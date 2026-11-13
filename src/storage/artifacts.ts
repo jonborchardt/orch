@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { and, eq } from 'drizzle-orm';
@@ -39,6 +39,12 @@ export function validateArtifact(artifactDir: string, relPath: string): CheckedA
   }
   if (!st.isFile()) throw new ValidationError(`Artifact is not a file: ${abs}`);
   if (st.size === 0) throw new ValidationError(`Artifact is empty: ${abs}`);
+  // Links (file or directory) that lead outside the artifact directory are not artifacts.
+  const realDir = realpathSync.native(artifactDir);
+  const realRel = path.relative(realDir, realpathSync.native(abs));
+  if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+    throw new ValidationError(`Artifact must be inside ${artifactDir} (not a link out): ${rel}`);
+  }
   const normalized = rel.split(path.sep).join('/');
   const content = readFileSync(abs, 'utf8');
   const marker = checkArtifact(normalized, content);
@@ -69,6 +75,7 @@ export function upsertArtifact(tx: Db, row: Omit<Artifact, 'id'>): Artifact {
         bytes: row.bytes,
         sha256: row.sha256,
         marker: row.marker,
+        head: row.head,
         stage: row.stage,
         round: row.round,
         createdAt: row.createdAt,

@@ -8,10 +8,13 @@
  * file, is refused in code rather than only in skill prose.
  */
 import { ValidationError } from './errors.ts';
+import type { Stage } from './workflow.ts';
 
 export interface ArtifactRule {
   /** Matches the relative artifact path (forward slashes). */
   path: RegExp;
+  /** The only stage in which this artifact may be registered or replaced. */
+  stage: Stage;
   /** Headings that must be present (case-insensitive, any level). */
   headings: string[];
   /** `MARKER_NAME: value` line that must be present once, and the allowed values. */
@@ -19,28 +22,49 @@ export interface ArtifactRule {
 }
 
 export const ARTIFACT_RULES: readonly ArtifactRule[] = [
-  { path: /^spec\.md$/, headings: ['Goal', 'Scope', 'Acceptance criteria'] },
-  { path: /^build\.md$/, headings: ['Summary', 'Validation'] },
+  { path: /^spec\.md$/, stage: 'spec', headings: ['Goal', 'Scope', 'Acceptance criteria'] },
+  { path: /^build\.md$/, stage: 'build', headings: ['Summary', 'Validation'] },
   {
     path: /^round-\d+\/review-[a-z0-9-]+\.md$/,
+    stage: 'review',
     headings: ['Findings'],
     marker: { name: 'VERDICT', values: ['PASS', 'CHANGES'] },
   },
   {
     path: /^round-\d+\/consolidated\.md$/,
+    stage: 'review',
     headings: ['Findings'],
     marker: { name: 'BLOCKING', pattern: /^\d+$/ },
   },
   {
     path: /^decision\.md$/,
+    stage: 'approve',
     headings: ['Rationale'],
     marker: { name: 'DECISION', values: ['APPROVE', 'ESCALATE'] },
   },
-  { path: /^pr\.md$/, headings: ['Validation', 'Known limitations'] },
+  { path: /^pr\.md$/, stage: 'pr', headings: ['Validation', 'Known limitations'] },
 ];
 
 export function ruleFor(relPath: string): ArtifactRule | undefined {
   return ARTIFACT_RULES.find((r) => r.path.test(relPath));
+}
+
+/**
+ * Workflow artifacts belong to one stage (and, under round-N/, one round): they can only be
+ * registered or replaced while the job is there, so nothing rewrites accepted evidence later.
+ * Paths without a rule (evidence, notes) are free.
+ */
+export function assertStageOwns(relPath: string, stage: Stage, round: number): void {
+  const rule = ruleFor(relPath);
+  if (!rule) return;
+  const m = /^round-(\d+)\//.exec(relPath);
+  const wrongRound = m !== null && Number(m[1]) !== round;
+  if (rule.stage !== stage || wrongRound) {
+    throw new ValidationError(
+      `${relPath} belongs to the ${rule.stage} stage${m ? ` of round ${m[1] ?? '?'}` : ''}; ` +
+        `the job is in ${stage}${stage === 'review' ? ` round ${String(round)}` : ''}.`,
+    );
+  }
 }
 
 function hasHeading(content: string, heading: string): boolean {

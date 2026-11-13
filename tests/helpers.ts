@@ -216,7 +216,7 @@ process.exit(code);
 
 export interface ShimState {
   calls: string[][];
-  fail?: string;
+  fail?: string | undefined;
   repo: { nameWithOwner: string; url: string; defaultBranchRef: { name: string } | null };
   issue: Record<string, unknown>;
   prs: Record<string, unknown>[];

@@ -8,17 +8,11 @@ import { ToolError, ValidationError } from '../src/core/errors.ts';
 import { jobArtifactDir } from '../src/core/paths.ts';
 import { describeRepo } from '../src/git/repo.ts';
 import { prWorkflowState, summarizeChecks } from '../src/integrations/github.ts';
+import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
 import { ensureDraftPr, issue, prStatus, pushBranch, resolveRepo } from '../src/ops/github.ts';
 import { createWorktree } from '../src/ops/worktree.ts';
 import { listEvents } from '../src/storage/events.ts';
-import {
-  claimJob,
-  createJob,
-  getJob,
-  recordReview,
-  registerArtifact,
-  transitionJob,
-} from '../src/storage/jobs.ts';
+import { claimJob, createJob, getJob, transitionJob } from '../src/storage/jobs.ts';
 import {
   commitFile,
   type GhShim,
@@ -74,26 +68,30 @@ function jobAt(stage: 'spec' | 'pr') {
   });
   const { token } = claimJob(store, job.id, { session: 's1' });
   const dir = jobArtifactDir(job.id, store.paths);
-  const go = (a: Parameters<typeof transitionJob>[2]) => transitionJob(store, job.id, a, { token });
+  // The worktree exists from the start, as `orch factory start` guarantees.
+  const wt = createWorktree(store, job.id, { token }).job.worktreePath ?? '';
+  const go = (a: Parameters<typeof transitionJob>[2]) =>
+    transitionGuarded(store, job.id, a, { token });
   const stageWith = (artifact: string) => {
     go('start');
     writeArtifact(dir, artifact);
-    registerArtifact(store, job.id, artifact, { token });
+    addArtifact(store, job.id, artifact, { token });
     go('complete');
   };
   if (stage === 'pr') {
     stageWith('spec.md');
+    commitFile(wt, 'export.ts', 'export const csv = 1;');
     stageWith('build.md');
     go('start');
     writeArtifact(dir, 'round-1/review-security.md');
-    recordReview(store, job.id, { token, reviewer: 'security', verdict: 'pass' });
+    recordVerdict(store, job.id, { token, reviewer: 'security', verdict: 'pass' });
     writeArtifact(dir, 'round-1/consolidated.md');
-    registerArtifact(store, job.id, 'round-1/consolidated.md', { token });
+    addArtifact(store, job.id, 'round-1/consolidated.md', { token });
     go('complete');
     stageWith('decision.md');
     go('start');
   }
-  return { id: job.id, token, dir };
+  return { id: job.id, token, dir, wt };
 }
 
 describe('gh wrapper', () => {
@@ -154,8 +152,7 @@ describe('gh wrapper', () => {
 
 describe('push and draft PR delivery', () => {
   it('pushes once, creates one draft PR, reuses it, and records CI status', () => {
-    const { id, token, dir } = jobAt('pr');
-    const wt = createWorktree(store, id, { token }).job.worktreePath ?? '';
+    const { id, token, dir, wt } = jobAt('pr');
     expect(() => ensureDraftPr(store, id, { token, bodyFile: join(dir, 'pr.md') })).toThrow(
       /Body file not found/,
     );
@@ -164,7 +161,6 @@ describe('push and draft PR delivery', () => {
       /not pushed/,
     );
 
-    commitFile(wt, 'export.ts', 'export const csv = 1;');
     const pushed = pushBranch(store, id, { token });
     expect(pushed.pushed).toBe(true);
     expect(gitIn(bare, 'rev-parse', `refs/heads/${pushed.branch}`)).toBe(pushed.head);
@@ -190,12 +186,14 @@ describe('push and draft PR delivery', () => {
     expect(reused.pr.url).toBe(created.pr.url);
     expect(createCalls()).toHaveLength(1);
 
-    // A new local commit that is not pushed blocks PR work until pushed.
+    // A commit made after the approval is neither pushed nor attached to the PR.
     commitFile(wt, 'more.ts', 'x');
+    expect(() => pushBranch(store, id, { token })).toThrow(/not approved/);
     expect(() => ensureDraftPr(store, id, { token, bodyFile: join(dir, 'pr.md') })).toThrow(
-      /push first/,
+      /not approved/,
     );
-    pushBranch(store, id, { token });
+    gitIn(wt, 'reset', '-q', '--hard', 'HEAD~1'); // test only: drop the unapproved commit
+    expect(pushBranch(store, id, { token }).pushed).toBe(false);
 
     // CI observation: read-only without a token, recorded with one.
     const st = readState();
@@ -214,7 +212,7 @@ describe('push and draft PR delivery', () => {
     expect(rw.job.ciCheckedAt).toBeTruthy();
 
     // The workflow still finishes only through the normal transition with pr.md registered.
-    registerArtifact(store, id, 'pr.md', { token });
+    addArtifact(store, id, 'pr.md', { token });
     const done = transitionJob(store, id, 'complete', { token });
     expect(done.stage).toBe('completed');
     // A later observation that the PR was marked ready is recorded without changing the stage.
@@ -234,8 +232,6 @@ describe('push and draft PR delivery', () => {
 
     const { id, token, dir } = jobAt('pr');
     writeArtifact(dir, 'pr.md');
-    const wt = createWorktree(store, id, { token }).job.worktreePath ?? '';
-    commitFile(wt, 'f.ts', 'f');
     pushBranch(store, id, { token });
     writeState({
       repo: {

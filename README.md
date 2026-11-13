@@ -207,13 +207,13 @@ artifact each must write, the registered artifacts re-verified against disk, the
 commands to run, in order. The skill substitutes the token and runs them. Every state change is a
 CLI call that `orch` validates; the skill never edits the database or workflow tables.
 
-| Stage     | Agent(s)                      | Produces                                         | `orch` checks before advancing                                                                                  |
-| --------- | ----------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `spec`    | `factory-spec-writer` (Opus)  | `spec.md`                                        | Goal, Scope, Acceptance criteria present                                                                        |
-| `build`   | `factory-builder` (Opus)      | commits on the job branch + `build.md`           | Summary, Validation present; round > 1 needs `--replace`                                                        |
-| `review`  | reviewers below, concurrently | `round-N/review-<r>.md` each + `consolidated.md` | every reviewer has a verdict matching its `VERDICT:` line; `BLOCKING: n`; worktree unchanged (`check-readonly`) |
-| `approve` | `factory-approver` (Opus)     | `decision.md`                                    | `DECISION: APPROVE`; `ESCALATE` forces `escalate`                                                               |
-| `pr`      | the coordinator + `orch gh`   | pushed branch, draft PR, `pr.md`                 | branch pushed and current, repo identity, base on origin, PR recorded                                           |
+| Stage     | Agent(s)                      | Produces                                         | `orch` checks before advancing                                                                                                                    |
+| --------- | ----------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`    | `factory-spec-writer` (Opus)  | `spec.md`                                        | Goal, Scope, Acceptance criteria present                                                                                                          |
+| `build`   | `factory-builder` (Opus)      | commits on the job branch + `build.md`           | Summary, Validation present; worktree clean; HEAD unchanged since `build.md`; round > 1 needs `--replace`                                         |
+| `review`  | reviewers below, concurrently | `round-N/review-<r>.md` each + `consolidated.md` | every verdict matches its `VERDICT:` line and was recorded against the same clean HEAD, still current; `BLOCKING: 0` to advance; `check-readonly` |
+| `approve` | `factory-approver` (Opus)     | `decision.md`                                    | `DECISION: APPROVE` against the current HEAD; no blocking findings left in the last round; `ESCALATE` forces `escalate`                           |
+| `pr`      | the coordinator + `orch gh`   | pushed branch, draft PR, `pr.md`                 | approval recorded; only base-integration merges since it; branch pushed and current; repo identity; PR recorded                                   |
 
 Reviewers always include **security** (Opus), **correctness**, and **code-quality** (Sonnet). When
 the job's diff touches rendered UI (`.tsx`, `.vue`, `.css`, `.html`, ... per
@@ -260,9 +260,19 @@ conversation is not needed. `orch factory resume <id> --session <name>`:
 3. Re-verifies every registered artifact (exists, same hash) and reports problems in the plan.
 4. Returns the plan, so the new session continues exactly where the state says.
 
-`needs-human` jobs stay blocked until a person decides; `resume --to <stage>` sends them back.
-`orch factory check-readonly` guards review rounds: the plan's worktree fingerprint (HEAD plus
-dirty files) must be unchanged after reviewers ran.
+`needs-human` jobs stay blocked until a person decides; `resume --to <stage>` sends them back. A
+jump cannot skip evidence: `pr` still needs a registered `DECISION: APPROVE`, and `approve` still
+refuses while the last round counts blocking findings.
+
+**Evidence is pinned to commits.** `build.md`, every review verdict, and `decision.md` are accepted
+only from a clean worktree and are recorded with its HEAD (`artifacts.head`, `reviews.head`). A
+stage completes only while HEAD is still that commit, all verdicts of a round name the same commit,
+and the files on disk still hash to what was registered; otherwise the evidence is stale and must be
+produced again. `orch factory check-readonly` additionally compares the plan's worktree
+fingerprint (HEAD plus dirty files) after reviewers ran. Workflow artifacts can be registered or
+replaced only in their own stage and round, so an approval cannot be rewritten after the fact.
+`plan.checkoutDirty` lists uncommitted files in the initiating checkout; the factory never writes
+there, so a list that grows during a stage means a subagent used the wrong directory.
 
 **Limits.** A skill cannot restart a Claude session that stopped, and there is no daemon: a lapsed
 lease is noticed only when someone runs `orch factory next` or `resume`. Ownership is advisory at
@@ -440,8 +450,11 @@ orch worktree remove <id>            # delete the directory; refused while dirty
 
 **Ownership is advisory at the filesystem level.** The CLI enforces that only the owner records
 changes about a job, but any process with filesystem access (including a subagent pointed at the
-wrong directory) can write into another job's worktree. Skills therefore pass the worktree path
-explicitly to every subagent and compare `orch worktree show` before and after read-only steps.
+wrong directory) can write into another job's worktree, the initiating checkout, the artifact
+directory, or the SQLite file itself. What the CLI can do is refuse to count such writes as
+progress: evidence is accepted only from a clean worktree at a recorded HEAD, re-hashed at every
+gate, and the plan reports dirty files in both trees. Skills pass the worktree path explicitly to
+every subagent. A worktree on the base branch, or inside the initiating checkout, cannot be adopted.
 
 ## GitHub integration
 
@@ -456,9 +469,12 @@ orch gh pr create <id> --body-file <md> [--title <t>]   # draft PR, or the exist
 orch gh pr status <id>                  # state, draft/ready/merged, CI rollup; recorded with --token
 ```
 
-Before creating a PR, `orch` checks that the job is in the `pr` stage, that GitHub's repository
-for the checkout matches the job's identity, that the base branch exists on `origin`, and that the
-job branch is pushed and `origin/<branch>` equals the worktree HEAD. An open (or merged) PR for the
+Before pushing or creating a PR, `orch` checks that the job is in the `pr` stage, that
+`decision.md` is a registered `APPROVE` tied to a commit, that every commit since that commit is a
+base-integration merge (`rev-list --no-merges <approved>..HEAD ^<base>` is empty), that the job
+branch is not the base branch, that GitHub's repository for the checkout matches the job's
+identity, that the base branch exists on `origin`, and (for the PR) that `origin/<branch>` equals
+the worktree HEAD. An open (or merged) PR for the
 branch with the same base is reused instead of creating a duplicate. The PR is recorded on the job
 (`prUrl`, `prState`) together with the CI rollup (`ciStatus`: `none`, `pending`, `passing`,
 `failing`). `orch` never merges, force-pushes, or marks a PR ready; a recorded draft PR is not a
@@ -475,8 +491,9 @@ Several VS Code sessions may run at once, so each job has at most one owner.
   lasts `--lease` minutes (default 30). Pass the token as `--token` or `ORCH_TOKEN` on every
   mutation; `ORCH_SESSION` can stand in for `--session`.
 - **Renewal is explicit.** There is no daemon. Every successful mutation by the token holder extends
-  the lease by the claimed length, and `claim` again from the same session renews it without
-  changing the token. A session that goes quiet simply lets the lease lapse.
+  the lease by the claimed length. `claim` or `resume` again, even from the same session name,
+  issues a new token and kills the old one: two processes resuming under one name cannot both keep
+  driving the job. A session that goes quiet simply lets the lease lapse.
 - **Expiry and takeover.** Another session may claim an expired lease, or any lease with `--force`.
   Takeover rotates the token, so commands from the previous owner fail with exit code 4, and marks
   a `running` job `interrupted` so it must be explicitly resumed.
@@ -497,7 +514,7 @@ Global flags: `--json` (machine output; errors become `{"error":{...}}` on stder
 2 usage error; 3 not found; 4 ownership (another owner, bad or stale token, stale revision).
 
 ```
-orch doctor
+orch doctor                            # also reports stale or missing installed skills/agents
 orch install [--dry-run] [--source <dir>] [--claude-dir <dir>]
 
 orch job create    --title <t> [--description <d>] [--issue <ref>] [--repo <path>] [--base <branch>]

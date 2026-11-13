@@ -10,6 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { OwnershipError, ValidationError, WorkflowError } from '../src/core/errors.ts';
 import { ROLES } from '../src/core/roles.ts';
+import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
 import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
 import {
   checkReadonly,
@@ -20,13 +21,7 @@ import {
   startJob,
 } from '../src/ops/factory.ts';
 import { showWorktree } from '../src/ops/worktree.ts';
-import {
-  claimJob,
-  getJob,
-  recordReview,
-  registerArtifact,
-  transitionJob,
-} from '../src/storage/jobs.ts';
+import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
 import {
   commitFile,
   fixture,
@@ -91,7 +86,9 @@ function start(title = 'Add CSV export', repoPath = clone, maxRounds?: number): 
 
 const next = (id: string, ui?: boolean) => planJob(store, id, { ui });
 const go = (c: Ctx, action: Parameters<typeof transitionJob>[2], reason?: string) =>
-  transitionJob(store, c.id, action, { token: c.token, reason });
+  transitionGuarded(store, c.id, action, { token: c.token, reason });
+const registerArtifact = addArtifact;
+const recordReview = recordVerdict;
 
 /** Fixture subagent: writes a valid artifact, registers it, completes the stage. */
 function runStage(c: Ctx, artifact: string, body = fixture(artifact), replace = false) {
@@ -167,7 +164,8 @@ describe('factory start and spec stage', () => {
     expect(r.tookOver).toBe(false);
     expect(r.plan.status).toBe('pending');
     expect(r.plan.step).toBe('run-stage');
-    expect(r.token).toBe(c.token); // same session keeps its token
+    expect(r.token).not.toBe(c.token); // every claim rotates; the old handle is dead
+    expect(() => go(c, 'start')).toThrow(OwnershipError);
   });
 
   it('spec -> build transition hands the builder the spec and no --replace on round 1', () => {
@@ -408,7 +406,7 @@ describe('resume, ownership, and cross-project', () => {
     const c = start();
     runStage(c, 'spec.md');
     // Simulate the owning session dying mid-build with a lapsed lease.
-    claimJob(store, c.id, { session: SESSION, leaseMinutes: 0 });
+    c.token = claimJob(store, c.id, { session: SESSION, leaseMinutes: 0 }).token;
     go(c, 'start');
     commitFile(c.wt, 'src/half.ts', 'half done');
     const orphan = next(c.id);
@@ -429,10 +427,12 @@ describe('resume, ownership, and cross-project', () => {
     expect(() => go(c, 'start')).toThrow(OwnershipError);
     const c2 = { ...c, token: r.token };
     expect(runStage(c2, 'build.md').stage).toBe('review');
-    // Resuming again from the same new session is idempotent.
+    // Resuming again from the same session name issues a new token and kills the previous one.
     const again = resumeFactoryJob(store, c.id, { session: 'claude-second-0001' });
-    expect(again.token).toBe(r.token);
+    expect(again.token).not.toBe(r.token);
+    expect(again.tookOver).toBe(false);
     expect(again.plan.stage).toBe('review');
+    expect(() => go(c2, 'start')).toThrow(OwnershipError);
   });
 
   it('resume rebuilds a missing worktree and flags tampered artifacts', () => {
@@ -594,7 +594,7 @@ describe('orch factory CLI', () => {
       orch(home, tmpdir(), ['--json', 'factory', 'resume', id, '--session', 'cli-session']),
     );
     expect(resumed.tookOver).toBe(false);
-    expect(resumed.token).toBe(token);
+    expect(resumed.token).not.toBe(token); // every claim rotates the token
     const contested = orch(home, tmpdir(), ['factory', 'resume', id, '--session', 'other']);
     expect(contested.code).toBe(4);
     expect(readFileSync(join(dir, 'spec.md'), 'utf8')).toContain('Acceptance criteria');

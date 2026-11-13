@@ -25,7 +25,7 @@ import {
   reviewArtifact,
   type Stage,
 } from '../core/workflow.ts';
-import { describeRepo } from '../git/repo.ts';
+import { describeRepo, dirtyFiles } from '../git/repo.ts';
 import type { WorktreeInfo } from '../git/worktree.ts';
 import { validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
@@ -95,6 +95,12 @@ export interface Plan {
   repo: { identity: string; path: string; baseBranch: string };
   artifactDir: string;
   worktree: (WorktreeInfo & { fingerprint: string }) | null;
+  /**
+   * Uncommitted files in the initiating checkout (`repo.path`). The factory never writes there;
+   * a list that grows during a stage means a subagent or project-local skill used the wrong
+   * directory. Null when the checkout is not reachable.
+   */
+  checkoutDirty: string[] | null;
   /** Rendered UI touched (decides whether UI reviewers run). */
   ui: boolean;
   agents: AgentTask[];
@@ -108,6 +114,14 @@ export interface Plan {
   pr: { url: string | null; state: string | null; ciStatus: string | null };
   /** Last escalation reason, when the job is in needs-human. */
   blockedReason?: string | null;
+}
+
+function tryDirty(root: string): string[] | undefined {
+  try {
+    return dirtyFiles(root);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Stable hash of HEAD plus the dirty-file list, to detect writes by read-only reviewers. */
@@ -185,6 +199,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     repo: { identity: job.repo, path: job.repoPath, baseBranch: job.baseBranch },
     artifactDir: detail.artifactDir,
     worktree,
+    checkoutDirty: existsSync(job.repoPath) ? (tryDirty(job.repoPath) ?? null) : null,
     ui,
     agents: [],
     reviews: current.map((r) => ({ reviewer: r.reviewer, verdict: r.verdict })),

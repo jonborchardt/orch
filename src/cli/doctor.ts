@@ -1,7 +1,14 @@
 import { existsSync } from 'node:fs';
 
 import { runTool } from '../core/exec.ts';
-import { databasePath, findProjectRoot, installRoot, runtimePaths } from '../core/paths.ts';
+import {
+  claudeHome,
+  databasePath,
+  findProjectRoot,
+  installRoot,
+  runtimePaths,
+} from '../core/paths.ts';
+import { planInstall } from '../integrations/claude.ts';
 
 export const MIN_NODE = '24.0.0';
 
@@ -37,7 +44,27 @@ function tool(name: string, label: string, missing: Status, hint: string): Check
     : { name: label, status: missing, detail: `${name} not found on PATH. ${hint}` };
 }
 
-export function runDoctor(cwd: string = process.cwd()): Check[] {
+/** Installed skill/agent links versus this checkout: stale managed copies are the usual drift. */
+function installCheck(claudeDir: string): Check {
+  const entries = planInstall(installRoot(), claudeDir);
+  const off = entries.filter((e) => e.state !== 'linked');
+  if (off.length === 0) {
+    return {
+      name: 'Skills and agents',
+      status: 'ok',
+      detail: `${String(entries.length)} linked into ${claudeDir}`,
+    };
+  }
+  return {
+    name: 'Skills and agents',
+    status: 'warn',
+    detail:
+      off.map((e) => `${e.kind} ${e.name}: ${e.state}`).join(', ') +
+      '. Run `orch install` to link or refresh them.',
+  };
+}
+
+export function runDoctor(cwd: string = process.cwd(), claudeDir: string = claudeHome()): Check[] {
   const paths = runtimePaths();
   const project = findProjectRoot(cwd);
   const db = databasePath(paths);
@@ -63,6 +90,7 @@ export function runDoctor(cwd: string = process.cwd()): Check[] {
       status: 'ok',
       detail: `${db} (${existsSync(db) ? 'exists' : 'will be created on first use'})`,
     },
+    installCheck(claudeDir),
   ];
 }
 

@@ -8,6 +8,7 @@ import { mkdirSync } from 'node:fs';
 
 import { and, desc, eq } from 'drizzle-orm';
 
+import { assertStageOwns } from '../core/artifact-rules.ts';
 import { NotFoundError, OwnershipError, ValidationError } from '../core/errors.ts';
 import {
   assertOwner,
@@ -23,6 +24,7 @@ import {
   type CiStatus,
   now,
   type PrState,
+  requiredArtifact,
   reviewArtifact,
   type Stage,
   type Status,
@@ -158,7 +160,9 @@ export function claimJob(
       const ts = now();
       const job = getJob(tx, id);
       const kind = decideClaim(job, opts.session, ts, opts.force);
-      const token = kind === 'renew' && job.ownerToken ? job.ownerToken : newToken();
+      // Every claim issues a fresh token, so a second process resuming under the same session
+      // name takes the job over instead of sharing it; the earlier holder fails with exit 4.
+      const token = newToken();
       const patch: Partial<Job> = {
         ownerSession: opts.session,
         ownerToken: token,
@@ -205,14 +209,43 @@ export function transitionJob(
   action: Action,
   opts: TransitionOptions,
 ): Job {
-  return mutate(store, id, opts, (job, tx) =>
-    transition(job, action, {
-      artifacts: listArtifacts(tx, id),
+  return mutate(store, id, opts, (job, tx) => {
+    const artifacts = listArtifacts(tx, id);
+    if (action === 'complete') verifyOnDisk(jobArtifactDir(id, store.paths), job, artifacts);
+    return transition(job, action, {
+      artifacts,
       reviews: listReviews(tx, id),
       to: opts.to,
       reason: opts.reason,
-    }),
-  );
+    });
+  });
+}
+
+/**
+ * A registered row is only evidence while the file still matches it: the stage's required
+ * artifact and, in review, the round's files are re-read before completion counts them.
+ */
+function verifyOnDisk(dir: string, job: Job, artifacts: Artifact[]): void {
+  const required = requiredArtifact(job.stage, job.round);
+  const prefix = `round-${String(job.round)}/`;
+  for (const a of artifacts) {
+    const relevant =
+      a.path === required ||
+      (job.stage === 'review' && a.path.startsWith(prefix)) ||
+      (job.stage === 'pr' && a.path === 'decision.md');
+    if (!relevant) continue;
+    let checked;
+    try {
+      checked = validateArtifact(dir, a.path);
+    } catch (err) {
+      throw new ValidationError(`${a.path} no longer verifies: ${(err as Error).message}`);
+    }
+    if (a.sha256 !== null && checked.sha256 !== a.sha256) {
+      throw new ValidationError(
+        `${a.path} changed on disk since it was registered; register it again (--replace) first.`,
+      );
+    }
+  }
 }
 
 /** Claim and, if the job was interrupted/failed/blocked, put it back to `pending`. */
@@ -231,6 +264,8 @@ export function resumeJob(
 export interface RegisterOptions extends Auth {
   /** Required to replace an already registered artifact whose content changed. */
   replace?: boolean | undefined;
+  /** Worktree HEAD the artifact describes (ops/gates.ts supplies it). */
+  head?: string | null | undefined;
 }
 
 /**
@@ -247,6 +282,7 @@ export function registerArtifact(
   let artifact!: Artifact;
   mutate(store, id, opts, (job, tx, ts) => {
     const checked = validateArtifact(jobArtifactDir(id, store.paths), relPath);
+    assertStageOwns(checked.path, job.stage, job.round);
     const existing = findArtifact(tx, id, checked.path);
     if (existing && existing.sha256 !== null && existing.sha256 !== checked.sha256) {
       if (!opts.replace) {
@@ -264,6 +300,7 @@ export function registerArtifact(
       bytes: checked.bytes,
       sha256: checked.sha256,
       marker: checked.marker,
+      head: opts.head ?? null,
       createdAt: ts,
     });
     const payload = { path: checked.path, stage: job.stage, sha256: checked.sha256 };
@@ -353,6 +390,8 @@ export interface ReviewInput extends Auth {
   /** Relative artifact path; defaults to round-N/review-<reviewer>.md when a verdict is given. */
   artifact?: string | undefined;
   summary?: string | undefined;
+  /** Worktree HEAD the verdict was given against (ops/gates.ts supplies it). */
+  head?: string | null | undefined;
 }
 
 /** Upsert a reviewer's row for the current round. Without a verdict the reviewer is pending. */
@@ -372,6 +411,7 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
     if (input.verdict) {
       const rel = input.artifact ?? reviewArtifact(job.round, input.reviewer);
       const checked = validateArtifact(jobArtifactDir(id, store.paths), rel);
+      assertStageOwns(checked.path, job.stage, job.round);
       if (checked.marker !== null && checked.marker !== input.verdict) {
         throw new ValidationError(
           `Verdict ${input.verdict} does not match ${checked.path}, which says VERDICT: ${checked.marker.toUpperCase()}.`,
@@ -385,9 +425,11 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
         bytes: checked.bytes,
         sha256: checked.sha256,
         marker: checked.marker,
+        head: input.head ?? null,
         createdAt: ts,
       }).id;
     }
+    const head = input.verdict ? (input.head ?? null) : null;
     review = tx
       .insert(reviews)
       .values({
@@ -396,6 +438,7 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
         reviewer: input.reviewer,
         verdict: input.verdict ?? null,
         artifactId,
+        head,
         summary: input.summary ?? null,
         createdAt: ts,
         completedAt: input.verdict ? ts : null,
@@ -405,6 +448,7 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
         set: {
           verdict: input.verdict ?? null,
           artifactId,
+          head,
           summary: input.summary ?? null,
           completedAt: input.verdict ? ts : null,
         },

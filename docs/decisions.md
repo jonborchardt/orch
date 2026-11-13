@@ -121,7 +121,8 @@ There is no daemon to renew leases, so: `claim` records the session, a random to
 `leaseExpiresAt = now + leaseMinutes` (default 30). Every successful mutation by the token holder
 renews the lease by the same length; `claim` by the same session renews explicitly. A different
 session may claim only after expiry (or with `--force`), which rotates the token so the previous
-owner's commands fail with exit 4, and marks a `running` job `interrupted`. `--revision <n>` adds
+owner's commands fail with exit 4, and marks a `running` job `interrupted`. (Since decision 38
+every claim rotates the token, same session or not.) `--revision <n>` adds
 optimistic concurrency for callers that want to reject any intervening change.
 
 ## 17. Known advisory: `minimatch` via ESLint tooling
@@ -283,3 +284,45 @@ a cancelled job, a fresh one). API tests start `startServer` in-process; compone
 React app in jsdom against a mocked `fetch`; Playwright drives Chromium against `orch ui` serving
 `web/dist` from a scratch `ORCH_HOME`. CI runs Playwright on Linux only to keep the Windows job
 fast; `npm run check` does not need a browser.
+
+## 37. Evidence is pinned to a commit (Phase 5A audit)
+
+Reviews used to be recorded against "the worktree", and `check-readonly` compared a fingerprint
+only if the coordinator ran it. That left three holes: reviewers could read different commits while
+the builder kept committing, a commit after the last verdict was still accepted, and a dirty file
+whose _content_ changed between reviewers kept the same fingerprint. Now `artifacts.head` and
+`reviews.head` record the worktree HEAD; `src/ops/gates.ts` (the only Git-aware path into
+`registerArtifact`, `recordReview`, and `transition complete`) refuses `build.md`, review verdicts,
+and `decision.md` from a dirty worktree, and refuses to complete `build`, `review`, or `approve`
+unless HEAD still equals the recorded head and the tree is clean. The pure `transition` separately
+rejects a round whose verdicts name different heads, so bypassing the gate does not help. Stage
+completion also re-hashes the artifacts it depends on, so a file edited after registration is not
+evidence. Workflow artifacts are locked to their stage and round (`assertStageOwns`), which is what
+stops `decision.md` or an old round from being rewritten after approval. The remaining gap is a
+conflict resolution inside a base-integration merge commit, which is accepted as a merge.
+
+## 38. Every claim rotates the token
+
+Session names are chosen by the caller, so a second process resuming under the same name used to
+receive the same token and both could drive the job. A claim now always issues a fresh token; the
+previous holder fails with exit 4 on its next command. "Resume" therefore means "take over from
+whoever had this name", which is the only safe reading when there is no process registry.
+
+## 39. Only approved commits leave the machine
+
+`orch gh push` and `orch gh pr create` require the `pr` stage, a registered `DECISION: APPROVE`
+with a head, and that `git rev-list --no-merges <approved>..HEAD ^<base>` is empty, so the only
+commits after an approval are base-integration merges. The job branch must differ from the base
+branch, and `worktree adopt` refuses a worktree on the base branch or inside the initiating
+checkout. `pr complete` also requires the approval, so a human `resume --to pr` cannot finish a job
+the approver never passed, and `approve complete` refuses while the last round's `consolidated.md`
+counts blocking findings; a round with all-PASS verdicts but `BLOCKING: n > 0` goes back to build.
+
+## 40. What stays cooperative
+
+The CLI cannot stop a process from writing into any directory or the database file. It can only
+decline to treat such writes as progress. Things that rest on agent behaviour, listed so nobody
+mistakes them for enforced: subagents staying in the worktree (the plan now reports dirty files in
+the initiating checkout so a stray write is visible), reviewers rerunning tests rather than trusting
+`build.md`, builders not weakening tests, `orch doctor` being run so stale managed agent copies are
+noticed, and the coordinator running `check-readonly` and `fail` when it trips.

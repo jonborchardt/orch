@@ -21,6 +21,11 @@ Rules that are never relaxed:
   command exits non-zero, read its message and fix the cause; do not work around it.
 - Subagents work only inside the job worktree, never the user's checkout. Give every subagent the
   absolute worktree path and artifact directory in its prompt; they do not inherit this context.
+  Compare `plan.checkoutDirty` across `next` calls: a file that appeared in the user's checkout was
+  written by the wrong process. Report it; never clean it up yourself.
+- Evidence is pinned to commits. `orch` refuses `build.md`, a review verdict, or `decision.md`
+  while the worktree has uncommitted changes, and refuses to complete a stage once HEAD moved past
+  the commit that evidence describes. When that happens, the stage is redone, not forced.
 - Reviewers and the approver are read-only on code. After reviews, run `orch factory
 check-readonly`; if it fails, treat the round as failed (`orch job transition <id> fail`).
 - Escalate rather than approve around a blocking finding. Humans mark PRs ready and merge.
@@ -76,7 +81,8 @@ orch factory next <job-id> --json
 Act on `plan.step`:
 
 - `resume`: `orch factory resume <id> --session <s> --json` (adds `--force` only if the user
-  explicitly said to take over a live session). Use the new `token` from now on.
+  explicitly said to take over a live session). Every claim or resume issues a new token and
+  invalidates the old one; use the new `token` from now on.
 - `create-worktree`: run the listed command, then `next` again.
 - `needs-human`: release the job (`orch job release <id> --token <t>`) so a human or another
   session can act on it, report `plan.blockedReason`, the job id, and the exact resume command;
@@ -134,7 +140,8 @@ sequentially. Wait for every agent to finish before registering anything.
 
 On the next build round, the builder gets `round-N/consolidated.md` and must address every
 blocking finding without expanding scope. Rerun all reviewers whose previous verdict was CHANGES
-plus correctness and code-quality.
+plus correctness and code-quality. `BLOCKING: n` with `n > 0` sends the job back to build even when
+every verdict is PASS; count honestly.
 
 ### Approval and delivery
 
@@ -156,5 +163,5 @@ Distinguish what was verified by commands from what an agent reported.
 This skill cannot restart a Claude session that stopped; it only resumes from state. Ownership is a
 database lease: it stops two sessions from both recording changes to one job, but any process can
 still write into a worktree directory it is pointed at, which is why prompts always carry the
-worktree path and reviews are fingerprint-checked. There is no daemon; nothing happens between
-your commands.
+worktree path, evidence is accepted only from a clean worktree at a recorded commit, and reviews
+are fingerprint-checked. There is no daemon; nothing happens between your commands.

@@ -94,12 +94,15 @@ describe('jobs: ownership', () => {
     const first = claimJob(store, job.id, { session: 's1' });
     expect(first.job.ownerSession).toBe('s1');
     expect(() => claimJob(store, job.id, { session: 's2' })).toThrow(OwnershipError);
-    // Same session renews and keeps its token.
-    expect(claimJob(store, job.id, { session: 's1' }).token).toBe(first.token);
+    // Same session renews with a fresh token; the earlier handle stops working, so two
+    // processes resuming under one session name cannot both keep driving the job.
+    const renewed = claimJob(store, job.id, { session: 's1' });
+    expect(renewed.token).not.toBe(first.token);
+    expect(() => go(job.id, first.token, 'start')).toThrow(/Stale or invalid token/);
     // Force takes over with a new token.
     const forced = claimJob(store, job.id, { session: 's2', force: true });
-    expect(forced.token).not.toBe(first.token);
-    expect(() => go(job.id, first.token, 'start')).toThrow(/Stale or invalid token/);
+    expect(forced.token).not.toBe(renewed.token);
+    expect(() => go(job.id, renewed.token, 'start')).toThrow(/Stale or invalid token/);
   });
 
   it('release clears ownership; mutations then require a fresh claim', () => {
@@ -211,8 +214,11 @@ describe('jobs: artifacts', () => {
     expect(() => registerArtifact(store, id, 'decision.md', { token })).toThrow(/DECISION/);
     writeArtifact(dir, 'decision.md', '# D\n\n## Rationale\nr\n\nDECISION: MAYBE\n');
     expect(() => registerArtifact(store, id, 'decision.md', { token })).toThrow(/one of APPROVE/);
+    // A well-formed decision is still refused outside the approve stage.
     writeArtifact(dir, 'decision.md', fixture('decision.md', 'ESCALATE'));
-    expect(registerArtifact(store, id, 'decision.md', { token }).marker).toBe('escalate');
+    expect(() => registerArtifact(store, id, 'decision.md', { token })).toThrow(
+      /belongs to the approve stage/,
+    );
     writeArtifact(dir, 'round-1/consolidated.md', fixture('round-1/consolidated.md', 'many'));
     expect(() => registerArtifact(store, id, 'round-1/consolidated.md', { token })).toThrow(
       /BLOCKING must match/,
@@ -223,9 +229,9 @@ describe('jobs: artifacts', () => {
 
   it('normalizes nested paths to forward slashes', () => {
     const { id, token, dir } = setup();
-    writeArtifact(dir, 'round-1/review-code.md');
-    const a = registerArtifact(store, id, 'round-1\\review-code.md', { token });
-    expect(a.path).toBe('round-1/review-code.md');
+    writeArtifact(dir, 'notes/evidence.md', 'free-form\n');
+    const a = registerArtifact(store, id, 'notes\\evidence.md', { token });
+    expect(a.path).toBe('notes/evidence.md');
   });
 });
 

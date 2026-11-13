@@ -135,6 +135,7 @@ export function transition(
       const artifact = required ? ctx.artifacts.find((a) => a.path === required) : undefined;
       if (required && !artifact) reject(`missing required artifact ${required}`);
       const completed = { type: 'stage.completed', payload: { stage, round: job.round } };
+      const blocking = blockingCount(ctx.artifacts, job.round);
       switch (stage) {
         case 'spec':
           return { patch: { stage: 'build', status: 'pending' }, events: [completed] };
@@ -144,7 +145,7 @@ export function transition(
             events: [completed],
           };
         case 'review':
-          return completeReview(job, ctx.reviews, completed);
+          return completeReview(job, ctx.reviews, blocking, completed);
         case 'approve': {
           // decision.md carries DECISION: APPROVE | ESCALATE; only an approval advances.
           if (artifact?.marker !== 'approve') {
@@ -152,10 +153,20 @@ export function transition(
               `decision.md says ${(artifact?.marker ?? 'nothing').toUpperCase()}; use escalate`,
             );
           }
+          // An approval cannot step over findings the last review round counted as blocking.
+          if (blocking > 0) {
+            reject(
+              `round-${String(job.round)}/consolidated.md still counts ${String(blocking)} blocking finding(s); use escalate`,
+            );
+          }
           return { patch: { stage: 'pr', status: 'pending' }, events: [completed] };
         }
         case 'pr': {
           if (!job.prUrl) reject('record the PR first (orch job pr)');
+          // Reaching pr by a human `--to pr` is allowed; finishing without an approval is not.
+          if (ctx.artifacts.find((a) => a.path === 'decision.md')?.marker !== 'approve') {
+            reject('no DECISION: APPROVE is registered in decision.md');
+          }
           return {
             patch: { stage: 'completed', status: 'completed', completedAt: now() },
             events: [completed, { type: 'job.completed', payload: { prUrl: job.prUrl } }],
@@ -219,17 +230,32 @@ function verifyReviewers(current: Review[]): void {
   if (pending.length > 0) {
     throw new WorkflowError(`Reviewers still pending: ${pending.join(', ')}`);
   }
+  // Every verdict in a round must have been given against the same commit.
+  const heads = new Set(current.map((r) => r.head));
+  if (heads.size > 1) {
+    const list = current.map((r) => `${r.reviewer}@${r.head?.slice(0, 7) ?? 'none'}`).join(', ');
+    throw new WorkflowError(`Reviewers evaluated different commits (${list}); rerun the round`);
+  }
+}
+
+/** BLOCKING count from the round's consolidated.md, 0 when there is none. */
+export function blockingCount(artifacts: Artifact[], round: number): number {
+  const a = artifacts.find((x) => x.path === `round-${String(round)}/consolidated.md`);
+  const n = Number(a?.marker ?? 0);
+  return Number.isInteger(n) && n > 0 ? n : 0;
 }
 
 function completeReview(
   job: JobState,
   reviews: Review[],
+  blocking: number,
   completed: TransitionResult['events'][number],
 ): TransitionResult {
   const current = currentReviews(job, reviews);
   const changes = current.filter((r) => r.verdict === 'changes').map((r) => r.reviewer);
-  const payload = { ...completed.payload, changesRequestedBy: changes };
-  if (changes.length === 0) {
+  const payload = { ...completed.payload, changesRequestedBy: changes, blocking };
+  // Blocking findings in the consolidation send the job back even when every verdict passed.
+  if (changes.length === 0 && blocking === 0) {
     return { patch: { stage: 'approve', status: 'pending' }, events: [{ ...completed, payload }] };
   }
   if (job.round >= job.maxRounds) {

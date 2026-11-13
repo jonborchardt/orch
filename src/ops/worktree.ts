@@ -3,7 +3,7 @@
  * checked before anything touches disk. Nothing here deletes uncommitted work.
  */
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { jobWorktreeDir } from '../core/paths.ts';
@@ -138,10 +138,17 @@ export function adoptWorktree(
   const info = inspectWorktree(root, path, job.baseBranch);
   if (!info.exists) throw new ValidationError(`${path} does not exist.`);
   if (!info.isWorktree) throw new ValidationError(`${path} is not a worktree of ${job.repo}.`);
-  if (resolve(root) === path) {
-    throw new ValidationError('The primary checkout cannot be adopted as a job worktree.');
+  if (resolve(root) === path || path.startsWith(resolve(root) + sep)) {
+    throw new ValidationError(
+      'The primary checkout (or a directory inside it) cannot be a job worktree.',
+    );
   }
   if (!info.branch) throw new ValidationError(`${path} is detached; check out a branch first.`);
+  if (info.branch === job.baseBranch) {
+    throw new ValidationError(
+      `${path} is on the base branch ${job.baseBranch}; jobs never work on it.`,
+    );
+  }
   const updated = setWorktree(store, id, {
     ...auth,
     path,

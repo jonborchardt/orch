@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { formatChecks, nodeVersionOk, runDoctor, toolVersion } from '../src/cli/doctor.ts';
+import { tempDir } from './helpers.ts';
 
 describe('nodeVersionOk', () => {
   it('compares numerically, not lexically', () => {
@@ -23,7 +24,7 @@ describe('toolVersion', () => {
 
 describe('runDoctor', () => {
   it('reports every check with a known status', () => {
-    const checks = runDoctor();
+    const checks = runDoctor(process.cwd(), tempDir('orch-doctor-'));
     expect(checks.map((c) => c.name)).toEqual([
       'Node.js',
       'Git',
@@ -34,6 +35,7 @@ describe('runDoctor', () => {
       'Config dir',
       'Data dir',
       'Database',
+      'Skills and agents',
     ]);
     for (const c of checks) expect(['ok', 'warn', 'fail']).toContain(c.status);
     expect(formatChecks(checks)).toContain('Node.js');

@@ -16,6 +16,7 @@ import {
   type Verdict,
 } from '../core/workflow.ts';
 import { describeRepo } from '../git/repo.ts';
+import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
 import {
@@ -25,11 +26,8 @@ import {
   jobDetail,
   listJobs,
   recordPr,
-  recordReview,
-  registerArtifact,
   releaseJob,
   resumeJob,
-  transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { UsageError } from './output.ts';
@@ -185,7 +183,7 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
     }
     case 'transition': {
       const action = need(oneOf<Action>(rest[1], ACTIONS, '<action>'), '<action>');
-      const job = transitionJob(store, id(), action, {
+      const job = transitionGuarded(store, id(), action, {
         ...auth,
         to: oneOf<Stage>(o.to, STAGES, '--to'),
         reason: o.reason,
@@ -195,7 +193,7 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
     case 'artifact': {
       if (rest[0] !== 'add') throw new UsageError('Usage: orch job artifact add <id> <path>');
       const jobId = need(rest[1], '<id>');
-      const artifact = registerArtifact(store, jobId, need(rest[2], '<relative-path>'), {
+      const artifact = addArtifact(store, jobId, need(rest[2], '<relative-path>'), {
         ...auth,
         replace: o.replace,
       });
@@ -204,7 +202,7 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
     case 'review': {
       if (rest[0] !== 'record') throw new UsageError('Usage: orch job review record <id> ...');
       const jobId = need(rest[1], '<id>');
-      const review = recordReview(store, jobId, {
+      const review = recordVerdict(store, jobId, {
         ...auth,
         reviewer: need(o.reviewer, '--reviewer'),
         verdict: oneOf<Verdict>(o.verdict, ['pass', 'changes'], '--verdict'),

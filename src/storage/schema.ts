@@ -83,6 +83,8 @@ export const artifacts = sqliteTable(
     sha256: text(),
     /** Value parsed from the content by core/artifact-rules.ts (e.g. review verdict, decision). */
     marker: text(),
+    /** Worktree HEAD when the artifact was registered; null when the job had no worktree. */
+    head: text(),
     createdAt: text().notNull(),
   },
   (t) => [uniqueIndex('artifacts_job_path_idx').on(t.jobId, t.path)],
@@ -100,6 +102,8 @@ export const reviews = sqliteTable(
     /** Null while the reviewer is still running. */
     verdict: text().$type<Verdict>(),
     artifactId: integer().references(() => artifacts.id),
+    /** Worktree HEAD the verdict was recorded against; every reviewer in a round must match. */
+    head: text(),
     summary: text(),
     createdAt: text().notNull(),
     completedAt: text(),

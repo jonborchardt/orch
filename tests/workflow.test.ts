@@ -38,6 +38,7 @@ function art(path: string, marker: string | null = null): Artifact {
     bytes: 1,
     sha256: null,
     marker,
+    head: null,
     createdAt: '',
   };
 }
@@ -50,6 +51,7 @@ function review(round: number, reviewer: string, verdict: Review['verdict']): Re
     reviewer,
     verdict,
     artifactId: null,
+    head: null,
     summary: null,
     createdAt: '',
     completedAt: null,
@@ -85,11 +87,16 @@ describe('transition: happy path', () => {
     j = step(j, 'complete', { artifacts: [art('decision.md')], reviews: [] });
     expect(j.stage).toBe('pr');
     j = step(j, 'start');
-    expect(() => run(j, 'complete', { artifacts: [art('pr.md')], reviews: [] })).toThrow(
+    const delivered = [art('pr.md'), art('decision.md')];
+    expect(() => run(j, 'complete', { artifacts: delivered, reviews: [] })).toThrow(
       /record the PR/,
     );
     j = { ...j, prUrl: 'https://x/pr/1', prState: 'draft' };
-    const done = run(j, 'complete', { artifacts: [art('pr.md')], reviews: [] });
+    // A PR alone is not completion: the approval must be on record too.
+    expect(() => run(j, 'complete', { artifacts: [art('pr.md')], reviews: [] })).toThrow(
+      /no DECISION: APPROVE/,
+    );
+    const done = run(j, 'complete', { artifacts: delivered, reviews: [] });
     expect(done.patch.stage).toBe('completed');
     expect(done.patch.status).toBe('completed');
     expect(done.patch.completedAt).toBeTruthy();

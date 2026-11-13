@@ -7,8 +7,8 @@ import { existsSync } from 'node:fs';
 
 import { ValidationError } from '../core/errors.ts';
 import type { CiStatus, PrState } from '../core/workflow.ts';
-import { describeRepo } from '../git/repo.ts';
-import { git } from '../git/run.ts';
+import { baseRef, describeRepo } from '../git/repo.ts';
+import { git, tryGit } from '../git/run.ts';
 import { inspectWorktree } from '../git/worktree.ts';
 import {
   createDraftPr,
@@ -22,6 +22,7 @@ import {
   viewPr,
   viewRepo,
 } from '../integrations/github.ts';
+import { findArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { type Auth, authorize, getJob, recordCi, recordEvent, recordPr } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
@@ -67,10 +68,43 @@ export interface PushResult {
   pushed: boolean;
 }
 
-/** `git push --set-upstream origin <branch>`; never force. */
+/**
+ * Only approved code leaves the machine: the job must be in the pr stage, decision.md must be
+ * APPROVE recorded against a commit, and every commit since then that is not already on the base
+ * must be a merge (base integration). Conflict resolutions inside a merge commit are the one gap.
+ */
+function requireApprovedHead(store: Store, job: Job, path: string, head: string): void {
+  if (job.stage !== 'pr' && job.stage !== 'completed') {
+    throw new ValidationError(`Pushing is allowed in the pr stage only (job is in ${job.stage}).`);
+  }
+  const decision = findArtifact(store.db, job.id, 'decision.md');
+  if (decision?.marker !== 'approve' || !decision.head) {
+    throw new ValidationError('No DECISION: APPROVE recorded against a commit; refusing to push.');
+  }
+  if (decision.head === head) return;
+  const base = baseRef(path, job.baseBranch);
+  const unreviewed = tryGit(
+    path,
+    'rev-list',
+    '--no-merges',
+    `${decision.head}..${head}`,
+    ...(base ? [`^${base}`] : []),
+  );
+  if (unreviewed === undefined || unreviewed !== '') {
+    throw new ValidationError(
+      `HEAD ${head.slice(0, 7)} has commits that were not approved (approved: ${decision.head.slice(0, 7)}); ` +
+        'only base integration merges may follow an approval. Return the job to review.',
+    );
+  }
+}
+
+/** `git push --set-upstream origin <branch>`; never force, never the base branch. */
 export function pushBranch(store: Store, id: string, auth: Auth): PushResult {
   const job = authorize(store, id, auth);
   const { path, branch } = requireWorktree(job);
+  if (branch === job.baseBranch) {
+    throw new ValidationError(`Job branch equals the base branch ${branch}; refusing to push.`);
+  }
   const info = inspectWorktree(job.repoPath, path, job.baseBranch);
   if (info.branch !== branch) {
     throw new ValidationError(
@@ -78,6 +112,7 @@ export function pushBranch(store: Store, id: string, auth: Auth): PushResult {
     );
   }
   const head = info.head ?? git(path, 'rev-parse', 'HEAD');
+  requireApprovedHead(store, job, path, head);
   if (remoteHead(path, branch) === head) {
     return { job, branch, head, pushed: false };
   }
@@ -118,6 +153,7 @@ export function ensureDraftPr(store: Store, id: string, input: EnsurePrInput): P
     throw new ValidationError(`Base branch ${job.baseBranch} does not exist on origin.`);
   }
   const head = git(path, 'rev-parse', 'HEAD');
+  requireApprovedHead(store, job, path, head);
   const remote = remoteHead(path, branch);
   if (!remote) throw new ValidationError(`Branch ${branch} is not pushed; run orch gh push first.`);
   if (remote !== head) {
