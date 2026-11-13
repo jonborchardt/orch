@@ -6,12 +6,14 @@ is; this file is about how to change it.
 ## Commands
 
 ```sh
-npm run check            # typecheck + lint + format:check + test; run before finishing any task
+npm run check            # typecheck (CLI + web) + lint + format:check + test; run before finishing
 npm run dev -- <args>    # run the CLI from source (Node strips types natively)
-npm run build            # tsc -> dist/ (the linked `orch` binary runs dist/)
+npm run build            # tsc -> dist/ and vite -> web/dist (the linked `orch` binary runs dist/)
 npm run db:generate      # after editing src/storage/schema.ts: write a migration under drizzle/
 npm run db:check         # validate committed migrations
 npm run test:coverage
+npm run test:e2e         # Playwright against a seeded `orch ui` (needs `npx playwright install chromium`)
+npm run web:dev          # Vite dev server for web/, proxying /api to a running `orch ui`
 ```
 
 ## Architecture boundaries
@@ -46,8 +48,14 @@ npm run test:coverage
   Never write into the install root, a skill directory, or a project repository.
 - The CLI must work from any directory. Resolve the project via `findProjectRoot(cwd)`, this
   installation via `installRoot()`, and migrations via `migrationsDir()`.
-- The CLI is one-shot: open the store, do one operation, print, exit. No daemons, servers, timers,
-  or background work.
+- `src/server/` is the dashboard: `http.ts` (node:http on 127.0.0.1 only, Host/Origin/CSRF
+  guards, static files from `web/dist`), `api.ts` (read models; `safeJob` strips `ownerToken`),
+  `types.ts` (shared with `web/src`). Writes go through `ops/actions.ts`, never straight to
+  storage. `web/` is the React + MUI client with its own `tsconfig.json`; it imports only
+  `src/server/types.ts` and `src/ops/actions.ts` types from `src/`.
+- The CLI is one-shot: open the store, do one operation, print, exit. No daemons, timers, or
+  background work. The single exception is `orch ui`, which serves the dashboard until interrupted
+  and is never required for jobs to run.
 
 ## Schema changes
 

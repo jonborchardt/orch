@@ -3,10 +3,13 @@ node_modules/
 
 # Build output
 dist/
+web/dist/
 *.tsbuildinfo
 
 # Test output
 coverage/
+playwright-report/
+test-results/
 
 # Local runtime state (should live under the OS data dir, never in the repo)
 .orch/

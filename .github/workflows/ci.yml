@@ -36,6 +36,11 @@ jobs:
       - run: npm run build
       - run: node dist/cli/main.js --version
       - run: node dist/cli/main.js doctor
+      - name: Dashboard browser checks (Playwright, Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e
       - name: CLI initializes the database from dist outside the repository
         shell: bash
         run: |

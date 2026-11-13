@@ -239,3 +239,47 @@ touched. Skills still link as junctions, so only the agent files lose liveness. 
 including for jobs waiting in `needs-human`. The human (or the new session on their instruction)
 passes `--force`, which rotates the token. Silent takeover would let two live sessions race on one
 job; a lapsed lease is taken over without ceremony because its holder is presumed gone.
+
+## 32. Dashboard: React + Vite + MUI client, `node:http` server, one long-running command (Phase 4)
+
+The dashboard is the one exception to "the CLI is one-shot": `orch ui` serves until interrupted.
+It is optional, loopback-only, and reads the same database the CLI writes, so nothing about jobs
+depends on it. The client is React 19 + Material UI built by Vite into `web/dist` (shipped, so a
+user never runs Vite); the server is `node:http` with a dozen routes rather than a framework. React
+and MUI are dev dependencies: their output is static files. Hash routing, a 40-line Markdown
+renderer, and polling were chosen over a router, a Markdown library, and websockets.
+
+## 33. Dashboard actions are short ownership episodes of session `dashboard`
+
+`approve`, `request-review`, `request-rework`, and `cancel` (`src/ops/actions.ts`) claim the job as
+session `dashboard`, run the same `transition` calls the CLI would (`resume --to`, `escalate` then
+`resume --to`, `cancel`), and release the job. They refuse a job whose session holds a live lease
+unless the user confirms a forced takeover; a job waiting in `needs-human` is the exception because
+its session is, by the skill's rules, stopped. The response always states that no session is
+running the job and gives the `orch factory resume` command: the dashboard records decisions, it
+does not pretend to wake anything.
+
+## 34. Liveness is reported, not inferred
+
+The board shows `running (lease live)` versus `last reported running` (status `running`, lease
+lapsed). Both are derived from the row; neither claims a process exists. A dedicated heartbeat or
+process table was rejected because there is no daemon to maintain it.
+
+## 35. Dashboard security model
+
+Loopback bind; `Host` must be one of the server's own origins (DNS rebinding); `Sec-Fetch-Site`
+other than `same-origin`/`none` is refused; mutations need a same-origin `Origin`, JSON content
+type, and a per-process CSRF token that only the page can fetch. Bodies are capped and validated
+field by field. Static files are confined to `web/dist`; artifact text is served only for paths
+registered in the database, so the API can never read an arbitrary file; owner tokens are stripped
+from every response. There is no authentication because the server is single-user on loopback; it
+must not be bound elsewhere.
+
+## 36. Browser tests run against the real server over seeded fixtures
+
+`tests/fixtures/dashboard.ts` builds representative state through the storage API (a live job, a
+stale one, a human-blocked one, multiple rounds with long findings, a completed PR with failing CI,
+a cancelled job, a fresh one). API tests start `startServer` in-process; component tests render the
+React app in jsdom against a mocked `fetch`; Playwright drives Chromium against `orch ui` serving
+`web/dist` from a scratch `ORCH_HOME`. CI runs Playwright on Linux only to keep the Windows job
+fast; `npm run check` does not need a browser.

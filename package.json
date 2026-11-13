@@ -13,12 +13,13 @@
   },
   "files": [
     "dist",
-    "drizzle"
+    "drizzle",
+    "web/dist"
   ],
   "scripts": {
     "dev": "node src/cli/main.ts",
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && vite build --config web/vite.config.ts",
+    "typecheck": "tsc --noEmit && tsc -p web --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -28,18 +29,35 @@
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
     "prepare": "npm run build",
     "db:generate": "drizzle-kit generate",
-    "db:check": "drizzle-kit check"
+    "db:check": "drizzle-kit check",
+    "build:cli": "tsc -p tsconfig.build.json",
+    "web:dev": "vite --config web/vite.config.ts",
+    "test:e2e": "playwright test",
+    "ui:seed": "node scripts/seed-dashboard.ts"
   },
   "devDependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
     "@eslint/js": "^10.0.1",
+    "@mui/material": "^9.5.0",
+    "@playwright/test": "^1.65.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
     "@vitest/coverage-v8": "^5.1.0",
     "drizzle-kit": "1.0.0-rc.5",
     "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.8",
+    "jsdom": "^31.0.1",
     "prettier": "^3.10.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.8",
     "vitest": "^5.1.0"
   },
   "dependencies": {

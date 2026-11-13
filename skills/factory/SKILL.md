@@ -78,7 +78,9 @@ Act on `plan.step`:
 - `resume`: `orch factory resume <id> --session <s> --json` (adds `--force` only if the user
   explicitly said to take over a live session). Use the new `token` from now on.
 - `create-worktree`: run the listed command, then `next` again.
-- `needs-human`: report `plan.blockedReason`, the job id, and the exact resume command; stop.
+- `needs-human`: release the job (`orch job release <id> --token <t>`) so a human or another
+  session can act on it, report `plan.blockedReason`, the job id, and the exact resume command;
+  stop.
 - `done`: run `orch gh pr status <id> --json`; report the PR URL and CI state; stop.
 - `run-stage`: run `plan.commands` in order. Where the list names an agent step (between `start`
   and `artifact add`), launch the agents in `plan.agents` as described below, then verify their

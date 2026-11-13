@@ -9,6 +9,7 @@ import { GH_HELP, runGh } from './gh.ts';
 import { runInstall } from './install.ts';
 import { JOB_HELP, runJob } from './job.ts';
 import { print, printError, UsageError } from './output.ts';
+import { runUi, UI_HELP } from './ui.ts';
 import { runWorktree, WORKTREE_HELP } from './worktree.ts';
 
 const HELP = `Usage: orch [--json] <command>
@@ -20,6 +21,8 @@ Commands:
   worktree <subcommand>  Create, inspect, adopt, remove a job's Git worktree (orch worktree --help)
   gh <subcommand>        GitHub via gh: issue, push, draft PR, CI status (orch gh --help)
   install [--dry-run]    Link skills/ and agents/ into ~/.claude (--claude-dir, --source)
+  ui [--port <n>] [--open]
+                         Serve the local dashboard on loopback (the only long-running command)
 
 Options:
   -h, --help             Show this help
@@ -33,7 +36,7 @@ operation, prints the result, and exits. It runs no background work.
 const str = { type: 'string' } as const;
 const bool = { type: 'boolean' } as const;
 
-export function main(argv: string[]): number {
+export function main(argv: string[]): number | Promise<number> {
   let parsed;
   try {
     parsed = parseArgs({
@@ -74,6 +77,9 @@ export function main(argv: string[]): number {
         ui: bool,
         'no-ui': bool,
         fingerprint: str,
+        // ui
+        port: str,
+        open: bool,
         // install
         'dry-run': bool,
         'claude-dir': str,
@@ -98,6 +104,7 @@ export function main(argv: string[]): number {
         worktree: WORKTREE_HELP,
         gh: GH_HELP,
         factory: FACTORY_HELP,
+        ui: UI_HELP,
       };
       console.log((command && helps[command]) ?? HELP);
       return o.help ? 0 : 2;
@@ -145,6 +152,8 @@ export function main(argv: string[]): number {
         }
         return 0;
       }
+      case 'ui':
+        return runUi(o).catch((err: unknown) => printError(err, json));
       case 'install': {
         const report = runInstall(o);
         print(json ? report : formatInstall(report), json);
@@ -170,4 +179,15 @@ function formatInstall(r: ReturnType<typeof runInstall>): string {
   return lines.join('\n');
 }
 
-process.exitCode = main(process.argv.slice(2));
+const code = main(process.argv.slice(2));
+if (typeof code === 'number') process.exitCode = code;
+else {
+  code.then(
+    (c) => {
+      process.exitCode = c;
+    },
+    () => {
+      process.exitCode = 1;
+    },
+  );
+}

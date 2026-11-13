@@ -12,7 +12,7 @@ export const DEFAULT_LEASE_MINUTES = 30;
 
 type Lease = Pick<Job, 'ownerSession' | 'ownerToken' | 'leaseExpiresAt' | 'status'>;
 
-export function leaseExpired(job: Lease, nowIso: string): boolean {
+export function leaseExpired(job: Pick<Lease, 'leaseExpiresAt'>, nowIso: string): boolean {
   return job.leaseExpiresAt === null || job.leaseExpiresAt < nowIso;
 }
 

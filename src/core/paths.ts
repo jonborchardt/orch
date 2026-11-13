@@ -105,6 +105,11 @@ export function jobWorktreeDir(
   return join(paths.data, 'worktrees', repoSlug(repoIdentity), jobId);
 }
 
+/** Built dashboard assets shipped with this installation. */
+export function webDistDir(): string {
+  return join(installRoot(), 'web', 'dist');
+}
+
 /** Directory of Drizzle migrations shipped with this installation. */
 export function migrationsDir(): string {
   return join(installRoot(), 'drizzle');

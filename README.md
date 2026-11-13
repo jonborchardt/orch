@@ -9,12 +9,13 @@ specialized subagents. The workflow moves through deterministic states enforced 
 shared state in a single local SQLite database and a CLI (`orch`) that agents and humans both use.
 Output is a draft GitHub PR; humans keep merge authority.
 
-**Status:** Phase 3B. The factory works end to end from any repository: the global `/factory`
+**Status:** Phase 4. The factory works end to end from any repository: the global `/factory`
 skill coordinates ten source-controlled subagents (spec writer, builder, seven reviewers, approver)
 through the deterministic `orch` CLI. Durable core (SQLite, state machine, events, leases),
 per-job Git worktrees, content-validated artifacts, GitHub delivery via `gh`, `orch factory` for
-start/plan/resume, and `orch install` for Windows-safe global installation are in place. There is no
-dashboard yet. See [Limits of Phase 3B](#limits-of-phase-3b).
+start/plan/resume, `orch install` for Windows-safe global installation, and an optional local
+dashboard (`orch ui`, React + Vite + Material UI over the shared database) are in place. See
+[Limits of Phase 4](#limits-of-phase-4).
 
 ## Architecture
 
@@ -31,6 +32,9 @@ VS Code + Claude Code session (any repository)
        ├─ orch worktree ...            one isolated Git worktree + branch per job (src/ops, src/git)
        ├─ orch gh ...                  issues, push, draft PR, CI status via gh (src/ops, src/integrations)
        └─ subagents (agents/*.md)       spec writer, builder, reviewers, approver in the job's worktree
+
+orch ui (optional, loopback)            src/server: JSON API + web/dist; actions reuse src/ops/actions.ts
+  └─ browser: web/ (React + MUI)        job board, job detail, human controls; reads the same database
 ```
 
 Responsibilities:
@@ -66,24 +70,30 @@ starts, does one thing, and exits.
 | Lint / format | ESLint (typescript-eslint, type-checked) + Prettier                |
 | CLI parsing   | `node:util` `parseArgs`                                            |
 | Persistence   | built-in `node:sqlite` + Drizzle ORM / Drizzle Kit (`1.0.0-rc.5`)  |
-| Dashboard     | Deferred; planned React + Vite + Material UI under `web/`          |
+| Dashboard     | React 19 + Vite + Material UI under `web/`, served by `node:http`  |
+| Browser tests | Playwright (Chromium) against a real `orch ui`                     |
 
-Runtime dependencies: `drizzle-orm` only. See `docs/decisions.md` for why the rc is pinned.
+Runtime dependencies: `drizzle-orm` only; the dashboard's React/MUI are build-time inputs whose
+output (`web/dist`) ships prebuilt. See `docs/decisions.md` for why the rc is pinned.
 
 ## Layout
 
 ```
 src/
   cli/           main.ts (arg parsing, dispatch), doctor.ts, job.ts, worktree.ts, gh.ts,
-                 install.ts, output.ts
-  core/          workflow.ts, artifact-rules.ts, ownership.ts, errors.ts, paths.ts, exec.ts
+                 factory.ts, ui.ts, install.ts, output.ts
+  core/          workflow.ts, artifact-rules.ts, roles.ts, ownership.ts, errors.ts, paths.ts, exec.ts
   storage/       schema.ts, client.ts, jobs.ts, events.ts, artifacts.ts   (only SQLite importer)
   git/           run.ts (git with arg arrays), repo.ts (queries), worktree.ts (worktree ops)
   integrations/  claude.ts (skill/agent linking), github.ts (gh CLI wrapper)
-  ops/           worktree.ts, github.ts: ownership check -> Git/gh action -> storage record
+  ops/           worktree.ts, github.ts, factory.ts (the plan), actions.ts (dashboard actions)
+  server/        http.ts (loopback server, guards, static), api.ts (read models), types.ts (shared)
+web/             Vite + React + MUI dashboard: index.html, src/*.tsx, vite.config.ts -> web/dist
 drizzle/         generated SQL migrations + snapshots (committed, shipped)
 drizzle.config.ts
-tests/           Vitest suites, mirror src/; helpers.ts has shared fixtures
+tests/           Vitest suites, mirror src/; helpers.ts has shared fixtures; fixtures/dashboard.ts
+e2e/             Playwright browser checks for the dashboard (playwright.config.ts)
+scripts/         seed-dashboard.ts (demo data into a scratch ORCH_HOME)
 docs/decisions.md
 .github/workflows/ci.yml
 ```
@@ -94,7 +104,61 @@ agents/          factory-spec-writer, factory-builder, factory-reviewer-{securit
                  code-quality,ui-design,ux,accessibility,web-platform}, factory-approver
 ```
 
-Planned, created when first needed: `web/` (dashboard).
+## Dashboard
+
+`orch ui` is optional. Factory jobs never need it; it reads the same shared database and job
+artifacts that the CLI writes and offers the few human decisions the workflow has.
+
+```sh
+orch ui                 # http://127.0.0.1:4777/ until Ctrl+C
+orch ui --port 0 --open # free port, open the browser
+ORCH_HOME=/tmp/demo npm run ui:seed && ORCH_HOME=/tmp/demo orch ui   # representative demo data
+```
+
+**Job board** (all repositories): repository, title and id, stage, status, session, branch and
+worktree, review round, per-reviewer verdicts for the current round, blocking-finding count from
+the latest consolidation, elapsed time, last update, PR link and CI rollup. The status column is
+honest about liveness: `running (lease live)` means a session renewed its lease recently;
+`last reported running` means the status is still `running` but the lease lapsed, so the session is
+presumed gone; `needs human`, `idle`, `finished` otherwise. A lease never proves a process is
+alive. Filter by repository and by active / needs human / finished; the page refreshes every few
+seconds while visible.
+
+**Job detail** (`#/jobs/<id>`): next step and agents from the plan, the request, and tabs for the
+spec, build summary, review history per round (verdict, summary, full review text), consolidated
+findings per round, the approval decision, registered artifacts (size, marker, hash), the event
+log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
+the PR with its CI status. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
+GitHub.
+
+**Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
+short-lived `dashboard` session and then releases the job:
+
+| Action               | Allowed when            | Effect                                              |
+| -------------------- | ----------------------- | --------------------------------------------------- |
+| Approve              | stage `needs-human`     | `resume --to <stage>` (default: where it came from) |
+| Request review round | round ≥ 1, not finished | `escalate` + `resume --to review`                   |
+| Request rework       | not finished            | `escalate` + `resume --to build`                    |
+| Cancel job           | not finished            | `cancel`                                            |
+
+A job whose session holds a live lease (and is not waiting in `needs-human`) is refused unless the
+user confirms a forced takeover, which rotates the token. Every action records a reason in the
+events and answers with the fact that no session is running the job plus the exact
+`orch factory resume` command; the dashboard never pretends to wake a Claude session.
+
+**Security.** The server binds `127.0.0.1` only, checks the `Host` header against its own
+loopback origins (DNS rebinding), rejects cross-site `Sec-Fetch-Site`, and for state-changing
+requests requires a same-origin `Origin`, `Content-Type: application/json`, and a per-process
+CSRF token obtained from `/api/session` (which a foreign origin cannot read). Bodies are limited to
+64 KB and validated field by field; unknown fields are rejected. Static files come only from
+`web/dist`; artifact text is served only for files registered in the database (no arbitrary path
+reads); job rows never include the owner token; there is no shell-execution endpoint. Responses
+carry a CSP, `nosniff`, and `no-store`.
+
+**Development.** `npm run web:dev` starts Vite with hot reload on `127.0.0.1:5173`, proxying
+`/api` to a running `orch ui`. `npm run build` compiles both the CLI and `web/dist`.
+`npm run test:e2e` runs the Playwright suite against a seeded scratch database (first time:
+`npx playwright install chromium`).
 
 ## Using the factory
 
@@ -460,6 +524,8 @@ orch factory next|status <id> [--ui|--no-ui]
 orch factory resume <id> --session <name> [--to <stage>] [--force]
 orch factory check-readonly <id> --fingerprint <f>
 orch factory config
+
+orch ui [--port <n>] [--open]          # the only long-running command; loopback only
 ```
 
 `job create` detects the repository from the current directory (or `--repo`), records its identity
@@ -532,19 +598,22 @@ links, which it does for junctions and symlinks; if a skill is not listed, check
 - Shells started by Claude Code do not keep environment variables between calls, so the plan's
   commands carry `--token <token>` explicitly instead of relying on `ORCH_TOKEN`.
 
-## Limits of Phase 3B
+## Limits of Phase 4
 
-Implemented: everything in Phase 3A plus `orch factory`, the `/factory` skill, ten agent
-definitions, model configuration, UI reviewer detection, read-only fingerprinting, resume from
-persisted state, and contract tests that drive the workflow with fixture subagent outputs (spec to
-build, malformed output, parallel review aggregation, rework rounds, max-round escalation, approval
-and rejection, resume after interruption, draft PR through the mocked `gh`, cross-project jobs,
-ownership loss, configuration).
+Implemented: everything in Phases 2 to 3B (durable core, worktrees, validated artifacts, GitHub via
+`gh`, `orch factory`, the `/factory` skill, ten agents, Windows-safe install) plus the dashboard:
+`orch ui`, the loopback JSON API with Origin/CSRF/Host guards, the job board and job detail, human
+controls through the shared domain layer, light and dark modes, API tests, component tests (jsdom),
+and Playwright browser checks over seeded fixtures (empty database, several repositories, live and
+stale sessions, review rounds with long findings, a human-blocked job, invalid commands, refresh
+while state changes, light and dark modes, keyboard navigation, cross-origin refusal).
 
-Not implemented: the dashboard (Phase 4), Claude session spawning or restoration, token accounting,
-any daemon or scheduler, automatic crash recovery (a lapsed lease is only noticed when someone runs
-`factory next` or `resume`), rebase-based integration (only merge commits), a workflow definition
-language, and plugin distribution. Ordinary CI never calls a model: the skill and agents are
-exercised by their contracts (frontmatter, templates, commands), and a live run requires a Claude
-Code session. The `events` table is an audit log, not an event-sourcing store. See
-`docs/decisions.md` for the reasoning behind what exists.
+Not implemented: Claude session spawning or restoration (the dashboard records decisions; a session
+must resume), token accounting, any daemon or scheduler (the dashboard is a plain server you start
+and stop; nothing runs between commands), automatic crash recovery (a lapsed lease is only noticed
+when someone runs `factory next`, `resume`, or looks at the board), rebase-based integration (only
+merge commits), authentication for the dashboard (it is loopback-only and single-user by design), a
+workflow definition language, and plugin distribution. Ordinary CI never calls a model: the skill
+and agents are exercised by their contracts (frontmatter, templates, commands), and a live run
+requires a Claude Code session. The `events` table is an audit log, not an event-sourcing store.
+See `docs/decisions.md` for the reasoning behind what exists.

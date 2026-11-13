@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "types": ["vite/client"],
+    "jsx": "react-jsx",
+    "rootDir": "..",
+    "noEmit": true
+  },
+  "include": ["src", "vite.config.ts", "../src/server/types.ts"]
+}
