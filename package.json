@@ -14,7 +14,9 @@
   "files": [
     "dist",
     "drizzle",
-    "web/dist"
+    "web/dist",
+    "skills",
+    "agents"
   ],
   "scripts": {
     "dev": "node src/cli/main.ts",

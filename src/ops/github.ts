@@ -9,7 +9,7 @@ import { ValidationError } from '../core/errors.ts';
 import type { CiStatus, PrState } from '../core/workflow.ts';
 import { baseRef, describeRepo } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
-import { editedMerges, inspectWorktree } from '../git/worktree.ts';
+import { editedMerges } from '../git/worktree.ts';
 import {
   createDraftPr,
   type GhIssue,
@@ -26,17 +26,21 @@ import { findArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { type Auth, authorize, getJob, recordCi, recordEvent, recordPr } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
-import { worktreeOf } from './tree.ts';
+import { requireClean, type Tree, worktreeOf } from './tree.ts';
 import { effectivePolicy, verificationStatus } from './verify.ts';
 
-function requireWorktree(job: Job): { path: string; branch: string } {
-  if (!job.worktreePath || !job.branch) {
+/** The job's worktree, inspected once, with the job branch checked out. */
+function requireWorktree(job: Job): Tree & { branch: string } {
+  const tree = job.branch ? worktreeOf(job) : null;
+  if (!tree || !job.branch) {
     throw new ValidationError(`Job ${job.id} has no worktree; run orch worktree create first.`);
   }
-  if (!existsSync(job.worktreePath)) {
-    throw new ValidationError(`Worktree ${job.worktreePath} is missing.`);
+  if (tree.branch !== job.branch) {
+    throw new ValidationError(
+      `Worktree is on ${tree.branch ?? '(detached)'} but the job branch is ${job.branch}; refusing to push.`,
+    );
   }
-  return { path: job.worktreePath, branch: job.branch };
+  return { ...tree, branch: job.branch };
 }
 
 /** The GitHub repository for a job, checked against the job's recorded identity. */
@@ -77,7 +81,8 @@ export interface PushResult {
  * edits inside the merge), the verification policy must not have drifted without a human, and the
  * latest verification run must be valid for this exact HEAD.
  */
-function requireApprovedHead(store: Store, job: Job, path: string, head: string): void {
+function requireApprovedHead(store: Store, job: Job, tree: Tree): void {
+  const { path, head } = tree;
   if (job.stage !== 'pr' && job.stage !== 'completed') {
     throw new ValidationError(`Pushing is allowed in the pr stage only (job is in ${job.stage}).`);
   }
@@ -109,13 +114,7 @@ function requireApprovedHead(store: Store, job: Job, path: string, head: string)
       );
     }
   }
-  const tree = worktreeOf(job);
-  if (!tree) throw new ValidationError(`Job ${job.id} has no worktree.`);
-  if (tree.dirty.length > 0) {
-    throw new ValidationError(
-      `Worktree has uncommitted changes (${tree.dirty[0] ?? ''}); refusing.`,
-    );
-  }
+  requireClean(tree, 'refusing to deliver.');
   const eff = effectivePolicy(job, tree);
   if (eff.diff) {
     throw new ValidationError(
@@ -133,18 +132,12 @@ function requireApprovedHead(store: Store, job: Job, path: string, head: string)
 /** `git push --set-upstream origin <branch>`; never force, never the base branch. */
 export function pushBranch(store: Store, id: string, auth: Auth): PushResult {
   const job = authorize(store, id, auth);
-  const { path, branch } = requireWorktree(job);
+  const tree = requireWorktree(job);
+  const { path, branch, head } = tree;
   if (branch === job.baseBranch) {
     throw new ValidationError(`Job branch equals the base branch ${branch}; refusing to push.`);
   }
-  const info = inspectWorktree(job.repoPath, path, job.baseBranch);
-  if (info.branch !== branch) {
-    throw new ValidationError(
-      `Worktree is on ${info.branch ?? '(detached)'} but the job branch is ${branch}; refusing to push.`,
-    );
-  }
-  const head = info.head ?? git(path, 'rev-parse', 'HEAD');
-  requireApprovedHead(store, job, path, head);
+  requireApprovedHead(store, job, tree);
   if (remoteHead(path, branch) === head) {
     return { job, branch, head, pushed: false };
   }
@@ -177,15 +170,15 @@ export function ensureDraftPr(store: Store, id: string, input: EnsurePrInput): P
       `A draft PR can only be created in the pr stage (job is in ${job.stage}).`,
     );
   }
-  const { path, branch } = requireWorktree(job);
+  const tree = requireWorktree(job);
+  const { path, branch, head } = tree;
   if (!existsSync(input.bodyFile))
     throw new ValidationError(`Body file not found: ${input.bodyFile}`);
   resolveRepo(job, path);
   if (!remoteHead(path, job.baseBranch)) {
     throw new ValidationError(`Base branch ${job.baseBranch} does not exist on origin.`);
   }
-  const head = git(path, 'rev-parse', 'HEAD');
-  requireApprovedHead(store, job, path, head);
+  requireApprovedHead(store, job, tree);
   const remote = remoteHead(path, branch);
   if (!remote) throw new ValidationError(`Branch ${branch} is not pushed; run orch gh push first.`);
   if (remote !== head) {

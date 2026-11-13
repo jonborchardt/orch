@@ -53,6 +53,3 @@ export function ciColor(v: string | null): ChipColor {
       return 'default';
   }
 }
-
-/** Short job id for dense tables. */
-export const shortId = (id: string) => id.replace(/^job-/, '');

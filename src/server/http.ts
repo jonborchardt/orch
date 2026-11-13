@@ -9,7 +9,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 
-import { OrchError } from '../core/errors.ts';
+import {
+  NotFoundError,
+  OwnershipError,
+  ToolError,
+  UsageError,
+  ValidationError,
+  WorkflowError,
+} from '../core/errors.ts';
 import { packageInfo, webDistDir } from '../core/paths.ts';
 import { DASHBOARD_ACTIONS } from '../ops/actions.ts';
 import type { Store } from '../storage/client.ts';
@@ -59,21 +66,20 @@ class HttpError extends Error {
 
 function statusFor(err: unknown): number {
   if (err instanceof HttpError) return err.status;
-  if (!(err instanceof OrchError)) return 500;
-  switch (err.name) {
-    case 'NotFoundError':
-      return 404;
-    case 'UsageError':
-      return 400;
-    case 'OwnershipError':
-    case 'WorkflowError':
-      return 409;
-    case 'ValidationError':
-      return 422;
-    case 'ToolError':
-      return 502;
-    default:
-      return 500;
+  if (err instanceof NotFoundError) return 404;
+  if (err instanceof UsageError) return 400;
+  if (err instanceof OwnershipError || err instanceof WorkflowError) return 409;
+  if (err instanceof ValidationError) return 422;
+  if (err instanceof ToolError) return 502;
+  return 500;
+}
+
+/** Percent-decode a URL path segment; malformed escapes are the client's fault, not ours. */
+function decode(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    throw new HttpError(400, 'Malformed URL encoding');
   }
 }
 
@@ -164,7 +170,7 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
       });
       return;
     }
-    const decoded = decodeURIComponent(pathname);
+    const decoded = decode(pathname);
     let file = normalize(join(webRoot, decoded));
     const inside = file === webRoot || file.startsWith(webRoot + sep);
     if (!inside) throw new HttpError(404, 'Not found');
@@ -229,7 +235,7 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
         return;
       }
       if (root === 'jobs' && id && sub === 'artifacts' && rest.length > 0) {
-        const rel = rest.map((p) => decodeURIComponent(p)).join('/');
+        const rel = rest.map(decode).join('/');
         if (rel.split('/').some((p) => p === '..' || p === '' || p === '.')) {
           throw new HttpError(400, 'Bad artifact path');
         }

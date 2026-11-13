@@ -9,13 +9,14 @@ specialized subagents. The workflow moves through deterministic states enforced 
 shared state in a single local SQLite database and a CLI (`orch`) that agents and humans both use.
 Output is a draft GitHub PR; humans keep merge authority.
 
-**Status:** Phase 4. The factory works end to end from any repository: the global `/factory`
-skill coordinates ten source-controlled subagents (spec writer, builder, seven reviewers, approver)
-through the deterministic `orch` CLI. Durable core (SQLite, state machine, events, leases),
-per-job Git worktrees, content-validated artifacts, GitHub delivery via `gh`, `orch factory` for
-start/plan/resume, `orch install` for Windows-safe global installation, and an optional local
-dashboard (`orch ui`, React + Vite + Material UI over the shared database) are in place. See
-[Limits of Phase 4](#limits-of-phase-4).
+**Status:** Phase 5 complete. The factory works end to end from any repository: the global
+`/factory` skill coordinates ten source-controlled subagents (spec writer, builder, seven
+reviewers, approver) through the deterministic `orch` CLI. Durable core (SQLite, state machine,
+events, leases), per-job Git worktrees, content-validated artifacts pinned to commits, executed
+verification evidence (`orch verify`), sensitive-change labelling, recorded base integration,
+GitHub delivery via `gh`, `orch factory` for start/plan/resume, `orch install` for Windows-safe
+global installation, and an optional local dashboard (`orch ui`, React + Vite + Material UI over
+the shared database) are in place. See [Limits](#limits).
 
 ## Architecture
 
@@ -43,7 +44,7 @@ Responsibilities:
 - **`orch`** owns durable state, concurrency control, validation, and workflow decisions. It
   returns structured results telling the skill what stage comes next and what it requires.
 - **The database** (`orch.sqlite`) is shared by every repository and every session on the machine.
-  Any session can inspect it and adopt an interrupted job; a future dashboard reads it too.
+  Any session can inspect it and adopt an interrupted job; the dashboard reads it too.
 
 `orch` is not a service. It runs no daemon, server, scheduler, or background work. Every command
 starts, does one thing, and exits.
@@ -80,18 +81,22 @@ output (`web/dist`) ships prebuilt. See `docs/decisions.md` for why the rc is pi
 
 ```
 src/
-  cli/           main.ts (arg parsing, dispatch), doctor.ts, job.ts, worktree.ts, gh.ts,
-                 factory.ts, ui.ts, install.ts, output.ts
-  core/          workflow.ts, artifact-rules.ts, roles.ts, ownership.ts, errors.ts, paths.ts, exec.ts
-  storage/       schema.ts, client.ts, jobs.ts, events.ts, artifacts.ts   (only SQLite importer)
+  cli/           main.ts (arg parsing, dispatch), args.ts (option helpers), output.ts, doctor.ts,
+                 job.ts, worktree.ts, gh.ts, verify.ts, factory.ts, ui.ts, install.ts
+  core/          workflow.ts, artifact-rules.ts, roles.ts, ownership.ts, verification.ts,
+                 sensitive.ts, errors.ts, paths.ts, exec.ts
+  storage/       schema.ts, client.ts, jobs.ts, events.ts, artifacts.ts, verification.ts
+                 (only SQLite importer)
   git/           run.ts (git with arg arrays), repo.ts (queries), worktree.ts (worktree ops)
   integrations/  claude.ts (skill/agent linking), github.ts (gh CLI wrapper)
-  ops/           worktree.ts, github.ts, factory.ts (the plan), actions.ts (dashboard actions)
+  ops/           worktree.ts, github.ts, verify.ts (runs the policy), gates.ts (Git-aware gates),
+                 tree.ts, factory.ts (the plan), actions.ts (dashboard actions)
   server/        http.ts (loopback server, guards, static), api.ts (read models), types.ts (shared)
 web/             Vite + React + MUI dashboard: index.html, src/*.tsx, vite.config.ts -> web/dist
 drizzle/         generated SQL migrations + snapshots (committed, shipped)
 drizzle.config.ts
-tests/           Vitest suites, mirror src/; helpers.ts has shared fixtures; fixtures/dashboard.ts
+tests/           Vitest suites, mirror src/; helpers.ts (fixtures), drive.ts (stage driver),
+                 fixtures/dashboard.ts (seeded dashboard state)
 e2e/             Playwright browser checks for the dashboard (playwright.config.ts)
 scripts/         seed-dashboard.ts (demo data into a scratch ORCH_HOME)
 docs/decisions.md
@@ -134,12 +139,13 @@ GitHub.
 **Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
 short-lived `dashboard` session and then releases the job:
 
-| Action               | Allowed when            | Effect                                              |
-| -------------------- | ----------------------- | --------------------------------------------------- |
-| Approve              | stage `needs-human`     | `resume --to <stage>` (default: where it came from) |
-| Request review round | round ≥ 1, not finished | `escalate` + `resume --to review`                   |
-| Request rework       | not finished            | `escalate` + `resume --to build`                    |
-| Cancel job           | not finished            | `cancel`                                            |
+| Action                     | Allowed when                    | Effect                                              |
+| -------------------------- | ------------------------------- | --------------------------------------------------- |
+| Approve                    | stage `needs-human`             | `resume --to <stage>` (default: where it came from) |
+| Request review round       | round ≥ 1, not finished         | `escalate` + `resume --to review`                   |
+| Request rework             | not finished                    | `escalate` + `resume --to build`                    |
+| Accept verification policy | worktree `factory.json` differs | snapshot it as the job's policy (`jobs.policy`)     |
+| Cancel job                 | not finished                    | `cancel`                                            |
 
 A job whose session holds a live lease (and is not waiting in `needs-human`) is refused unless the
 user confirms a forced takeover, which rotates the token. Every action records a reason in the
@@ -343,12 +349,15 @@ recreates a database, and `drizzle-kit push` is never used.
 
 Tables:
 
-| Table       | Purpose                                                                                            |
-| ----------- | -------------------------------------------------------------------------------------------------- |
-| `jobs`      | One row per job: identity, repo, branch, worktree, stage, status, round, owner lease, PR, CI, rev. |
-| `events`    | Append-only activity log (`type`, JSON `payload`, `actor`, timestamp) per job                      |
-| `artifacts` | Registered artifact files: relative path, stage, round, size, sha256, parsed marker                |
-| `reviews`   | One row per reviewer per round: verdict (`pass`/`changes`/pending), artifact, summary              |
+| Table                 | Purpose                                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| `jobs`                | One row per job: identity, repo, branch, worktree, stage, status, round, owner lease, PR, CI, rev. |
+| `events`              | Append-only activity log (`type`, JSON `payload`, `actor`, timestamp) per job                      |
+| `artifacts`           | Registered artifact files: relative path, stage, round, size, sha256, parsed marker, HEAD          |
+| `reviews`             | One row per reviewer per round: verdict (`pass`/`changes`/pending), artifact, summary, HEAD        |
+| `verification_runs`   | One `orch verify` invocation: commit, tree, policy fingerprint and source, status                  |
+| `verification_checks` | One row per check of a run: command, cwd, status, exit code, duration, log path and hash           |
+| `integrations`        | One base-integration attempt: inputs recorded before Git runs, outcome after                       |
 
 `jobs.worktreePath` and (`repo`, `branch`) are unique, so a managed worktree or branch belongs to
 at most one job.
@@ -377,6 +386,7 @@ Claude requests an action; `orch job transition <id> <action>` validates and app
 | `fail`     | status `running`                                          | status `failed`                                         |
 | `escalate` | any live stage                                            | stage `needs-human`, status `blocked`, remembers origin |
 | `resume`   | `needs-human`, or status `interrupted`/`failed`/`blocked` | back to the origin or `--to` stage, status `pending`    |
+| `rework`   | stage `pr` (base integration needs the builder)           | stage `build`, status `pending`; re-review follows      |
 | `cancel`   | any job not already finished                              | status `cancelled`                                      |
 
 Required artifacts, relative to the job's artifact directory and registered with
@@ -611,7 +621,7 @@ orch job events    <id> [--limit <n>]
 orch job claim     <id> --session <name> [--lease <minutes>] [--force]
 orch job release   <id> --token <t>
 orch job resume    <id> --session <name> [--to <stage>] [--force]
-orch job transition <id> start|complete|fail|escalate|resume|cancel --token <t>
+orch job transition <id> start|complete|fail|escalate|resume|rework|cancel --token <t>
                    [--to <stage>] [--reason <r>] [--revision <n>]
 orch job artifact add <id> <relative-path> --token <t> [--replace] [--revision <n>]
 orch job review record <id> --reviewer <name> [--verdict pass|changes] [--artifact <path>]
@@ -719,15 +729,14 @@ subagents staying inside the worktree; checks not being influenced by ignored fi
 (`node_modules`, build caches) that `git status` cannot see; child processes of a timed-out check
 being cleaned up on Windows (the direct child is killed; grandchildren may linger).
 
-## Limits of Phase 4
+## Limits
 
-Implemented: everything in Phases 2 to 3B (durable core, worktrees, validated artifacts, GitHub via
-`gh`, `orch factory`, the `/factory` skill, ten agents, Windows-safe install) plus the dashboard:
-`orch ui`, the loopback JSON API with Origin/CSRF/Host guards, the job board and job detail, human
+Implemented: the durable core, worktrees, validated artifacts pinned to commits, executed
+verification evidence, sensitive-change labelling, recorded base integration, GitHub via `gh`,
+`orch factory`, the `/factory` skill, ten agents, Windows-safe install, and the dashboard (`orch
+ui`, the loopback JSON API with Origin/CSRF/Host guards, the job board and job detail, human
 controls through the shared domain layer, light and dark modes, API tests, component tests (jsdom),
-and Playwright browser checks over seeded fixtures (empty database, several repositories, live and
-stale sessions, review rounds with long findings, a human-blocked job, invalid commands, refresh
-while state changes, light and dark modes, keyboard navigation, cross-origin refusal).
+and Playwright browser checks over seeded fixtures).
 
 Not implemented: Claude session spawning or restoration (the dashboard records decisions; a session
 must resume), token accounting, any daemon or scheduler (the dashboard is a plain server you start

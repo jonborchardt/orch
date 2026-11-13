@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 
+import { UsageError } from '../core/errors.ts';
 import { packageInfo } from '../core/paths.ts';
-import { openStore } from '../storage/client.ts';
+import { openStore, type Store } from '../storage/client.ts';
 import { formatChecks, runDoctor } from './doctor.ts';
 import { FACTORY_HELP, runFactory } from './factory.ts';
 import { GH_HELP, runGh } from './gh.ts';
-import { runInstall } from './install.ts';
+import { formatInstall, runInstall } from './install.ts';
 import { JOB_HELP, runJob } from './job.ts';
-import { print, printError, UsageError } from './output.ts';
+import { print, printError } from './output.ts';
 import { runUi, UI_HELP } from './ui.ts';
 import { runVerify, VERIFY_HELP } from './verify.ts';
 import { runWorktree, WORKTREE_HELP } from './worktree.ts';
@@ -35,10 +36,29 @@ orch is a one-shot CLI: it opens the shared SQLite database, performs one determ
 operation, prints the result, and exits. It runs no background work.
 `;
 
+const SUBCOMMAND_HELP: Record<string, string> = {
+  job: JOB_HELP,
+  worktree: WORKTREE_HELP,
+  gh: GH_HELP,
+  factory: FACTORY_HELP,
+  verify: VERIFY_HELP,
+  ui: UI_HELP,
+};
+
 const str = { type: 'string' } as const;
 const bool = { type: 'boolean' } as const;
 
-export function main(argv: string[]): number | Promise<number> {
+/** Open the shared database for one command and close it however the command ends. */
+function withStore<T>(fn: (store: Store) => T): T {
+  const store = openStore();
+  try {
+    return fn(store);
+  } finally {
+    store.close();
+  }
+}
+
+export async function main(argv: string[]): Promise<number> {
   let parsed;
   try {
     parsed = parseArgs({
@@ -101,15 +121,7 @@ export function main(argv: string[]): number | Promise<number> {
     }
     const [command, ...rest] = positionals;
     if (o.help || command === undefined) {
-      const helps: Record<string, string> = {
-        job: JOB_HELP,
-        worktree: WORKTREE_HELP,
-        gh: GH_HELP,
-        factory: FACTORY_HELP,
-        verify: VERIFY_HELP,
-        ui: UI_HELP,
-      };
-      console.log((command && helps[command]) ?? HELP);
+      console.log((command && SUBCOMMAND_HELP[command]) ?? HELP);
       return o.help ? 0 : 2;
     }
 
@@ -119,54 +131,37 @@ export function main(argv: string[]): number | Promise<number> {
         print(json ? checks : formatChecks(checks), json);
         return checks.some((c) => c.status === 'fail') ? 1 : 0;
       }
-      case 'job': {
-        const store = openStore();
-        try {
-          print(runJob(store, rest, o), json);
-        } finally {
-          store.close();
-        }
+      case 'job':
+        print(
+          withStore((store) => runJob(store, rest, o)),
+          json,
+        );
         return 0;
-      }
-      case 'factory': {
-        const store = openStore();
-        try {
-          print(runFactory(store, rest, o), json);
-        } finally {
-          store.close();
-        }
+      case 'factory':
+        print(
+          withStore((store) => runFactory(store, rest, o)),
+          json,
+        );
         return 0;
-      }
-      case 'worktree': {
-        const store = openStore();
-        try {
-          print(runWorktree(store, rest, o), json);
-        } finally {
-          store.close();
-        }
+      case 'worktree':
+        print(
+          withStore((store) => runWorktree(store, rest, o)),
+          json,
+        );
         return 0;
-      }
-      case 'gh': {
-        const store = openStore();
-        try {
-          print(runGh(store, rest, o), json);
-        } finally {
-          store.close();
-        }
+      case 'gh':
+        print(
+          withStore((store) => runGh(store, rest, o)),
+          json,
+        );
         return 0;
-      }
       case 'verify': {
-        const store = openStore();
-        try {
-          const { result, exitCode } = runVerify(store, rest, o);
-          print(result, json);
-          return exitCode;
-        } finally {
-          store.close();
-        }
+        const { result, exitCode } = withStore((store) => runVerify(store, rest, o));
+        print(result, json);
+        return exitCode;
       }
       case 'ui':
-        return runUi(o).catch((err: unknown) => printError(err, json));
+        return await runUi(o);
       case 'install': {
         const report = runInstall(o);
         print(json ? report : formatInstall(report), json);
@@ -180,27 +175,4 @@ export function main(argv: string[]): number | Promise<number> {
   }
 }
 
-function formatInstall(r: ReturnType<typeof runInstall>): string {
-  const lines = [`${r.dryRun ? 'Would link' : 'Linking'} ${r.source} -> ${r.claudeDir}`];
-  if (r.entries.length === 0) lines.push('(no skills/ or agents/ found in source)');
-  for (const e of r.entries) {
-    const how = e.method ? ` [${e.method}]` : '';
-    lines.push(
-      `${e.state.toUpperCase().padEnd(8)} ${e.kind} ${e.name}${how} -> ${e.target}${e.detail ? `: ${e.detail}` : ''}`,
-    );
-  }
-  return lines.join('\n');
-}
-
-const code = main(process.argv.slice(2));
-if (typeof code === 'number') process.exitCode = code;
-else {
-  code.then(
-    (c) => {
-      process.exitCode = c;
-    },
-    () => {
-      process.exitCode = 1;
-    },
-  );
-}
+process.exitCode = await main(process.argv.slice(2));

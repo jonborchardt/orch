@@ -1,4 +1,5 @@
 /** `orch worktree ...` handlers. */
+import { UsageError } from '../core/errors.ts';
 import {
   adoptWorktree,
   createWorktree,
@@ -7,8 +8,7 @@ import {
   showWorktree,
 } from '../ops/worktree.ts';
 import type { Store } from '../storage/client.ts';
-import type { Auth } from '../storage/jobs.ts';
-import { UsageError } from './output.ts';
+import { authFrom, need } from './args.ts';
 
 export interface WorktreeOptions {
   token?: string;
@@ -37,13 +37,7 @@ export function runWorktree(
   env = process.env,
 ): unknown {
   const [cmd, id] = args;
-  const auth: Auth = { token: o.token ?? env['ORCH_TOKEN'] };
-  if (o.revision !== undefined) {
-    const n = Number(o.revision);
-    if (!Number.isInteger(n) || n < 0)
-      throw new UsageError('--revision must be a non-negative integer');
-    auth.expectRevision = n;
-  }
+  const auth = authFrom(o, env);
   if (cmd === undefined) throw new UsageError(WORKTREE_HELP);
   if (!id) throw new UsageError(`Missing required <job-id>\n\n${WORKTREE_HELP}`);
   switch (cmd) {
@@ -52,8 +46,7 @@ export function runWorktree(
     case 'show':
       return showWorktree(store, id);
     case 'adopt':
-      if (!o.path) throw new UsageError('Missing required --path <dir>');
-      return adoptWorktree(store, id, auth, o.path, { repo: o.repo });
+      return adoptWorktree(store, id, auth, need(o.path, '--path <dir>'), { repo: o.repo });
     case 'remove':
       return dropWorktree(store, id, auth);
     case 'integrate':

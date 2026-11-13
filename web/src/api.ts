@@ -34,7 +34,7 @@ async function parse<T>(res: Response): Promise<T> {
   );
 }
 
-export async function getJson<T>(path: string): Promise<T> {
+async function getJson<T>(path: string): Promise<T> {
   return parse<T>(await fetch(path, { headers: { Accept: 'application/json' } }));
 }
 

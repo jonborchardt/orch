@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 
 import { checkArtifact } from '../core/artifact-rules.ts';
 import { ValidationError } from '../core/errors.ts';
@@ -87,4 +87,18 @@ export function upsertArtifact(tx: Db, row: Omit<Artifact, 'id'>): Artifact {
 
 export function listArtifacts(db: Db, jobId: string): Artifact[] {
   return db.select().from(artifacts).where(eq(artifacts.jobId, jobId)).orderBy(artifacts.id).all();
+}
+
+/** Artifacts of several jobs in one query (the dashboard board), grouped by job id. */
+export function artifactsByJob(db: Db, jobIds: readonly string[]): Map<string, Artifact[]> {
+  const out = new Map<string, Artifact[]>(jobIds.map((id) => [id, []]));
+  if (jobIds.length === 0) return out;
+  const rows = db
+    .select()
+    .from(artifacts)
+    .where(inArray(artifacts.jobId, [...jobIds]))
+    .orderBy(artifacts.id)
+    .all();
+  for (const a of rows) out.get(a.jobId)?.push(a);
+  return out;
 }

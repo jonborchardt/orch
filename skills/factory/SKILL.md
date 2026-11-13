@@ -154,9 +154,9 @@ sequentially. Wait for every agent to finish before registering anything.
    verdict is PASS, back to `build` otherwise, or to `needs-human` when the round limit is reached.
 
 On the next build round, the builder gets `round-N/consolidated.md` and must address every
-blocking finding without expanding scope. Rerun all reviewers whose previous verdict was CHANGES
-plus correctness and code-quality. `BLOCKING: n` with `n > 0` sends the job back to build even when
-every verdict is PASS; count honestly.
+blocking finding without expanding scope. Every round runs every reviewer in `plan.agents` again;
+`orch` refuses to complete a round with a reviewer still pending. `BLOCKING: n` with `n > 0` sends
+the job back to build even when every verdict is PASS; count honestly.
 
 ### Approval and delivery
 

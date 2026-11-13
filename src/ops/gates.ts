@@ -28,8 +28,6 @@ import type { Artifact, Job, Review } from '../storage/schema.ts';
 import { effectivePolicy, sensitiveReport, verificationStatus } from './verify.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
 
-export { worktreeOf };
-
 /** Artifacts that describe the code and therefore need a committed, clean worktree. */
 const CODE_EVIDENCE = /^(build\.md|decision\.md|round-\d+\/review-[a-z0-9-]+\.md)$/;
 /** Artifacts that must name every sensitive change in the diff. */
@@ -89,7 +87,7 @@ export function addArtifact(
   let info: Tree | null;
   if (CODE_EVIDENCE.test(rel)) {
     info = worktreeOf(job);
-    if (info) requireClean(info, rel);
+    if (info) requireClean(info, `${rel} must describe a committed state.`);
   } else if (SUMMARIES.test(rel)) {
     info = worktreeOf(job);
     if (info?.baseRef) requireSensitiveSection(store, job, info, rel);
@@ -108,7 +106,7 @@ export function addArtifact(
 export function recordVerdict(store: Store, id: string, input: ReviewInput): Review {
   const job = authorize(store, id, input);
   const info = input.verdict ? worktreeOf(job) : null;
-  if (info) requireClean(info, 'a review verdict');
+  if (info) requireClean(info, 'a review verdict must describe a committed state.');
   return recordReview(store, id, { ...input, head: info?.head ?? null });
 }
 
@@ -146,7 +144,7 @@ export function transitionGuarded(
     const evidence = evidenceHead(job, listArtifacts(store.db, id), listReviews(store.db, id));
     const info = evidence && job.worktreePath ? worktreeOf(job) : null;
     if (info && evidence) {
-      requireClean(info, `completing ${job.stage}`);
+      requireClean(info, `completing ${job.stage} must describe a committed state.`);
       if (!evidence.head) {
         throw new ValidationError(
           `${evidence.what} were recorded without a worktree commit; record them again.`,
@@ -166,7 +164,7 @@ export function transitionGuarded(
     if (job.stage === 'pr' && job.worktreePath) {
       const tree = worktreeOf(job);
       if (tree) {
-        requireClean(tree, 'completing pr');
+        requireClean(tree, 'completing pr must describe a committed state.');
         requireVerified(store, job, tree, 'completing pr');
         requireAuthorizedPolicy(job, tree, 'completing pr');
       }

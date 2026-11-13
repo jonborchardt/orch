@@ -80,7 +80,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
   }
   if (!detail) return <Typography sx={{ p: 2 }}>Loading {id}…</Typography>;
   const { job } = detail;
-  const latestRound = detail.rounds.at(-1);
+  const consolidatedRounds = detail.rounds.filter((r) => r.consolidated !== null).reverse();
   const content = (path: string | null | undefined) =>
     path && detail.contents[path] !== undefined ? (
       <Markdown text={detail.contents[path] ?? ''} />
@@ -243,18 +243,15 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
             ))
           ))}
         {tab === 'Findings' &&
-          (latestRound?.consolidated ? (
-            detail.rounds
-              .filter((r) => r.consolidated)
-              .reverse()
-              .map((r) => (
-                <Box key={r.round} sx={{ mb: 3 }}>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                    Round {r.round} consolidated findings
-                  </Typography>
-                  {content(r.consolidated)}
-                </Box>
-              ))
+          (consolidatedRounds.length > 0 ? (
+            consolidatedRounds.map((r) => (
+              <Box key={r.round} sx={{ mb: 3 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                  Round {r.round} consolidated findings
+                </Typography>
+                {content(r.consolidated)}
+              </Box>
+            ))
           ) : (
             <Typography color="text.secondary">No consolidated findings yet.</Typography>
           ))}

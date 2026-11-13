@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 
 import { ValidationError } from './errors.ts';
+import { TOOL_NAME } from './exec.ts';
 
 /** Name of the repository-level policy file (at the worktree root). */
 export const POLICY_FILE = 'factory.json';
@@ -15,7 +16,6 @@ export const MAX_TIMEOUT_MS = 60 * 60_000;
 export const OUTPUT_CAP = 256 * 1024;
 
 const CHECK_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
-const TOOL_NAME = /^[a-z][a-z0-9-]*$/i;
 
 export interface VerificationCheckSpec {
   id: string;

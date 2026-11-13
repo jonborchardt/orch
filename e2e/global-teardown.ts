@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { STATE_FILE } from './global-setup.ts';
 
-export default function globalTeardown(): void {
+export default async function globalTeardown(): Promise<void> {
   if (!existsSync(STATE_FILE)) return;
   const state = JSON.parse(readFileSync(STATE_FILE, 'utf8')) as { home: string; pid: number };
   try {
@@ -11,8 +12,7 @@ export default function globalTeardown(): void {
     /* already gone */
   }
   rmSync(STATE_FILE, { force: true });
-  // The server may hold the SQLite file for a moment; best effort.
-  setTimeout(() => {
-    rmSync(state.home, { recursive: true, force: true });
-  }, 500).unref();
+  // The server holds the SQLite file until it exits; give it a moment, then remove the scratch home.
+  await sleep(500);
+  rmSync(state.home, { recursive: true, force: true });
 }

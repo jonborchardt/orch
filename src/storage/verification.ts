@@ -16,7 +16,7 @@ import type {
   VerificationPolicy,
 } from '../core/verification.ts';
 import type { Db, Store } from './client.ts';
-import { type Auth, mutate } from './jobs.ts';
+import { type Auth, mutate, mutateReturning } from './jobs.ts';
 import {
   type Integration,
   integrations,
@@ -49,8 +49,7 @@ export interface RunDetail {
 
 /** Row up the run and every expected check (pending) before anything executes. */
 export function startRun(store: Store, id: string, input: StartRunInput): RunDetail {
-  let out!: RunDetail;
-  mutate(store, id, input, (job, tx, ts) => {
+  return mutateReturning(store, id, input, (job, tx, ts) => {
     // A previous run that never finished is now known to be interrupted.
     tx.update(verificationRuns)
       .set({ status: 'interrupted', completedAt: ts })
@@ -88,7 +87,6 @@ export function startRun(store: Store, id: string, input: StartRunInput): RunDet
         .returning()
         .get(),
     );
-    out = { run, checks };
     return {
       patch: {},
       events: [
@@ -102,9 +100,9 @@ export function startRun(store: Store, id: string, input: StartRunInput): RunDet
           },
         },
       ],
+      value: { run, checks },
     };
   });
-  return out;
 }
 
 export interface CheckResult {
@@ -127,9 +125,10 @@ export function recordCheck(
   checkRowId: number,
   result: CheckResult,
 ): VerificationCheck {
-  let out!: VerificationCheck;
-  mutate(store, id, auth, (_job, tx) => {
-    out = must(
+  return mutateReturning(store, id, auth, (_job, tx) => ({
+    patch: {},
+    events: [],
+    value: must(
       tx
         .update(verificationChecks)
         .set(result)
@@ -137,10 +136,8 @@ export function recordCheck(
         .returning()
         .get(),
       `verification check ${String(checkRowId)}`,
-    );
-    return { patch: {}, events: [] };
-  });
-  return out;
+    ),
+  }));
 }
 
 export function finishRun(
@@ -150,9 +147,10 @@ export function finishRun(
   runId: number,
   status: Exclude<RunStatus, 'running'>,
 ): VerificationRun {
-  let out!: VerificationRun;
-  mutate(store, id, auth, (_job, tx, ts) => {
-    out = must(
+  return mutateReturning(store, id, auth, (_job, tx, ts) => ({
+    patch: {},
+    events: [{ type: 'verification.completed', payload: { runId, status } }],
+    value: must(
       tx
         .update(verificationRuns)
         .set({ status, completedAt: ts })
@@ -160,10 +158,8 @@ export function finishRun(
         .returning()
         .get(),
       `verification run ${String(runId)}`,
-    );
-    return { patch: {}, events: [{ type: 'verification.completed', payload: { runId, status } }] };
-  });
-  return out;
+    ),
+  }));
 }
 
 export function listRuns(db: Db, jobId: string): VerificationRun[] {
@@ -223,9 +219,8 @@ export function startIntegration(
   id: string,
   input: StartIntegrationInput,
 ): Integration {
-  let out!: Integration;
-  mutate(store, id, input, (_job, tx, ts) => {
-    out = tx
+  return mutateReturning(store, id, input, (_job, tx, ts) => {
+    const row = tx
       .insert(integrations)
       .values({
         jobId: id,
@@ -245,12 +240,12 @@ export function startIntegration(
       events: [
         {
           type: 'integration.started',
-          payload: { integrationId: out.id, fromHead: input.fromHead, baseSha: input.baseSha },
+          payload: { integrationId: row.id, fromHead: input.fromHead, baseSha: input.baseSha },
         },
       ],
+      value: row,
     };
   });
-  return out;
 }
 
 export interface FinishIntegrationInput {
@@ -268,9 +263,10 @@ export function finishIntegration(
   integrationId: number,
   input: FinishIntegrationInput,
 ): Integration {
-  let out!: Integration;
-  mutate(store, id, auth, (_job, tx, ts) => {
-    out = must(
+  return mutateReturning(store, id, auth, (_job, tx, ts) => ({
+    patch: {},
+    events: [{ type: 'integration.completed', payload: { integrationId, ...input } }],
+    value: must(
       tx
         .update(integrations)
         .set({ ...input, completedAt: ts })
@@ -278,18 +274,8 @@ export function finishIntegration(
         .returning()
         .get(),
       `integration ${String(integrationId)}`,
-    );
-    return {
-      patch: {},
-      events: [
-        {
-          type: 'integration.completed',
-          payload: { integrationId, ...input },
-        },
-      ],
-    };
-  });
-  return out;
+    ),
+  }));
 }
 
 export function listIntegrations(db: Db, jobId: string): Integration[] {

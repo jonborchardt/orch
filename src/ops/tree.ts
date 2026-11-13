@@ -21,10 +21,9 @@ export function worktreeOf(job: Job): Tree | null {
   return { ...info, head: info.head };
 }
 
-export function requireClean(info: WorktreeInfo, what: string): void {
+/** Throw unless the worktree is clean; `why` completes "Worktree has uncommitted changes (...); ". */
+export function requireClean(info: Pick<WorktreeInfo, 'dirty'>, why: string): void {
   if (info.dirty.length === 0) return;
   const list = info.dirty.slice(0, 5).join(', ') + (info.dirty.length > 5 ? ', ...' : '');
-  throw new ValidationError(
-    `Worktree has uncommitted changes (${list}); ${what} must describe a committed state.`,
-  );
+  throw new ValidationError(`Worktree has uncommitted changes (${list}); ${why}`);
 }

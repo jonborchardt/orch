@@ -1,7 +1,8 @@
 /** `orch verify ...` handlers: run the repository's verification policy and read the evidence. */
+import { UsageError } from '../core/errors.ts';
 import { showVerification, verifyJob } from '../ops/verify.ts';
 import type { Store } from '../storage/client.ts';
-import { UsageError } from './output.ts';
+import { authFrom, need } from './args.ts';
 
 export interface VerifyOptions {
   token?: string;
@@ -36,19 +37,11 @@ export function runVerify(
   const [first, second] = args;
   if (first === undefined) throw new UsageError(VERIFY_HELP);
   if (first === 'show') {
-    if (!second) throw new UsageError(`Missing required <job-id>\n\n${VERIFY_HELP}`);
-    const status = showVerification(store, second);
+    const status = showVerification(store, need(second, '<job-id>', VERIFY_HELP));
     return { result: status ?? { configured: false, reason: 'job has no worktree' }, exitCode: 0 };
   }
   if (second !== undefined)
     throw new UsageError(`Unexpected argument: ${second}\n\n${VERIFY_HELP}`);
-  let expectRevision: number | undefined;
-  if (o.revision !== undefined) {
-    expectRevision = Number(o.revision);
-    if (!Number.isInteger(expectRevision) || expectRevision < 0) {
-      throw new UsageError('--revision must be a non-negative integer');
-    }
-  }
-  const result = verifyJob(store, first, { token: o.token ?? env['ORCH_TOKEN'], expectRevision });
+  const result = verifyJob(store, first, authFrom(o, env));
   return { result, exitCode: result.status === 'passed' ? 0 : 1 };
 }

@@ -6,7 +6,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 
 import { assertStageOwns } from '../core/artifact-rules.ts';
 import { NotFoundError, OwnershipError, ValidationError } from '../core/errors.ts';
@@ -19,6 +19,7 @@ import {
   newToken,
 } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
+import { DEFAULT_CONFIG } from '../core/roles.ts';
 import {
   type Action,
   type CiStatus,
@@ -71,7 +72,7 @@ export function createJob(store: Store, input: CreateJobInput): Job {
           baseBranch: input.baseBranch,
           stage: 'spec',
           status: 'pending',
-          maxRounds: input.maxRounds ?? 3,
+          maxRounds: input.maxRounds ?? DEFAULT_CONFIG.maxRounds,
           createdAt: ts,
           updatedAt: ts,
         })
@@ -121,6 +122,20 @@ export function listJobs(db: Db, filter: JobFilter = {}): Job[] {
 
 export function listReviews(db: Db, jobId: string): Review[] {
   return db.select().from(reviews).where(eq(reviews.jobId, jobId)).orderBy(reviews.id).all();
+}
+
+/** Reviews of several jobs in one query (the dashboard board), grouped by job id. */
+export function reviewsByJob(db: Db, jobIds: readonly string[]): Map<string, Review[]> {
+  const out = new Map<string, Review[]>(jobIds.map((id) => [id, []]));
+  if (jobIds.length === 0) return out;
+  const rows = db
+    .select()
+    .from(reviews)
+    .where(inArray(reviews.jobId, [...jobIds]))
+    .orderBy(reviews.id)
+    .all();
+  for (const r of rows) out.get(r.jobId)?.push(r);
+  return out;
 }
 
 export interface JobDetail {
@@ -279,8 +294,7 @@ export function registerArtifact(
   relPath: string,
   opts: RegisterOptions,
 ): Artifact {
-  let artifact!: Artifact;
-  mutate(store, id, opts, (job, tx, ts) => {
+  return mutateReturning(store, id, opts, (job, tx, ts) => {
     const checked = validateArtifact(jobArtifactDir(id, store.paths), relPath);
     assertStageOwns(checked.path, job.stage, job.round);
     const existing = findArtifact(tx, id, checked.path);
@@ -292,7 +306,7 @@ export function registerArtifact(
       }
     }
     const replaced = existing !== undefined && existing.sha256 !== checked.sha256;
-    artifact = upsertArtifact(tx, {
+    const artifact = upsertArtifact(tx, {
       jobId: id,
       stage: job.stage,
       round: job.stage === 'review' ? job.round : null,
@@ -311,9 +325,9 @@ export function registerArtifact(
           ? { type: 'artifact.replaced', payload: { ...payload, previousSha256: existing.sha256 } }
           : { type: 'artifact.registered', payload },
       ],
+      value: artifact,
     };
   });
-  return artifact;
 }
 
 export interface WorktreeInput extends Auth {
@@ -402,8 +416,7 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
   if (input.verdict !== undefined && !VERDICTS.includes(input.verdict)) {
     throw new ValidationError(`Verdict must be one of ${VERDICTS.join(', ')}.`);
   }
-  let review!: Review;
-  mutate(store, id, input, (job, tx, ts) => {
+  return mutateReturning(store, id, input, (job, tx, ts) => {
     if (job.stage !== 'review' || job.status !== 'running') {
       throw new ValidationError('Reviews can only be recorded while the review stage is running.');
     }
@@ -430,7 +443,7 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
       }).id;
     }
     const head = input.verdict ? (input.head ?? null) : null;
-    review = tx
+    const review = tx
       .insert(reviews)
       .values({
         jobId: id,
@@ -463,9 +476,9 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
           payload: { round: job.round, reviewer: input.reviewer, verdict: input.verdict ?? null },
         },
       ],
+      value: review,
     };
   });
-  return review;
 }
 
 export function recordPr(
@@ -485,15 +498,19 @@ export function recordPr(
   });
 }
 
-/** Ownership and revision check without a write, for operations that act outside the DB first. */
-export function authorize(store: Store, id: string, auth: Auth): Job {
-  const job = getJob(store.db, id);
+function checkAuth(job: Job, auth: Auth): void {
   assertOwner(job, auth.token);
   if (auth.expectRevision !== undefined && auth.expectRevision !== job.revision) {
     throw new OwnershipError(
       `Stale revision: expected ${String(auth.expectRevision)}, job is at ${String(job.revision)}.`,
     );
   }
+}
+
+/** Ownership and revision check without a write, for operations that act outside the DB first. */
+export function authorize(store: Store, id: string, auth: Auth): Job {
+  const job = getJob(store.db, id);
+  checkAuth(job, auth);
   return job;
 }
 
@@ -527,12 +544,7 @@ export function mutate(
     (tx) => {
       const ts = now();
       const job = getJob(tx, id);
-      assertOwner(job, auth.token);
-      if (auth.expectRevision !== undefined && auth.expectRevision !== job.revision) {
-        throw new OwnershipError(
-          `Stale revision: expected ${String(auth.expectRevision)}, job is at ${String(job.revision)}.`,
-        );
-      }
+      checkAuth(job, auth);
       const { patch, events } = decide(job, tx, ts);
       const renew = patch.ownerToken === undefined && job.leaseExpiresAt !== null;
       return apply(
@@ -546,6 +558,22 @@ export function mutate(
     },
     { behavior: 'immediate' },
   );
+}
+
+/** `mutate` for decisions that also produce a row (the artifact, review, run) the caller needs. */
+export function mutateReturning<T>(
+  store: Store,
+  id: string,
+  auth: Auth,
+  decide: (job: Job, tx: Db, ts: string) => Decision & { value: T },
+): T {
+  let value!: T; // assigned inside the transaction, which either commits or throws
+  mutate(store, id, auth, (job, tx, ts) => {
+    const d = decide(job, tx, ts);
+    value = d.value;
+    return d;
+  });
+  return value;
 }
 
 function apply(

@@ -16,10 +16,10 @@ import {
   withoutToken,
 } from '../ops/actions.ts';
 import { planJob } from '../ops/factory.ts';
-import { listArtifacts } from '../storage/artifacts.ts';
+import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
-import { getJob, listJobs, listReviews } from '../storage/jobs.ts';
+import { getJob, listJobs, listReviews, reviewsByJob } from '../storage/jobs.ts';
 import type { Artifact, Job, Review } from '../storage/schema.ts';
 import type {
   ActionRequest,
@@ -57,9 +57,14 @@ function blockingOf(artifacts: Artifact[], round: number): number | null {
 
 export function board(store: Store, filter: { repo?: string | undefined } = {}): BoardRow[] {
   const ts = now();
-  return listJobs(store.db, { repo: filter.repo }).map((job) => {
-    const reviews = listReviews(store.db, job.id).filter((r) => r.round === job.round);
-    const artifacts = listArtifacts(store.db, job.id);
+  const jobs = listJobs(store.db, { repo: filter.repo });
+  const ids = jobs.map((j) => j.id);
+  // Three queries for the whole board rather than two per job, since it is polled every few seconds.
+  const reviewsOf = reviewsByJob(store.db, ids);
+  const artifactsOf = artifactsByJob(store.db, ids);
+  return jobs.map((job) => {
+    const reviews = (reviewsOf.get(job.id) ?? []).filter((r) => r.round === job.round);
+    const artifacts = artifactsOf.get(job.id) ?? [];
     const owner = job.ownerSession
       ? {
           session: job.ownerSession,
@@ -180,9 +185,7 @@ export function detail(store: Store, id: string): JobDetailView {
 }
 
 /** Validate an action request body from the network before it reaches the domain layer. */
-export function parseAction(
-  body: unknown,
-): ActionRequest & { action: DashboardAction; to?: Stage } {
+export function parseAction(body: unknown): ActionRequest & { to?: Stage } {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     throw new ValidationError('Body must be a JSON object.');
   }
@@ -195,9 +198,7 @@ export function parseAction(
   if (typeof action !== 'string' || !DASHBOARD_ACTIONS.includes(action as DashboardAction)) {
     throw new ValidationError(`action must be one of ${DASHBOARD_ACTIONS.join(', ')}`);
   }
-  const out: ActionRequest & { action: DashboardAction; to?: Stage } = {
-    action: action as DashboardAction,
-  };
+  const out: ActionRequest & { to?: Stage } = { action: action as DashboardAction };
   if (b['reason'] !== undefined) {
     if (typeof b['reason'] !== 'string' || b['reason'].length > 500) {
       throw new ValidationError('reason must be a string of at most 500 characters');

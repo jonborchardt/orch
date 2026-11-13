@@ -114,11 +114,12 @@ export function toReview(store: Store, c: Ctx, file = 'src/export.ts'): void {
   go(store, c, 'complete');
 }
 
-export function passRound(store: Store, c: Ctx): void {
+/** One round where every always-on reviewer passes; `blocking` is the consolidated count. */
+export function passRound(store: Store, c: Ctx, blocking = '0'): void {
   go(store, c, 'start');
   for (const r of ['security', 'correctness', 'code-quality']) verdict(store, c, r);
   const round = getJob(store.db, c.id).round;
-  add(store, c, `round-${String(round)}/consolidated.md`, consolidated(store, c));
+  add(store, c, `round-${String(round)}/consolidated.md`, consolidated(store, c, blocking));
   go(store, c, 'complete');
 }
 

@@ -13,15 +13,7 @@ import {
 } from '@mui/material';
 
 import type { BoardRow } from '../../src/server/types.ts';
-import {
-  LIVENESS_COLOR,
-  LIVENESS_LABEL,
-  ago,
-  ciColor,
-  elapsed,
-  shortId,
-  verdictColor,
-} from './format.ts';
+import { LIVENESS_COLOR, LIVENESS_LABEL, ago, ciColor, elapsed, verdictColor } from './format.ts';
 
 export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
   if (rows.length === 0) {
@@ -162,5 +154,3 @@ export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
     </TableContainer>
   );
 }
-
-export const SHORT = shortId;

@@ -38,16 +38,20 @@ export function describeRepo(cwd: string): RepoInfo {
   };
 }
 
-/** The shared `.git` directory of a checkout or worktree, resolved to an absolute real path. */
-export function commonGitDir(cwd: string): string {
-  const dir = resolve(cwd, git(cwd, 'rev-parse', '--git-common-dir'));
-  let real: string;
+/** Absolute real path, lower-cased on Windows, so two spellings of one directory compare equal. */
+export function canonicalPath(p: string): string {
+  let real = resolve(p);
   try {
-    real = realpathSync.native(dir);
+    real = realpathSync.native(real);
   } catch {
-    real = dir;
+    /* keep unresolved */
   }
   return process.platform === 'win32' ? real.toLowerCase() : real;
+}
+
+/** The shared `.git` directory of a checkout or worktree, resolved to an absolute real path. */
+export function commonGitDir(cwd: string): string {
+  return canonicalPath(resolve(cwd, git(cwd, 'rev-parse', '--git-common-dir')));
 }
 
 /** True when `dir` is a working tree (main checkout or linked worktree) of the same repository. */

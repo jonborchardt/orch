@@ -42,7 +42,8 @@ Procedure:
 2. Plan the smallest set of changes; prefer existing patterns and helpers in the repo.
 3. Implement, test, validate. For rendered UI work, exercise it with the project's tooling
    (Playwright, Storybook, dev server + screenshot) and save screenshots or reports under
-   `<artifactDir>/evidence/round-<N>/` so reviewers can reuse them.
+   `<artifactDir>/round-<N>/evidence/` (N is the round number in your prompt) so reviewers can
+   reuse them.
 4. Verify each acceptance criterion and record how.
 5. Commit. Confirm `git status --porcelain` is empty.
 6. Run `orch verify <jobId> --token <token>`. If a required check fails, fix it, commit, and run

@@ -13,8 +13,8 @@ import { runInstall } from '../src/cli/install.ts';
 import { ToolError, WorkflowError } from '../src/core/errors.ts';
 import { installRoot } from '../src/core/paths.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
-import { planJob, resumeFactoryJob, startJob } from '../src/ops/factory.ts';
-import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
+import { planJob, resumeFactoryJob } from '../src/ops/factory.ts';
+import { recordVerdict } from '../src/ops/gates.ts';
 import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
 import { verifyJob } from '../src/ops/verify.ts';
 import { adoptWorktree, integrateBase } from '../src/ops/worktree.ts';
@@ -25,6 +25,8 @@ import {
   recordReview as storageRecordReview,
   transitionJob,
 } from '../src/storage/jobs.ts';
+import * as drive from './drive.ts';
+import { type Ctx, head, SESSION } from './drive.ts';
 import {
   commitFile,
   fixture,
@@ -63,66 +65,26 @@ afterEach(() => {
   for (const d of [clone, bare, ...extra.splice(0)]) rmSync(d, { recursive: true, force: true });
 });
 
-const SESSION = 'claude-20261113-1000-5a5a';
-
-interface Ctx {
-  id: string;
-  token: string;
-  dir: string;
-  wt: string;
-}
-
-function start(title = 'Add CSV export'): Ctx {
-  const r = startJob(store, { title, session: SESSION, cwd: clone });
-  return { id: r.job.id, token: r.token, dir: r.plan.artifactDir, wt: r.job.worktreePath ?? '' };
-}
+// The drivers from tests/drive.ts, bound to this file's store and clone.
+const start = (title?: string) => drive.start(store, clone, title);
 const go = (c: Ctx, action: Parameters<typeof transitionJob>[2], reason?: string) =>
-  transitionGuarded(store, c.id, action, { token: c.token, reason });
-const add = (c: Ctx, rel: string, body = fixture(rel), replace = false) => {
+  drive.go(store, c, action, reason);
+const add = (c: Ctx, rel: string, body?: string, replace?: boolean) => {
   // Code evidence is verified first, as the builder and approver do (same refusal on a dirty tree).
-  if (rel === 'build.md' || rel === 'decision.md') verifyJob(store, c.id, { token: c.token });
-  writeArtifact(c.dir, rel, body);
-  return addArtifact(store, c.id, rel, { token: c.token, replace });
+  if (rel === 'build.md' || rel === 'decision.md') drive.verify(store, c);
+  return drive.add(store, c, rel, body, replace);
 };
-const verdict = (c: Ctx, reviewer: string, v: 'PASS' | 'CHANGES' = 'PASS') => {
-  const rel = `round-${String(getJob(store.db, c.id).round)}/review-${reviewer}.md`;
-  writeArtifact(c.dir, rel, fixture(rel, v));
-  return recordVerdict(store, c.id, {
-    token: c.token,
-    reviewer,
-    verdict: v === 'PASS' ? 'pass' : 'changes',
-  });
+const verdict = (c: Ctx, reviewer: string, v?: 'PASS' | 'CHANGES') =>
+  drive.verdict(store, c, reviewer, v);
+const toReview = (c: Ctx) => {
+  drive.toReview(store, c);
 };
-const head = (dir: string) => gitIn(dir, 'rev-parse', 'HEAD');
-
-/** spec done, one commit on the branch, build.md registered and completed: review pending. */
-function toReview(c: Ctx): void {
-  go(c, 'start');
-  add(c, 'spec.md');
-  go(c, 'complete');
-  go(c, 'start');
-  commitFile(c.wt, 'src/export.ts', 'export const csv = 1;');
-  add(c, 'build.md');
-  go(c, 'complete');
-}
-
-/** One passing round of the three always-on reviewers; the job lands in approve. */
-function passRound(c: Ctx, blocking = '0'): void {
-  go(c, 'start');
-  for (const r of ['security', 'correctness', 'code-quality']) verdict(c, r);
-  const round = getJob(store.db, c.id).round;
-  add(c, `round-${String(round)}/consolidated.md`, fixture('round-1/consolidated.md', blocking));
-  go(c, 'complete');
-}
-
-function toPr(c: Ctx): void {
-  toReview(c);
-  passRound(c);
-  go(c, 'start');
-  add(c, 'decision.md');
-  go(c, 'complete');
-  go(c, 'start');
-}
+const passRound = (c: Ctx, blocking?: string) => {
+  drive.passRound(store, c, blocking);
+};
+const toPr = (c: Ctx) => {
+  drive.toPr(store, c);
+};
 
 describe('invariants 3 and 4: one immutable commit per review round', () => {
   it('a verdict cannot be recorded while the worktree has uncommitted changes', () => {

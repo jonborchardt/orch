@@ -1,10 +1,10 @@
 /** `orch ui`: the one long-running command. Serves the dashboard on loopback until Ctrl+C. */
 import { spawn } from 'node:child_process';
 
+import { UsageError } from '../core/errors.ts';
 import { webDistDir } from '../core/paths.ts';
 import { DEFAULT_PORT, startServer } from '../server/http.ts';
 import { openStore } from '../storage/client.ts';
-import { UsageError } from './output.ts';
 
 export interface UiOptions {
   port?: string;
@@ -20,14 +20,14 @@ the CLI and never pretend to wake a Claude session. Factory jobs do not need it 
 `;
 
 function openBrowser(url: string): void {
-  const cmd =
+  const [exe, args]: [string, string[]] =
     process.platform === 'win32'
       ? ['cmd.exe', ['/c', 'start', '', url]]
       : process.platform === 'darwin'
         ? ['open', [url]]
         : ['xdg-open', [url]];
   try {
-    spawn(cmd[0] as string, cmd[1] as string[], { stdio: 'ignore', detached: true }).unref();
+    spawn(exe, args, { stdio: 'ignore', detached: true }).unref();
   } catch {
     /* no browser available; the URL was printed */
   }

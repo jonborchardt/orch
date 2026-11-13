@@ -20,12 +20,14 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
 ## Architecture boundaries
 
 - `src/cli/` parses arguments and prints. No business logic; handlers call into `storage/` and
-  `core/` and return plain data that `output.ts` renders as text or JSON.
+  `ops/` and return plain data that `output.ts` renders as text or JSON. Option parsing helpers
+  (`oneOf`, `int`, `need`, `authFrom`) live in `args.ts`; every usage mistake is a `UsageError`.
 - `src/core/` holds domain rules: `workflow.ts` (stages, statuses, the pure `transition`
   function), `artifact-rules.ts` (required sections and marker lines per artifact path),
-  `ownership.ts` (lease decisions), `errors.ts` (error classes carrying exit codes), `paths.ts`
-  (filesystem conventions), `exec.ts` (safe subprocess helpers). No I/O beyond `paths.ts` and
-  `exec.ts`.
+  `ownership.ts` (lease decisions), `roles.ts` (agents and models), `verification.ts` (policy
+  parsing and run validity), `sensitive.ts` (diff classification), `errors.ts` (every error
+  class, each carrying its exit code), `paths.ts` (filesystem conventions), `exec.ts` (safe
+  subprocess helpers). No I/O beyond `paths.ts` and `exec.ts`.
 - `src/storage/` is the only module that imports `node:sqlite` or the Drizzle driver. Schema in
   `schema.ts`; every job mutation goes through `jobs.ts`, which wraps a pure `core/` decision in
   one immediate transaction. Nothing else writes to the database.
@@ -107,6 +109,11 @@ framework. Upgrade Drizzle deliberately, both packages together.
 - Verification tests use real subprocesses (`node -e ...` as the configured command) and real
   `factory.json` files committed to temporary repositories; `tests/verify.test.ts`,
   `tests/sensitive.test.ts`, and `tests/integration.test.ts` cover the three Phase 5B gates.
+  `tests/drive.ts` drives a job through its stages the way the CLI does (through `ops/gates.ts`
+  and `ops/verify.ts`); reuse it instead of re-implementing stage helpers in a new test file.
+- The suite spawns many Git and Node processes and runs its files in parallel; on a loaded
+  Windows machine a CLI-heavy file can take minutes. A single failure in `tests/factory.test.ts`
+  or `tests/cli.test.ts` that passes alone is load, not a defect; rerun it in isolation first.
 
 ## Documentation
 

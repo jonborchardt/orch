@@ -88,8 +88,6 @@ function start(title = 'Add CSV export', repoPath = clone, maxRounds?: number): 
 const next = (id: string, ui?: boolean) => planJob(store, id, { ui });
 const go = (c: Ctx, action: Parameters<typeof transitionJob>[2], reason?: string) =>
   transitionGuarded(store, c.id, action, { token: c.token, reason });
-const registerArtifact = addArtifact;
-const recordReview = recordVerdict;
 
 /** Fixture subagent: writes a valid artifact, registers it, completes the stage. */
 function runStage(c: Ctx, artifact: string, body = fixture(artifact), replace = false) {
@@ -99,7 +97,7 @@ function runStage(c: Ctx, artifact: string, body = fixture(artifact), replace = 
     verifyJob(store, c.id, { token: c.token });
   }
   writeArtifact(c.dir, artifact, body);
-  registerArtifact(store, c.id, artifact, { token: c.token, replace });
+  addArtifact(store, c.id, artifact, { token: c.token, replace });
   return go(c, 'complete');
 }
 
@@ -109,12 +107,12 @@ function reviewRound(c: Ctx, verdicts: Record<string, 'PASS' | 'CHANGES'>, block
   expect(plan.stage).toBe('review');
   if (plan.status === 'pending') go(c, 'start');
   const round = plan.round;
-  for (const r of plan.agents) recordReview(store, c.id, { token: c.token, reviewer: r.role });
+  for (const r of plan.agents) recordVerdict(store, c.id, { token: c.token, reviewer: r.role });
   const fp = next(c.id).worktree?.fingerprint ?? '';
   for (const r of plan.agents) {
     const v = verdicts[r.role] ?? 'PASS';
     writeArtifact(c.dir, r.artifact, fixture(r.artifact, v));
-    recordReview(store, c.id, {
+    recordVerdict(store, c.id, {
       token: c.token,
       reviewer: r.role,
       verdict: v === 'PASS' ? 'pass' : 'changes',
@@ -124,7 +122,7 @@ function reviewRound(c: Ctx, verdicts: Record<string, 'PASS' | 'CHANGES'>, block
   checkReadonly(store, c.id, fp);
   const consolidated = `round-${String(round)}/consolidated.md`;
   writeArtifact(c.dir, consolidated, fixture(consolidated, String(blocking)));
-  registerArtifact(store, c.id, consolidated, { token: c.token });
+  addArtifact(store, c.id, consolidated, { token: c.token });
   return go(c, 'complete');
 }
 
@@ -156,7 +154,7 @@ describe('factory start and spec stage', () => {
     const c = start();
     go(c, 'start');
     writeArtifact(c.dir, 'spec.md', '# Spec\n\n## Goal\nvague\n');
-    expect(() => registerArtifact(store, c.id, 'spec.md', { token: c.token })).toThrow(
+    expect(() => addArtifact(store, c.id, 'spec.md', { token: c.token })).toThrow(
       /missing required section/,
     );
     expect(() => go(c, 'complete')).toThrow(/missing required artifact spec.md/);
@@ -248,10 +246,10 @@ describe('review rounds', () => {
     const c = start();
     toReview(c);
     go(c, 'start');
-    recordReview(store, c.id, { token: c.token, reviewer: 'security' });
+    recordVerdict(store, c.id, { token: c.token, reviewer: 'security' });
     writeArtifact(c.dir, 'round-1/review-security.md', '# R\n\n## Findings\nnone\n');
     expect(() =>
-      recordReview(store, c.id, { token: c.token, reviewer: 'security', verdict: 'pass' }),
+      recordVerdict(store, c.id, { token: c.token, reviewer: 'security', verdict: 'pass' }),
     ).toThrow(/VERDICT/);
     writeArtifact(
       c.dir,
@@ -259,11 +257,11 @@ describe('review rounds', () => {
       fixture('round-1/review-security.md', 'CHANGES'),
     );
     expect(() =>
-      recordReview(store, c.id, { token: c.token, reviewer: 'security', verdict: 'pass' }),
+      recordVerdict(store, c.id, { token: c.token, reviewer: 'security', verdict: 'pass' }),
     ).toThrow(/does not match/);
     // Still pending, so the round cannot complete.
     writeArtifact(c.dir, 'round-1/consolidated.md');
-    registerArtifact(store, c.id, 'round-1/consolidated.md', { token: c.token });
+    addArtifact(store, c.id, 'round-1/consolidated.md', { token: c.token });
     expect(() => go(c, 'complete')).toThrow(/pending: security/);
     expect(next(c.id).reviews).toEqual([{ reviewer: 'security', verdict: null }]);
   });
@@ -287,7 +285,7 @@ describe('review rounds', () => {
     reviewRound(c, { 'code-quality': 'CHANGES' }, 1);
     expect(() => runStage(c, 'build.md', fixture('build.md') + '\nround 2\n')).toThrow(/--replace/);
     // The failed registration left the stage running; register properly and complete.
-    registerArtifact(store, c.id, 'build.md', { token: c.token, replace: true });
+    addArtifact(store, c.id, 'build.md', { token: c.token, replace: true });
     expect(go(c, 'complete').round).toBe(2);
     expect(next(c.id).agents[0]?.artifact).toBe('round-2/review-security.md');
     const approved = reviewRound(c, {});
@@ -327,7 +325,7 @@ describe('approval, rejection, delivery', () => {
     toApprove(c);
     go(c, 'start');
     writeArtifact(c.dir, 'decision.md', fixture('decision.md', 'ESCALATE'));
-    registerArtifact(store, c.id, 'decision.md', { token: c.token });
+    addArtifact(store, c.id, 'decision.md', { token: c.token });
     expect(() => go(c, 'complete')).toThrow(/says ESCALATE; use escalate/);
     go(c, 'escalate', 'AC2 has no evidence');
     expect(next(c.id).step).toBe('needs-human');
@@ -343,7 +341,7 @@ describe('approval, rejection, delivery', () => {
     expect([r.plan.stage, r.plan.status]).toEqual(['approve', 'pending']);
     const c2 = { ...c, token: r.token };
     expect(() => runStage(c2, 'decision.md')).toThrow(/--replace/);
-    registerArtifact(store, c.id, 'decision.md', { token: r.token, replace: true });
+    addArtifact(store, c.id, 'decision.md', { token: r.token, replace: true });
     expect(go(c2, 'complete').stage).toBe('pr');
   });
 
@@ -368,7 +366,7 @@ describe('approval, rejection, delivery', () => {
     expect(pr.created).toBe(true);
     expect(pr.pr.isDraft).toBe(true);
     expect(pr.pr.headRefName).toBe(`factory/${c.id}-add-csv-export`);
-    registerArtifact(store, c.id, 'pr.md', { token: c.token });
+    addArtifact(store, c.id, 'pr.md', { token: c.token });
     const done = go(c, 'complete');
     expect(done.stage).toBe('completed');
     const final = next(c.id);
@@ -471,9 +469,7 @@ describe('resume, ownership, and cross-project', () => {
     const taken = claimJob(store, c.id, { session: 'claude-other', force: true });
     expect(taken.job.status).toBe('interrupted');
     writeArtifact(c.dir, 'build.md');
-    expect(() => registerArtifact(store, c.id, 'build.md', { token: c.token })).toThrow(
-      OwnershipError,
-    );
+    expect(() => addArtifact(store, c.id, 'build.md', { token: c.token })).toThrow(OwnershipError);
     expect(() => go(c, 'complete')).toThrow(OwnershipError);
     expect(() => showWorktree(store, c.id)).not.toThrow();
     const plan = next(c.id);
@@ -577,9 +573,8 @@ describe('orch factory CLI', () => {
     expect(json<Plan>(orch(home, tmpdir(), ['--json', 'factory', 'next', id])).stage).toBe('build');
 
     const fp = status.worktree?.fingerprint ?? '';
-    expect(orch(home, tmpdir(), ['factory', 'check-readonly', id, '--fingerprint', fp]).code).toBe(
-      0,
-    );
+    const readonly = orch(home, tmpdir(), ['factory', 'check-readonly', id, '--fingerprint', fp]);
+    expect(readonly.code, readonly.err).toBe(0);
     expect(orch(home, tmpdir(), ['factory', 'check-readonly', id]).code).toBe(2);
     expect(orch(home, tmpdir(), ['factory', 'check-readonly', id, '--fingerprint', 'x']).code).toBe(
       1,

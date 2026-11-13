@@ -1,4 +1,4 @@
-/** Errors carry the CLI exit code so handlers stay thin. 2 is reserved for usage errors. */
+/** Errors carry the CLI exit code so handlers stay thin. */
 export class OrchError extends Error {
   readonly exitCode: number;
 
@@ -6,6 +6,13 @@ export class OrchError extends Error {
     super(message);
     this.exitCode = exitCode;
     this.name = new.target.name;
+  }
+}
+
+/** Bad command line: unknown command, missing or malformed option. */
+export class UsageError extends OrchError {
+  constructor(message: string) {
+    super(message, 2);
   }
 }
 
@@ -27,6 +34,19 @@ export class ValidationError extends OrchError {
 export class ToolError extends OrchError {
   constructor(message: string) {
     super(message, 1);
+  }
+}
+
+/** A merge stopped on conflicts and was aborted; `files` names the conflicting paths. */
+export class MergeConflictError extends ToolError {
+  readonly files: string[];
+
+  constructor(ref: string, files: string[], detail: string) {
+    super(
+      `Merging ${ref} conflicts in: ${files.length ? files.join(', ') : '(unknown)'}. ` +
+        `The merge was aborted. ${detail}`,
+    );
+    this.files = files;
   }
 }
 

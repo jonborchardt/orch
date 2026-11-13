@@ -23,6 +23,18 @@ export interface InstallReport {
   problems: boolean;
 }
 
+export function formatInstall(r: InstallReport): string {
+  const lines = [`${r.dryRun ? 'Would link' : 'Linking'} ${r.source} -> ${r.claudeDir}`];
+  if (r.entries.length === 0) lines.push('(no skills/ or agents/ found in source)');
+  for (const e of r.entries) {
+    const how = e.method ? ` [${e.method}]` : '';
+    lines.push(
+      `${e.state.toUpperCase().padEnd(8)} ${e.kind} ${e.name}${how} -> ${e.target}${e.detail ? `: ${e.detail}` : ''}`,
+    );
+  }
+  return lines.join('\n');
+}
+
 export function runInstall(o: InstallOptions): InstallReport {
   const source = o.source ?? installRoot();
   const claudeDir = o['claude-dir'] ?? claudeHome();

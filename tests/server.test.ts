@@ -158,6 +158,9 @@ describe('seeded board and detail', () => {
     expect((await api('/missing.js')).status).toBe(404);
     expect((await api('/..%2Fpackage.json')).status).toBe(404);
     expect((await api('/assets/..%2F..%2Fpackage.json')).status).toBe(404);
+    // Malformed percent-encoding is a client error, not an internal one.
+    expect((await api('/%E0%A4%A')).status).toBe(400);
+    expect((await api(`/api/jobs/${ids.completed}/artifacts/%zz.md`)).status).toBe(400);
     expect((await api('/', { method: 'POST' })).status).toBe(405);
   });
 });

@@ -27,7 +27,6 @@ import {
 import { now } from '../core/workflow.ts';
 import { describeRepo } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
-import type { WorktreeInfo } from '../git/worktree.ts';
 import type { Store } from '../storage/client.ts';
 import { type Auth, authorize, getJob } from '../storage/jobs.ts';
 import type { Job, VerificationCheck, VerificationRun } from '../storage/schema.ts';
@@ -39,7 +38,7 @@ import {
   type RunDetail,
   startRun,
 } from '../storage/verification.ts';
-import { worktreeOf } from './tree.ts';
+import { requireClean, type Tree, worktreeOf } from './tree.ts';
 
 export interface EffectivePolicy {
   policy: VerificationPolicy;
@@ -69,7 +68,7 @@ function policyAt(wt: string, sha: string): VerificationPolicy {
 }
 
 /** Which policy governs this job right now, and whether HEAD proposes a different one. */
-export function effectivePolicy(job: Job, wt: WorktreeInfo & { head: string }): EffectivePolicy {
+export function effectivePolicy(job: Job, wt: Tree): EffectivePolicy {
   const base = wt.baseRef;
   const mergeBase = base ? (tryGit(wt.path, 'merge-base', base, 'HEAD') ?? null) : null;
   let policy: VerificationPolicy;
@@ -91,7 +90,8 @@ export function effectivePolicy(job: Job, wt: WorktreeInfo & { head: string }): 
   try {
     const candidate = policyAt(wt.path, wt.head);
     const d = diffPolicy(policy, candidate);
-    if (d.changed || policyFingerprint(candidate) !== fingerprint) diff = d;
+    // A reordering changes the fingerprint (and so what a run proves) without changing any check.
+    if (d.changed || policyFingerprint(candidate) !== fingerprint) diff = { ...d, changed: true };
   } catch (err) {
     candidateError = (err as Error).message;
     diff = { changed: true, added: [], removed: [], modified: [], weakened: [] };
@@ -100,7 +100,7 @@ export function effectivePolicy(job: Job, wt: WorktreeInfo & { head: string }): 
 }
 
 /** The worktree's factory.json at HEAD, parsed, for a human to accept. */
-export function candidatePolicy(wt: WorktreeInfo & { head: string }): VerificationPolicy {
+export function candidatePolicy(wt: Tree): VerificationPolicy {
   return policyAt(wt.path, wt.head);
 }
 
@@ -125,7 +125,7 @@ export interface VerificationStatus {
 export function verificationStatus(
   store: Store,
   job: Job,
-  wt: WorktreeInfo & { head: string },
+  wt: Tree,
   eff: EffectivePolicy = effectivePolicy(job, wt),
 ): VerificationStatus {
   const latest = latestRun(store.db, job.id);
@@ -167,10 +167,7 @@ export function verificationStatus(
 }
 
 /** Sensitive-path report for the job's diff against its base. */
-export function sensitiveReport(
-  wt: WorktreeInfo & { head: string },
-  eff: EffectivePolicy,
-): SensitiveReport {
+export function sensitiveReport(wt: Tree, eff: EffectivePolicy): SensitiveReport {
   const testFiles = wt.changes
     .filter((c) => c.status !== 'deleted' && classifyPath(c.path)?.kind === 'tests')
     .map((c) => c.path);
@@ -283,12 +280,7 @@ export function verifyJob(store: Store, id: string, auth: Auth): VerifyResult {
   if (identity !== job.repo) {
     throw new ValidationError(`Worktree belongs to ${identity}; job ${id} belongs to ${job.repo}.`);
   }
-  if (wt.dirty.length > 0) {
-    throw new ValidationError(
-      `Worktree has uncommitted changes (${wt.dirty.slice(0, 5).join(', ')}); ` +
-        'verification covers committed snapshots only. Commit first.',
-    );
-  }
+  requireClean(wt, 'verification covers committed snapshots only. Commit first.');
   const eff = effectivePolicy(job, wt);
   const status = verificationStatus(store, job, wt, eff);
   if (!status.configured) {
@@ -357,11 +349,7 @@ export function showVerification(store: Store, id: string): VerificationStatus |
   return verificationStatus(store, job, wt);
 }
 
-export function latestValidRun(
-  store: Store,
-  job: Job,
-  wt: WorktreeInfo & { head: string },
-): RunDetail | undefined {
+export function latestValidRun(store: Store, job: Job, wt: Tree): RunDetail | undefined {
   const s = verificationStatus(store, job, wt);
   return s.valid && s.run ? { run: s.run, checks: s.run.checks } : undefined;
 }

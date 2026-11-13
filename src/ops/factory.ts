@@ -35,7 +35,6 @@ import {
   createJob,
   getJob,
   jobDetail,
-  listReviews,
   resumeJob,
   transitionJob,
 } from '../storage/jobs.ts';
@@ -192,7 +191,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const { worktree: wt } = showWorktree(store, id);
   const worktree = wt.exists && wt.isWorktree ? { ...wt, fingerprint: fingerprint(wt) } : null;
   const { ui, reviewers } = reviewersForJob(roles, config, worktree, opts.ui);
-  const current = listReviews(store.db, id).filter((r) => r.round === job.round);
+  const current = detail.reviews.filter((r) => r.round === job.round);
   const expired = job.ownerSession !== null && leaseExpired(job, ts);
   let verification: VerificationStatus | null = null;
   let sensitive: SensitiveReport | null = null;
@@ -209,13 +208,12 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   }
   const integration = listIntegrations(store.db, id)[0] ?? null;
   const required = requiredArtifact(job.stage, job.round);
-  const id_ = job.id;
   // Every mutating command carries the token explicitly: shells spawned by Claude Code do not
   // keep environment variables between calls, so the skill substitutes <token> each time.
   const tok = ' --token <token>';
 
   const plan: Plan = {
-    jobId: id_,
+    jobId: id,
     title: job.title,
     stage: job.stage,
     status: job.status,
@@ -248,7 +246,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   if (job.stage === 'completed') {
     plan.step = 'done';
     plan.reason = `Draft PR recorded (${job.prUrl ?? 'no URL'}). Humans mark it ready and merge.`;
-    plan.commands = [`orch gh pr status ${id_}`];
+    plan.commands = [`orch gh pr status ${id}`];
     return plan;
   }
   if (job.stage === 'needs-human') {
@@ -257,8 +255,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     plan.blockedReason = (blocked?.payload['reason'] as string | null | undefined) ?? null;
     plan.reason =
       'A human must decide. Report the blocking reason and stop. To continue after the decision: ' +
-      `orch factory resume ${id_} --session <name> [--to ${job.returnStage ?? '<stage>'}]`;
-    plan.commands = [`orch job show ${id_}`];
+      `orch factory resume ${id} --session <name> [--to ${job.returnStage ?? '<stage>'}]`;
+    plan.commands = [`orch job show ${id}`];
     return plan;
   }
   if (
@@ -273,18 +271,18 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         : expired
           ? `The lease held by ${job.ownerSession} lapsed; that session is presumed gone.`
           : `The job is ${job.status}.`;
-    plan.commands = [`orch factory resume ${id_} --session <your-session-name>`];
+    plan.commands = [`orch factory resume ${id} --session <your-session-name>`];
     return plan;
   }
   if (!worktree) {
     plan.step = 'create-worktree';
     plan.reason = 'The job has no usable worktree yet.';
-    plan.commands = [`orch worktree create ${id_}${tok}`, `orch factory next ${id_}`];
+    plan.commands = [`orch worktree create ${id}${tok}`, `orch factory next ${id}`];
     return plan;
   }
 
-  const start = job.status === 'pending' ? [`orch job transition ${id_} start${tok}`] : [];
-  const verify = `orch verify ${id_}${tok}`;
+  const start = job.status === 'pending' ? [`orch job transition ${id} start${tok}`] : [];
+  const verify = `orch verify ${id}${tok}`;
   const verifyIfStale = verification?.valid ? [] : [verify];
   const notes: string[] = [];
   if (planProblem) notes.push(`Policy problem: ${planProblem}.`);
@@ -306,8 +304,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     );
   }
   const add = (p: string, replace = false) =>
-    `orch job artifact add ${id_} ${p}${replace ? ' --replace' : ''}${tok}`;
-  const complete = `orch job transition ${id_} complete${tok}`;
+    `orch job artifact add ${id} ${p}${replace ? ' --replace' : ''}${tok}`;
+  const complete = `orch job transition ${id} complete${tok}`;
   const role = (kind: Role['kind']) => roles.find((r) => r.kind === kind);
 
   switch (job.stage) {
@@ -354,11 +352,11 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         (pending.length ? ` Pending: ${pending.join(', ')}.` : ' All verdicts recorded.');
       plan.commands = [
         ...start,
-        ...reviewers.map((r) => `orch job review record ${id_} --reviewer ${r.name}${tok}`),
-        `orch factory check-readonly ${id_} --fingerprint ${worktree.fingerprint}`,
+        ...reviewers.map((r) => `orch job review record ${id} --reviewer ${r.name}${tok}`),
+        `orch factory check-readonly ${id} --fingerprint ${worktree.fingerprint}`,
         ...reviewers.map(
           (r) =>
-            `orch job review record ${id_} --reviewer ${r.name} --verdict <pass|changes> --summary "<one line>"${tok}`,
+            `orch job review record ${id} --reviewer ${r.name} --verdict <pass|changes> --summary "<one line>"${tok}`,
         ),
         add(`round-${String(job.round)}/consolidated.md`),
         complete,
@@ -375,7 +373,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         ...start,
         ...verifyIfStale,
         add('decision.md'),
-        `${complete}   # only if DECISION: APPROVE; otherwise: orch job transition ${id_} escalate --reason "<why>"${tok}`,
+        `${complete}   # only if DECISION: APPROVE; otherwise: orch job transition ${id} escalate --reason "<why>"${tok}`,
       ];
       break;
     }
@@ -388,16 +386,16 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         ...start,
         ...(behind > 0
           ? [
-              `orch worktree integrate ${id_}${tok}   # conflicts send the job back to build`,
-              `orch factory next ${id_}   # re-plan: HEAD changed`,
+              `orch worktree integrate ${id}${tok}   # conflicts send the job back to build`,
+              `orch factory next ${id}   # re-plan: HEAD changed`,
             ]
           : []),
         ...(behind > 0 ? [verify] : verifyIfStale),
-        `orch gh push ${id_}${tok}`,
-        `orch gh pr create ${id_} --body-file "${join(detail.artifactDir, 'pr.md')}"${tok}`,
+        `orch gh push ${id}${tok}`,
+        `orch gh pr create ${id} --body-file "${join(detail.artifactDir, 'pr.md')}"${tok}`,
         add('pr.md'),
         complete,
-        `orch gh pr status ${id_}`,
+        `orch gh pr status ${id}`,
       ];
       break;
     }

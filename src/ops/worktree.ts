@@ -5,10 +5,9 @@
 import { existsSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 
-import { ValidationError } from '../core/errors.ts';
+import { MergeConflictError, ValidationError } from '../core/errors.ts';
 import { jobWorktreeDir } from '../core/paths.ts';
-import { ToolError } from '../core/errors.ts';
-import { describeRepo, remoteExists, baseRef } from '../git/repo.ts';
+import { baseRef, describeRepo, remoteExists } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
 import {
   addWorktree,
@@ -32,7 +31,7 @@ import {
 } from '../storage/jobs.ts';
 import type { Integration, Job } from '../storage/schema.ts';
 import { finishIntegration, listIntegrations, startIntegration } from '../storage/verification.ts';
-import { worktreeOf } from './tree.ts';
+import { requireClean, worktreeOf } from './tree.ts';
 import { latestValidRun } from './verify.ts';
 
 export interface WorktreeResult {
@@ -183,12 +182,7 @@ export function dropWorktree(store: Store, id: string, auth: Auth): WorktreeResu
       `${job.worktreePath} is not a worktree of ${job.repo}; not removing.`,
     );
   }
-  if (info.dirty.length > 0) {
-    throw new ValidationError(
-      `Worktree has uncommitted changes (${info.dirty.slice(0, 5).join(', ')}${info.dirty.length > 5 ? ', ...' : ''}). ` +
-        'Commit or stash them first; orch never deletes uncommitted work.',
-    );
-  }
+  requireClean(info, 'commit or stash them first; orch never deletes uncommitted work.');
   removeWorktree(root, job.worktreePath);
   return { job: clearWorktree(store, id, auth, 'removed'), worktree: { ...info, exists: false } };
 }
@@ -263,9 +257,7 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
   if (open) reconcile(store, id, auth, wt, open);
   const before = inspectWorktree(root, wt, job.baseBranch);
   if (!before.isWorktree) throw new ValidationError(`${wt} is not a valid worktree.`);
-  if (before.dirty.length > 0) {
-    throw new ValidationError('Worktree has uncommitted changes; commit them before integrating.');
-  }
+  requireClean(before, 'commit them before integrating.');
   const fetched = remoteExists(root);
   if (fetched) git(wt, 'fetch', 'origin', job.baseBranch);
   const ref = baseRef(root, job.baseBranch);
@@ -306,19 +298,18 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
   try {
     merge = mergeInto(wt, ref);
   } catch (err) {
-    const msg = (err as Error).message;
-    const files = /conflicts in: (.+?)\. The merge was aborted/.exec(msg)?.[1] ?? '';
+    const files = err instanceof MergeConflictError ? err.files : [];
     integration = finishIntegration(store, id, auth, integration.id, {
       status: 'conflict',
       resultHead: null,
-      conflicts: files && files !== '(unknown)' ? files.split(', ') : [],
+      conflicts: files,
       changedFiles: [],
       material: [],
     });
-    if (job.stage !== 'pr') throw err instanceof ToolError ? err : new ValidationError(msg);
+    if (job.stage !== 'pr') throw err;
     const reworked = transitionJob(store, id, 'rework', {
       token: auth.token,
-      reason: `base integration of ${ref} conflicts in ${files || 'unknown files'}`,
+      reason: `base integration of ${ref} conflicts in ${files.join(', ') || 'unknown files'}`,
     });
     return {
       job: reworked,

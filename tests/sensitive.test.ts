@@ -251,6 +251,38 @@ describe('sensitive changes in a real job', () => {
     expect(() => pushBranch(store, c.id, { token: c.token })).toThrow(/pr stage only/);
   });
 
+  it('reordering the checks changes what a run proves, so it counts as a policy change', () => {
+    const two = makePolicyRepo('https://github.com/acme/two.git', {
+      verification: {
+        commands: [
+          { id: 'check', command: 'node', args: ['check.js'] },
+          { id: 'other', command: 'node', args: ['-e', '0'] },
+        ],
+      },
+    });
+    try {
+      const c = start(store, two.clone);
+      commitFile(
+        c.wt,
+        'factory.json',
+        JSON.stringify({
+          verification: {
+            commands: [
+              { id: 'other', command: 'node', args: ['-e', '0'] },
+              { id: 'check', command: 'node', args: ['check.js'] },
+            ],
+          },
+        }),
+      );
+      const plan = planJob(store, c.id);
+      expect(plan.verification?.policy.authorization).toBe('required');
+      expect(plan.sensitive?.authorization).toBe('required');
+      expect(plan.sensitive?.policy).toMatchObject({ changed: true, added: [], removed: [] });
+    } finally {
+      for (const d of [two.clone, two.bare]) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   it('a human accepts a stronger policy; the job then runs it and can be approved', () => {
     const c = start(store, clone);
     toReview(store, c);

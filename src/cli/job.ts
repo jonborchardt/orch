@@ -1,7 +1,7 @@
 /** `orch job ...` handlers: parse options, call storage, return data for printing. */
 import { existsSync } from 'node:fs';
 
-import { ValidationError } from '../core/errors.ts';
+import { UsageError } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import {
   type Action,
@@ -14,6 +14,7 @@ import {
   type Status,
   STATUSES,
   type Verdict,
+  VERDICTS,
 } from '../core/workflow.ts';
 import { describeRepo } from '../git/repo.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
@@ -30,7 +31,7 @@ import {
   resumeJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
-import { UsageError } from './output.ts';
+import { authFrom, int, need, oneOf } from './args.ts';
 
 export interface JobOptions {
   title?: string;
@@ -91,35 +92,10 @@ function summary(job: Job, store: Store, extra: Record<string, unknown> = {}) {
   };
 }
 
-function oneOf<T extends string>(
-  value: string | undefined,
-  allowed: readonly T[],
-  flag: string,
-): T | undefined {
-  if (value === undefined) return undefined;
-  if (!allowed.includes(value as T)) {
-    throw new UsageError(`${flag} must be one of ${allowed.join(', ')}`);
-  }
-  return value as T;
-}
-
-function int(value: string | undefined, flag: string): number | undefined {
-  if (value === undefined) return undefined;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 0) throw new UsageError(`${flag} must be a non-negative integer`);
-  return n;
-}
-
-function need<T>(value: T | undefined, flag: string): T {
-  if (value === undefined || value === '') throw new UsageError(`Missing required ${flag}`);
-  return value;
-}
-
 export function runJob(store: Store, args: string[], o: JobOptions, env = process.env): unknown {
   const [cmd, ...rest] = args;
-  const token = o.token ?? env['ORCH_TOKEN'];
   const session = o.session ?? env['ORCH_SESSION'];
-  const auth = { token, expectRevision: int(o.revision, '--revision') };
+  const auth = authFrom(o, env);
   const id = () => need(rest[0], '<id>');
 
   switch (cmd) {
@@ -205,7 +181,7 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
       const review = recordVerdict(store, jobId, {
         ...auth,
         reviewer: need(o.reviewer, '--reviewer'),
-        verdict: oneOf<Verdict>(o.verdict, ['pass', 'changes'], '--verdict'),
+        verdict: oneOf<Verdict>(o.verdict, VERDICTS, '--verdict'),
         artifact: o.artifact,
         summary: o.summary,
       });
@@ -225,5 +201,3 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
       throw new UsageError(`Unknown job command: ${cmd}\n\n${JOB_HELP}`);
   }
 }
-
-export { ValidationError };

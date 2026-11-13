@@ -1,12 +1,6 @@
 /** Human vs JSON rendering. Handlers return plain data; this decides how it is printed. */
 import { OrchError } from '../core/errors.ts';
 
-export class UsageError extends OrchError {
-  constructor(message: string) {
-    super(message, 2);
-  }
-}
-
 export function print(data: unknown, json: boolean): void {
   console.log(json ? JSON.stringify(data, null, 2) : human(data));
 }

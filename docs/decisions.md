@@ -131,7 +131,10 @@ optimistic concurrency for callers that want to reject any intervening change.
 `typescript-eslint@8`. Both are at their latest versions and still depend on `minimatch@10`; the
 only "fix" npm offers is a downgrade to ESLint 9. The dependency is dev-only (lint-time glob
 matching of our own config) and never shipped, so it is documented here and left alone until the
-tooling moves to `minimatch >= 11.0.1`.
+tooling moves to `minimatch >= 11.0.1`. (Rechecked 2026-11-13: still the only advisory, now
+reported as 10 moderate entries that are all this one `minimatch` range reached through
+`eslint@10`, `@eslint/config-array`, and `typescript-eslint@8`; `npm audit fix --force` would
+downgrade to ESLint 9. Unchanged decision.)
 
 ## 18. Artifact structure rules and markers are code (Phase 3A)
 
@@ -181,6 +184,7 @@ force-pushes, or marks ready: approval permits a draft PR, humans do the rest.
 `orch worktree integrate` fetches `origin/<base>` and merges it with `--no-ff`; conflicts abort the
 merge and report the files. Rebase would rewrite a branch that may already be pushed and reviewed.
 Validation after integration is the skill's responsibility (it re-runs the project's checks).
+(Since decisions 41 and 43 that validation is `orch verify`, and the merge is recorded first.)
 
 ## 24. Repository identity from the configured remote URL
 
@@ -368,3 +372,21 @@ built, verified, reviewed, and approved like any other change; a clean merge nee
 full re-review for a clean base update was rejected as cost without evidence; a review for any
 edit inside a merge was accepted because the CLI cannot tell a trivial resolution from a hidden
 change.
+
+## 44. Cleanup pass: what was consolidated and what was deliberately left (Phase 5C)
+
+Consolidated: all error classes (including `UsageError`) live in `core/errors.ts`, so the
+dashboard maps them to HTTP statuses with `instanceof`; `MergeConflictError` carries the
+conflicting files instead of callers parsing a message; `runTool` is `spawnCommand` with the
+result reduced to stdout; CLI option parsing (`cli/args.ts`) replaced four copies of `--revision`
+handling; `mutateReturning` replaced six definite-assignment assertions; the board reads reviews
+and artifacts for all jobs in two queries; `inspectWorktree` derives `changedFiles` from the
+name-status diff instead of a second `git diff`; push and PR creation inspect the worktree once.
+A reordering of `factory.json` commands now counts as a policy change everywhere (it already
+changed the fingerprint, so a run could be refused without the plan saying why).
+
+Left alone on purpose: the seven reviewer agent files repeat the same rules block. Claude Code
+loads one agent file per subagent with no include mechanism, so sharing the text would need a
+generated artifact; the duplication is the cost of self-contained agents and a contract test keeps
+the files consistent with `core/roles.ts`. `web/src/Actions.tsx` keeps its own stage list and
+live-lease check because the client may import only types from `src/`.

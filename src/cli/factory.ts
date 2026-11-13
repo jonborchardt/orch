@@ -1,5 +1,6 @@
 /** `orch factory ...` handlers: the skill-facing commands. */
-import { STAGES, type Stage } from '../core/workflow.ts';
+import { UsageError } from '../core/errors.ts';
+import { type Stage, STAGES } from '../core/workflow.ts';
 import {
   checkReadonly,
   configPath,
@@ -9,7 +10,7 @@ import {
   startJob,
 } from '../ops/factory.ts';
 import type { Store } from '../storage/client.ts';
-import { UsageError } from './output.ts';
+import { need, oneOf } from './args.ts';
 
 export interface FactoryOptions {
   title?: string;
@@ -51,10 +52,7 @@ export function runFactory(
   const [cmd, id] = args;
   const session = o.session ?? env['ORCH_SESSION'];
   const ui = o.ui ? true : o['no-ui'] ? false : undefined;
-  const needId = (): string => {
-    if (!id) throw new UsageError(`Missing required <job-id>\n\n${FACTORY_HELP}`);
-    return id;
-  };
+  const needId = () => need(id, '<job-id>', FACTORY_HELP);
   const needSession = (): string => {
     if (!session) throw new UsageError('Missing required --session <name> (or $ORCH_SESSION)');
     if (!/^[\w.:-]{1,64}$/.test(session)) {
@@ -86,20 +84,15 @@ export function runFactory(
     case 'next':
     case 'status':
       return planJob(store, needId(), { ui });
-    case 'resume': {
-      let to: Stage | undefined;
-      if (o.to !== undefined) {
-        if (!STAGES.includes(o.to as Stage)) {
-          throw new UsageError(`--to must be one of ${STAGES.join(', ')}`);
-        }
-        to = o.to as Stage;
-      }
-      return resumeFactoryJob(store, needId(), { session: needSession(), to, force: o.force, ui });
-    }
-    case 'check-readonly': {
-      if (!o.fingerprint) throw new UsageError('Missing required --fingerprint <f>');
-      return checkReadonly(store, needId(), o.fingerprint);
-    }
+    case 'resume':
+      return resumeFactoryJob(store, needId(), {
+        session: needSession(),
+        to: oneOf<Stage>(o.to, STAGES, '--to'),
+        force: o.force,
+        ui,
+      });
+    case 'check-readonly':
+      return checkReadonly(store, needId(), need(o.fingerprint, '--fingerprint <f>'));
     case 'config':
       return { file: configPath(store), ...loadConfig(store) };
     case undefined:

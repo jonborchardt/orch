@@ -72,11 +72,11 @@ function setBaselinePolicy(commands: Record<string, unknown>[]): void {
   gitIn(clone, 'push', '-q', 'origin', 'main');
 }
 
-function inBuild(c: Ctx): void {
-  go(store, c, 'start');
-  add(store, c, 'spec.md');
-  go(store, c, 'complete');
-  go(store, c, 'start');
+function inBuild(c: Ctx, s: Store = store): void {
+  go(s, c, 'start');
+  add(s, c, 'spec.md');
+  go(s, c, 'complete');
+  go(s, c, 'start');
 }
 
 describe('orch verify: runs and records', () => {
@@ -298,7 +298,7 @@ describe('orch verify: runs and records', () => {
       extra.push(repo.clone, repo.bare);
       const r0 = (() => {
         const c = start(spaced, repo.clone, 'Spaces every where');
-        inBuildWith(spaced, c);
+        inBuild(c, spaced);
         return { c, r: verify(spaced, c) };
       })();
       expect(r0.c.wt).toContain('data dir');
@@ -309,13 +309,6 @@ describe('orch verify: runs and records', () => {
     }
   });
 });
-
-function inBuildWith(s: Store, c: Ctx): void {
-  go(s, c, 'start');
-  add(s, c, 'spec.md');
-  go(s, c, 'complete');
-  go(s, c, 'start');
-}
 
 describe('orch verify: identity, ownership, concurrency', () => {
   it('refuses a dirty or untracked worktree and a stale token', () => {

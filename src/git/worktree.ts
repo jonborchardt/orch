@@ -2,11 +2,11 @@
  * Git worktree operations with argument arrays. These touch Git only; recording the result in
  * the database happens in src/ops/worktree.ts.
  */
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
-import { ToolError } from '../core/errors.ts';
-import { baseRef, dirtyFiles, refExists, sameRepository } from './repo.ts';
+import { MergeConflictError, ToolError } from '../core/errors.ts';
+import { baseRef, canonicalPath, dirtyFiles, refExists, sameRepository } from './repo.ts';
 import { git, tryGit } from './run.ts';
 
 export interface Commit {
@@ -55,19 +55,6 @@ export function parseNameStatus(out: string): WorktreeInfo['changes'] {
   });
 }
 
-function samePath(a: string, b: string): boolean {
-  const norm = (p: string) => {
-    let r = resolve(p);
-    try {
-      r = realpathSync.native(r);
-    } catch {
-      /* keep unresolved */
-    }
-    return process.platform === 'win32' ? r.toLowerCase() : r;
-  };
-  return norm(a) === norm(b);
-}
-
 /** Read-only description of `path` as a candidate worktree of `repoRoot`. */
 export function inspectWorktree(repoRoot: string, path: string, baseBranch: string): WorktreeInfo {
   const info: WorktreeInfo = {
@@ -86,7 +73,9 @@ export function inspectWorktree(repoRoot: string, path: string, baseBranch: stri
   };
   if (!info.exists) return info;
   const top = tryGit(path, 'rev-parse', '--show-toplevel');
-  if (!top || !samePath(top, path) || !sameRepository(repoRoot, path)) return info;
+  if (!top || canonicalPath(top) !== canonicalPath(path) || !sameRepository(repoRoot, path)) {
+    return info;
+  }
   info.isWorktree = true;
   info.head = tryGit(path, 'rev-parse', 'HEAD') ?? null;
   const branch = tryGit(path, 'rev-parse', '--abbrev-ref', 'HEAD');
@@ -108,9 +97,8 @@ export function inspectWorktree(repoRoot: string, path: string, baseBranch: stri
           return { sha, subject: rest.join('\t') };
         })
       : [];
-    const diff = tryGit(path, 'diff', '--name-only', `${base}...HEAD`);
-    info.changedFiles = diff ? diff.split(/\r?\n/) : [];
     info.changes = parseNameStatus(tryGit(path, 'diff', '--name-status', `${base}...HEAD`) ?? '');
+    info.changedFiles = info.changes.map((c) => c.path);
   }
   return info;
 }
@@ -186,7 +174,7 @@ export interface MergeResult {
 
 /**
  * Merge `ref` into the worktree's branch. On conflict the merge is aborted, the worktree is
- * left as it was, and a ToolError names the conflicting files.
+ * left as it was, and a MergeConflictError names the conflicting files.
  */
 export function mergeInto(path: string, ref: string): MergeResult {
   const before = git(path, 'rev-parse', 'HEAD');
@@ -195,10 +183,8 @@ export function mergeInto(path: string, ref: string): MergeResult {
   } catch (err) {
     const conflicts = tryGit(path, 'diff', '--name-only', '--diff-filter=U') ?? '';
     tryGit(path, 'merge', '--abort');
-    const files = conflicts ? conflicts.split(/\r?\n/).join(', ') : '(unknown)';
-    throw new ToolError(
-      `Merging ${ref} conflicts in: ${files}. The merge was aborted. ${(err as Error).message}`,
-    );
+    const files = conflicts ? conflicts.split(/\r?\n/) : [];
+    throw new MergeConflictError(ref, files, (err as Error).message);
   }
   const after = git(path, 'rev-parse', 'HEAD');
   return { merged: after !== before, upToDate: after === before, head: after };
