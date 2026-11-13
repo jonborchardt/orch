@@ -4,11 +4,13 @@
  * a stage completes only while HEAD is still that commit. Storage alone cannot know Git, so the
  * CLI routes these three mutations through here.
  */
-import { existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
+import { jobArtifactDir } from '../core/paths.ts';
+import { sensitiveSummary } from '../core/sensitive.ts';
 import { type Action, requiredArtifact } from '../core/workflow.ts';
-import { inspectWorktree, type WorktreeInfo } from '../git/worktree.ts';
 import { listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import {
@@ -23,29 +25,56 @@ import {
 } from '../storage/jobs.ts';
 import type { Artifact, Job, Review } from '../storage/schema.ts';
 
+import { effectivePolicy, sensitiveReport, verificationStatus } from './verify.ts';
+import { requireClean, type Tree, worktreeOf } from './tree.ts';
+
+export { worktreeOf };
+
 /** Artifacts that describe the code and therefore need a committed, clean worktree. */
 const CODE_EVIDENCE = /^(build\.md|decision\.md|round-\d+\/review-[a-z0-9-]+\.md)$/;
+/** Artifacts that must name every sensitive change in the diff. */
+const SUMMARIES = /^(round-\d+\/consolidated\.md|pr\.md)$/;
 
-/** The job's worktree, or null when it has none. Throws when it is recorded but unusable. */
-export function worktreeOf(job: Job): (WorktreeInfo & { head: string }) | null {
-  if (!job.worktreePath) return null;
-  const root = existsSync(job.repoPath) ? job.repoPath : job.worktreePath;
-  const info = inspectWorktree(root, job.worktreePath, job.baseBranch);
-  if (!info.exists) {
-    throw new ValidationError(`Worktree ${job.worktreePath} is missing; run orch worktree create.`);
+/** Consolidations and PR bodies must carry a "Sensitive changes" section naming each path. */
+function requireSensitiveSection(store: Store, job: Job, info: Tree, rel: string): void {
+  const report = sensitiveReport(info, effectivePolicy(job, info));
+  const lines = sensitiveSummary(report);
+  if (lines.length === 0) return;
+  const text = readFileSync(join(jobArtifactDir(job.id, store.paths), ...rel.split('/')), 'utf8');
+  if (!/^#{1,6}\s*Sensitive changes\b/im.test(text)) {
+    throw new ValidationError(
+      `${rel} needs a "Sensitive changes" section covering: ${lines.join('; ')}`,
+    );
   }
-  if (!info.isWorktree || !info.head) {
-    throw new ValidationError(`${job.worktreePath} is not a usable worktree of ${job.repo}.`);
+  const missing = report.changes.map((c) => c.path).filter((p) => !text.includes(p));
+  if (missing.length > 0) {
+    throw new ValidationError(
+      `${rel}: the Sensitive changes section does not mention ${missing.join(', ')}`,
+    );
   }
-  return { ...info, head: info.head };
 }
 
-function requireClean(info: WorktreeInfo, what: string): void {
-  if (info.dirty.length === 0) return;
-  const list = info.dirty.slice(0, 5).join(', ') + (info.dirty.length > 5 ? ', ...' : '');
-  throw new ValidationError(
-    `Worktree has uncommitted changes (${list}); ${what} must describe a committed state.`,
-  );
+/** Refuse unless the latest verification run is evidence for HEAD under the effective policy. */
+function requireVerified(store: Store, job: Job, info: Tree, what: string): void {
+  const status = verificationStatus(store, job, info);
+  if (!status.valid) {
+    throw new ValidationError(
+      `${what} needs a valid verification run for HEAD ${info.head.slice(0, 7)}: ${status.reason ?? 'none'}. Run orch verify ${job.id}.`,
+    );
+  }
+}
+
+/** Refuse while the worktree's factory.json differs from the effective policy without a human's say. */
+function requireAuthorizedPolicy(job: Job, info: Tree, what: string): void {
+  const eff = effectivePolicy(job, info);
+  if (eff.diff) {
+    throw new ValidationError(
+      `${what} is refused: the worktree's factory.json changes the verification policy ` +
+        `(added: ${eff.diff.added.join(', ') || 'none'}; removed: ${eff.diff.removed.join(', ') || 'none'}; ` +
+        `modified: ${eff.diff.modified.join(', ') || 'none'}${eff.candidateError ? `; ${eff.candidateError}` : ''}). ` +
+        'A human must accept it (dashboard: accept-policy) or the change must be reverted.',
+    );
+  }
 }
 
 /** `orch job artifact add`: register with the worktree HEAD; code evidence needs a clean tree. */
@@ -57,10 +86,13 @@ export function addArtifact(
 ): Artifact {
   const job = authorize(store, id, opts);
   const rel = relPath.split('\\').join('/');
-  let info: (WorktreeInfo & { head: string }) | null;
+  let info: Tree | null;
   if (CODE_EVIDENCE.test(rel)) {
     info = worktreeOf(job);
     if (info) requireClean(info, rel);
+  } else if (SUMMARIES.test(rel)) {
+    info = worktreeOf(job);
+    if (info?.baseRef) requireSensitiveSection(store, job, info, rel);
   } else {
     // Other artifacts just note the HEAD when there is one; a missing worktree is not their problem.
     try {
@@ -125,6 +157,18 @@ export function transitionGuarded(
           `HEAD is ${info.head.slice(0, 7)} but ${evidence.what} describe ${evidence.head.slice(0, 7)}; ` +
             'the implementation changed since that evidence was collected. Record it again.',
         );
+      }
+      if (job.stage === 'build' || job.stage === 'approve') {
+        requireVerified(store, job, info, `completing ${job.stage}`);
+      }
+      if (job.stage === 'approve') requireAuthorizedPolicy(job, info, 'completing approve');
+    }
+    if (job.stage === 'pr' && job.worktreePath) {
+      const tree = worktreeOf(job);
+      if (tree) {
+        requireClean(tree, 'completing pr');
+        requireVerified(store, job, tree, 'completing pr');
+        requireAuthorizedPolicy(job, tree, 'completing pr');
       }
     }
   }

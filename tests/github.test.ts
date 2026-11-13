@@ -10,6 +10,7 @@ import { describeRepo } from '../src/git/repo.ts';
 import { prWorkflowState, summarizeChecks } from '../src/integrations/github.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
 import { ensureDraftPr, issue, prStatus, pushBranch, resolveRepo } from '../src/ops/github.ts';
+import { verifyJob } from '../src/ops/verify.ts';
 import { createWorktree } from '../src/ops/worktree.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { claimJob, createJob, getJob, transitionJob } from '../src/storage/jobs.ts';
@@ -74,6 +75,7 @@ function jobAt(stage: 'spec' | 'pr') {
     transitionGuarded(store, job.id, a, { token });
   const stageWith = (artifact: string) => {
     go('start');
+    if (artifact !== 'spec.md') verifyJob(store, job.id, { token });
     writeArtifact(dir, artifact);
     addArtifact(store, job.id, artifact, { token });
     go('complete');

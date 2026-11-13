@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
+import type { SensitiveReport } from '../core/sensitive.ts';
 import {
   detectUi,
   type FactoryConfig,
@@ -38,8 +39,15 @@ import {
   resumeJob,
   transitionJob,
 } from '../storage/jobs.ts';
-import type { Artifact, Job, Review } from '../storage/schema.ts';
+import type { Artifact, Integration, Job, Review } from '../storage/schema.ts';
+import { listIntegrations } from '../storage/verification.ts';
 import { issue as ghIssue } from './github.ts';
+import {
+  effectivePolicy,
+  sensitiveReport,
+  verificationStatus,
+  type VerificationStatus,
+} from './verify.ts';
 import { createWorktree, showWorktree } from './worktree.ts';
 
 export function configPath(store: Store): string {
@@ -101,6 +109,12 @@ export interface Plan {
    * directory. Null when the checkout is not reachable.
    */
   checkoutDirty: string[] | null;
+  /** Latest verification run against the current HEAD and policy; null without a worktree. */
+  verification: VerificationStatus | null;
+  /** Sensitive paths in the job's diff, disabled tests, and policy drift; null without a diff. */
+  sensitive: SensitiveReport | null;
+  /** Most recent base integration attempt, if any. */
+  integration: Integration | null;
   /** Rendered UI touched (decides whether UI reviewers run). */
   ui: boolean;
   agents: AgentTask[];
@@ -180,6 +194,20 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const { ui, reviewers } = reviewersForJob(roles, config, worktree, opts.ui);
   const current = listReviews(store.db, id).filter((r) => r.round === job.round);
   const expired = job.ownerSession !== null && leaseExpired(job, ts);
+  let verification: VerificationStatus | null = null;
+  let sensitive: SensitiveReport | null = null;
+  let planProblem = '';
+  if (worktree?.head && worktree.baseRef) {
+    const tree = { ...worktree, head: worktree.head };
+    try {
+      const eff = effectivePolicy(job, tree);
+      verification = verificationStatus(store, job, tree, eff);
+      sensitive = sensitiveReport(tree, eff);
+    } catch (err) {
+      planProblem = (err as Error).message;
+    }
+  }
+  const integration = listIntegrations(store.db, id)[0] ?? null;
   const required = requiredArtifact(job.stage, job.round);
   const id_ = job.id;
   // Every mutating command carries the token explicitly: shells spawned by Claude Code do not
@@ -200,6 +228,9 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     artifactDir: detail.artifactDir,
     worktree,
     checkoutDirty: existsSync(job.repoPath) ? (tryDirty(job.repoPath) ?? null) : null,
+    verification,
+    sensitive,
+    integration,
     ui,
     agents: [],
     reviews: current.map((r) => ({ reviewer: r.reviewer, verdict: r.verdict })),
@@ -253,6 +284,27 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   }
 
   const start = job.status === 'pending' ? [`orch job transition ${id_} start${tok}`] : [];
+  const verify = `orch verify ${id_}${tok}`;
+  const verifyIfStale = verification?.valid ? [] : [verify];
+  const notes: string[] = [];
+  if (planProblem) notes.push(`Policy problem: ${planProblem}.`);
+  if (verification && !verification.configured) {
+    notes.push(
+      `No verification policy (factory.json) on the base branch: the job cannot pass its gates ` +
+        'until one exists or a human accepts a proposed policy (dashboard: accept-policy).',
+    );
+  }
+  if (verification?.policy.authorization === 'required') {
+    notes.push(
+      'The worktree changes the verification policy; a human must accept it (dashboard: accept-policy) ' +
+        'or it must be reverted before approval.',
+    );
+  }
+  if (sensitive?.needsReview) {
+    notes.push(
+      `Sensitive changes need explicit review: ${sensitive.changes.map((c) => c.path).join(', ') || 'see sensitive.scan'}.`,
+    );
+  }
   const add = (p: string, replace = false) =>
     `orch job artifact add ${id_} ${p}${replace ? ' --replace' : ''}${tok}`;
   const complete = `orch job transition ${id_} complete${tok}`;
@@ -270,10 +322,20 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const r = role('build');
       if (r) plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'build.md' }];
       const rework = job.round > 0;
-      plan.reason = rework
-        ? `Rework round ${String(job.round + 1)}: address round-${String(job.round)}/consolidated.md, then rebuild build.md.`
-        : 'Implement spec.md in the worktree, validate, commit, and write build.md.';
-      plan.commands = [...start, add('build.md', rework), complete];
+      const conflict =
+        integration &&
+        (integration.status === 'conflict' || (integration.material?.length ?? 0) > 0)
+          ? ` Base integration of ${integration.baseRef} needs the builder: ` +
+            (integration.status === 'conflict'
+              ? `conflicts in ${integration.conflicts?.join(', ') ?? 'unknown files'}; merge ${integration.baseRef}, resolve, commit the merge.`
+              : `merge ${integration.resultHead?.slice(0, 7) ?? '?'} edited ${integration.material?.join(', ') ?? ''}; review those edits as new code.`)
+          : '';
+      plan.reason =
+        (rework
+          ? `Rework round ${String(job.round + 1)}: address round-${String(job.round)}/consolidated.md, then rebuild build.md.`
+          : 'Implement spec.md in the worktree, commit, run orch verify, and write build.md citing the run id.') +
+        conflict;
+      plan.commands = [...start, verify, add('build.md', rework), complete];
       break;
     }
     case 'review': {
@@ -311,6 +373,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         'Independent final approval: spec, build.md, git diff, review artifacts, outstanding findings.';
       plan.commands = [
         ...start,
+        ...verifyIfStale,
         add('decision.md'),
         `${complete}   # only if DECISION: APPROVE; otherwise: orch job transition ${id_} escalate --reason "<why>"${tok}`,
       ];
@@ -319,13 +382,17 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     case 'pr': {
       const behind = worktree.behind ?? 0;
       plan.reason =
-        'Deliver: integrate base if it advanced, validate, push, create or reuse the draft PR, write pr.md.' +
+        'Deliver: integrate base if it advanced, verify the resulting commit, push, create or reuse the draft PR, write pr.md.' +
         (behind > 0 ? ` Base is ${String(behind)} commit(s) ahead.` : '');
       plan.commands = [
         ...start,
         ...(behind > 0
-          ? [`orch worktree integrate ${id_}${tok}   # then re-run project validation`]
+          ? [
+              `orch worktree integrate ${id_}${tok}   # conflicts send the job back to build`,
+              `orch factory next ${id_}   # re-plan: HEAD changed`,
+            ]
           : []),
+        ...(behind > 0 ? [verify] : verifyIfStale),
         `orch gh push ${id_}${tok}`,
         `orch gh pr create ${id_} --body-file "${join(detail.artifactDir, 'pr.md')}"${tok}`,
         add('pr.md'),
@@ -338,6 +405,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       break;
   }
   if (required && !plan.requiredArtifacts.includes(required)) plan.requiredArtifacts.push(required);
+  if (notes.length > 0) plan.reason = `${plan.reason} ${notes.join(' ')}`;
   return plan;
 }
 

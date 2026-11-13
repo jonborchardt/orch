@@ -16,6 +16,7 @@ import { dashboardAction } from '../src/ops/actions.ts';
 import { planJob, resumeFactoryJob, startJob } from '../src/ops/factory.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
 import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
+import { verifyJob } from '../src/ops/verify.ts';
 import { adoptWorktree, integrateBase } from '../src/ops/worktree.ts';
 import { listArtifacts } from '../src/storage/artifacts.ts';
 import {
@@ -78,6 +79,8 @@ function start(title = 'Add CSV export'): Ctx {
 const go = (c: Ctx, action: Parameters<typeof transitionJob>[2], reason?: string) =>
   transitionGuarded(store, c.id, action, { token: c.token, reason });
 const add = (c: Ctx, rel: string, body = fixture(rel), replace = false) => {
+  // Code evidence is verified first, as the builder and approver do (same refusal on a dirty tree).
+  if (rel === 'build.md' || rel === 'decision.md') verifyJob(store, c.id, { token: c.token });
   writeArtifact(c.dir, rel, body);
   return addArtifact(store, c.id, rel, { token: c.token, replace });
 };
@@ -357,6 +360,9 @@ describe('invariants 10, 11, and 15: approval, blocking findings, and what gets 
     expect(planJob(store, c.id).worktree?.behind).toBe(1);
     const merged = integrateBase(store, c.id, { token: c.token });
     expect(merged.merge.merged).toBe(true);
+    // The merge commit is new code as far as evidence goes: verify it before it can leave.
+    expect(() => pushBranch(store, c.id, { token: c.token })).toThrow(/No valid verification run/);
+    verifyJob(store, c.id, { token: c.token });
     expect(pushBranch(store, c.id, { token: c.token }).pushed).toBe(true);
     commitFile(c.wt, 'extra.ts', 'not reviewed');
     expect(() => pushBranch(store, c.id, { token: c.token })).toThrow(/not approved/);

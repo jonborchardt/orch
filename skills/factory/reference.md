@@ -15,9 +15,10 @@ Every prompt starts with the header block from SKILL.md. Add:
 | `review`  | each `factory-reviewer-*` | Paths to `spec.md`, `build.md`, the evidence dir if one exists, `git diff <baseRef>...HEAD` hint, the base ref (`plan.worktree.baseRef`), round number, and the artifact path. |
 | `approve` | `factory-approver`        | Paths to `spec.md`, `build.md`, every `round-*/review-*.md` and `consolidated.md`, the base ref for the diff, and the round count.                                             |
 
-Builder validation commands: whatever the project's own instructions say (`npm test`,
-`npm run check`, `pytest`, `cargo test`...). The builder discovers them from the project's
-CLAUDE.md / package.json / Makefile; the coordinator does not guess.
+Builder validation: `orch verify <id> --token <t>`, which runs the repository's `factory.json`
+verification policy (see README, "Verification evidence"). The builder may also run the project's
+own commands while iterating, but only `orch verify` produces evidence. Give the builder and every
+reviewer the latest run id and `plan.sensitive` (paths, disabled tests, policy drift).
 
 ## spec.md
 
@@ -76,7 +77,9 @@ What was implemented and how; commits on the branch (`git log <baseRef>..HEAD --
 
 ## Validation
 
-Commands run inside the worktree and their results (paste the tail of the output):
+Verification run: `orch verify` run <id> at <HEAD sha>, status passed; checks: <id: passed, ...>.
+Logs: `<artifactDir>/verification/<run>/<check>.log`. Exploratory commands you ran beyond that
+(with the tail of their output):
 
 - `npm run check` → pass (N tests)
 - ...
@@ -111,6 +114,12 @@ actually gathered, not on build.md's claims.
 - ...
   (or "No findings.")
 
+## Sensitive changes
+
+For each path in `plan.sensitive` (tests, CI, dependency manifests, verification policy): what
+changed in the actual diff, whether a check was added, removed, or weakened, and whether the
+effective verification baseline changed. "None" when the plan lists nothing.
+
 VERDICT: PASS
 ```
 
@@ -140,6 +149,12 @@ Deduplicated, actionable, in priority order. Each names the reviewers who raised
 ## Dropped
 
 Reported but not actionable for this job (out of scope, duplicate, incorrect), with one reason each.
+
+## Sensitive changes
+
+Every path from `plan.sensitive.changes` (orch refuses the file otherwise), why it is sensitive,
+whether checks were added, removed, or modified, whether the required verification baseline
+changed, and whether human authorization is still needed. "None" when there are none.
 
 BLOCKING: 1
 ```
@@ -198,11 +213,16 @@ job's artifact directory.
 
 ## Validation
 
-Commands and results from the final worktree state (after base integration, if any).
+Verification run <id> at <final HEAD> (after base integration, if any): passed; checks <...>.
 
 ## Review
 
 Round <K> of <max>: security PASS, correctness PASS, ... Approver: APPROVE.
+
+## Sensitive changes
+
+Every sensitive path (tests, CI, dependencies, factory.json) with what changed and whether the
+verification baseline changed or a human accepted a new policy. "None" when there are none.
 
 ## Known limitations
 

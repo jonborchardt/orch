@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { OwnershipError, ValidationError, WorkflowError } from '../src/core/errors.ts';
 import { ROLES } from '../src/core/roles.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
+import { verifyJob } from '../src/ops/verify.ts';
 import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
 import {
   checkReadonly,
@@ -93,6 +94,10 @@ const recordReview = recordVerdict;
 /** Fixture subagent: writes a valid artifact, registers it, completes the stage. */
 function runStage(c: Ctx, artifact: string, body = fixture(artifact), replace = false) {
   if (getJob(store.db, c.id).status === 'pending') go(c, 'start');
+  // The builder and approver verify the commit they describe before registering their artifact.
+  if (artifact === 'build.md' || artifact === 'decision.md') {
+    verifyJob(store, c.id, { token: c.token });
+  }
   writeArtifact(c.dir, artifact, body);
   registerArtifact(store, c.id, artifact, { token: c.token, replace });
   return go(c, 'complete');

@@ -7,27 +7,33 @@ import { resolve, sep } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { jobWorktreeDir } from '../core/paths.ts';
+import { ToolError } from '../core/errors.ts';
 import { describeRepo, remoteExists, baseRef } from '../git/repo.ts';
-import { git } from '../git/run.ts';
+import { git, tryGit } from '../git/run.ts';
 import {
   addWorktree,
   inspectWorktree,
+  mergeEdits,
   mergeInto,
   pruneWorktrees,
   removeWorktree,
   type MergeResult,
   type WorktreeInfo,
 } from '../git/worktree.ts';
+import { findArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import {
   type Auth,
   authorize,
   clearWorktree,
   getJob,
-  recordEvent,
   setWorktree,
+  transitionJob,
 } from '../storage/jobs.ts';
-import type { Job } from '../storage/schema.ts';
+import type { Integration, Job } from '../storage/schema.ts';
+import { finishIntegration, listIntegrations, startIntegration } from '../storage/verification.ts';
+import { worktreeOf } from './tree.ts';
+import { latestValidRun } from './verify.ts';
 
 export interface WorktreeResult {
   job: Job;
@@ -190,35 +196,159 @@ export function dropWorktree(store: Store, id: string, auth: Auth): WorktreeResu
 export interface IntegrateResult extends WorktreeResult {
   merge: MergeResult;
   fetched: boolean;
+  integration: Integration;
+  /** What must happen next: nothing, verification, or (pr stage) the builder. */
+  next: 'verify' | 'rework' | 'none';
+}
+
+function mergeOutcome(wt: string, fromHead: string, resultHead: string) {
+  const changed = tryGit(wt, 'diff', '--name-only', fromHead, resultHead) ?? '';
+  return {
+    resultHead,
+    conflicts: [] as string[],
+    changedFiles: changed ? changed.split(/\r?\n/) : [],
+    material: mergeEdits(wt, resultHead),
+  };
 }
 
 /**
- * Bring base-branch changes into the job branch with a merge commit. Fetches origin first when
- * there is one. Refused on a dirty worktree; conflicts abort the merge and raise an error.
+ * An integration row left `started` means a previous attempt died. Work out from Git what
+ * actually happened: a half-done merge is aborted (nothing committed is lost), a merge that
+ * completed but was never recorded is recorded now, anything else is marked interrupted.
+ */
+function reconcile(store: Store, id: string, auth: Auth, wt: string, open: Integration): void {
+  const inMerge = tryGit(wt, 'rev-parse', '--verify', '--quiet', 'MERGE_HEAD') !== undefined;
+  if (inMerge) {
+    tryGit(wt, 'merge', '--abort');
+    finishIntegration(store, id, auth, open.id, {
+      status: 'interrupted',
+      resultHead: null,
+      conflicts: [],
+      changedFiles: [],
+      material: [],
+    });
+    return;
+  }
+  const head = git(wt, 'rev-parse', 'HEAD');
+  const parents = tryGit(wt, 'rev-list', '--parents', '-n', '1', head)?.split(/\s+/) ?? [];
+  if (head !== open.fromHead && parents.includes(open.fromHead) && parents.includes(open.baseSha)) {
+    finishIntegration(store, id, auth, open.id, {
+      status: 'merged',
+      ...mergeOutcome(wt, open.fromHead, head),
+    });
+    return;
+  }
+  finishIntegration(store, id, auth, open.id, {
+    status: 'interrupted',
+    resultHead: head === open.fromHead ? null : head,
+    conflicts: [],
+    changedFiles: [],
+    material: [],
+  });
+}
+
+/**
+ * Bring base-branch changes into the job branch with a merge commit, recording the inputs before
+ * Git runs and the outcome after. Fetches origin first when there is one. Refused on a dirty
+ * worktree. Conflicts abort the merge; in the pr stage the job then goes back to build (the
+ * builder resolves, and the result is verified, reviewed, and approved again), elsewhere the
+ * conflict is raised as an error. A completed merge still needs fresh verification.
  */
 export function integrateBase(store: Store, id: string, auth: Auth): IntegrateResult {
   const job = authorize(store, id, auth);
   if (!job.worktreePath) throw new ValidationError(`Job ${id} has no worktree.`);
   const root = repoRoot(job);
-  const before = inspectWorktree(root, job.worktreePath, job.baseBranch);
-  if (!before.isWorktree) throw new ValidationError(`${job.worktreePath} is not a valid worktree.`);
+  const wt = job.worktreePath;
+  const open = listIntegrations(store.db, id).find((i) => i.status === 'started');
+  if (open) reconcile(store, id, auth, wt, open);
+  const before = inspectWorktree(root, wt, job.baseBranch);
+  if (!before.isWorktree) throw new ValidationError(`${wt} is not a valid worktree.`);
   if (before.dirty.length > 0) {
     throw new ValidationError('Worktree has uncommitted changes; commit them before integrating.');
   }
   const fetched = remoteExists(root);
-  if (fetched) git(job.worktreePath, 'fetch', 'origin', job.baseBranch);
+  if (fetched) git(wt, 'fetch', 'origin', job.baseBranch);
   const ref = baseRef(root, job.baseBranch);
   if (!ref) throw new ValidationError(`Base branch ${job.baseBranch} not found.`);
-  const merge = mergeInto(job.worktreePath, ref);
-  const updated = recordEvent(store, id, auth, 'worktree.integrated', {
-    from: ref,
-    merged: merge.merged,
-    head: merge.head,
+  const fromHead = git(wt, 'rev-parse', 'HEAD');
+  const baseSha = git(wt, 'rev-parse', `${ref}^{commit}`);
+  const mergeBase = tryGit(wt, 'merge-base', ref, 'HEAD') ?? null;
+  const tree = worktreeOf(job);
+  const decision = findArtifact(store.db, id, 'decision.md');
+  const valid = tree ? latestValidRun(store, job, tree) : undefined;
+  let integration = startIntegration(store, id, {
+    ...auth,
+    fromHead,
+    baseRef: ref,
+    baseSha,
+    mergeBase,
+    decisionHead: decision?.marker === 'approve' ? decision.head : null,
+    verificationRunId: valid?.run.id ?? null,
   });
+  if (mergeBase === baseSha) {
+    integration = finishIntegration(store, id, auth, integration.id, {
+      status: 'up-to-date',
+      resultHead: fromHead,
+      conflicts: [],
+      changedFiles: [],
+      material: [],
+    });
+    return {
+      job: getJob(store.db, id),
+      worktree: inspectWorktree(root, wt, job.baseBranch),
+      merge: { merged: false, upToDate: true, head: fromHead },
+      fetched,
+      integration,
+      next: valid ? 'none' : 'verify',
+    };
+  }
+  let merge: MergeResult;
+  try {
+    merge = mergeInto(wt, ref);
+  } catch (err) {
+    const msg = (err as Error).message;
+    const files = /conflicts in: (.+?)\. The merge was aborted/.exec(msg)?.[1] ?? '';
+    integration = finishIntegration(store, id, auth, integration.id, {
+      status: 'conflict',
+      resultHead: null,
+      conflicts: files && files !== '(unknown)' ? files.split(', ') : [],
+      changedFiles: [],
+      material: [],
+    });
+    if (job.stage !== 'pr') throw err instanceof ToolError ? err : new ValidationError(msg);
+    const reworked = transitionJob(store, id, 'rework', {
+      token: auth.token,
+      reason: `base integration of ${ref} conflicts in ${files || 'unknown files'}`,
+    });
+    return {
+      job: reworked,
+      worktree: inspectWorktree(root, wt, job.baseBranch),
+      merge: { merged: false, upToDate: false, head: fromHead },
+      fetched,
+      integration,
+      next: 'rework',
+    };
+  }
+  const outcome = mergeOutcome(wt, fromHead, merge.head);
+  integration = finishIntegration(store, id, auth, integration.id, {
+    status: 'merged',
+    ...outcome,
+  });
+  let next: IntegrateResult['next'] = 'verify';
+  let updated = getJob(store.db, id);
+  if (outcome.material.length > 0 && job.stage === 'pr') {
+    updated = transitionJob(store, id, 'rework', {
+      token: auth.token,
+      reason: `merge ${merge.head.slice(0, 7)} edited ${outcome.material.join(', ')} beyond either parent`,
+    });
+    next = 'rework';
+  }
   return {
     job: updated,
-    worktree: inspectWorktree(root, job.worktreePath, job.baseBranch),
+    worktree: inspectWorktree(root, wt, job.baseBranch),
     merge,
     fetched,
+    integration,
+    next,
   };
 }

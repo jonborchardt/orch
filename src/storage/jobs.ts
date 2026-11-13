@@ -511,12 +511,13 @@ export function recordEvent(
 
 // ---------------------------------------------------------------------------------------------
 
-interface Decision {
+export interface Decision {
   patch: Partial<Job>;
   events: { type: string; payload: Record<string, unknown> }[];
 }
 
-function mutate(
+/** Owner-checked, revision-bumped, lease-renewing transaction around a pure decision. */
+export function mutate(
   store: Store,
   id: string,
   auth: Auth,

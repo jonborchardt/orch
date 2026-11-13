@@ -34,6 +34,7 @@ const TABS = [
   'Artifacts',
   'Events',
   'Git',
+  'Verification',
   'PR',
 ] as const;
 type TabName = (typeof TABS)[number];
@@ -258,6 +259,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
             <Typography color="text.secondary">No consolidated findings yet.</Typography>
           ))}
         {tab === 'Decision' && content('decision.md')}
+        {tab === 'Verification' && <Verification detail={detail} />}
         {tab === 'Artifacts' && (
           <Table size="small" aria-label="Artifacts">
             <TableHead>
@@ -388,5 +390,157 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
         )}
       </Box>
     </Box>
+  );
+}
+
+/** Verification evidence, policy state, sensitive changes, and base integrations from the plan. */
+function Verification({ detail }: { detail: JobDetailView }) {
+  const v = detail.plan?.verification ?? null;
+  const s = detail.plan?.sensitive ?? null;
+  const integ = detail.plan?.integration ?? null;
+  if (!detail.plan) return <Typography color="text.secondary">Plan unavailable.</Typography>;
+  return (
+    <Stack spacing={2}>
+      {v ? (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            Policy
+          </Typography>
+          <Typography variant="body2">
+            Source: <b>{v.policy.source}</b>
+            {v.policy.head ? (
+              <>
+                {' '}
+                at <code>{v.policy.head.slice(0, 10)}</code>
+              </>
+            ) : null}
+            , fingerprint <code>{v.policy.fingerprint}</code>. Checks:{' '}
+            {v.policy.checks.join(', ') || 'none'}.
+          </Typography>
+          {!v.configured && (
+            <Alert severity="warning" sx={{ mt: 1 }}>
+              No verification policy on the base branch. Gates cannot pass until factory.json exists
+              there or a proposed policy is accepted.
+            </Alert>
+          )}
+          {v.policy.authorization === 'required' && (
+            <Alert severity="warning" sx={{ mt: 1 }} data-testid="policy-drift">
+              The worktree changes the verification policy. Accept it below or have it reverted.
+              {v.policy.candidateError ? ` (${v.policy.candidateError})` : ''}
+            </Alert>
+          )}
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            Latest run:{' '}
+            {v.run ? (
+              <>
+                #{v.run.id}{' '}
+                <Chip size="small" label={v.run.status} color={v.valid ? 'success' : 'default'} />{' '}
+                at <code>{v.run.head.slice(0, 10)}</code>,{' '}
+                {v.valid ? 'valid for HEAD' : `stale: ${v.reason ?? ''}`}
+              </>
+            ) : (
+              <>none ({v.reason ?? ''})</>
+            )}
+          </Typography>
+          {v.run && (
+            <Table size="small" aria-label="Verification checks" sx={{ mt: 1 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Check</TableCell>
+                  <TableCell>Command</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell align="right">Exit</TableCell>
+                  <TableCell align="right">ms</TableCell>
+                  <TableCell>Log</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {v.run.checks.map((c) => (
+                  <TableRow key={c.id}>
+                    <TableCell>
+                      {c.checkId}
+                      {c.required ? '' : ' (optional)'}
+                    </TableCell>
+                    <TableCell>
+                      <code>{[c.command, ...c.args].join(' ')}</code> in {c.cwd}
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        size="small"
+                        label={c.status}
+                        color={
+                          c.status === 'passed'
+                            ? 'success'
+                            : c.status === 'pending'
+                              ? 'default'
+                              : 'error'
+                        }
+                      />
+                    </TableCell>
+                    <TableCell align="right">{c.exitCode ?? c.signal ?? ''}</TableCell>
+                    <TableCell align="right">{c.durationMs ?? ''}</TableCell>
+                    <TableCell>
+                      {c.outputPath ?? ''}
+                      {c.truncated ? ' (truncated)' : ''}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </Paper>
+      ) : (
+        <Typography color="text.secondary">No worktree; nothing verified.</Typography>
+      )}
+      {s &&
+        (s.changes.length > 0 || s.scan.disabled.length > 0 || s.scan.removedTests.length > 0) && (
+          <Paper variant="outlined" sx={{ p: 2 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              Sensitive changes {s.needsReview ? '(review required)' : '(new tests only)'}
+            </Typography>
+            <ul>
+              {s.changes.map((c) => (
+                <li key={c.path}>
+                  <code>{c.path}</code> {c.status}: {c.why}
+                </li>
+              ))}
+              {s.scan.disabled.map((d, i) => (
+                <li key={`d${String(i)}`}>
+                  <code>{d.path}</code> disabled or focused test: <code>{d.line}</code>
+                </li>
+              ))}
+              {s.scan.removedTests.map((r) => (
+                <li key={`r${r.path}`}>
+                  <code>{r.path}</code>: {r.removed} test definition(s) removed, {r.added} added
+                </li>
+              ))}
+            </ul>
+          </Paper>
+        )}
+      {integ && (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            Base integration #{integ.id}: {integ.status}
+          </Typography>
+          <Typography variant="body2">
+            From <code>{integ.fromHead.slice(0, 10)}</code> with {integ.baseRef} at{' '}
+            <code>{integ.baseSha.slice(0, 10)}</code>
+            {integ.resultHead ? (
+              <>
+                {' '}
+                → <code>{integ.resultHead.slice(0, 10)}</code>
+              </>
+            ) : null}
+            .{integ.conflicts?.length ? ` Conflicts: ${integ.conflicts.join(', ')}.` : ''}
+            {integ.material?.length
+              ? ` Edited inside the merge: ${integ.material.join(', ')}.`
+              : ''}
+            {integ.changedFiles?.length
+              ? ` ${String(integ.changedFiles.length)} file(s) changed.`
+              : ''}
+          </Typography>
+        </Paper>
+      )}
+    </Stack>
   );
 }

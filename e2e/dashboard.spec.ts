@@ -63,6 +63,9 @@ test('job detail exposes spec, reviews, long findings, decision, events, and lin
   await expect(
     page.getByRole('table', { name: 'Events' }).getByText('job.completed'),
   ).toBeVisible();
+  await page.getByRole('tab', { name: 'Verification' }).click();
+  // Seeded jobs have no worktree, so the evidence panel says so instead of inventing a run.
+  await expect(page.getByText('No worktree; nothing verified.')).toBeVisible();
   await page.getByRole('tab', { name: 'PR' }).click();
   await expect(page.getByText('CI failing')).toBeVisible();
   // Finished jobs have no live controls.

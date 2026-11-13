@@ -63,7 +63,16 @@ describe('openStore', () => {
         .all()
         .map((r) => r['name'])
         .sort();
-      expect(tables).toEqual(['__drizzle_migrations', 'artifacts', 'events', 'jobs', 'reviews']);
+      expect(tables).toEqual([
+        '__drizzle_migrations',
+        'artifacts',
+        'events',
+        'integrations',
+        'jobs',
+        'reviews',
+        'verification_checks',
+        'verification_runs',
+      ]);
       const applied = db.prepare('SELECT count(*) AS n FROM __drizzle_migrations').get();
       expect(applied?.['n']).toBe(shippedMigrations().length);
       expect(db.prepare('PRAGMA journal_mode').get()?.['journal_mode']).toBe('wal');

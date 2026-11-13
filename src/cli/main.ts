@@ -10,6 +10,7 @@ import { runInstall } from './install.ts';
 import { JOB_HELP, runJob } from './job.ts';
 import { print, printError, UsageError } from './output.ts';
 import { runUi, UI_HELP } from './ui.ts';
+import { runVerify, VERIFY_HELP } from './verify.ts';
 import { runWorktree, WORKTREE_HELP } from './worktree.ts';
 
 const HELP = `Usage: orch [--json] <command>
@@ -20,6 +21,7 @@ Commands:
   job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
   worktree <subcommand>  Create, inspect, adopt, remove a job's Git worktree (orch worktree --help)
   gh <subcommand>        GitHub via gh: issue, push, draft PR, CI status (orch gh --help)
+  verify <job-id>        Run the repository's verification policy in the job worktree (orch verify --help)
   install [--dry-run]    Link skills/ and agents/ into ~/.claude (--claude-dir, --source)
   ui [--port <n>] [--open]
                          Serve the local dashboard on loopback (the only long-running command)
@@ -104,6 +106,7 @@ export function main(argv: string[]): number | Promise<number> {
         worktree: WORKTREE_HELP,
         gh: GH_HELP,
         factory: FACTORY_HELP,
+        verify: VERIFY_HELP,
         ui: UI_HELP,
       };
       console.log((command && helps[command]) ?? HELP);
@@ -151,6 +154,16 @@ export function main(argv: string[]): number | Promise<number> {
           store.close();
         }
         return 0;
+      }
+      case 'verify': {
+        const store = openStore();
+        try {
+          const { result, exitCode } = runVerify(store, rest, o);
+          print(result, json);
+          return exitCode;
+        } finally {
+          store.close();
+        }
       }
       case 'ui':
         return runUi(o).catch((err: unknown) => printError(err, json));

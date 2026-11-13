@@ -281,9 +281,10 @@ describe('worktree integrate', () => {
     expect(merged.worktree.dirty).toEqual([]);
     const again = integrateBase(store, id, { token });
     expect(again.merge.upToDate).toBe(true);
-    expect(listEvents(store.db, id).filter((e) => e.type === 'worktree.integrated')).toHaveLength(
-      2,
-    );
+    const done = listEvents(store.db, id).filter((e) => e.type === 'integration.completed');
+    expect(done.map((e) => e.payload['status'])).toEqual(['merged', 'up-to-date']);
+    expect(merged.integration.changedFiles).toEqual(['base.txt']);
+    expect(merged.integration.material).toEqual([]);
   });
 
   it('aborts on conflict, leaving the worktree exactly as it was', () => {
@@ -302,7 +303,9 @@ describe('worktree integrate', () => {
     const after = showWorktree(store, id);
     expect(after.worktree.head).toBe(head);
     expect(after.worktree.dirty).toEqual([]);
-    expect(listEvents(store.db, id).some((e) => e.type === 'worktree.integrated')).toBe(false);
+    // Both attempts were recorded as conflicts; nothing was merged.
+    const done = listEvents(store.db, id).filter((e) => e.type === 'integration.completed');
+    expect(done.map((e) => e.payload['status'])).toEqual(['conflict', 'conflict']);
   });
 
   it('refuses to integrate over uncommitted changes', () => {

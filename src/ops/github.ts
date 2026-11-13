@@ -9,7 +9,7 @@ import { ValidationError } from '../core/errors.ts';
 import type { CiStatus, PrState } from '../core/workflow.ts';
 import { baseRef, describeRepo } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
-import { inspectWorktree } from '../git/worktree.ts';
+import { editedMerges, inspectWorktree } from '../git/worktree.ts';
 import {
   createDraftPr,
   type GhIssue,
@@ -26,6 +26,8 @@ import { findArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { type Auth, authorize, getJob, recordCi, recordEvent, recordPr } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
+import { worktreeOf } from './tree.ts';
+import { effectivePolicy, verificationStatus } from './verify.ts';
 
 function requireWorktree(job: Job): { path: string; branch: string } {
   if (!job.worktreePath || !job.branch) {
@@ -69,9 +71,11 @@ export interface PushResult {
 }
 
 /**
- * Only approved code leaves the machine: the job must be in the pr stage, decision.md must be
- * APPROVE recorded against a commit, and every commit since then that is not already on the base
- * must be a merge (base integration). Conflict resolutions inside a merge commit are the one gap.
+ * Only approved, verified code leaves the machine: the job must be in the pr stage, decision.md
+ * must be APPROVE recorded against a commit, every commit since then that is not already on the
+ * base must be a merge whose result matches one of its parents (a clean base integration, no
+ * edits inside the merge), the verification policy must not have drifted without a human, and the
+ * latest verification run must be valid for this exact HEAD.
  */
 function requireApprovedHead(store: Store, job: Job, path: string, head: string): void {
   if (job.stage !== 'pr' && job.stage !== 'completed') {
@@ -81,19 +85,47 @@ function requireApprovedHead(store: Store, job: Job, path: string, head: string)
   if (decision?.marker !== 'approve' || !decision.head) {
     throw new ValidationError('No DECISION: APPROVE recorded against a commit; refusing to push.');
   }
-  if (decision.head === head) return;
-  const base = baseRef(path, job.baseBranch);
-  const unreviewed = tryGit(
-    path,
-    'rev-list',
-    '--no-merges',
-    `${decision.head}..${head}`,
-    ...(base ? [`^${base}`] : []),
-  );
-  if (unreviewed === undefined || unreviewed !== '') {
+  if (decision.head !== head) {
+    const base = baseRef(path, job.baseBranch);
+    const unreviewed = tryGit(
+      path,
+      'rev-list',
+      '--no-merges',
+      `${decision.head}..${head}`,
+      ...(base ? [`^${base}`] : []),
+    );
+    if (unreviewed === undefined || unreviewed !== '') {
+      throw new ValidationError(
+        `HEAD ${head.slice(0, 7)} has commits that were not approved (approved: ${decision.head.slice(0, 7)}); ` +
+          'only base integration merges may follow an approval. Return the job to review.',
+      );
+    }
+    const edited = editedMerges(path, decision.head, head);
+    if (edited.length > 0) {
+      const list = edited.map((m) => `${m.sha.slice(0, 7)}: ${m.files.join(', ')}`).join('; ');
+      throw new ValidationError(
+        `Merge commit(s) since the approval contain edits that match neither parent (${list}); ` +
+          'conflict resolutions are new code. Rework, re-review, and re-approve first.',
+      );
+    }
+  }
+  const tree = worktreeOf(job);
+  if (!tree) throw new ValidationError(`Job ${job.id} has no worktree.`);
+  if (tree.dirty.length > 0) {
     throw new ValidationError(
-      `HEAD ${head.slice(0, 7)} has commits that were not approved (approved: ${decision.head.slice(0, 7)}); ` +
-        'only base integration merges may follow an approval. Return the job to review.',
+      `Worktree has uncommitted changes (${tree.dirty[0] ?? ''}); refusing.`,
+    );
+  }
+  const eff = effectivePolicy(job, tree);
+  if (eff.diff) {
+    throw new ValidationError(
+      'The worktree changes the verification policy without a recorded human authorization; refusing to deliver.',
+    );
+  }
+  const status = verificationStatus(store, job, tree, eff);
+  if (!status.valid) {
+    throw new ValidationError(
+      `No valid verification run for HEAD ${head.slice(0, 7)}: ${status.reason ?? 'none'}. Run orch verify ${job.id} first.`,
     );
   }
 }

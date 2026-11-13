@@ -98,6 +98,8 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       createdAt: '2026-11-13T08:00:00.000Z',
       updatedAt: '2026-11-13T08:30:00.000Z',
       completedAt: null,
+      policy: null,
+      policyHead: null,
     },
     liveness: 'blocked',
     artifacts: [],

@@ -116,9 +116,19 @@ export function makeRepoWithOrigin(
   gitIn(bare, 'init', '-q', '--bare', '-b', 'main');
   const clone = makeRepo(originUrl, dir);
   gitIn(clone, 'config', `url.${bare.split('\\').join('/')}.insteadOf`, originUrl);
+  // A minimal verification policy, so build/approve/pr gates can be satisfied with `orch verify`.
+  commitFile(clone, 'factory.json', NOOP_POLICY, 'add verification policy');
   gitIn(clone, 'push', '-q', '-u', 'origin', 'main');
   return { clone, bare };
 }
+
+/** factory.json whose only check is `node -e 0`. */
+export const NOOP_POLICY =
+  JSON.stringify(
+    { verification: { commands: [{ id: 'noop', command: 'node', args: ['-e', '0'] }] } },
+    null,
+    2,
+  ) + '\n';
 
 const MAIN = join(installRoot(), 'src', 'cli', 'main.ts');
 

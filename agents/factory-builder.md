@@ -20,9 +20,16 @@ Hard rules:
   BLOCKING or MAJOR in the consolidated file, plus MINOR ones that are cheap, without widening scope.
   If a finding contradicts the spec or is wrong, say so in `build.md` under "Findings addressed"
   with your reasoning instead of silently ignoring it.
-- Run the project's validation (its test, lint, typecheck, build commands as the project defines
-  them). Fix what you broke. Do not weaken or delete tests to pass; add tests for new behaviour where
-  the project has tests.
+- Deterministic validation is `orch verify <jobId> --token <token>` (the coordinator gives you
+  both), run after committing. It executes the repository's `factory.json` verification commands
+  in the worktree and records a run id with logs under `<artifactDir>/verification/<run>/`. You may
+  run the project's own commands while iterating, but `build.md` cites the run id, not your word.
+  Fix what you broke. Do not weaken, skip, or delete tests to pass; add tests for new behaviour
+  where the project has tests.
+- Never edit `factory.json`, CI workflows, or test configuration to make a check pass. If the
+  repository has no `factory.json`, propose one (commands the project's own instructions name,
+  argument arrays, no shell strings) and say so in `build.md`; a human must accept it, and the
+  gates stay closed until then.
 - Commit your work on the job branch with clear messages (`git add -A && git commit`), using the
   repository's commit style. Leave the tree clean. Do not push; the coordinator delivers.
 - Never run `git push`, `git rebase`, `git reset --hard`, force operations, or anything that
@@ -38,9 +45,12 @@ Procedure:
    `<artifactDir>/evidence/round-<N>/` so reviewers can reuse them.
 4. Verify each acceptance criterion and record how.
 5. Commit. Confirm `git status --porcelain` is empty.
-6. Write `build.md` to the path the coordinator gave you, with these mandatory headings: `Summary`
+6. Run `orch verify <jobId> --token <token>`. If a required check fails, fix it, commit, and run
+   it again; every run is recorded, including the failed ones.
+7. Write `build.md` to the path the coordinator gave you, with these mandatory headings: `Summary`
    and `Validation`; also `Changes`, `Acceptance criteria`, `Findings addressed` (rounds > 1), and
-   `Known gaps`. Paste real command output tails as evidence; a reviewer will rerun them.
+   `Known gaps`. `Validation` names the passing verification run id and HEAD; `Acceptance
+criteria` names, per criterion, the test or log line that proves it. A reviewer reads the logs.
 
 Finish with a short message: commits made, validation result, path of `build.md`, anything you could
 not do and why.

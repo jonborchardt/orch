@@ -40,7 +40,15 @@ export type PrState = (typeof PR_STATES)[number];
 export const CI_STATUSES = ['pending', 'passing', 'failing', 'none'] as const;
 export type CiStatus = (typeof CI_STATUSES)[number];
 
-export const ACTIONS = ['start', 'complete', 'fail', 'escalate', 'resume', 'cancel'] as const;
+export const ACTIONS = [
+  'start',
+  'complete',
+  'fail',
+  'escalate',
+  'resume',
+  'rework',
+  'cancel',
+] as const;
 export type Action = (typeof ACTIONS)[number];
 
 export const TERMINAL_STATUSES: readonly Status[] = ['completed', 'cancelled'];
@@ -206,6 +214,16 @@ export function transition(
       return {
         patch: { status: 'pending' },
         events: [{ type: 'job.resumed', payload: { stage } }],
+      };
+    }
+
+    case 'rework': {
+      // Base integration needed the builder (conflicts or edits inside the merge): the result is
+      // new code, so it goes through build, review, and approval again.
+      if (stage !== 'pr') reject('rework is only for the pr stage');
+      return {
+        patch: { stage: 'build', status: 'pending' },
+        events: [{ type: 'job.reworked', payload: { from: stage, reason: ctx.reason ?? null } }],
       };
     }
 

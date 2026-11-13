@@ -4,6 +4,13 @@
  */
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
+import type {
+  CheckStatus,
+  IntegrationStatus,
+  PolicySource,
+  RunStatus,
+  VerificationPolicy,
+} from '../core/verification.ts';
 import type { CiStatus, PrState, Stage, Status, Verdict } from '../core/workflow.ts';
 
 export const jobs = sqliteTable(
@@ -37,6 +44,13 @@ export const jobs = sqliteTable(
     /** Last observed CI rollup for the PR; null until `orch gh pr status` has run. */
     ciStatus: text().$type<CiStatus>(),
     ciCheckedAt: text(),
+    /**
+     * Verification policy a human authorized for this job (dashboard `accept-policy`), replacing
+     * the baseline read from the merge base. Null means the baseline applies.
+     */
+    policy: text({ mode: 'json' }).$type<VerificationPolicy>(),
+    /** Commit whose factory.json was authorized. */
+    policyHead: text(),
     /** Incremented on every mutation; optimistic concurrency check for callers. */
     revision: integer().notNull().default(1),
     createdAt: text().notNull(),
@@ -117,3 +131,91 @@ export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type Artifact = typeof artifacts.$inferSelect;
 export type Review = typeof reviews.$inferSelect;
+
+/** One `orch verify` invocation: the expected checks are rowed up front, then run in order. */
+export const verificationRuns = sqliteTable(
+  'verification_runs',
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    jobId: text()
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    /** Commit and tree the checks ran against; the worktree was clean (see `dirty`). */
+    head: text().notNull(),
+    tree: text().notNull(),
+    dirty: text({ mode: 'json' }).$type<string[]>().notNull(),
+    /** Hash of the effective verification policy (core/verification.ts fingerprint). */
+    configFingerprint: text().notNull(),
+    policySource: text().$type<PolicySource>().notNull(),
+    /** Commit the policy was read from (merge base, or the authorized head). */
+    policyHead: text(),
+    status: text().$type<RunStatus>().notNull(),
+    actor: text(),
+    startedAt: text().notNull(),
+    completedAt: text(),
+  },
+  (t) => [index('verification_runs_job_idx').on(t.jobId, t.id)],
+);
+
+export const verificationChecks = sqliteTable(
+  'verification_checks',
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    runId: integer()
+      .notNull()
+      .references(() => verificationRuns.id, { onDelete: 'cascade' }),
+    checkId: text().notNull(),
+    command: text().notNull(),
+    args: text({ mode: 'json' }).$type<string[]>().notNull(),
+    /** Working directory relative to the worktree ('.' for the root). */
+    cwd: text().notNull(),
+    required: integer({ mode: 'boolean' }).notNull(),
+    timeoutMs: integer().notNull(),
+    status: text().$type<CheckStatus>().notNull(),
+    startedAt: text(),
+    completedAt: text(),
+    durationMs: integer(),
+    exitCode: integer(),
+    signal: text(),
+    /** Captured output, relative to the job artifact directory, and its hash. */
+    outputPath: text(),
+    outputSha256: text(),
+    truncated: integer({ mode: 'boolean' }).notNull().default(false),
+    /** Launch or capture problem, when status is `error`. */
+    error: text(),
+  },
+  (t) => [uniqueIndex('verification_checks_run_check_idx').on(t.runId, t.checkId)],
+);
+
+/** One base-branch integration attempt, recorded before Git runs so a crash leaves a trace. */
+export const integrations = sqliteTable(
+  'integrations',
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    jobId: text()
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    status: text().$type<IntegrationStatus>().notNull(),
+    /** Inputs: job HEAD, base tip, their merge base, approval commit, valid pre-run. */
+    fromHead: text().notNull(),
+    baseRef: text().notNull(),
+    baseSha: text().notNull(),
+    mergeBase: text(),
+    decisionHead: text(),
+    verificationRunId: integer(),
+    /** Outcome. */
+    resultHead: text(),
+    conflicts: text({ mode: 'json' }).$type<string[]>(),
+    /** Files that differ between fromHead and resultHead (what taking the base changed). */
+    changedFiles: text({ mode: 'json' }).$type<string[]>(),
+    /** Files whose merge result matches neither parent: conflict resolution or manual edits. */
+    material: text({ mode: 'json' }).$type<string[]>(),
+    startedAt: text().notNull(),
+    completedAt: text(),
+  },
+  (t) => [index('integrations_job_idx').on(t.jobId, t.id)],
+);
+
+export type VerificationRun = typeof verificationRuns.$inferSelect;
+export type VerificationCheck = typeof verificationChecks.$inferSelect;
+export type Integration = typeof integrations.$inferSelect;

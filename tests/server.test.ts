@@ -171,7 +171,13 @@ describe('mutations', () => {
     const s = (await (await api('/api/session', { headers: same() })).json()) as SessionInfo;
     csrf = s.csrf;
     expect(csrf).toMatch(/^[0-9a-f]{48}$/);
-    expect(s.actions).toEqual(['approve', 'request-review', 'request-rework', 'cancel']);
+    expect(s.actions).toEqual([
+      'approve',
+      'request-review',
+      'request-rework',
+      'accept-policy',
+      'cancel',
+    ]);
   });
 
   it('requires a same-origin Origin, JSON content type, and the CSRF token', async () => {

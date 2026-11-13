@@ -11,6 +11,7 @@ npm run dev -- <args>    # run the CLI from source (Node strips types natively)
 npm run build            # tsc -> dist/ and vite -> web/dist (the linked `orch` binary runs dist/)
 npm run db:generate      # after editing src/storage/schema.ts: write a migration under drizzle/
 npm run db:check         # validate committed migrations
+npm run dev -- verify <job-id> --token <t>   # run this repository's factory.json checks for a job
 npm run test:coverage
 npm run test:e2e         # Playwright against a seeded `orch ui` (needs `npx playwright install chromium`)
 npm run web:dev          # Vite dev server for web/, proxying /api to a running `orch ui`
@@ -43,6 +44,15 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
 - Workflow state transitions are enforced in TypeScript, never only in skill prose. A stage is
   complete only when its required artifact has been validated (location, type, structure, marker)
   and registered; replacing registered content requires `--replace`.
+- Evidence is Git-bound and executed, never claimed. `src/ops/gates.ts` is the CLI's only path into
+  `artifact add`, `review record`, and `transition complete`; `src/ops/verify.ts` is the only
+  thing that runs a repository's checks (`factory.json` at the merge base, or the policy a human
+  accepted, via `spawnCommand` in `core/exec.ts`, in the worktree, on a clean commit). Gates
+  recompute validity from `core/verification.ts`; never add a flag that skips one. Sensitive-path
+  rules live in `core/sensitive.ts` and only label; they never execute anything.
+- Base integration goes through `integrateBase` in `src/ops/worktree.ts`, which records an
+  `integrations` row before Git runs and reconciles a `started` row on the next call. Edits inside
+  a merge commit (`git diff-tree --cc`) are new code: `rework`, never a push.
 - Mutable state goes under `runtimePaths()` from `src/core/paths.ts`: the database at
   `databasePath()`, artifacts at `jobArtifactDir(id)`, worktrees at `jobWorktreeDir(id, repo)`.
   Never write into the install root, a skill directory, or a project repository.
@@ -94,6 +104,9 @@ framework. Upgrade Drizzle deliberately, both packages together.
   `origin`). GitHub tests run a stateful `gh` shim via `ORCH_GH_SHIM`; nothing reaches the network.
   Artifact fixtures come from `fixture(path, marker?)` in `tests/helpers.ts`.
 - Tests must never touch the real user data directories or `~/.claude`.
+- Verification tests use real subprocesses (`node -e ...` as the configured command) and real
+  `factory.json` files committed to temporary repositories; `tests/verify.test.ts`,
+  `tests/sensitive.test.ts`, and `tests/integration.test.ts` cover the three Phase 5B gates.
 
 ## Documentation
 

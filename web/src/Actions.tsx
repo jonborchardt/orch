@@ -21,6 +21,7 @@ const LABEL: Record<DashboardAction, string> = {
   approve: 'Approve (return to stage)',
   'request-review': 'Request another review round',
   'request-rework': 'Request rework',
+  'accept-policy': 'Accept the verification policy from the worktree',
   cancel: 'Cancel job',
 };
 
@@ -41,6 +42,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
 
   const finished = detail.job.status === 'completed' || detail.job.status === 'cancelled';
   const blocked = detail.job.stage === 'needs-human';
+  const policyDrift = detail.plan?.verification?.policy.authorization === 'required';
   const liveOwner =
     detail.job.ownerSession !== null &&
     detail.job.ownerSession !== 'dashboard' &&
@@ -104,6 +106,16 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
           }}
         >
           Request rework
+        </Button>
+        <Button
+          variant="outlined"
+          color="warning"
+          disabled={finished || !policyDrift}
+          onClick={() => {
+            start('accept-policy');
+          }}
+        >
+          Accept verification policy
         </Button>
         <Button
           variant="outlined"

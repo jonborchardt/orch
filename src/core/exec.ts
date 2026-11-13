@@ -31,6 +31,12 @@ export interface ToolResult {
   status: number | null;
   stdout: string;
   stderr: string;
+  /** Terminating signal, when the process did not exit on its own. */
+  signal?: string | null;
+  /** True when `timeout` elapsed and the process was killed. */
+  timedOut?: boolean;
+  /** Set when the process could not be started (missing executable, EACCES, ...). */
+  error?: string;
 }
 
 /**
@@ -53,6 +59,72 @@ export function spawnTool(
   });
   if (r.error) return { status: null, stdout: '', stderr: r.error.message };
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+export interface CommandOptions {
+  cwd: string;
+  timeout: number;
+  env?: NodeJS.ProcessEnv;
+  /** Output cap per stream; the process is killed when exceeded (`error` says so). */
+  maxBuffer?: number;
+}
+
+/**
+ * Run a named tool (resolved on PATH) with an argument array, for verification commands. Unlike
+ * `spawnTool`, never throws for a missing tool, and reports timeouts and signals explicitly.
+ * Windows `.cmd`/`.bat` shims (npm, npx, pnpm) must go through cmd.exe, which parses text, so
+ * their arguments are restricted to plain tokens; anything else is refused as a launch error.
+ */
+export function spawnCommand(
+  name: string,
+  args: readonly string[],
+  opts: CommandOptions,
+): ToolResult {
+  if (!TOOL_NAME.test(name)) return launchError(`Invalid tool name: ${name}`);
+  const exe = whichSync(name, opts.env ?? process.env);
+  if (!exe) return launchError(`${name} not found on PATH`);
+  const base = {
+    cwd: opts.cwd,
+    encoding: 'utf8' as const,
+    stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
+    timeout: opts.timeout,
+    killSignal: 'SIGKILL' as const,
+    env: opts.env ?? process.env,
+    maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024,
+    windowsHide: true,
+  };
+  const ext = extname(exe).toLowerCase();
+  let r;
+  if (WIN && (ext === '.cmd' || ext === '.bat')) {
+    if (!isAbsolute(exe) || CMD_META.test(exe)) return launchError(`Unsafe shim path: ${exe}`);
+    const bad = args.find((a) => !CMD_SAFE_ARG.test(a));
+    if (bad !== undefined) {
+      return launchError(
+        `Argument ${JSON.stringify(bad)} cannot be passed through the ${name} shim`,
+      );
+    }
+    const line = `"${exe}" ${args.join(' ')}`;
+    r = spawnSync('cmd.exe', ['/d', '/s', '/c', `"${line}"`], {
+      ...base,
+      windowsVerbatimArguments: true,
+    });
+  } else {
+    r = spawnSync(exe, args, base);
+  }
+  const out: ToolResult = {
+    status: r.status,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    signal: r.signal ?? null,
+  };
+  const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'ETIMEDOUT') out.timedOut = true;
+  else if (r.error) out.error = r.error.message;
+  return out;
+}
+
+function launchError(message: string): ToolResult {
+  return { status: null, stdout: '', stderr: '', signal: null, error: message };
 }
 
 /**

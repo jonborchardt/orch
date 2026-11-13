@@ -7,10 +7,20 @@ import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { now, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
 import type { Store } from '../storage/client.ts';
+import { policyFingerprint } from '../core/verification.ts';
 import { claimJob, getJob, releaseJob, transitionJob } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
+import { authorizePolicy } from '../storage/verification.ts';
+import { worktreeOf } from './tree.ts';
+import { candidatePolicy } from './verify.ts';
 
-export const DASHBOARD_ACTIONS = ['approve', 'request-review', 'request-rework', 'cancel'] as const;
+export const DASHBOARD_ACTIONS = [
+  'approve',
+  'request-review',
+  'request-rework',
+  'accept-policy',
+  'cancel',
+] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 export const DASHBOARD_SESSION = 'dashboard';
 
@@ -85,6 +95,15 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
     const current = getJob(store.db, id);
     if (input.action === 'cancel') {
       job = transitionJob(store, id, 'cancel', { token, reason });
+    } else if (input.action === 'accept-policy') {
+      // A human adopts the worktree's factory.json at HEAD as this job's verification policy.
+      const tree = worktreeOf(current);
+      if (!tree) throw new ValidationError('The job has no worktree to read factory.json from.');
+      const policy = candidatePolicy(tree);
+      if (policy.commands.length === 0) {
+        throw new ValidationError('factory.json at HEAD defines no verification commands.');
+      }
+      job = authorizePolicy(store, id, { token }, policy, tree.head, policyFingerprint(policy));
     } else {
       const to = target(input.action, current, input.to);
       if (current.stage !== 'needs-human') {
@@ -101,6 +120,15 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   const resume = `orch factory resume ${id} --session <name>`;
   if (input.action === 'cancel') {
     return { job: safe, message: `Job cancelled (${reason}).` };
+  }
+  if (input.action === 'accept-policy') {
+    return {
+      job: safe,
+      message:
+        `Verification policy from factory.json at ${job.policyHead?.slice(0, 7) ?? '?'} accepted (${reason}). ` +
+        'Earlier verification runs are stale; the next orch verify uses the accepted checks.',
+      resumeCommand: resume,
+    };
   }
   return {
     job: safe,

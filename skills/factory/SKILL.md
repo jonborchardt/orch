@@ -26,6 +26,20 @@ Rules that are never relaxed:
 - Evidence is pinned to commits. `orch` refuses `build.md`, a review verdict, or `decision.md`
   while the worktree has uncommitted changes, and refuses to complete a stage once HEAD moved past
   the commit that evidence describes. When that happens, the stage is redone, not forced.
+- Automated validation is `orch verify <id> --token <t>`, nothing else. It runs the repository's
+  `factory.json` verification commands in the worktree and records a run id, per-check exit codes,
+  and logs under `<artifactDir>/verification/<run>/`. `build`, `approve`, and `pr` cannot complete
+  and nothing is pushed without a passing run for the exact HEAD. Agents cannot invent one; a
+  `Validation` section in `build.md` cites the run id, and reviewers read the logs, not the prose.
+- `plan.verification.configured === false` means the base branch has no verification policy. Do
+  not invent checks or skip the gate: ask the builder to propose a `factory.json` in the worktree
+  (never run it), then escalate with reason "verification policy needs human acceptance". The
+  dashboard's **Accept verification policy** records the decision; resume afterwards.
+- `plan.verification.policy.authorization === 'required'` means the worktree changed the policy.
+  The effective policy stays the base branch's until a human accepts the change the same way.
+- `plan.sensitive.needsReview` lists test, CI, dependency, or policy files that changed, disabled
+  tests, and removed test definitions. Put them in the reviewer prompts; `orch` refuses a
+  `consolidated.md` or `pr.md` that lacks a `## Sensitive changes` section naming each path.
 - Reviewers and the approver are read-only on code. After reviews, run `orch factory
 check-readonly`; if it fails, treat the round as failed (`orch job transition <id> fail`).
 - Escalate rather than approve around a blocking finding. Humans mark PRs ready and merge.
@@ -91,7 +105,8 @@ Act on `plan.step`:
 - `run-stage`: run `plan.commands` in order. Where the list names an agent step (between `start`
   and `artifact add`), launch the agents in `plan.agents` as described below, then verify their
   artifact exists before registering it. Substitute `<token>`, `<pass|changes>`, and `<one line>`
-  from the agents' results.
+  from the agents' results. `orch verify` exits 1 on a failed required check: send the builder the
+  failing check's log path once; if it fails again, `fail` the stage and escalate.
 
 If any command fails with exit 1 because an artifact is malformed, send the same agent one
 correction message naming the missing section or marker. If it fails again, run
@@ -147,9 +162,14 @@ every verdict is PASS; count honestly.
 
 The approver reads everything independently and writes `decision.md`. If it says `ESCALATE`, run
 `escalate` with its reason; `complete` is refused anyway. If `APPROVE`, follow the `pr` stage
-commands: integrate the base branch if `plan.worktree.behind > 0` and rerun the project's
-validation in the worktree (ask the builder agent to do it if it is more than a test run), push,
-create or reuse the draft PR with `pr.md` as the body, register `pr.md`, complete.
+commands: `orch worktree integrate` when `plan.worktree.behind > 0` (it records the inputs and
+outcome; run `orch factory next` again afterwards because HEAD changed), `orch verify` on the
+resulting commit, push, create or reuse the draft PR with `pr.md` as the body, register `pr.md`,
+complete. A conflicting merge, or a merge commit with edits that match neither parent, sends the
+job back to `build`: the builder merges the base and resolves, and the result is verified,
+reviewed, and approved again before anything is pushed. Never resolve conflicts yourself and never
+`--force` anything. On resume, `orch worktree integrate` reconstructs an interrupted attempt from
+Git; do not merge by hand.
 
 ## 4. Report
 

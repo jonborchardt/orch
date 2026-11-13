@@ -326,3 +326,45 @@ mistakes them for enforced: subagents staying in the worktree (the plan now repo
 the initiating checkout so a stray write is visible), reviewers rerunning tests rather than trusting
 `build.md`, builders not weakening tests, `orch doctor` being run so stale managed agent copies are
 noticed, and the coordinator running `check-readonly` and `fail` when it trips.
+
+## 41. Verification is executed by orch, from a policy the job did not write (Phase 5B)
+
+`build.md` used to be the only record that tests ran. `orch verify` now runs the checks itself and
+records a run (`verification_runs`) with every expected check rowed as `pending` before the first
+one starts (`verification_checks`), so a crash leaves an obviously incomplete run. The policy is
+`factory.json` at the repository root, parsed strictly into executable names and argument arrays
+(`core/verification.ts`), executed with `spawnCommand` (`core/exec.ts`: PATH resolution, Windows
+`.cmd` shims through `cmd.exe` with plain tokens only, timeouts with SIGKILL, capped output). The
+effective policy is read from the merge base of the job branch and the base branch, which the job
+cannot have authored; a human can replace it per job through the dashboard (`accept-policy`,
+snapshotted in `jobs.policy`). No policy means `configuration-required`, and the gates stay shut:
+inventing checks or passing by default would make the evidence worthless. Checks run in order and
+stop at the first failed required check; the rest stay `pending`. Validity (`runInvalidReason`) is
+recomputed at every gate from HEAD, the tree hash, the dirty list, the policy fingerprint, and the
+check rows; HEAD alone is not trusted because the same commit can carry a different tree only
+through uncommitted files, which is why a dirty worktree is refused outright rather than recorded.
+
+## 42. Sensitive paths are labelled, not blocked
+
+`core/sensitive.ts` classifies the diff (tests, test config, CI, dependencies, policy), scans the
+diff of changed test files for skip/only/commented-out markers and removed definitions, and diffs
+the policy. The output is a report in the plan; the only hard rules are that `consolidated.md` and
+`pr.md` must name each sensitive path under a `Sensitive changes` heading, and that an
+unauthorized policy change blocks approval and delivery. A generalized policy language was
+rejected: a reviewer reading the diff is the control, the CLI just makes sure the diff is on the
+table.
+
+## 43. Integration is recorded first and reconciled from Git
+
+`integrateBase` writes an `integrations` row (job HEAD, base SHA, merge base, approval commit,
+valid run) before merging and completes it after (result, conflicts, changed files, `material`
+from `git diff-tree --cc`, which is empty for a clean merge and lists every file whose result
+matches neither parent otherwise). A `started` row on the next call means the previous process
+died: `MERGE_HEAD` present means abort (nothing committed is lost), a merge commit with the
+recorded parents means record it, otherwise mark interrupted. In the `pr` stage, conflicts or
+material edits send the job back to `build` with the new `rework` action, so the resolution is
+built, verified, reviewed, and approved like any other change; a clean merge needs only a fresh
+`orch verify`. The push gate re-checks all of this against the commit actually being pushed. A
+full re-review for a clean base update was rejected as cost without evidence; a review for any
+edit inside a merge was accepted because the CLI cannot tell a trivial resolution from a hidden
+change.

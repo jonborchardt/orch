@@ -207,13 +207,13 @@ artifact each must write, the registered artifacts re-verified against disk, the
 commands to run, in order. The skill substitutes the token and runs them. Every state change is a
 CLI call that `orch` validates; the skill never edits the database or workflow tables.
 
-| Stage     | Agent(s)                      | Produces                                         | `orch` checks before advancing                                                                                                                    |
-| --------- | ----------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spec`    | `factory-spec-writer` (Opus)  | `spec.md`                                        | Goal, Scope, Acceptance criteria present                                                                                                          |
-| `build`   | `factory-builder` (Opus)      | commits on the job branch + `build.md`           | Summary, Validation present; worktree clean; HEAD unchanged since `build.md`; round > 1 needs `--replace`                                         |
-| `review`  | reviewers below, concurrently | `round-N/review-<r>.md` each + `consolidated.md` | every verdict matches its `VERDICT:` line and was recorded against the same clean HEAD, still current; `BLOCKING: 0` to advance; `check-readonly` |
-| `approve` | `factory-approver` (Opus)     | `decision.md`                                    | `DECISION: APPROVE` against the current HEAD; no blocking findings left in the last round; `ESCALATE` forces `escalate`                           |
-| `pr`      | the coordinator + `orch gh`   | pushed branch, draft PR, `pr.md`                 | approval recorded; only base-integration merges since it; branch pushed and current; repo identity; PR recorded                                   |
+| Stage     | Agent(s)                      | Produces                                                           | `orch` checks before advancing                                                                                                                                                         |
+| --------- | ----------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`    | `factory-spec-writer` (Opus)  | `spec.md`                                                          | Goal, Scope, Acceptance criteria present                                                                                                                                               |
+| `build`   | `factory-builder` (Opus)      | commits on the job branch + `orch verify` run + `build.md`         | Summary, Validation present; worktree clean; HEAD unchanged since `build.md`; valid verification run for HEAD; round > 1 needs `--replace`                                             |
+| `review`  | reviewers below, concurrently | `round-N/review-<r>.md` each + `consolidated.md`                   | every verdict matches its `VERDICT:` line and was recorded against the same clean HEAD, still current; `BLOCKING: 0` to advance; `check-readonly`                                      |
+| `approve` | `factory-approver` (Opus)     | `decision.md`                                                      | `DECISION: APPROVE` against the current HEAD; no blocking findings left in the last round; valid verification run; no unauthorized policy change; `ESCALATE` forces `escalate`         |
+| `pr`      | the coordinator + `orch gh`   | integrated base, verified commit, pushed branch, draft PR, `pr.md` | approval recorded; only clean base-integration merges since it; policy not drifted; valid `orch verify` run for the pushed HEAD; branch pushed and current; repo identity; PR recorded |
 
 Reviewers always include **security** (Opus), **correctness**, and **code-quality** (Sonnet). When
 the job's diff touches rendered UI (`.tsx`, `.vue`, `.css`, `.html`, ... per
@@ -419,7 +419,9 @@ Every accepted change appends events (`job.created`, `job.claimed`, `job.release
 `stage.started`, `stage.completed`, `stage.failed`, `artifact.registered`, `artifact.replaced`,
 `review.recorded`, `job.blocked`, `job.resumed`, `job.interrupted`, `job.cancelled`,
 `job.completed`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
-`worktree.integrated`, `branch.pushed`, `pr.recorded`, `ci.observed`) in the same transaction.
+`integration.started`, `integration.completed`, `verification.started`,
+`verification.completed`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
+`ci.observed`) in the same transaction.
 `orch job events <id>` lists them.
 
 ## Worktrees
@@ -446,6 +448,20 @@ orch worktree remove <id>            # delete the directory; refused while dirty
 - `remove` and `integrate` refuse to run over uncommitted changes; `integrate` aborts cleanly on a
   conflict and reports the files, leaving the worktree exactly as it was. The branch and its
   commits are always preserved; `orch` never deletes uncommitted or unpushed work.
+
+**Base integration** records an `integrations` row before Git runs (job HEAD, base ref and SHA,
+merge base, the approval commit, the valid verification run) and completes it afterwards (result
+HEAD, conflicts, files changed by taking the base, and `material`: files whose merge result matches
+neither parent, from `git diff-tree --cc`). Outcomes: `up-to-date` (no commit), `merged`, `conflict`
+(merge aborted), `interrupted`. In the `pr` stage a conflict, or a merge with material edits, moves
+the job back to `build` (`rework`): the builder merges and resolves, and the result is verified,
+reviewed, and approved again. A clean merge only needs a fresh `orch verify` on the new commit.
+On resume, a row left `started` is reconciled from Git: a half-done merge (`MERGE_HEAD`) is
+aborted, a merge that completed but was never recorded is recorded, anything else is marked
+interrupted; the merge is never blindly retried. Delivery (`gh push`, `gh pr create`) then requires
+that every commit since the approval is a merge with no material edits, that the policy has not
+drifted without authorization, and that the latest verification run is valid for the pushed HEAD.
+
 - `create`, `adopt`, `remove`, and `integrate` require the job's owner token; `show` is read-only.
 
 **Ownership is advisory at the filesystem level.** The CLI enforces that only the owner records
@@ -482,6 +498,76 @@ passing CI run.
 
 Tests never call GitHub: setting `ORCH_GH_SHIM=<file.cjs>` makes `orch` run `node <file> <args>`
 instead of `gh`, and the suite uses a stateful shim plus a local bare repository as `origin`.
+
+## Verification evidence
+
+`orch verify <id>` is the only source of automated validation evidence. It runs the repository's
+verification policy inside the job's clean worktree and records what happened; `build`, `approve`,
+and `pr` cannot complete, and nothing is pushed, without a run that is still valid for the exact
+HEAD.
+
+```sh
+orch verify <id> --token <t>     # run the policy; exit 1 on a failed required check or no policy
+orch verify show <id>            # latest run and whether it is still valid for HEAD (read-only)
+```
+
+**Policy.** A `factory.json` at the repository root (committed, like any file) declares the checks:
+
+```json
+{
+  "verification": {
+    "commands": [
+      { "id": "check", "command": "npm", "args": ["run", "check"], "required": true },
+      {
+        "id": "e2e",
+        "command": "npm",
+        "args": ["run", "test:e2e"],
+        "cwd": "web",
+        "required": false,
+        "timeoutMs": 900000
+      }
+    ]
+  }
+}
+```
+
+`command` is an executable name resolved on `PATH` (no paths, no shell strings); `args` is an
+array; `cwd` is relative to the worktree and must resolve inside it (links out are refused);
+`required` defaults to true; `timeoutMs` defaults to ten minutes. Checks run in order and stop at
+the first failed required one. Nothing from job titles, descriptions, issues, or the dashboard is
+ever executed.
+
+**Trusted baseline.** The effective policy is the `factory.json` at the merge base of the job
+branch and its base branch: code the job did not write. A job editing its own `factory.json`
+changes nothing by itself; `orch verify` keeps running the baseline, the plan reports
+`policy.authorization: required`, `approve` and delivery are refused, and a human can accept the
+proposed file from the dashboard (**Accept verification policy**), which snapshots it on the job
+(`jobs.policy`) and makes every earlier run stale. A repository with no policy at the baseline
+gets `configuration-required`: the gate stays closed until a policy exists on the base branch or a
+proposed one is accepted. Nothing is invented.
+
+**What a run records** (`verification_runs`, `verification_checks`): job, run id, commit and tree,
+dirty files (always none, since a dirty worktree is refused), the policy fingerprint and where it
+came from, start and end times, and per check the executable, argument array, working directory,
+required flag, timeout, status (`passed`, `failed`, `timed-out`, `error`, or `pending` when an
+earlier required check already failed), exit code or signal, duration, and the log file under
+`<artifacts>/verification/<run>/<check>.log` with its SHA-256 (long output keeps its head and tail
+and is marked truncated). All expected checks are rowed before anything runs, so an interrupted run
+is visibly incomplete; starting a new run marks any still-`running` one `interrupted`.
+
+**Validity.** A run is evidence only while HEAD and its tree are unchanged, the worktree is clean,
+the policy fingerprint matches the effective policy, every currently required check passed in
+that run, and the run completed. Anything else is reported as the reason it is stale.
+
+**Sensitive changes.** The plan classifies the job's diff (`plan.sensitive`): application tests
+(added, modified, deleted), test or lint configuration, CI workflows, dependency manifests, and
+`factory.json`, for JavaScript, Python, Go, Rust, and Ruby layouts; the diff of changed test files
+is scanned for skipped, focused, or commented-out tests and for removed test definitions, and the
+policy is diffed against the baseline (added, removed, modified, weakened checks). Newly added
+tests alone need no special attention; everything else sets `needsReview`, and `orch` refuses a
+`round-N/consolidated.md` or `pr.md` that lacks a `Sensitive changes` section naming each path.
+Reviewers are told to read those diffs. Classification is a label, not a block: disabling a test is
+caught because a reviewer must address it, not because the CLI understands the test.
 
 ## Ownership and resumability
 
@@ -534,6 +620,8 @@ orch job pr        <id> --url <url> --state draft|ready|merged --token <t>
 
 orch worktree create|show|adopt|remove|integrate <id> [--path <dir>] [--repo <clone>] --token <t>
 orch gh repo | issue <ref> | push <id> | pr create <id> --body-file <md> | pr status <id>
+orch verify <id> --token <t>           # run the repository's verification policy; exit 1 on failure
+orch verify show <id>                  # latest run and validity for HEAD
 
 orch factory start  --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
                     [--max-rounds <n>] --session <name> [--ui|--no-ui]
@@ -614,6 +702,22 @@ links, which it does for junctions and symlinks; if a skill is not listed, check
   spaces work everywhere because nothing goes through a shell.
 - Shells started by Claude Code do not keep environment variables between calls, so the plan's
   commands carry `--token <token>` explicitly instead of relying on `ORCH_TOKEN`.
+
+## Enforced versus cooperative (Phase 5B)
+
+Enforced in code: every gate above; `orch verify` runs only the baseline or a human-accepted
+policy, only in the job worktree, only on a clean commit, with argument arrays; evidence validity
+is recomputed from HEAD, tree, policy fingerprint, and the run's rows at every gate; delivery is
+bound to the pushed commit; conflict resolutions and edits inside merge commits are detected and
+routed back through review; integration attempts are recorded before Git runs and reconciled on
+resume; `consolidated.md` and `pr.md` must name every sensitive path.
+
+Cooperative (prose only): reviewers actually reading the verification logs and the sensitive
+diffs; builders not disabling tests in ways the scan does not recognise; the policy on the base
+branch being meaningful (an empty or weak `factory.json` merged by humans is trusted as policy);
+subagents staying inside the worktree; checks not being influenced by ignored files
+(`node_modules`, build caches) that `git status` cannot see; child processes of a timed-out check
+being cleaned up on Windows (the direct child is killed; grandchildren may linger).
 
 ## Limits of Phase 4
 

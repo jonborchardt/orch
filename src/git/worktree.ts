@@ -31,6 +31,28 @@ export interface WorktreeInfo {
   commits: Commit[];
   /** Files changed by those commits relative to the merge base. */
   changedFiles: string[];
+  /** The same files with their change status. */
+  changes: { path: string; status: 'added' | 'modified' | 'deleted' | 'renamed' }[];
+}
+
+const STATUS: Record<string, 'added' | 'modified' | 'deleted' | 'renamed'> = {
+  A: 'added',
+  M: 'modified',
+  D: 'deleted',
+  R: 'renamed',
+  C: 'added',
+  T: 'modified',
+};
+
+/** Parse `git diff --name-status` output (renames report the new path). */
+export function parseNameStatus(out: string): WorktreeInfo['changes'] {
+  if (!out) return [];
+  return out.split(/\r?\n/).flatMap((line) => {
+    const [code = '', ...paths] = line.split('\t');
+    const status = STATUS[code.charAt(0)];
+    const path = paths[paths.length - 1];
+    return status && path ? [{ path, status }] : [];
+  });
 }
 
 function samePath(a: string, b: string): boolean {
@@ -60,6 +82,7 @@ export function inspectWorktree(repoRoot: string, path: string, baseBranch: stri
     behind: null,
     commits: [],
     changedFiles: [],
+    changes: [],
   };
   if (!info.exists) return info;
   const top = tryGit(path, 'rev-parse', '--show-toplevel');
@@ -87,8 +110,38 @@ export function inspectWorktree(repoRoot: string, path: string, baseBranch: stri
       : [];
     const diff = tryGit(path, 'diff', '--name-only', `${base}...HEAD`);
     info.changedFiles = diff ? diff.split(/\r?\n/) : [];
+    info.changes = parseNameStatus(tryGit(path, 'diff', '--name-status', `${base}...HEAD`) ?? '');
   }
   return info;
+}
+
+/**
+ * Files in merge commit `sha` whose result matches neither parent: conflict resolutions or edits
+ * made while committing the merge. Empty for a clean automatic merge (`git diff-tree --cc`
+ * drops every hunk that simply took one side).
+ */
+export function mergeEdits(path: string, sha: string): string[] {
+  const parents = tryGit(path, 'rev-list', '--parents', '-n', '1', sha)?.split(/\s+/) ?? [];
+  if (parents.length < 3) return [];
+  const out = tryGit(path, 'diff-tree', '--cc', '-p', sha) ?? '';
+  const files = new Set<string>();
+  for (const m of out.matchAll(/^diff --(?:cc|combined) (.+)$/gm)) files.add(m[1] ?? '');
+  files.delete('');
+  return [...files].sort();
+}
+
+/** Merge commits between `from` (exclusive) and `to` with edits that match neither parent. */
+export function editedMerges(
+  path: string,
+  from: string,
+  to: string,
+): { sha: string; files: string[] }[] {
+  const list = tryGit(path, 'rev-list', '--merges', `${from}..${to}`) ?? '';
+  return list
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((sha) => ({ sha, files: mergeEdits(path, sha) }))
+    .filter((m) => m.files.length > 0);
 }
 
 /**

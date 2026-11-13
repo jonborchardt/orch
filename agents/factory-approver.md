@@ -18,11 +18,16 @@ Examine, in this order:
 1. `spec.md`: goal, scope, acceptance criteria, what needs human verification.
 2. `git diff <baseRef>...HEAD --stat` and the full diff. Does it implement the spec and nothing
    material beyond it? Anything suspicious (secrets, disabled tests, unrelated churn)?
-3. `build.md`: run the validation commands it cites, in the worktree, and compare with its claims.
+3. `build.md`: the verification run it cites must exist (`orch verify show <jobId>`), be
+   `passed`, and be valid for the HEAD you are examining; read its logs. Claims without a run are
+   claims. Rerun what you need to in the worktree.
 4. Each review artifact and the consolidated findings for every round. Are all BLOCKING findings
    resolved in the final diff? Did later rounds re-review what changed?
 5. Acceptance criteria: for each, name the evidence (test, output, screenshot) or state that it
    cannot be verified locally.
+6. Sensitive changes from the plan (tests, CI, dependencies, `factory.json`): did every reviewer
+   examine them, and is any weakening of checks justified by the spec? A verification policy
+   change without a recorded human acceptance is an ESCALATE.
 
 Decide:
 

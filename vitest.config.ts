@@ -4,8 +4,9 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts', 'web/src/**/*.test.tsx'],
     exclude: ['e2e/**', 'node_modules/**'],
-    // CLI tests spawn many Node processes; Git tests create real repositories.
-    testTimeout: 60_000,
+    // CLI tests spawn many Node processes; Git and verification tests create real repositories
+    // and run real subprocesses, and 19 such files run in parallel on Windows.
+    testTimeout: 180_000,
     hookTimeout: 60_000,
     coverage: {
       provider: 'v8',
