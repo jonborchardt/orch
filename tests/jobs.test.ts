@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -230,7 +230,7 @@ describe('jobs: artifacts', () => {
   it('normalizes nested paths to forward slashes', () => {
     const { id, token, dir } = setup();
     writeArtifact(dir, 'notes/evidence.md', 'free-form\n');
-    const a = registerArtifact(store, id, 'notes\\evidence.md', { token });
+    const a = registerArtifact(store, id, ['notes', 'evidence.md'].join(sep), { token });
     expect(a.path).toBe('notes/evidence.md');
   });
 });

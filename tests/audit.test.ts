@@ -3,7 +3,7 @@
  * its guarantees, and the refusal that now stops it. Real temporary repositories throughout: an
  * initiating checkout with a local bare origin, and the job's managed worktree under ORCH_HOME.
  */
-import { readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -34,6 +34,7 @@ import {
   ghShim,
   gitIn,
   makeRepoWithOrigin,
+  removeLink,
   tempDir,
   type TempStore,
   tempStore,
@@ -233,7 +234,7 @@ describe('invariant 6: registered artifacts must still match the disk at the gat
         recordVerdict(store, c.id, { token: c.token, reviewer: 'security', verdict: 'pass' }),
       ).toThrow(/not a link out/);
     } finally {
-      rmdirSync(join(c.dir, 'round-1')); // drop the link itself, never its target
+      removeLink(join(c.dir, 'round-1')); // drop the link itself, never its target
     }
   });
 });

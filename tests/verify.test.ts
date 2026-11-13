@@ -2,22 +2,14 @@
  * `orch verify`: real subprocesses in real worktrees. Policies use `node` so every platform runs
  * the same checks; one test goes through the Windows `.cmd` shim path with npm.
  */
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmdirSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { OwnershipError, ValidationError } from '../src/core/errors.ts';
-import { installRoot } from '../src/core/paths.ts';
+import { canonicalPath, installRoot } from '../src/core/paths.ts';
 import { parsePolicy, policyFingerprint } from '../src/core/verification.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { planJob } from '../src/ops/factory.ts';
@@ -43,6 +35,7 @@ import {
   json,
   orch,
   orchAsync,
+  removeLink,
   tempDir,
   type TempStore,
   tempStore,
@@ -115,8 +108,8 @@ describe('orch verify: runs and records', () => {
       'utf8',
     );
     // The second check ran in <worktree>/src, never in the initiating checkout.
-    expect(where.toLowerCase()).toContain(join(c.wt, 'src').toLowerCase());
-    expect(where.toLowerCase()).not.toContain(clone.toLowerCase());
+    expect(where.toLowerCase()).toContain(canonicalPath(join(c.wt, 'src')).toLowerCase());
+    expect(where.toLowerCase()).not.toContain(canonicalPath(clone).toLowerCase());
     const status = showVerification(store, c.id);
     expect(status?.valid).toBe(true);
     expect(planJob(store, c.id).verification?.valid).toBe(true);
@@ -263,7 +256,7 @@ describe('orch verify: runs and records', () => {
       expect(r.status).toBe('failed');
       expect(r.checks[0]?.error).toContain('outside the worktree');
     } finally {
-      rmdirSync(join(c.wt, 'link'));
+      removeLink(join(c.wt, 'link'));
     }
   });
 
