@@ -627,6 +627,7 @@ orch job artifact add <id> <relative-path> --token <t> [--replace] [--revision <
 orch job review record <id> --reviewer <name> [--verdict pass|changes] [--artifact <path>]
                    [--summary <s>] --token <t>
 orch job pr        <id> --url <url> --state draft|ready|merged --token <t>
+orch job repo      <id> [--repo <path>] --token <t>   # re-point after the checkout's origin changed
 
 orch worktree create|show|adopt|remove|integrate <id> [--path <dir>] [--repo <clone>] --token <t>
 orch gh repo | issue <ref> | push <id> | pr create <id> --body-file <md> | pr status <id>

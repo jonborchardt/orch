@@ -18,6 +18,7 @@ import {
 } from '../core/workflow.ts';
 import { describeRepo } from '../git/repo.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
+import { repointRepo } from '../ops/worktree.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
 import {
@@ -75,6 +76,7 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   review record <id> --reviewer <name> [--verdict pass|changes] [--artifact <path>]
             [--summary <s>] --token <t>
   pr <id> --url <url> --state <${PR_STATES.join('|')}> --token <t>
+  repo <id> [--repo <path>] --token <t>     re-point at the checkout's current remote identity
 
 --token defaults to $ORCH_TOKEN, --session to $ORCH_SESSION. Add --json for machine output.
 `;
@@ -187,6 +189,8 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
       });
       return summary(getJob(store.db, jobId), store, { review });
     }
+    case 'repo':
+      return summary(repointRepo(store, id(), auth, o.repo), store);
     case 'pr': {
       const job = recordPr(store, id(), {
         ...auth,

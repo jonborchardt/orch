@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 
 import { MergeConflictError, ValidationError } from '../core/errors.ts';
-import { jobWorktreeDir } from '../core/paths.ts';
+import { canonicalPath, jobWorktreeDir } from '../core/paths.ts';
 import { baseRef, describeRepo, remoteExists } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
 import {
@@ -26,6 +26,7 @@ import {
   authorize,
   clearWorktree,
   getJob,
+  setRepo,
   setWorktree,
   transitionJob,
 } from '../storage/jobs.ts';
@@ -67,6 +68,22 @@ function repoRoot(job: Job, override?: string): string {
     );
   }
   return info.root;
+}
+
+/**
+ * Re-point a job at its checkout's current identity after the remote was added or changed. The
+ * clone must be the directory the job already records; this never adopts a different repository.
+ */
+export function repointRepo(store: Store, id: string, auth: Auth, path?: string): Job {
+  const job = authorize(store, id, auth);
+  const info = describeRepo(path ?? job.repoPath);
+  if (canonicalPath(info.root) !== canonicalPath(job.repoPath)) {
+    throw new ValidationError(
+      `${info.root} is not the checkout job ${id} records (${job.repoPath}); ` +
+        `repoint only follows a remote change of the same clone.`,
+    );
+  }
+  return setRepo(store, id, auth, { repo: info.identity, repoPath: info.root });
 }
 
 /** Read-only view of the job's worktree (or of where it would be created). */
