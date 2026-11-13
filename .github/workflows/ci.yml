@@ -22,7 +22,24 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
+      - run: npm run db:check
+      - name: Schema and committed migrations must agree
+        shell: bash
+        run: |
+          npx drizzle-kit generate --name ci-drift
+          if [ -n "$(git status --porcelain -- drizzle)" ]; then
+            echo "src/storage/schema.ts has changes without a committed migration (run npm run db:generate)"
+            git status --porcelain -- drizzle
+            exit 1
+          fi
       - run: npm run test:coverage
       - run: npm run build
       - run: node dist/cli/main.js --version
       - run: node dist/cli/main.js doctor
+      - name: CLI initializes the database from dist outside the repository
+        shell: bash
+        run: |
+          export ORCH_HOME="$RUNNER_TEMP/orch-home"
+          cd "$RUNNER_TEMP"
+          node "$GITHUB_WORKSPACE/dist/cli/main.js" --json job list
+          test -f "$ORCH_HOME/orch.sqlite"

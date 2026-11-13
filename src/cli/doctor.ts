@@ -1,8 +1,9 @@
-import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
-import { findProjectRoot, installRoot, runtimePaths } from '../core/paths.ts';
+import { runTool } from '../core/exec.ts';
+import { databasePath, findProjectRoot, installRoot, runtimePaths } from '../core/paths.ts';
 
-export const MIN_NODE = '22.18.0';
+export const MIN_NODE = '24.0.0';
 
 export type Status = 'ok' | 'warn' | 'fail';
 
@@ -12,7 +13,7 @@ export interface Check {
   detail: string;
 }
 
-/** Returns true when `actual` (e.g. "v24.1.0") is at least `min` (e.g. "22.18.0"). */
+/** Returns true when `actual` (e.g. "v24.1.0") is at least `min` (e.g. "24.0.0"). */
 export function nodeVersionOk(actual: string, min: string = MIN_NODE): boolean {
   const parse = (v: string) => v.replace(/^v/, '').split('.').map(Number);
   const [a, b] = [parse(actual), parse(min)];
@@ -26,17 +27,7 @@ export function nodeVersionOk(actual: string, min: string = MIN_NODE): boolean {
 
 /** First line of `<tool> --version`, or undefined if the tool is not on PATH. */
 export function toolVersion(tool: string): string | undefined {
-  try {
-    // execSync uses the platform shell, which resolves .exe/.cmd shims on Windows.
-    const out = execSync(`${tool} --version`, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 10_000,
-    });
-    return out.trim().split(/\r?\n/)[0];
-  } catch {
-    return undefined;
-  }
+  return runTool(tool, ['--version'])?.split(/\r?\n/)[0];
 }
 
 function tool(name: string, label: string, missing: Status, hint: string): Check {
@@ -49,6 +40,7 @@ function tool(name: string, label: string, missing: Status, hint: string): Check
 export function runDoctor(cwd: string = process.cwd()): Check[] {
   const paths = runtimePaths();
   const project = findProjectRoot(cwd);
+  const db = databasePath(paths);
   return [
     {
       name: 'Node.js',
@@ -66,6 +58,11 @@ export function runDoctor(cwd: string = process.cwd()): Check[] {
     { name: 'Install root', status: 'ok', detail: installRoot() },
     { name: 'Config dir', status: 'ok', detail: paths.config },
     { name: 'Data dir', status: 'ok', detail: paths.data },
+    {
+      name: 'Database',
+      status: 'ok',
+      detail: `${db} (${existsSync(db) ? 'exists' : 'will be created on first use'})`,
+    },
   ];
 }
 

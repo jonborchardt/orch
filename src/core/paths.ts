@@ -80,3 +80,23 @@ export function findProjectRoot(cwd: string = process.cwd()): string | undefined
     return undefined;
   }
 }
+
+/** Shared SQLite database for all repositories. */
+export function databasePath(paths: RuntimePaths = runtimePaths()): string {
+  return join(paths.data, 'orch.sqlite');
+}
+
+/** Per-job artifact directory (spec.md, build.md, round-N/...). Distinct from any worktree. */
+export function jobArtifactDir(jobId: string, paths: RuntimePaths = runtimePaths()): string {
+  return join(paths.data, 'jobs', jobId, 'artifacts');
+}
+
+/** Directory of Drizzle migrations shipped with this installation. */
+export function migrationsDir(): string {
+  return join(installRoot(), 'drizzle');
+}
+
+/** The user's global Claude Code configuration directory. */
+export function claudeHome(env: Env = process.env, home: string = homedir()): string {
+  return env['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude');
+}

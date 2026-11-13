@@ -1,0 +1,1 @@
+ALTER TABLE `jobs` ADD `leaseMinutes` integer DEFAULT 30 NOT NULL;

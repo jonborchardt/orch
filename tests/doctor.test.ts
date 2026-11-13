@@ -4,10 +4,10 @@ import { formatChecks, nodeVersionOk, runDoctor, toolVersion } from '../src/cli/
 
 describe('nodeVersionOk', () => {
   it('compares numerically, not lexically', () => {
-    expect(nodeVersionOk('v22.18.0', '22.18.0')).toBe(true);
-    expect(nodeVersionOk('v22.9.0', '22.18.0')).toBe(false);
-    expect(nodeVersionOk('v24.1.0', '22.18.0')).toBe(true);
-    expect(nodeVersionOk('v9.99.99', '22.18.0')).toBe(false);
+    expect(nodeVersionOk('v24.0.0', '24.0.0')).toBe(true);
+    expect(nodeVersionOk('v22.18.0', '24.0.0')).toBe(false);
+    expect(nodeVersionOk('v24.1.0', '24.0.0')).toBe(true);
+    expect(nodeVersionOk('v9.99.99', '24.0.0')).toBe(false);
   });
 });
 
@@ -33,6 +33,7 @@ describe('runDoctor', () => {
       'Install root',
       'Config dir',
       'Data dir',
+      'Database',
     ]);
     for (const c of checks) expect(['ok', 'warn', 'fail']).toContain(c.status);
     expect(formatChecks(checks)).toContain('Node.js');

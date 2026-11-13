@@ -1,48 +1,216 @@
-import { spawnSync } from 'node:child_process';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { installRoot, packageInfo } from '../src/core/paths.ts';
+import { jobArtifactDir, packageInfo } from '../src/core/paths.ts';
+import { homePaths, json, makeRepo, orch, orchAsync, tempDir, writeArtifact } from './helpers.ts';
 
-/** Run the CLI from source, outside the repository, to prove cwd independence. */
-function orch(...args: string[]) {
-  const r = spawnSync(process.execPath, [join(installRoot(), 'src', 'cli', 'main.ts'), ...args], {
-    cwd: tmpdir(),
-    encoding: 'utf8',
-    env: { ...process.env, ORCH_HOME: join(tmpdir(), 'orch-test-home') },
-  });
-  return { code: r.status, out: r.stdout, err: r.stderr };
+let home: string;
+let repoA: string;
+let repoB: string;
+const dirs: string[] = [];
+
+beforeAll(() => {
+  home = tempDir('orch-cli-home-');
+  repoA = makeRepo('git@github.com:acme/alpha.git');
+  repoB = makeRepo('https://github.com/acme/beta');
+  dirs.push(home, repoA, repoB);
+});
+afterAll(() => {
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+
+interface Summary {
+  jobId: string;
+  stage: string;
+  status: string;
+  revision: number;
+  token?: string;
+  next: { stage: string; status: string; requiredArtifacts: string[] };
+  job: { repo: string; baseBranch: string; ownerSession: string | null };
 }
 
-describe('orch CLI', () => {
-  it('--version prints the package version', () => {
-    const r = orch('--version');
-    expect(r.code).toBe(0);
-    expect(r.out.trim()).toBe(packageInfo().version);
-  });
-
-  it('--help prints usage', () => {
-    const r = orch('--help');
-    expect(r.code).toBe(0);
-    expect(r.out).toContain('Usage: orch');
-  });
-
-  it('no command prints usage and exits 2', () => {
-    expect(orch().code).toBe(2);
-  });
-
-  it('unknown command exits 2', () => {
-    const r = orch('bogus');
-    expect(r.code).toBe(2);
-    expect(r.err).toContain('Unknown command: bogus');
+describe('orch CLI: basics', () => {
+  it('--version, --help, usage errors', () => {
+    expect(orch(home, tmpdir(), ['--version']).out.trim()).toBe(packageInfo().version);
+    expect(orch(home, tmpdir(), ['--help']).out).toContain('Usage: orch');
+    expect(orch(home, tmpdir(), []).code).toBe(2);
+    const bogus = orch(home, tmpdir(), ['bogus']);
+    expect(bogus.code).toBe(2);
+    expect(bogus.err).toContain('Unknown command: bogus');
+    expect(orch(home, tmpdir(), ['job', 'bogus']).code).toBe(2);
+    expect(orch(home, tmpdir(), ['job', 'create']).err).toContain('Missing required --title');
+    expect(orch(home, tmpdir(), ['--nope']).code).toBe(2);
   });
 
   it('doctor runs outside a repository and reports the override home', () => {
-    const r = orch('doctor');
+    const r = orch(home, tmpdir(), ['doctor']);
     expect(r.out).toContain('Node.js');
-    expect(r.out).toContain('orch-test-home');
+    expect(r.out).toContain(home);
     expect(r.out).toContain('not inside a Git repository');
+    const j = orch(home, tmpdir(), ['--json', 'doctor']);
+    expect(Array.isArray(json(j))).toBe(true);
+  });
+
+  it('errors are JSON on stderr with --json and keep their exit codes', () => {
+    const r = orch(home, tmpdir(), ['--json', 'job', 'show', 'job-nope']);
+    expect(r.code).toBe(3);
+    expect(r.out).toBe('');
+    const err = JSON.parse(r.err) as { error: { type: string; exitCode: number } };
+    expect(err.error.type).toBe('NotFoundError');
+    expect(err.error.exitCode).toBe(3);
+    expect(orch(home, tmpdir(), ['job', 'show', 'job-nope']).err).toMatch(/^NotFoundError:/);
+  });
+
+  it('job create needs a repository unless --repo is given', () => {
+    const r = orch(home, tmpdir(), ['job', 'create', '--title', 'x']);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('not inside a Git repository');
+  });
+});
+
+describe('orch CLI: jobs across repositories', () => {
+  let a: Summary;
+  let b: Summary;
+
+  it('creates jobs from two repositories into one shared store', () => {
+    a = json<Summary>(orch(home, repoA, ['--json', 'job', 'create', '--title', 'Alpha feature']));
+    b = json<Summary>(
+      orch(home, tmpdir(), [
+        '--json',
+        'job',
+        'create',
+        '--title',
+        'Beta fix',
+        '--repo',
+        repoB,
+        '--issue',
+        '#12',
+        '--base',
+        'develop',
+      ]),
+    );
+    expect(a.job.repo).toBe('github.com/acme/alpha');
+    expect(a.job.baseBranch).toBe('main');
+    expect(b.job.repo).toBe('github.com/acme/beta');
+    expect(b.job.baseBranch).toBe('develop');
+    expect(a.next).toEqual({ stage: 'spec', status: 'pending', requiredArtifacts: ['spec.md'] });
+  });
+
+  it('lists both from an unrelated directory, filtered by repo path or identity', () => {
+    const all = json<{ id: string }[]>(orch(home, tmpdir(), ['--json', 'job', 'list']));
+    expect(all.map((j) => j.id).sort()).toEqual([a.jobId, b.jobId].sort());
+    const byPath = json<{ id: string }[]>(
+      orch(home, tmpdir(), ['--json', 'job', 'list', '--repo', repoA]),
+    );
+    expect(byPath.map((j) => j.id)).toEqual([a.jobId]);
+    const byId = json<{ id: string }[]>(
+      orch(home, tmpdir(), ['--json', 'job', 'list', '--repo', 'github.com/acme/beta']),
+    );
+    expect(byId.map((j) => j.id)).toEqual([b.jobId]);
+    const human = orch(home, tmpdir(), ['job', 'list']);
+    expect(human.out).toContain('Alpha feature');
+    expect(human.out).toContain('Beta fix');
+    expect(orch(home, tmpdir(), ['job', 'list', '--status', 'nope']).code).toBe(2);
+  });
+
+  it('claim, transition, artifact, review, pr, show, events through the CLI', () => {
+    const claim = json<Summary>(
+      orch(home, repoB, ['--json', 'job', 'claim', a.jobId, '--session', 'vscode-1']),
+    );
+    const token = claim.token ?? '';
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    expect(claim.job.ownerSession).toBe('vscode-1');
+
+    // Token via environment, from a directory unrelated to the job's repository.
+    const env = { ORCH_TOKEN: token };
+    expect(orch(home, tmpdir(), ['job', 'transition', a.jobId, 'start'], env).code).toBe(0);
+    const noArtifact = orch(home, tmpdir(), ['job', 'transition', a.jobId, 'complete'], env);
+    expect(noArtifact.code).toBe(1);
+    expect(noArtifact.err).toContain('missing required artifact spec.md');
+
+    writeArtifact(jobArtifactDir(a.jobId, homePaths(home)), 'spec.md');
+    const added = json<Summary & { artifact: { path: string } }>(
+      orch(home, tmpdir(), ['--json', 'job', 'artifact', 'add', a.jobId, 'spec.md'], env),
+    );
+    expect(added.artifact.path).toBe('spec.md');
+    const done = json<Summary>(
+      orch(home, tmpdir(), ['--json', 'job', 'transition', a.jobId, 'complete'], env),
+    );
+    expect(done.stage).toBe('build');
+    expect(done.next.requiredArtifacts).toEqual(['build.md']);
+
+    // Wrong token and competing claim are ownership errors (exit 4).
+    const stale = orch(home, tmpdir(), ['job', 'transition', a.jobId, 'start', '--token', 'bad']);
+    expect(stale.code).toBe(4);
+    const competing = orch(home, tmpdir(), ['job', 'claim', a.jobId, '--session', 'vscode-2']);
+    expect(competing.code).toBe(4);
+    expect(competing.err).toContain('owned by session vscode-1');
+
+    const show = orch(home, tmpdir(), ['job', 'show', a.jobId]);
+    expect(show.code).toBe(0);
+    expect(show.out).toContain('Alpha feature');
+    expect(show.out).toContain('spec.md');
+    const events = json<{ type: string }[]>(
+      orch(home, tmpdir(), ['--json', 'job', 'events', a.jobId]),
+    );
+    expect(events.map((e) => e.type)).toEqual([
+      'job.created',
+      'job.claimed',
+      'stage.started',
+      'artifact.registered',
+      'stage.completed',
+    ]);
+
+    const released = json<Summary>(
+      orch(home, tmpdir(), ['--json', 'job', 'release', a.jobId], env),
+    );
+    expect(released.job.ownerSession).toBeNull();
+  });
+
+  it('resume adopts a job whose owner went away', () => {
+    const claim = json<Summary>(
+      orch(home, repoA, ['--json', 'job', 'claim', b.jobId, '--session', 'old', '--lease', '0']),
+    );
+    orch(home, repoA, ['job', 'transition', b.jobId, 'start', '--token', claim.token ?? '']);
+    const resumed = json<Summary>(
+      orch(home, tmpdir(), ['--json', 'job', 'resume', b.jobId, '--session', 'new']),
+    );
+    expect(resumed.job.ownerSession).toBe('new');
+    expect(resumed.status).toBe('pending');
+    const old = orch(home, tmpdir(), [
+      'job',
+      'transition',
+      b.jobId,
+      'start',
+      '--token',
+      claim.token ?? '',
+    ]);
+    expect(old.code).toBe(4);
+  });
+});
+
+describe('orch CLI: concurrency', () => {
+  it('parallel creates all succeed with distinct ids', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        orchAsync(home, repoA, ['--json', 'job', 'create', '--title', `par-${String(i)}`]),
+      ),
+    );
+    expect(results.map((r) => r.code)).toEqual([0, 0, 0, 0, 0, 0]);
+    const ids = new Set(results.map((r) => json<Summary>(r).jobId));
+    expect(ids.size).toBe(6);
+  });
+
+  it('parallel competing claims: exactly one wins', async () => {
+    const job = json<Summary>(orch(home, repoA, ['--json', 'job', 'create', '--title', 'race']));
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        orchAsync(home, repoA, ['--json', 'job', 'claim', job.jobId, '--session', `s${String(i)}`]),
+      ),
+    );
+    const codes = results.map((r) => r.code).sort();
+    expect(codes).toEqual([0, 4, 4, 4, 4]);
   });
 });
