@@ -4,7 +4,16 @@ import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { jobArtifactDir, packageInfo } from '../src/core/paths.ts';
-import { homePaths, json, makeRepo, orch, orchAsync, tempDir, writeArtifact } from './helpers.ts';
+import {
+  gitIn,
+  homePaths,
+  json,
+  makeRepo,
+  orch,
+  orchAsync,
+  tempDir,
+  writeArtifact,
+} from './helpers.ts';
 
 let home: string;
 let repoA: string;
@@ -188,6 +197,27 @@ describe('orch CLI: jobs across repositories', () => {
       claim.token ?? '',
     ]);
     expect(old.code).toBe(4);
+  });
+
+  it('job repo re-points a job after its checkout gains an origin, same clone only', () => {
+    const local = makeRepo();
+    dirs.push(local);
+    const c = json<Summary>(orch(home, local, ['--json', 'job', 'create', '--title', 'Local']));
+    expect(c.job.repo).toBe(local.split(/[\\/]/).pop()?.toLowerCase());
+    const claim = json<Summary>(
+      orch(home, tmpdir(), ['--json', 'job', 'claim', c.jobId, '--session', 's']),
+    );
+    const env = { ORCH_TOKEN: claim.token ?? '' };
+    gitIn(local, 'remote', 'add', 'origin', 'https://github.com/acme/local.git');
+    const other = orch(home, tmpdir(), ['job', 'repo', c.jobId, '--repo', repoA], env);
+    expect(other.code).toBe(1);
+    expect(other.err).toContain('is not the checkout');
+    const moved = json<Summary>(orch(home, tmpdir(), ['--json', 'job', 'repo', c.jobId], env));
+    expect(moved.job.repo).toBe('github.com/acme/local');
+    const events = json<{ type: string }[]>(
+      orch(home, tmpdir(), ['--json', 'job', 'events', c.jobId]),
+    );
+    expect(events.map((e) => e.type)).toContain('repo.repointed');
   });
 });
 
