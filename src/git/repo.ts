@@ -2,7 +2,8 @@
 import { realpathSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
-import { ValidationError } from '../core/errors.ts';
+import { ToolError, ValidationError } from '../core/errors.ts';
+import { spawnTool } from '../core/exec.ts';
 import { findProjectRoot } from '../core/paths.ts';
 import { git, tryGit } from './run.ts';
 
@@ -60,8 +61,14 @@ export function sameRepository(repoRoot: string, dir: string): boolean {
 
 /** Paths with uncommitted changes (staged, unstaged, untracked). Empty when clean. */
 export function dirtyFiles(cwd: string): string[] {
-  const out = git(cwd, 'status', '--porcelain', '--untracked-files=all');
-  return out ? out.split(/\r?\n/).map((l) => l.slice(3)) : [];
+  // Raw stdout, not `git()`: that trims, so a first line like " M path" would lose its leading
+  // space and then the first character of the path.
+  const r = spawnTool('git', ['status', '--porcelain', '--untracked-files=all'], { cwd });
+  if (r.status !== 0) throw new ToolError(`git status failed in ${cwd}: ${r.stderr.trim()}`);
+  return r.stdout
+    .split(/\r?\n/)
+    .filter((l) => l.length > 3)
+    .map((l) => l.slice(3));
 }
 
 export function remoteExists(repoRoot: string, name = 'origin'): boolean {

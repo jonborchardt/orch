@@ -181,10 +181,11 @@ describe('worktree show, adopt, remove', () => {
     commitFile(wt, 'src/a.ts', 'a');
     commitFile(wt, 'src/b.ts', 'b');
     writeFileSync(join(wt, 'untracked.txt'), 'u');
+    writeFileSync(join(wt, 'src', 'a.ts'), 'a2'); // unstaged: " M src/a.ts" is the first status line
     const shown = showWorktree(store, id);
     expect(shown.worktree.commits.map((c) => c.subject)).toEqual(['add src/b.ts', 'add src/a.ts']);
     expect(shown.worktree.changedFiles.sort()).toEqual(['src/a.ts', 'src/b.ts']);
-    expect(shown.worktree.dirty).toEqual(['untracked.txt']);
+    expect(shown.worktree.dirty).toEqual(['src/a.ts', 'untracked.txt']);
     expect([shown.worktree.ahead, shown.worktree.behind]).toEqual([2, 0]);
     expect(getJob(store.db, id).revision).toBe(r.job.revision); // no write
   });
