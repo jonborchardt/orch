@@ -371,6 +371,37 @@ export function setWorktree(store: Store, id: string, input: WorktreeInput): Job
   });
 }
 
+/**
+ * Move a job to a new repository identity (the checkout gained or changed its `origin`). The
+ * caller has already proven `repoPath` is the directory the job records.
+ */
+export function setRepo(
+  store: Store,
+  id: string,
+  auth: Auth,
+  input: { repo: string; repoPath: string },
+): Job {
+  return mutate(store, id, auth, (job, tx) => {
+    if (job.repo === input.repo) return { patch: {}, events: [] };
+    const branchOwner = job.branch
+      ? tx
+          .select({ id: jobs.id })
+          .from(jobs)
+          .where(and(eq(jobs.repo, input.repo), eq(jobs.branch, job.branch)))
+          .get()
+      : undefined;
+    if (branchOwner && branchOwner.id !== id) {
+      throw new ValidationError(
+        `Branch ${job.branch ?? ''} already belongs to job ${branchOwner.id} in ${input.repo}.`,
+      );
+    }
+    return {
+      patch: { repo: input.repo, repoPath: input.repoPath },
+      events: [{ type: 'repo.repointed', payload: { from: job.repo, to: input.repo } }],
+    };
+  });
+}
+
 /** Forget a worktree after it was removed from disk. The branch stays recorded. */
 export function clearWorktree(store: Store, id: string, auth: Auth, reason: string): Job {
   return mutate(store, id, auth, (job) => ({
