@@ -390,3 +390,70 @@ loads one agent file per subagent with no include mechanism, so sharing the text
 generated artifact; the duplication is the cost of self-contained agents and a contract test keeps
 the files consistent with `core/roles.ts`. `web/src/Actions.tsx` keeps its own stage list and
 live-lease check because the client may import only types from `src/`.
+
+## 45. A Git read failure is a Git error, not a reviewer write (check-readonly flake)
+
+Observed once: during a full parallel `npx vitest run` on a loaded Windows machine,
+`tests/factory.test.ts` ("orch factory CLI") got exit 1 from `check-readonly --fingerprint <fp>`
+where 0 was expected; isolated and later full runs passed. The stderr was not kept.
+
+Mechanism, from the code: the fingerprint is sha256 of HEAD plus the sorted
+`git status --porcelain --untracked-files=all` paths, read by `inspectWorktree`. Its HEAD,
+top-level, and repository-identity reads went through `tryGit`, which turns any Git failure
+(non-zero exit, signal, spawn error, timeout) into `undefined`. So one failed
+`git rev-parse HEAD` on either side (the plan's `factory status`, or `check-readonly`) gave
+`head: null`, a different fingerprint, and "Reviewers must not modify code", exit 1; a failed
+`--show-toplevel` or `--git-common-dir` on the check side gave "Worktree is missing.", exit 1;
+a failed `git status` threw a ToolError whose text was only stderr, empty for a killed process
+(exit 1). A real change to the worktree is the only other exit-1 path, and nothing in that test
+writes to it. Which of these happened in the observed run is unknown.
+
+Reproduction (tree at `main`, b88621d, exported to a scratch directory so that edits on the job
+branch could not leak in): `npx vitest run tests/factory.test.ts` alone 5 times: 0 of 5 failed
+(20 of 20 tests each, 250 to 345 s). Full suite twice concurrently (two `npx vitest run`
+processes), 3 rounds: 0 of 6 runs had a `factory.test.ts` or `check-readonly` failure (199 of 200
+each, 540 to 572 s per round). Full suite three times concurrently, 1 round: 0 of 3 (199 of 200
+each, 868 s). The one failure in every full run is `paths.test.ts` "finds this repository from a
+subdirectory", because the scratch export is not a Git checkout; it is unrelated.
+
+Hypotheses:
+
+- Git or spawn failures swallowed by `tryGit`: **confirmed as a defect, not proven as the
+  cause.** A test that makes HEAD unreadable while `--show-toplevel` still works (HEAD pointing at
+  a missing branch) gets `ValidationError: Worktree changed ... Reviewers must not modify code` on
+  `main`. Under load on Windows the plausible triggers are a process that fails to initialise
+  (exit 0xC0000142, empty stderr) or a file briefly locked by a scanner; neither was reproduced.
+- `index.lock` held, or `git status` writing the index: **ruled out.** With `.git/index.lock`
+  present, `git status --porcelain` exits 0 with correct output (checked by hand; only writers
+  such as `git add` fail with 128). Its opportunistic index refresh writes under `.git`, not into
+  the working tree, and cannot change the path list. `rev-parse` does not touch the index.
+- Racy-git or stat-dirty entries: **ruled out.** `status` re-compares content when stat data is
+  ambiguous, and the fingerprint uses only path names; a stat-only difference cannot add a path.
+- Writes into the worktree between `factory status` and `check-readonly` in that test: **ruled
+  out.** The commands in between are `job transition start`, `job artifact add spec.md`,
+  `job transition complete`, and `factory next`; artifacts live under `ORCH_HOME`, not in the
+  worktree, and none of them runs a Git write in the worktree.
+- Shared `ORCH_HOME`, temp paths, or `process.env` across Vitest workers: **ruled out.** The pool
+  is `forks` (one process per file), so `process.env` changes stay in that file; the test's home,
+  clone, bare remote, and worktree all come from `mkdtemp`; `cliEnv` sets `ORCH_HOME` and drops
+  `ORCH_TOKEN`/`ORCH_SESSION` for every spawned CLI.
+- Time-based inputs: **ruled out.** The fingerprint hashes HEAD and path names only.
+
+Fix: for a path confirmed to be a worktree, `inspectWorktree` reads HEAD with `git()`, so a failed
+read throws ToolError (exit 1, as before) from both `factory next/status` and `check-readonly`,
+and no plan carries a fingerprint computed from no HEAD. Callers checked: `ops/tree.ts`
+(`worktreeOf` already rejected a null HEAD as unusable), `ops/worktree.ts` (`showWorktree`,
+`createWorktree`, `adoptWorktree`, `dropWorktree`, `integrateBase`), `ops/factory.ts` (`planJob`,
+`checkReadonly`), `cli/worktree.ts` (`show`); none relies on a null HEAD for a real worktree.
+An unborn branch in a worktree (`adopt` of an orphan worktree) now fails with the Git error rather
+than "is detached"; job worktrees are always created from a commit. `git()` and `dirtyFiles` now
+name the exit status (with the NTSTATUS in hex above 0xFFFF), signal, timeout, or launch error;
+the mismatch message names both fingerprints and the full HEAD; the missing-worktree message names
+the path. The fingerprint's inputs and format are unchanged (pinned by a test), as are timeouts
+and exit codes.
+
+Status: the misattribution is fixed and covered by a regression test, but it is only a
+**probable** cause of the observed failure; it did not reproduce. If it happens again, the CLI
+test's assertion message now shows the stderr (which says whether it was a Git failure, with its
+exit status, or a fingerprint mismatch with both values) and the HEAD and dirty list the plan's
+fingerprint came from.

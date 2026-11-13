@@ -114,6 +114,8 @@ framework. Upgrade Drizzle deliberately, both packages together.
 - The suite spawns many Git and Node processes and runs its files in parallel; on a loaded
   Windows machine a CLI-heavy file can take minutes. A single failure in `tests/factory.test.ts`
   or `tests/cli.test.ts` that passes alone is load, not a defect; rerun it in isolation first.
+  Keep its stderr: a Git failure says `git <cmd> failed in <dir> (exit status ...)` with any
+  signal or timeout, and a `check-readonly` mismatch names both fingerprints (decision 45).
 
 ## Documentation
 
