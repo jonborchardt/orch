@@ -96,6 +96,43 @@ describe('orch install', () => {
     }
   });
 
+  it('falls back to a marked copy that is refreshed when stale and never clobbers other files', () => {
+    const first = runInstall({ source, 'claude-dir': claude, agentMethods: ['copy'] });
+    expect(first.problems).toBe(false);
+    const agent = first.entries.find((e) => e.kind === 'agent');
+    expect(agent?.method).toBe('copy');
+    const target = join(claude, 'agents', 'planner.md');
+    expect(readFileSync(target, 'utf8')).toMatch(/^# planner\n\n<!-- orch-managed-copy: .+ -->\n$/);
+
+    // Unchanged source: linked. Changed source: stale, then refreshed by a plain install.
+    expect(runInstall({ source, 'claude-dir': claude, 'dry-run': true }).entries[1]?.state).toBe(
+      'linked',
+    );
+    writeFileSync(join(source, 'agents', 'planner.md'), '# planner v2\n');
+    const dry = runInstall({ source, 'claude-dir': claude, 'dry-run': true });
+    expect(dry.entries[1]?.state).toBe('stale');
+    expect(dry.problems).toBe(false);
+    const refreshed = runInstall({ source, 'claude-dir': claude });
+    expect(refreshed.entries[1]?.state).toBe('linked');
+    expect(readFileSync(target, 'utf8')).toContain('# planner v2');
+
+    // A copy made from a different source, or a user's own file, is a conflict.
+    const other = tempDir('orch-other-');
+    try {
+      mkdirSync(join(other, 'agents'));
+      writeFileSync(join(other, 'agents', 'planner.md'), '# theirs\n');
+      const r = runInstall({ source: other, 'claude-dir': claude, agentMethods: ['copy'] });
+      expect(r.entries[0]?.state).toBe('conflict');
+      expect(r.entries[0]?.detail).toContain('managed copy of another source');
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+    writeFileSync(target, '# user edited\n');
+    const user = runInstall({ source, 'claude-dir': claude });
+    expect(user.entries[1]?.state).toBe('conflict');
+    expect(readFileSync(target, 'utf8')).toBe('# user edited\n');
+  });
+
   it('is exposed on the CLI with --json and a nonzero exit on conflicts', () => {
     const home = tempDir('orch-home-');
     try {

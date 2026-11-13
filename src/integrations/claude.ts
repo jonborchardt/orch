@@ -2,10 +2,11 @@
  * Links source-controlled skills and agents into the user's global Claude Code directory.
  *
  *   <source>/skills/<name>/SKILL.md  ->  <claude>/skills/<name>   (directory junction on Windows)
- *   <source>/agents/<name>.md        ->  <claude>/agents/<name>.md (symlink, else hardlink)
+ *   <source>/agents/<name>.md        ->  <claude>/agents/<name>.md (symlink, else hardlink,
+ *                                                                   else a marked managed copy)
  *
- * Nothing is copied, so edits in the repository are live. Existing paths that are not our links
- * are reported as conflicts and never touched.
+ * Nothing is copied when a link is possible, so edits in the repository are live. Existing paths
+ * that are not our links or our marked copies are reported as conflicts and never touched.
  */
 import {
   existsSync,
@@ -13,14 +14,16 @@ import {
   lstatSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 
-export type LinkState = 'linked' | 'missing' | 'conflict' | 'error';
-export type LinkMethod = 'junction' | 'symlink' | 'hardlink';
+export type LinkState = 'linked' | 'missing' | 'stale' | 'conflict' | 'error';
+export type LinkMethod = 'junction' | 'symlink' | 'hardlink' | 'copy';
 
 export interface LinkEntry {
   kind: 'skill' | 'agent';
@@ -30,6 +33,13 @@ export interface LinkEntry {
   state: LinkState;
   method?: LinkMethod;
   detail?: string;
+}
+
+/** Trailer appended to managed copies so they can be recognised and refreshed. */
+const COPY_MARKER = /\n<!-- orch-managed-copy: (.+) -->\n$/;
+
+function withMarker(content: string, source: string): string {
+  return `${content.replace(/\s*$/, '')}\n\n<!-- orch-managed-copy: ${source} -->\n`;
 }
 
 function sameFile(a: string, b: string): boolean {
@@ -60,8 +70,24 @@ function inspect(entry: Omit<LinkEntry, 'state'>): LinkEntry {
     }
     return { ...entry, state: 'conflict', detail: `existing link points to ${real ?? '(broken)'}` };
   }
-  if (entry.kind === 'agent' && st.isFile() && sameFile(entry.source, entry.target)) {
-    return { ...entry, state: 'linked', method: 'hardlink' };
+  if (entry.kind === 'agent' && st.isFile()) {
+    if (sameFile(entry.source, entry.target))
+      return { ...entry, state: 'linked', method: 'hardlink' };
+    const content = readFileSync(entry.target, 'utf8');
+    const marker = COPY_MARKER.exec(content);
+    if (marker?.[1] === entry.source) {
+      const fresh = withMarker(readFileSync(entry.source, 'utf8'), entry.source);
+      return content === fresh
+        ? { ...entry, state: 'linked', method: 'copy' }
+        : { ...entry, state: 'stale', method: 'copy', detail: 'copy differs from source' };
+    }
+    if (marker) {
+      return {
+        ...entry,
+        state: 'conflict',
+        detail: `managed copy of another source: ${marker[1] ?? '?'}`,
+      };
+    }
   }
   return { ...entry, state: 'conflict', detail: 'existing path is not managed by orch' };
 }
@@ -102,33 +128,64 @@ export function planInstall(sourceRoot: string, claudeDir: string): LinkEntry[] 
   return entries;
 }
 
-function link(entry: LinkEntry): LinkEntry {
-  mkdirSync(join(entry.target, '..'), { recursive: true });
-  if (entry.kind === 'skill') {
-    // 'junction' needs no privilege on Windows and is ignored (plain symlink) elsewhere.
-    symlinkSync(entry.source, entry.target, 'junction');
-    return { ...entry, state: 'linked', method: 'junction' };
-  }
-  try {
-    symlinkSync(entry.source, entry.target, 'file');
-    return { ...entry, state: 'linked', method: 'symlink' };
-  } catch (err) {
-    // Windows without Developer Mode: file symlinks need elevation. Hard links do not, but
-    // only work on the same volume.
+export type AgentMethod = Exclude<LinkMethod, 'junction'>;
+export const AGENT_METHODS: readonly AgentMethod[] = ['symlink', 'hardlink', 'copy'];
+
+function linkAgent(entry: LinkEntry, methods: readonly AgentMethod[]): LinkEntry {
+  const errors: string[] = [];
+  for (const method of methods) {
     try {
-      linkSync(entry.source, entry.target);
-      return { ...entry, state: 'linked', method: 'hardlink' };
-    } catch {
-      return {
-        ...entry,
-        state: 'error',
-        detail: `${(err as Error).message}. Enable Windows Developer Mode or keep the repo on the same drive as ${entry.target}.`,
-      };
+      switch (method) {
+        case 'symlink':
+          symlinkSync(entry.source, entry.target, 'file');
+          break;
+        case 'hardlink':
+          // Needs no privilege on Windows but only works on the same volume.
+          linkSync(entry.source, entry.target);
+          break;
+        case 'copy':
+          // Last resort (Windows without Developer Mode, repo on another drive): a marked copy
+          // that `orch install` recognises and refreshes. Not live; rerun install after edits.
+          writeFileSync(entry.target, withMarker(readFileSync(entry.source, 'utf8'), entry.source));
+          break;
+      }
+      return { ...entry, state: 'linked', method };
+    } catch (err) {
+      errors.push(`${method}: ${(err as Error).message}`);
     }
   }
+  return {
+    ...entry,
+    state: 'error',
+    detail: `${errors.join('; ')}. Enable Windows Developer Mode or keep the repo on the same drive as ${entry.target}.`,
+  };
 }
 
-/** Create links for missing entries. Linked entries are left alone; conflicts are never touched. */
-export function applyInstall(entries: LinkEntry[]): LinkEntry[] {
-  return entries.map((e) => (e.state === 'missing' ? link(e) : e));
+function link(entry: LinkEntry, methods: readonly AgentMethod[]): LinkEntry {
+  mkdirSync(join(entry.target, '..'), { recursive: true });
+  if (entry.kind === 'skill') {
+    try {
+      // 'junction' needs no privilege on Windows and is ignored (plain symlink) elsewhere.
+      symlinkSync(entry.source, entry.target, 'junction');
+      return { ...entry, state: 'linked', method: 'junction' };
+    } catch (err) {
+      return { ...entry, state: 'error', detail: (err as Error).message };
+    }
+  }
+  return linkAgent(entry, methods);
+}
+
+/**
+ * Create links for missing entries and refresh stale managed copies. Linked entries are left
+ * alone; conflicts are never touched. `agentMethods` orders the fallbacks for agent files.
+ */
+export function applyInstall(
+  entries: LinkEntry[],
+  agentMethods: readonly AgentMethod[] = AGENT_METHODS,
+): LinkEntry[] {
+  return entries.map((e) => {
+    if (e.state === 'missing') return link(e, agentMethods);
+    if (e.state === 'stale') return link(e, ['copy']);
+    return e;
+  });
 }

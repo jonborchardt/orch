@@ -1,6 +1,6 @@
 /** Shared fixtures: temp ORCH_HOME, temp Git repositories, and a CLI runner. */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -177,4 +177,104 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
   } catch {
     throw new Error(`CLI printed no JSON (exit ${String(r.code)}): ${r.err}`);
   }
+}
+
+/**
+ * A stand-in for `gh`, run as `node gh-shim.cjs <args>` via ORCH_GH_SHIM. State (repo, issue,
+ * PRs, checks, a command to fail, and the call log) lives in a JSON file tests read and change.
+ */
+const GH_SHIM_SOURCE = String.raw`
+const fs = require('node:fs');
+const file = process.env.ORCH_GH_SHIM_STATE;
+const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+const args = process.argv.slice(2);
+state.calls.push(args);
+const [a, b] = args;
+const flag = (f) => args[args.indexOf(f) + 1];
+let code = 0;
+const out = (o) => process.stdout.write(typeof o === 'string' ? o : JSON.stringify(o));
+if (state.fail === a + ' ' + b) { process.stderr.write('shim: simulated failure'); code = 1; }
+else if (a === 'repo' && b === 'view') out(state.repo);
+else if (a === 'issue' && b === 'view') out(state.issue);
+else if (a === 'pr' && b === 'list') out(state.prs.filter((p) => p.headRefName === flag('--head')));
+else if (a === 'pr' && b === 'view') {
+  const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
+  if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else out(pr);
+} else if (a === 'pr' && b === 'create') {
+  const n = state.prs.length + 1;
+  state.prs.push({
+    number: n, url: state.repo.url + '/pull/' + n, state: 'OPEN',
+    isDraft: args.includes('--draft'), baseRefName: flag('--base'), headRefName: flag('--head'),
+    title: flag('--title'), mergeable: 'MERGEABLE', statusCheckRollup: state.checks,
+    body: fs.readFileSync(flag('--body-file'), 'utf8'),
+  });
+  out(state.repo.url + '/pull/' + n + '\n');
+} else { process.stderr.write('shim: unknown command ' + args.join(' ')); code = 1; }
+fs.writeFileSync(file, JSON.stringify(state));
+process.exit(code);
+`;
+
+export interface ShimState {
+  calls: string[][];
+  fail?: string;
+  repo: { nameWithOwner: string; url: string; defaultBranchRef: { name: string } | null };
+  issue: Record<string, unknown>;
+  prs: Record<string, unknown>[];
+  checks: Record<string, unknown>[];
+}
+
+export interface GhShim {
+  dir: string;
+  stateFile: string;
+  /** Environment for `orch(...)` or `process.env` so `gh` resolves to the shim. */
+  env: Record<string, string>;
+  read(): ShimState;
+  write(patch: Partial<ShimState>): void;
+  reset(repo?: string): void;
+  cleanup(): void;
+}
+
+/** Create a shim for GitHub repository `repo` (owner/name). */
+export function ghShim(repo = 'acme/alpha'): GhShim {
+  const dir = tempDir('orch-gh-shim-');
+  const stateFile = join(dir, 'state.json');
+  const script = join(dir, 'gh-shim.cjs');
+  writeFileSync(script, GH_SHIM_SOURCE);
+  const shim: GhShim = {
+    dir,
+    stateFile,
+    env: { ORCH_GH_SHIM: script, ORCH_GH_SHIM_STATE: stateFile },
+    read: () => JSON.parse(readFileSync(stateFile, 'utf8')) as ShimState,
+    write: (patch) => {
+      writeFileSync(stateFile, JSON.stringify({ ...shim.read(), ...patch }));
+    },
+    reset: (r = repo) => {
+      writeFileSync(
+        stateFile,
+        JSON.stringify({
+          calls: [],
+          repo: {
+            nameWithOwner: r,
+            url: `https://github.com/${r}`,
+            defaultBranchRef: { name: 'main' },
+          },
+          issue: {
+            number: 12,
+            title: 'Export CSV',
+            body: 'Please',
+            url: `https://github.com/${r}/issues/12`,
+            state: 'OPEN',
+            labels: [{ name: 'feature' }],
+          },
+          prs: [],
+          checks: [],
+        } satisfies ShimState),
+      );
+    },
+    cleanup: () => {
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+  shim.reset();
+  return shim;
 }

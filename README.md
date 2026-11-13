@@ -9,26 +9,28 @@ specialized subagents. The workflow moves through deterministic states enforced 
 shared state in a single local SQLite database and a CLI (`orch`) that agents and humans both use.
 Output is a draft GitHub PR; humans keep merge authority.
 
-**Status:** Phase 3A. The durable core (SQLite persistence, workflow state machine, event log,
-lease-based ownership, `orch job`, `orch install`) plus the execution infrastructure: per-job Git
-worktrees (`orch worktree`), content-validated artifacts with an explicit replacement policy, and
-GitHub delivery through the `gh` CLI (`orch gh`: issues, push, idempotent draft PRs, CI status).
-There are no factory skills or subagents yet and no dashboard. See
-[Limits of Phase 3A](#limits-of-phase-3a).
+**Status:** Phase 3B. The factory works end to end from any repository: the global `/factory`
+skill coordinates ten source-controlled subagents (spec writer, builder, seven reviewers, approver)
+through the deterministic `orch` CLI. Durable core (SQLite, state machine, events, leases),
+per-job Git worktrees, content-validated artifacts, GitHub delivery via `gh`, `orch factory` for
+start/plan/resume, and `orch install` for Windows-safe global installation are in place. There is no
+dashboard yet. See [Limits of Phase 3B](#limits-of-phase-3b).
 
 ## Architecture
 
 ```
 VS Code + Claude Code session (any repository)
-  └─ /factory skill (future)            decides what to do next from CLI output
+  └─ /factory skill (skills/factory)    runs `orch factory next` and does what the plan says
+       ├─ orch factory ...             start / next / resume / check-readonly / config (src/ops/factory.ts)
        ├─ orch job ...                  one-shot CLI: open DB, one deterministic op, print, exit
        │    ├─ src/core/workflow.ts     legal transitions, required artifacts, review rounds
        │    ├─ src/core/artifact-rules.ts  required sections and VERDICT/DECISION markers
+       │    ├─ src/core/roles.ts        roles -> agents -> default models; UI reviewer detection
        │    ├─ src/core/ownership.ts    who may mutate a job right now
        │    └─ src/storage/            SQLite (node:sqlite + Drizzle), migrations, queries
        ├─ orch worktree ...            one isolated Git worktree + branch per job (src/ops, src/git)
        ├─ orch gh ...                  issues, push, draft PR, CI status via gh (src/ops, src/integrations)
-       └─ subagents (future)            do the engineering work in the job's worktree
+       └─ subagents (agents/*.md)       spec writer, builder, reviewers, approver in the job's worktree
 ```
 
 Responsibilities:
@@ -86,8 +88,123 @@ docs/decisions.md
 .github/workflows/ci.yml
 ```
 
-Planned, created when first needed: `skills/` and `agents/` (source-controlled Claude skills and
-subagents), `web/` (dashboard).
+```
+skills/factory/  SKILL.md (the coordinator), reference.md (agent inputs, artifact templates)
+agents/          factory-spec-writer, factory-builder, factory-reviewer-{security,correctness,
+                 code-quality,ui-design,ux,accessibility,web-platform}, factory-approver
+```
+
+Planned, created when first needed: `web/` (dashboard).
+
+## Using the factory
+
+One-time setup on a machine:
+
+```sh
+git clone <this repo> && cd agent-orchestrator
+npm install && npm link       # `orch` on PATH
+orch install                  # link skills/ and agents/ into ~/.claude (see Global Claude skills)
+gh auth login                 # only needed for the draft PR at the end
+```
+
+Restart Claude Code (skills are read at session start), open any project repository, and:
+
+```
+/factory Add a feature to export reports as CSV      start a job for this repository
+/factory job-1a2b3c4d                                continue or adopt a job
+/factory status job-1a2b3c4d                         report without changing anything
+/factory resume job-1a2b3c4d                         same as the bare id
+```
+
+The same thing from a shell, without Claude:
+
+```sh
+cd ~/code/my-app
+orch factory start --title "Export reports as CSV" --session me --json   # job, token, worktree, plan
+orch factory next job-1a2b3c4d --json                                     # what to do now
+orch factory status job-1a2b3c4d                                          # read-only summary
+orch factory resume job-1a2b3c4d --session me-2 [--force] [--to <stage>]  # adopt from saved state
+orch factory config                                                       # role -> model, config path
+```
+
+### How a job runs
+
+```
+request ─→ spec ─→ build ─→ review (N reviewers in parallel) ─┬─ all PASS ─→ approve ─┬─ APPROVE ─→ pr ─→ done
+                     ▲                                       │                      └─ ESCALATE ─→ needs-human
+                     └──────── any CHANGES (round < max) ◀───┘   round == max ─→ needs-human
+```
+
+The coordinating Claude session owns the job (a lease with a token) and loops on
+`orch factory next <id> --json`, which returns a **plan**: the step (`run-stage`, `create-worktree`,
+`resume`, `needs-human`, `done`, `cancelled`), the agents to launch with their models and the
+artifact each must write, the registered artifacts re-verified against disk, the worktree state
+(branch, HEAD, dirty files, commits and changed files vs base, a fingerprint), and the exact `orch`
+commands to run, in order. The skill substitutes the token and runs them. Every state change is a
+CLI call that `orch` validates; the skill never edits the database or workflow tables.
+
+| Stage     | Agent(s)                      | Produces                                         | `orch` checks before advancing                                                                                  |
+| --------- | ----------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `spec`    | `factory-spec-writer` (Opus)  | `spec.md`                                        | Goal, Scope, Acceptance criteria present                                                                        |
+| `build`   | `factory-builder` (Opus)      | commits on the job branch + `build.md`           | Summary, Validation present; round > 1 needs `--replace`                                                        |
+| `review`  | reviewers below, concurrently | `round-N/review-<r>.md` each + `consolidated.md` | every reviewer has a verdict matching its `VERDICT:` line; `BLOCKING: n`; worktree unchanged (`check-readonly`) |
+| `approve` | `factory-approver` (Opus)     | `decision.md`                                    | `DECISION: APPROVE`; `ESCALATE` forces `escalate`                                                               |
+| `pr`      | the coordinator + `orch gh`   | pushed branch, draft PR, `pr.md`                 | branch pushed and current, repo identity, base on origin, PR recorded                                           |
+
+Reviewers always include **security** (Opus), **correctness**, and **code-quality** (Sonnet). When
+the job's diff touches rendered UI (`.tsx`, `.vue`, `.css`, `.html`, ... per
+`uiPatterns`), **ui-design**, **ux**, **accessibility**, and **web-platform** (Sonnet) join;
+`--ui`/`--no-ui` on `factory next` overrides detection. Reviewers are read-only on code (their
+tools exclude `Edit`), must cite evidence they gathered rather than trusting `build.md`, report only
+inside their ownership and the spec's scope, and end their file with `VERDICT: PASS|CHANGES`. The
+coordinator deduplicates findings into `round-N/consolidated.md`; any `CHANGES` returns the job to
+`build` with that file as input, up to `maxRounds` (default 3), after which `orch` escalates to
+`needs-human` instead of approving.
+
+The approver reads the spec, `build.md`, the full diff, every review, and reruns validation before
+writing `decision.md`. Approval permits a draft PR; it never merges. In the `pr` stage the plan says
+to integrate `origin/<base>` first if it advanced (then re-validate), push, create or reuse the draft
+PR with `pr.md` as the body, and record it. A recorded draft PR with `ciStatus: pending` is reported
+as exactly that.
+
+### Model configuration
+
+Defaults live in `src/core/roles.ts` and in each agent's frontmatter; the plan carries the model
+per agent so the skill can pass it to the subagent tool. Override per machine in
+`<config>/factory.json` (path from `orch factory config`):
+
+```json
+{
+  "models": { "security": "sonnet", "builder": "opus" },
+  "uiPatterns": ["\\.(tsx|jsx|css)$"],
+  "maxRounds": 2
+}
+```
+
+Models are `opus`, `sonnet`, `haiku`, or `inherit`; unknown roles, models, keys, or invalid
+regexes are rejected.
+
+### Resume and recovery
+
+A job is recoverable from the database, its artifact directory, and its worktree; the original
+conversation is not needed. `orch factory resume <id> --session <name>`:
+
+1. Claims the job (takes over a lapsed lease; needs `--force` against a live one, which rotates the
+   token so the previous session's commands fail with exit 4). A job that was `running` under the
+   previous owner becomes `interrupted` and is put back to `pending` for its current stage.
+2. Recreates the worktree from the surviving branch if the directory is gone.
+3. Re-verifies every registered artifact (exists, same hash) and reports problems in the plan.
+4. Returns the plan, so the new session continues exactly where the state says.
+
+`needs-human` jobs stay blocked until a person decides; `resume --to <stage>` sends them back.
+`orch factory check-readonly` guards review rounds: the plan's worktree fingerprint (HEAD plus
+dirty files) must be unchanged after reviewers ran.
+
+**Limits.** A skill cannot restart a Claude session that stopped, and there is no daemon: a lapsed
+lease is noticed only when someone runs `orch factory next` or `resume`. Ownership is advisory at
+the filesystem level (see [Worktrees](#worktrees)). Subagent APIs differ between harnesses; the
+skill explains how to fall back to inline prompts or sequential self-execution and asks the
+coordinator to say so in its report.
 
 ## Install and develop
 
@@ -336,6 +453,13 @@ orch job pr        <id> --url <url> --state draft|ready|merged --token <t>
 
 orch worktree create|show|adopt|remove|integrate <id> [--path <dir>] [--repo <clone>] --token <t>
 orch gh repo | issue <ref> | push <id> | pr create <id> --body-file <md> | pr status <id>
+
+orch factory start  --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
+                    [--max-rounds <n>] --session <name> [--ui|--no-ui]
+orch factory next|status <id> [--ui|--no-ui]
+orch factory resume <id> --session <name> [--to <stage>] [--force]
+orch factory check-readonly <id> --fingerprint <f>
+orch factory config
 ```
 
 `job create` detects the repository from the current directory (or `--repo`), records its identity
@@ -372,18 +496,20 @@ orch job transition job-3f9a1c2e complete --json              # next: build, req
 ## Global Claude skills
 
 Skills and subagent definitions are source-controlled under `skills/<name>/SKILL.md` and
-`agents/<name>.md` (none exist yet). `orch install` links them into the user's global Claude
-configuration (`~/.claude`, or `CLAUDE_CONFIG_DIR`, or `--claude-dir`):
+`agents/<name>.md`. `orch install` links them into the user's global Claude configuration
+(`~/.claude`, or `CLAUDE_CONFIG_DIR`, or `--claude-dir`):
 
 - `~/.claude/skills/<name>` → `<install root>/skills/<name>` as a directory junction on Windows
-  (`fs.symlink(..., 'junction')`, no admin or Developer Mode) and a symlink elsewhere.
-- `~/.claude/agents/<name>.md` → `<install root>/agents/<name>.md` as a file symlink; junctions
-  cannot target files. On Windows without Developer Mode a file symlink is refused, so a hard link
-  is used instead (same volume only). Both are live: edits in this repo show up immediately.
+  (`fs.symlink(..., 'junction')`, no admin or Developer Mode) and a symlink elsewhere. Live.
+- `~/.claude/agents/<name>.md` → `<install root>/agents/<name>.md`, trying in order: a file symlink
+  (live; needs Developer Mode or elevation on Windows), a hard link (live; same volume only), and
+  finally a **managed copy** ending in `<!-- orch-managed-copy: <source> -->`. Copies are not
+  live: `orch install --dry-run` reports them as `stale` when the source changed and `orch install`
+  refreshes them. Only files carrying that marker for this source are ever rewritten.
 
-The installer never copies, never overwrites, and is safe to repeat: existing links back to this
-repo are reported as `linked`, anything else at a target path is a `conflict` that is left alone
-and makes the command exit 1. `--dry-run` shows the plan. It never touches a project's `CLAUDE.md`,
+The installer never overwrites anything it does not own and is safe to repeat: existing links or
+fresh copies are `linked`, anything else at a target path is a `conflict` that is left alone and
+makes the command exit 1. `--dry-run` shows the plan. It never touches a project's `CLAUDE.md`,
 `.claude/`, or other global skills, and no plugin or marketplace is involved.
 
 Limitations: Claude Code reads `~/.claude/skills` and `~/.claude/agents` when a session starts, so
@@ -399,20 +525,26 @@ links, which it does for junctions and symlinks; if a skill is not listed, check
   absolute path and fixed arguments. Nothing user-supplied reaches a shell.
 - Artifact paths are stored with forward slashes regardless of how they were typed.
 - SQLite WAL leaves `orch.sqlite-wal` / `-shm` beside the database while connections are open.
-- Skill links are junctions; agent links fall back to hard links without Developer Mode.
+- Skill links are junctions; agent links fall back to hard links, then managed copies, without
+  Developer Mode (a repo on `E:` and `~/.claude` on `C:` ends up with copies).
 - Worktree and repository paths are compared case-insensitively after `realpath`; paths with
   spaces work everywhere because nothing goes through a shell.
+- Shells started by Claude Code do not keep environment variables between calls, so the plan's
+  commands carry `--token <token>` explicitly instead of relying on `ORCH_TOKEN`.
 
-## Limits of Phase 3A
+## Limits of Phase 3B
 
-Implemented: database, migrations, job model, state machine, events, ownership, artifact content
-rules and replacement policy, per-job worktrees, GitHub issue/push/draft-PR/CI via `gh`,
-`orch job`, `orch worktree`, `orch gh`, `orch install`, tests for all of it (real temporary Git
-repositories; a `gh` shim instead of the network).
+Implemented: everything in Phase 3A plus `orch factory`, the `/factory` skill, ten agent
+definitions, model configuration, UI reviewer detection, read-only fingerprinting, resume from
+persisted state, and contract tests that drive the workflow with fixture subagent outputs (spec to
+build, malformed output, parallel review aggregation, rework rounds, max-round escalation, approval
+and rejection, resume after interruption, draft PR through the mocked `gh`, cross-project jobs,
+ownership loss, configuration).
 
-Not implemented (Phase 3B and later): the `/factory` skill and subagent definitions, spec/build/
-review work itself, Claude session spawning or restoration, model selection and token accounting,
-the dashboard, any daemon or scheduler, automatic crash recovery (a lapsed lease is only noticed
-when someone claims), rebase-based integration (only merge commits), a workflow definition
-language, and plugin distribution. The `events` table is an audit log, not an event-sourcing store.
-See `docs/decisions.md` for the reasoning behind what exists.
+Not implemented: the dashboard (Phase 4), Claude session spawning or restoration, token accounting,
+any daemon or scheduler, automatic crash recovery (a lapsed lease is only noticed when someone runs
+`factory next` or `resume`), rebase-based integration (only merge commits), a workflow definition
+language, and plugin distribution. Ordinary CI never calls a model: the skill and agents are
+exercised by their contracts (frontmatter, templates, commands), and a live run requires a Claude
+Code session. The `events` table is an audit log, not an event-sourcing store. See
+`docs/decisions.md` for the reasoning behind what exists.

@@ -32,6 +32,12 @@ npm run test:coverage
 - `src/ops/` sequences the above for a job: `authorize()` the owner, act on Git or GitHub, then
   record through `storage/jobs.ts`. It is the only layer allowed to import both `git/` or
   `integrations/` and `storage/`. Nothing in `ops/` deletes uncommitted work or force-pushes.
+  `ops/factory.ts` builds the plan the `/factory` skill follows; `core/roles.ts` is the only place
+  that names agents and models.
+- `skills/factory/` and `agents/` are prose for Claude, linked into `~/.claude` by `orch install`.
+  They must only call `orch` commands; any rule that matters is enforced in TypeScript first and
+  described in prose second. `tests/skill-contract.test.ts` keeps roles, agent frontmatter, and the
+  reference templates consistent with the code.
 - Workflow state transitions are enforced in TypeScript, never only in skill prose. A stage is
   complete only when its required artifact has been validated (location, type, structure, marker)
   and registered; replacing registered content requires `--replace`.

@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { packageInfo } from '../core/paths.ts';
 import { openStore } from '../storage/client.ts';
 import { formatChecks, runDoctor } from './doctor.ts';
+import { FACTORY_HELP, runFactory } from './factory.ts';
 import { GH_HELP, runGh } from './gh.ts';
 import { runInstall } from './install.ts';
 import { JOB_HELP, runJob } from './job.ts';
@@ -14,6 +15,7 @@ const HELP = `Usage: orch [--json] <command>
 
 Commands:
   doctor                 Check the local environment (Node, Git, Claude Code, paths)
+  factory <subcommand>   Start, plan, and resume factory jobs for the /factory skill (orch factory --help)
   job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
   worktree <subcommand>  Create, inspect, adopt, remove a job's Git worktree (orch worktree --help)
   gh <subcommand>        GitHub via gh: issue, push, draft PR, CI status (orch gh --help)
@@ -68,6 +70,10 @@ export function main(argv: string[]): number {
         // worktree / gh
         path: str,
         'body-file': str,
+        // factory
+        ui: bool,
+        'no-ui': bool,
+        fingerprint: str,
         // install
         'dry-run': bool,
         'claude-dir': str,
@@ -87,7 +93,12 @@ export function main(argv: string[]): number {
     }
     const [command, ...rest] = positionals;
     if (o.help || command === undefined) {
-      const helps: Record<string, string> = { job: JOB_HELP, worktree: WORKTREE_HELP, gh: GH_HELP };
+      const helps: Record<string, string> = {
+        job: JOB_HELP,
+        worktree: WORKTREE_HELP,
+        gh: GH_HELP,
+        factory: FACTORY_HELP,
+      };
       console.log((command && helps[command]) ?? HELP);
       return o.help ? 0 : 2;
     }
@@ -102,6 +113,15 @@ export function main(argv: string[]): number {
         const store = openStore();
         try {
           print(runJob(store, rest, o), json);
+        } finally {
+          store.close();
+        }
+        return 0;
+      }
+      case 'factory': {
+        const store = openStore();
+        try {
+          print(runFactory(store, rest, o), json);
         } finally {
           store.close();
         }

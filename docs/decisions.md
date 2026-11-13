@@ -193,3 +193,49 @@ local bare repository).
 Switching to WAL takes a lock. With five CLI processes opening the database at once, setting the
 journal mode before the busy timeout produced sporadic `database is locked` failures. The pragmas
 are ordered timeout first.
+
+## 26. `orch factory next` is the skill's oracle (Phase 3B)
+
+The coordinating Claude session never reasons about workflow state. `src/ops/factory.ts` turns the
+job row, its artifacts (re-verified against disk), its worktree, and the role configuration into a
+plan: the step, the agents with models and target artifacts, and the literal `orch` commands to run.
+The skill prose is therefore short and the behaviour is testable without a model. Every plan command
+carries `--token <token>` because shells spawned by Claude Code do not keep environment variables.
+
+## 27. Roles and models are data
+
+`src/core/roles.ts` is the single table of role → agent → default model → applicability, mirrored
+by the agents' frontmatter (a test keeps them in sync). `<config>/factory.json` overrides models,
+the UI detection patterns, and the default round limit per machine. UI reviewers are added when the
+job's changed files match the patterns; `--ui`/`--no-ui` overrides. Nothing else in the code names
+a model.
+
+## 28. Reviewers are read-only, enforced two ways
+
+Reviewer and approver agents have no `Edit` tool, and the plan carries a worktree fingerprint
+(HEAD plus the sorted dirty-file list) that `orch factory check-readonly` compares after the round.
+A changed worktree fails the round rather than letting a reviewer's edit slip into the diff. This
+does not stop a process with filesystem access from writing anywhere; it detects it.
+
+## 29. One factory start command
+
+`orch factory start` creates, claims, and gives a worktree to a job in one call and returns the
+token with the first plan. Three separate commands would be three chances for the coordinator to
+drop the token or skip the worktree. `start` fetches the title from an issue through `gh` when only
+`--issue` is given.
+
+## 30. Managed copies as the last resort for agent files
+
+Windows without Developer Mode refuses file symlinks, and hard links cannot cross volumes, which is
+exactly the common layout of a repo on one drive and `~/.claude` on `C:`. `orch install` then writes
+a copy with a trailer `<!-- orch-managed-copy: <source> -->`. Copies are recognised by that trailer
+and refreshed when stale; a file without it, or with another source, is a conflict and is never
+touched. Skills still link as junctions, so only the agent files lose liveness. Copying the whole
+`agents` directory as a junction was rejected because it would capture the user's own agents.
+
+## 31. Hand-off to a new session needs `--force` while a lease is live
+
+`orch factory resume` by a different session is refused while the owner's lease has not lapsed,
+including for jobs waiting in `needs-human`. The human (or the new session on their instruction)
+passes `--force`, which rotates the token. Silent takeover would let two live sessions race on one
+job; a lapsed lease is taken over without ceremony because its holder is presumed gone.

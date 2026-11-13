@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { ToolError, ValidationError } from '../src/core/errors.ts';
 import { jobArtifactDir } from '../src/core/paths.ts';
 import { describeRepo } from '../src/git/repo.ts';
-import { GH_SHIM_ENV, prWorkflowState, summarizeChecks } from '../src/integrations/github.ts';
+import { prWorkflowState, summarizeChecks } from '../src/integrations/github.ts';
 import { ensureDraftPr, issue, prStatus, pushBranch, resolveRepo } from '../src/ops/github.ts';
 import { createWorktree } from '../src/ops/worktree.ts';
 import { listEvents } from '../src/storage/events.ts';
@@ -21,110 +21,39 @@ import {
 } from '../src/storage/jobs.ts';
 import {
   commitFile,
+  type GhShim,
+  ghShim,
   gitIn,
   json,
   makeRepoWithOrigin,
   orch,
+  type ShimState,
   tempDir,
   type TempStore,
   tempStore,
   writeArtifact,
 } from './helpers.ts';
 
-/**
- * A stand-in for `gh`, run as `node gh-shim.cjs <args>`. State (repo, issue, PRs, checks, a
- * command to fail, and the call log) lives in a JSON file so tests can read and change it.
- */
-const SHIM = String.raw`
-const fs = require('node:fs');
-const file = process.env.ORCH_GH_SHIM_STATE;
-const state = JSON.parse(fs.readFileSync(file, 'utf8'));
-const args = process.argv.slice(2);
-state.calls.push(args);
-const [a, b] = args;
-const flag = (f) => args[args.indexOf(f) + 1];
-let code = 0;
-const out = (o) => process.stdout.write(typeof o === 'string' ? o : JSON.stringify(o));
-if (state.fail === a + ' ' + b) { process.stderr.write('shim: simulated failure'); code = 1; }
-else if (a === 'repo' && b === 'view') out(state.repo);
-else if (a === 'issue' && b === 'view') out(state.issue);
-else if (a === 'pr' && b === 'list') out(state.prs.filter((p) => p.headRefName === flag('--head')));
-else if (a === 'pr' && b === 'view') {
-  const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
-  if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else out(pr);
-} else if (a === 'pr' && b === 'create') {
-  const n = state.prs.length + 1;
-  state.prs.push({
-    number: n, url: 'https://github.com/acme/alpha/pull/' + n, state: 'OPEN',
-    isDraft: args.includes('--draft'), baseRefName: flag('--base'), headRefName: flag('--head'),
-    title: flag('--title'), mergeable: 'MERGEABLE', statusCheckRollup: state.checks,
-    body: fs.readFileSync(flag('--body-file'), 'utf8'),
-  });
-  out('https://github.com/acme/alpha/pull/' + n + '\n');
-} else { process.stderr.write('shim: unknown command ' + args.join(' ')); code = 1; }
-fs.writeFileSync(file, JSON.stringify(state));
-process.exit(code);
-`;
-
-interface ShimState {
-  calls: string[][];
-  fail?: string;
-  repo: { nameWithOwner: string; url: string; defaultBranchRef: { name: string } | null };
-  issue: Record<string, unknown>;
-  prs: Record<string, unknown>[];
-  checks: Record<string, unknown>[];
-}
-
-let shimDir: string;
-let stateFile: string;
 let store: TempStore;
 let clone: string;
 let bare: string;
-
-function readState(): ShimState {
-  return JSON.parse(readFileSync(stateFile, 'utf8')) as ShimState;
-}
-function writeState(patch: Partial<ShimState>): void {
-  writeFileSync(stateFile, JSON.stringify({ ...readState(), ...patch }));
-}
-function freshState(): void {
-  writeFileSync(
-    stateFile,
-    JSON.stringify({
-      calls: [],
-      repo: {
-        nameWithOwner: 'acme/alpha',
-        url: 'https://github.com/acme/alpha',
-        defaultBranchRef: { name: 'main' },
-      },
-      issue: {
-        number: 12,
-        title: 'Export CSV',
-        body: 'Please',
-        url: 'https://github.com/acme/alpha/issues/12',
-        state: 'OPEN',
-        labels: [{ name: 'feature' }],
-      },
-      prs: [],
-      checks: [],
-    } satisfies ShimState),
-  );
-}
+let shim: GhShim;
+const readState = () => shim.read();
+const writeState = (patch: Partial<ShimState>) => {
+  shim.write(patch);
+};
 
 beforeAll(() => {
-  shimDir = tempDir('orch-gh-shim-');
-  stateFile = join(shimDir, 'state.json');
-  writeFileSync(join(shimDir, 'gh-shim.cjs'), SHIM);
-  process.env[GH_SHIM_ENV] = join(shimDir, 'gh-shim.cjs');
-  process.env['ORCH_GH_SHIM_STATE'] = stateFile;
+  shim = ghShim();
+  Object.assign(process.env, shim.env);
 });
 afterAll(() => {
   delete process.env['ORCH_GH_SHIM'];
   delete process.env['ORCH_GH_SHIM_STATE'];
-  rmSync(shimDir, { recursive: true, force: true });
+  shim.cleanup();
 });
 beforeEach(() => {
-  freshState();
+  shim.reset();
   store = tempStore();
   ({ clone, bare } = makeRepoWithOrigin('git@github.com:acme/alpha.git'));
 });
@@ -334,7 +263,7 @@ describe('push and draft PR delivery', () => {
   it('is available on the CLI: orch gh repo / issue / pr status with --json', () => {
     const home = tempDir('orch-gh-cli-');
     try {
-      const env = { [GH_SHIM_ENV]: join(shimDir, 'gh-shim.cjs'), ORCH_GH_SHIM_STATE: stateFile };
+      const env = shim.env;
       const repo = json<{ identity: string }>(orch(home, clone, ['--json', 'gh', 'repo'], env));
       expect(repo.identity).toBe('github.com/acme/alpha');
       const iss = json<{ number: number }>(
@@ -351,7 +280,7 @@ describe('push and draft PR delivery', () => {
       expect(st.code).toBe(1);
       expect(st.err).toContain('no PR recorded');
       // Without gh and without the shim, the error is explicit.
-      const noGh = orch(home, clone, ['gh', 'repo'], { [GH_SHIM_ENV]: '', PATH: '' });
+      const noGh = orch(home, clone, ['gh', 'repo'], { ORCH_GH_SHIM: '', PATH: '' });
       expect(noGh.code).toBe(1);
       expect(noGh.err).toMatch(/gh\) not found|not inside a Git repository|git/);
     } finally {
