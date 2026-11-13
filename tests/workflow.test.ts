@@ -27,8 +27,19 @@ function job(stage: Stage, status: Status, extra: Partial<JobState> = {}): JobSt
   };
 }
 
-function art(path: string): Artifact {
-  return { id: 1, jobId: 'j', stage: 'spec', round: null, path, bytes: 1, createdAt: '' };
+function art(path: string, marker: string | null = null): Artifact {
+  if (path === 'decision.md' && marker === null) marker = 'approve';
+  return {
+    id: 1,
+    jobId: 'j',
+    stage: 'spec',
+    round: null,
+    path,
+    bytes: 1,
+    sha256: null,
+    marker,
+    createdAt: '',
+  };
 }
 
 function review(round: number, reviewer: string, verdict: Review['verdict']): Review {
@@ -113,6 +124,18 @@ describe('transition: illegal moves', () => {
     }
     expect(() => run(job('completed', 'completed'), 'cancel')).toThrow(/finished/);
     expect(() => run(job('build', 'cancelled'), 'cancel')).toThrow(/already cancelled/);
+  });
+
+  it('approve completes only on DECISION: APPROVE', () => {
+    expect(() =>
+      run(job('approve', 'running'), 'complete', {
+        artifacts: [art('decision.md', 'escalate')],
+        reviews: [],
+      }),
+    ).toThrow(/says ESCALATE; use escalate/);
+    expect(() =>
+      run(job('approve', 'running'), 'complete', { artifacts: [art('decision.md')], reviews: [] }),
+    ).not.toThrow();
   });
 
   it('cannot start needs-human directly', () => {

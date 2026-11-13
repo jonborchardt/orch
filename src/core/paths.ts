@@ -91,6 +91,20 @@ export function jobArtifactDir(jobId: string, paths: RuntimePaths = runtimePaths
   return join(paths.data, 'jobs', jobId, 'artifacts');
 }
 
+/** Filesystem-safe form of a repository identity, e.g. github.com/o/r -> github.com-o-r. */
+export function repoSlug(identity: string): string {
+  return identity.replace(/[^a-z0-9._]+/gi, '-').replace(/^-+|-+$/g, '') || 'repo';
+}
+
+/** Managed worktree location for a job. Under the data dir, never inside the project. */
+export function jobWorktreeDir(
+  jobId: string,
+  repoIdentity: string,
+  paths: RuntimePaths = runtimePaths(),
+): string {
+  return join(paths.data, 'worktrees', repoSlug(repoIdentity), jobId);
+}
+
 /** Directory of Drizzle migrations shipped with this installation. */
 export function migrationsDir(): string {
   return join(installRoot(), 'drizzle');

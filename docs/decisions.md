@@ -131,3 +131,65 @@ optimistic concurrency for callers that want to reject any intervening change.
 only "fix" npm offers is a downgrade to ESLint 9. The dependency is dev-only (lint-time glob
 matching of our own config) and never shipped, so it is documented here and left alone until the
 tooling moves to `minimatch >= 11.0.1`.
+
+## 18. Artifact structure rules and markers are code (Phase 3A)
+
+`src/core/artifact-rules.ts` maps each workflow artifact path to required headings and, for
+reviews, consolidations, and decisions, a single marker line (`VERDICT: PASS|CHANGES`,
+`BLOCKING: <n>`, `DECISION: APPROVE|ESCALATE`). Registration parses the marker into
+`artifacts.marker`, and the pure `transition` reads it: `approve` completes only on `APPROVE`, and
+`review record --verdict` must agree with the file. Skill prose can ask a reviewer for a verdict,
+but only the CLI decides whether a stage is done. Other files in the artifact directory (evidence,
+screenshots' notes) are unconstrained so reviewers can attach what they like.
+
+## 19. Replacing an artifact is explicit and hashed
+
+`artifacts.sha256` records what was accepted. Re-registering identical content is idempotent;
+different content is refused without `--replace`, and the replacement is logged as
+`artifact.replaced` with the previous hash. `--revision <n>` still applies. This keeps builders
+from silently rewriting `build.md` under a running review while allowing the normal rework round
+(`--replace`) and leaves a durable trail of what each stage accepted.
+
+## 20. One worktree and branch per job, under the data directory
+
+Worktrees live at `<data>/worktrees/<repo slug>/<job id>` on branch `factory/<id>-<title slug>`.
+Unique indexes on `jobs.worktreePath` and (`repo`, `branch`) make double assignment impossible.
+`create` is idempotent and recreates a vanished directory from the surviving branch; `remove` and
+`integrate` refuse on uncommitted changes, and the branch is never deleted, so nothing `orch` does
+can lose work. Ownership (the token) gates every mutating command, but it is advisory against a
+process that writes into another worktree directly; that is documented rather than pretended away.
+
+## 21. `src/ops/` composes Git, GitHub, and storage
+
+Worktree creation and PR delivery are sequences: check ownership, act on Git or GitHub, record the
+result. They do not belong in `src/cli/` (no business logic), `src/core/` (no I/O), or
+`src/storage/` (no Git). `src/ops/` holds them; it is the only layer that imports from both
+`src/git`/`src/integrations` and `src/storage`. `authorize()` in `storage/jobs.ts` performs the
+ownership and revision check without a write so the Git action can run first.
+
+## 22. GitHub through `gh`, with a shim for tests
+
+No GitHub SDK: `gh` is already authenticated on the developer's machine and covers issues, PR
+listing, draft creation, and `statusCheckRollup`. `src/integrations/github.ts` invokes it with
+argument arrays and parses `--json`. `ORCH_GH_SHIM=<file>` swaps the executable for
+`node <file> <args>` so tests run a stateful fake and never touch the network. `orch` never merges,
+force-pushes, or marks ready: approval permits a draft PR, humans do the rest.
+
+## 23. Base integration is a merge commit, never a rebase
+
+`orch worktree integrate` fetches `origin/<base>` and merges it with `--no-ff`; conflicts abort the
+merge and report the files. Rebase would rewrite a branch that may already be pushed and reviewed.
+Validation after integration is the skill's responsibility (it re-runs the project's checks).
+
+## 24. Repository identity from the configured remote URL
+
+`describeRepo` reads `git config --get remote.origin.url`, not `git remote get-url`, which applies
+`url.<x>.insteadOf` rewrites. The configured URL is what the user thinks of as "the repository";
+rewrites are transport details (and the test suite uses one to point a GitHub-looking origin at a
+local bare repository).
+
+## 25. `busy_timeout` before `journal_mode`
+
+Switching to WAL takes a lock. With five CLI processes opening the database at once, setting the
+journal mode before the busy timeout produced sporadic `database is locked` failures. The pragmas
+are ordered timeout first.

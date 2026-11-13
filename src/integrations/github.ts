@@ -1,0 +1,205 @@
+/**
+ * GitHub access through the `gh` CLI, invoked with argument arrays. Never merges, force-pushes,
+ * or marks a PR ready. Set ORCH_GH_SHIM to a JavaScript file to replace `gh` with
+ * `node <shim> <args>` in tests.
+ */
+import { ToolError } from '../core/errors.ts';
+import { spawnTool, whichSync } from '../core/exec.ts';
+import type { CiStatus, PrState } from '../core/workflow.ts';
+import { normalizeRemote } from '../git/repo.ts';
+
+export const GH_SHIM_ENV = 'ORCH_GH_SHIM';
+
+export function gh(args: string[], cwd?: string, env: NodeJS.ProcessEnv = process.env): string {
+  const shim = env[GH_SHIM_ENV];
+  const exe = shim ? process.execPath : whichSync('gh', env);
+  if (!exe)
+    throw new ToolError('GitHub CLI (gh) not found on PATH. Install it and run gh auth login.');
+  const r = spawnTool(exe, shim ? [shim, ...args] : args, { cwd, env });
+  if (r.status !== 0) {
+    throw new ToolError(
+      `gh ${args.slice(0, 2).join(' ')} failed: ${(r.stderr || r.stdout).trim()}`,
+    );
+  }
+  return r.stdout.trim();
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- caller picks the shape
+function ghJson<T>(args: string[], cwd?: string): T {
+  const out = gh(args, cwd);
+  try {
+    return JSON.parse(out) as T;
+  } catch {
+    throw new ToolError(`gh ${args[0] ?? ''} returned invalid JSON: ${out.slice(0, 200)}`);
+  }
+}
+
+export interface GhRepo {
+  nameWithOwner: string;
+  url: string;
+  defaultBranch: string;
+  /** Same form as a job's repo identity: github.com/owner/name (lower-case). */
+  identity: string;
+}
+
+export function viewRepo(cwd: string): GhRepo {
+  const r = ghJson<{
+    nameWithOwner: string;
+    url: string;
+    defaultBranchRef: { name: string } | null;
+  }>(['repo', 'view', '--json', 'nameWithOwner,url,defaultBranchRef'], cwd);
+  return {
+    nameWithOwner: r.nameWithOwner,
+    url: r.url,
+    defaultBranch: r.defaultBranchRef?.name ?? 'main',
+    identity: normalizeRemote(r.url),
+  };
+}
+
+export interface GhIssue {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  state: string;
+  labels: string[];
+}
+
+/** `ref` may be `#12`, `12`, or an issue URL. `repo` is owner/name when not inferable from cwd. */
+export function viewIssue(ref: string, cwd: string, repo?: string): GhIssue {
+  const target = /^#?\d+$/.test(ref) ? ref.replace(/^#/, '') : ref;
+  if (!/^(\d+|https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+)$/.test(target)) {
+    throw new ToolError(`Not an issue reference: ${ref} (use #N, N, or an issue URL)`);
+  }
+  const args = ['issue', 'view', target, '--json', 'number,title,body,url,state,labels'];
+  if (repo) args.push('--repo', repo);
+  const r = ghJson<Omit<GhIssue, 'labels'> & { labels: { name: string }[] }>(args, cwd);
+  return { ...r, labels: r.labels.map((l) => l.name) };
+}
+
+export interface GhCheck {
+  name: string;
+  status: string;
+  conclusion: string;
+}
+
+export interface GhPr {
+  number: number;
+  url: string;
+  /** OPEN, MERGED, or CLOSED. */
+  state: string;
+  isDraft: boolean;
+  baseRefName: string;
+  headRefName: string;
+  title: string;
+  mergeable?: string;
+  checks: GhCheck[];
+}
+
+const PR_FIELDS =
+  'number,url,state,isDraft,baseRefName,headRefName,title,mergeable,statusCheckRollup';
+
+interface RawPr {
+  number: number;
+  url: string;
+  state: string;
+  isDraft: boolean;
+  baseRefName: string;
+  headRefName: string;
+  title: string;
+  mergeable?: string;
+  statusCheckRollup?: RawCheck[] | null;
+}
+
+interface RawCheck {
+  name?: string;
+  context?: string;
+  status?: string;
+  state?: string;
+  conclusion?: string;
+}
+
+function toPr(raw: RawPr): GhPr {
+  const checks = (raw.statusCheckRollup ?? []).map((c) => ({
+    name: c.name ?? c.context ?? 'check',
+    status: c.status ?? c.state ?? '',
+    conclusion: c.conclusion ?? c.state ?? '',
+  }));
+  const pr: GhPr = {
+    number: raw.number,
+    url: raw.url,
+    state: raw.state,
+    isDraft: raw.isDraft,
+    baseRefName: raw.baseRefName,
+    headRefName: raw.headRefName,
+    title: raw.title,
+    checks,
+  };
+  if (raw.mergeable !== undefined) pr.mergeable = raw.mergeable;
+  return pr;
+}
+
+/** All PRs (open, merged, closed) whose head is `branch`. */
+export function listPrsForBranch(branch: string, cwd: string): GhPr[] {
+  const raw = ghJson<RawPr[]>(
+    ['pr', 'list', '--head', branch, '--state', 'all', '--json', PR_FIELDS],
+    cwd,
+  );
+  return raw.map(toPr);
+}
+
+export function viewPr(urlOrNumber: string, cwd: string): GhPr {
+  return toPr(ghJson<RawPr>(['pr', 'view', urlOrNumber, '--json', PR_FIELDS], cwd));
+}
+
+export interface CreatePrInput {
+  base: string;
+  head: string;
+  title: string;
+  bodyFile: string;
+}
+
+/** Always a draft. Returns the created PR's details. */
+export function createDraftPr(input: CreatePrInput, cwd: string): GhPr {
+  const out = gh(
+    [
+      'pr',
+      'create',
+      '--draft',
+      '--base',
+      input.base,
+      '--head',
+      input.head,
+      '--title',
+      input.title,
+      '--body-file',
+      input.bodyFile,
+    ],
+    cwd,
+  );
+  const url = out.split(/\s+/).find((w) => w.startsWith('https://'));
+  if (!url) throw new ToolError(`gh pr create did not return a PR URL: ${out}`);
+  return viewPr(url, cwd);
+}
+
+/** Collapse a PR's checks into one status. */
+export function summarizeChecks(checks: GhCheck[]): CiStatus {
+  if (checks.length === 0) return 'none';
+  const words = checks.map((c) => `${c.status} ${c.conclusion}`.toUpperCase());
+  if (
+    words.some((w) => /FAILURE|ERROR|TIMED_OUT|CANCELLED|ACTION_REQUIRED|STARTUP_FAILURE/.test(w))
+  ) {
+    return 'failing';
+  }
+  if (words.some((w) => /PENDING|IN_PROGRESS|QUEUED|EXPECTED|WAITING|REQUESTED/.test(w))) {
+    return 'pending';
+  }
+  return 'passing';
+}
+
+/** Workflow PR state for a GitHub PR; undefined for a closed, unmerged PR. */
+export function prWorkflowState(pr: Pick<GhPr, 'state' | 'isDraft'>): PrState | undefined {
+  if (pr.state === 'MERGED') return 'merged';
+  if (pr.state === 'OPEN') return pr.isDraft ? 'draft' : 'ready';
+  return undefined;
+}

@@ -27,9 +27,11 @@ export function openStore(
 ): Store {
   if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
   const client = new DatabaseSync(file);
+  // busy_timeout first: switching the journal mode takes a lock, and concurrent CLI processes
+  // opening the same database must wait for it rather than fail with "database is locked".
+  client.exec('PRAGMA busy_timeout = 5000');
   client.exec('PRAGMA journal_mode = WAL');
   client.exec('PRAGMA foreign_keys = ON');
-  client.exec('PRAGMA busy_timeout = 5000');
   const db = drizzle({ client });
   // Idempotent: records applied migrations in __drizzle_migrations and applies only new ones.
   migrate(db, { migrationsFolder: migrations });

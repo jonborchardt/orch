@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -24,7 +25,7 @@ import {
   transitionJob,
 } from '../src/storage/jobs.ts';
 import type { Job } from '../src/storage/schema.ts';
-import { type TempStore, tempStore, writeArtifact } from './helpers.ts';
+import { fixture, type TempStore, tempStore, writeArtifact } from './helpers.ts';
 
 const input = (title = 'T', repo = 'github.com/o/r') => ({
   title,
@@ -174,13 +175,50 @@ describe('jobs: artifacts', () => {
     expect(() => registerArtifact(store, id, 'spec.md', { token })).toThrow(/not found/);
     writeArtifact(dir, 'spec.md', '');
     expect(() => registerArtifact(store, id, 'spec.md', { token })).toThrow(/empty/);
+    writeArtifact(dir, 'spec.md', '# Spec\n\n## Goal\nonly a goal\n');
+    expect(() => registerArtifact(store, id, 'spec.md', { token })).toThrow(
+      /missing required section\(s\): "Scope", "Acceptance criteria"/,
+    );
     writeArtifact(dir, 'spec.md');
     const a = registerArtifact(store, id, 'spec.md', { token });
     expect(a.path).toBe('spec.md');
     expect(a.stage).toBe('spec');
-    // Re-registering is idempotent.
+    expect(a.sha256).toMatch(/^[0-9a-f]{64}$/);
+    // Re-registering identical content is idempotent.
     expect(registerArtifact(store, id, 'spec.md', { token }).id).toBe(a.id);
     expect(jobDetail(store, id).artifacts).toHaveLength(1);
+    // Changed content needs an explicit --replace and is recorded as a replacement.
+    writeArtifact(dir, 'spec.md', fixture('spec.md') + '\nmore\n');
+    expect(() => registerArtifact(store, id, 'spec.md', { token })).toThrow(/--replace/);
+    const b = registerArtifact(store, id, 'spec.md', { token, replace: true });
+    expect(b.id).toBe(a.id);
+    expect(b.sha256).not.toBe(a.sha256);
+    const types = listEvents(store.db, id).map((e) => e.type);
+    expect(types.filter((t) => t === 'artifact.replaced')).toHaveLength(1);
+    expect(jobDetail(store, id).artifacts).toHaveLength(1);
+  });
+
+  it('rejects absolute paths and traversal from nested directories', () => {
+    const { id, token, dir } = setup();
+    writeArtifact(dir, 'spec.md');
+    expect(() => registerArtifact(store, id, join(dir, 'spec.md'), { token })).toThrow(/relative/);
+    expect(() => registerArtifact(store, id, 'round-1/../../x.md', { token })).toThrow(/inside/);
+  });
+
+  it('review and decision files must carry their marker lines', () => {
+    const { id, token, dir } = setup();
+    writeArtifact(dir, 'decision.md', '# D\n\n## Rationale\nr\n');
+    expect(() => registerArtifact(store, id, 'decision.md', { token })).toThrow(/DECISION/);
+    writeArtifact(dir, 'decision.md', '# D\n\n## Rationale\nr\n\nDECISION: MAYBE\n');
+    expect(() => registerArtifact(store, id, 'decision.md', { token })).toThrow(/one of APPROVE/);
+    writeArtifact(dir, 'decision.md', fixture('decision.md', 'ESCALATE'));
+    expect(registerArtifact(store, id, 'decision.md', { token }).marker).toBe('escalate');
+    writeArtifact(dir, 'round-1/consolidated.md', fixture('round-1/consolidated.md', 'many'));
+    expect(() => registerArtifact(store, id, 'round-1/consolidated.md', { token })).toThrow(
+      /BLOCKING must match/,
+    );
+    writeArtifact(dir, 'notes/evidence.md', 'free-form evidence\n');
+    expect(registerArtifact(store, id, 'notes/evidence.md', { token }).marker).toBeNull();
   });
 
   it('normalizes nested paths to forward slashes', () => {
@@ -213,8 +251,12 @@ describe('jobs: full workflow through storage', () => {
     writeArtifact(dir, 'round-1/consolidated.md');
     registerArtifact(store, id, 'round-1/consolidated.md', { token });
     expect(() => go(id, token, 'complete')).toThrow(/pending: code, security/);
-    writeArtifact(dir, 'round-1/review-code.md');
+    writeArtifact(dir, 'round-1/review-code.md', fixture('round-1/review-code.md', 'CHANGES'));
     writeArtifact(dir, 'round-1/review-security.md');
+    // The recorded verdict must agree with the file's VERDICT line.
+    expect(() =>
+      recordReview(store, id, { token, reviewer: 'code', verdict: 'pass', summary: 'nit' }),
+    ).toThrow(/does not match/);
     recordReview(store, id, { token, reviewer: 'code', verdict: 'changes', summary: 'nit' });
     recordReview(store, id, { token, reviewer: 'security', verdict: 'pass' });
     const back = go(id, token, 'complete');
@@ -272,9 +314,9 @@ describe('jobs: full workflow through storage', () => {
     advance(id, token, dir, 'spec.md');
     advance(id, token, dir, 'build.md');
     go(id, token, 'start');
-    writeArtifact(dir, 'round-1/review-code.md');
+    writeArtifact(dir, 'round-1/review-code.md', fixture('round-1/review-code.md', 'CHANGES'));
     recordReview(store, id, { token, reviewer: 'code', verdict: 'changes' });
-    writeArtifact(dir, 'round-1/consolidated.md');
+    writeArtifact(dir, 'round-1/consolidated.md', fixture('round-1/consolidated.md', '2'));
     registerArtifact(store, id, 'round-1/consolidated.md', { token });
     const blocked = go(id, token, 'complete');
     expect([blocked.stage, blocked.status, blocked.returnStage]).toEqual([

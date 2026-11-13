@@ -1,20 +1,30 @@
-import { statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
+import { checkArtifact } from '../core/artifact-rules.ts';
 import { ValidationError } from '../core/errors.ts';
 import type { Db } from './client.ts';
 import { artifacts, type Artifact } from './schema.ts';
 
+export interface CheckedArtifact {
+  /** Normalized relative path, forward slashes. */
+  path: string;
+  bytes: number;
+  sha256: string;
+  marker: string | null;
+}
+
 /**
- * Phase 2 validation: the file must live inside the job artifact directory, exist, be a
- * non-empty Markdown file. Returns the normalized relative path (forward slashes).
+ * The file must live inside the job artifact directory (no traversal, no absolute paths), be a
+ * non-empty Markdown file, and satisfy the structure rule for its path (core/artifact-rules.ts).
  */
-export function validateArtifact(
-  artifactDir: string,
-  relPath: string,
-): { path: string; bytes: number } {
+export function validateArtifact(artifactDir: string, relPath: string): CheckedArtifact {
+  if (path.isAbsolute(relPath) || /^[a-zA-Z]:/.test(relPath)) {
+    throw new ValidationError(`Artifact path must be relative to ${artifactDir}: ${relPath}`);
+  }
   const abs = path.resolve(artifactDir, relPath);
   const rel = path.relative(artifactDir, abs);
   if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
@@ -29,7 +39,23 @@ export function validateArtifact(
   }
   if (!st.isFile()) throw new ValidationError(`Artifact is not a file: ${abs}`);
   if (st.size === 0) throw new ValidationError(`Artifact is empty: ${abs}`);
-  return { path: rel.split(path.sep).join('/'), bytes: st.size };
+  const normalized = rel.split(path.sep).join('/');
+  const content = readFileSync(abs, 'utf8');
+  const marker = checkArtifact(normalized, content);
+  return {
+    path: normalized,
+    bytes: st.size,
+    sha256: createHash('sha256').update(content).digest('hex'),
+    marker,
+  };
+}
+
+export function findArtifact(db: Db, jobId: string, relPath: string): Artifact | undefined {
+  return db
+    .select()
+    .from(artifacts)
+    .where(and(eq(artifacts.jobId, jobId), eq(artifacts.path, relPath)))
+    .get();
 }
 
 /** Insert or refresh (same path registered twice is idempotent). */
@@ -39,7 +65,14 @@ export function upsertArtifact(tx: Db, row: Omit<Artifact, 'id'>): Artifact {
     .values(row)
     .onConflictDoUpdate({
       target: [artifacts.jobId, artifacts.path],
-      set: { bytes: row.bytes, stage: row.stage, round: row.round, createdAt: row.createdAt },
+      set: {
+        bytes: row.bytes,
+        sha256: row.sha256,
+        marker: row.marker,
+        stage: row.stage,
+        round: row.round,
+        createdAt: row.createdAt,
+      },
     })
     .returning()
     .get();

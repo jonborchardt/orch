@@ -4,7 +4,7 @@
  */
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
-import type { PrState, Stage, Status, Verdict } from '../core/workflow.ts';
+import type { CiStatus, PrState, Stage, Status, Verdict } from '../core/workflow.ts';
 
 export const jobs = sqliteTable(
   'jobs',
@@ -34,13 +34,22 @@ export const jobs = sqliteTable(
     leaseMinutes: integer().notNull().default(30),
     prUrl: text(),
     prState: text().$type<PrState>(),
+    /** Last observed CI rollup for the PR; null until `orch gh pr status` has run. */
+    ciStatus: text().$type<CiStatus>(),
+    ciCheckedAt: text(),
     /** Incremented on every mutation; optimistic concurrency check for callers. */
     revision: integer().notNull().default(1),
     createdAt: text().notNull(),
     updatedAt: text().notNull(),
     completedAt: text(),
   },
-  (t) => [index('jobs_repo_idx').on(t.repo), index('jobs_status_idx').on(t.status)],
+  (t) => [
+    index('jobs_repo_idx').on(t.repo),
+    index('jobs_status_idx').on(t.status),
+    // A managed worktree and a branch within a repository belong to at most one job.
+    uniqueIndex('jobs_worktree_idx').on(t.worktreePath),
+    uniqueIndex('jobs_repo_branch_idx').on(t.repo, t.branch),
+  ],
 );
 
 export const events = sqliteTable(
@@ -70,6 +79,10 @@ export const artifacts = sqliteTable(
     /** Path relative to the job's artifact directory, forward slashes. */
     path: text().notNull(),
     bytes: integer().notNull(),
+    /** Content hash; replacing a registered artifact with different content needs --replace. */
+    sha256: text(),
+    /** Value parsed from the content by core/artifact-rules.ts (e.g. review verdict, decision). */
+    marker: text(),
     createdAt: text().notNull(),
   },
   (t) => [uniqueIndex('artifacts_job_path_idx').on(t.jobId, t.path)],

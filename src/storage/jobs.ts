@@ -20,6 +20,7 @@ import {
 import { jobArtifactDir } from '../core/paths.ts';
 import {
   type Action,
+  type CiStatus,
   now,
   type PrState,
   reviewArtifact,
@@ -29,7 +30,7 @@ import {
   type Verdict,
   VERDICTS,
 } from '../core/workflow.ts';
-import { listArtifacts, upsertArtifact, validateArtifact } from './artifacts.ts';
+import { findArtifact, listArtifacts, upsertArtifact, validateArtifact } from './artifacts.ts';
 import type { Db, Store } from './client.ts';
 import { appendEvent, listEvents } from './events.ts';
 import { type Artifact, type Event, type Job, jobs, type Review, reviews } from './schema.ts';
@@ -227,24 +228,123 @@ export function resumeJob(
   return { token, detail: jobDetail(store, id) };
 }
 
-export function registerArtifact(store: Store, id: string, relPath: string, auth: Auth): Artifact {
+export interface RegisterOptions extends Auth {
+  /** Required to replace an already registered artifact whose content changed. */
+  replace?: boolean | undefined;
+}
+
+/**
+ * Validate and register an artifact. Re-registering identical content is a no-op; changed
+ * content is refused unless `replace` is set, and then recorded as `artifact.replaced` with the
+ * previous hash so the history of what was accepted is preserved in the event log.
+ */
+export function registerArtifact(
+  store: Store,
+  id: string,
+  relPath: string,
+  opts: RegisterOptions,
+): Artifact {
   let artifact!: Artifact;
-  mutate(store, id, auth, (job, tx, ts) => {
+  mutate(store, id, opts, (job, tx, ts) => {
     const checked = validateArtifact(jobArtifactDir(id, store.paths), relPath);
+    const existing = findArtifact(tx, id, checked.path);
+    if (existing && existing.sha256 !== null && existing.sha256 !== checked.sha256) {
+      if (!opts.replace) {
+        throw new ValidationError(
+          `${checked.path} is already registered with different content; pass --replace to replace it.`,
+        );
+      }
+    }
+    const replaced = existing !== undefined && existing.sha256 !== checked.sha256;
     artifact = upsertArtifact(tx, {
       jobId: id,
       stage: job.stage,
       round: job.stage === 'review' ? job.round : null,
       path: checked.path,
       bytes: checked.bytes,
+      sha256: checked.sha256,
+      marker: checked.marker,
       createdAt: ts,
     });
+    const payload = { path: checked.path, stage: job.stage, sha256: checked.sha256 };
     return {
       patch: {},
-      events: [{ type: 'artifact.registered', payload: { path: checked.path, stage: job.stage } }],
+      events: [
+        replaced
+          ? { type: 'artifact.replaced', payload: { ...payload, previousSha256: existing.sha256 } }
+          : { type: 'artifact.registered', payload },
+      ],
     };
   });
   return artifact;
+}
+
+export interface WorktreeInput extends Auth {
+  path: string;
+  branch: string;
+  /** `created` for a managed worktree, `adopted` for an existing directory. */
+  how: 'created' | 'adopted';
+  /** Current clone the worktree was made from, when it differs from the recorded one. */
+  repoPath?: string | undefined;
+}
+
+/** Record a job's worktree and branch. The unique indexes refuse a path or branch in use. */
+export function setWorktree(store: Store, id: string, input: WorktreeInput): Job {
+  return mutate(store, id, input, (job, tx) => {
+    const other = tx
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.worktreePath, input.path), eq(jobs.repo, job.repo)))
+      .get();
+    if (other && other.id !== id) {
+      throw new ValidationError(`Worktree ${input.path} is already assigned to job ${other.id}.`);
+    }
+    const branchOwner = tx
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.repo, job.repo), eq(jobs.branch, input.branch)))
+      .get();
+    if (branchOwner && branchOwner.id !== id) {
+      throw new ValidationError(
+        `Branch ${input.branch} already belongs to job ${branchOwner.id} in ${job.repo}.`,
+      );
+    }
+    const patch: Partial<Job> = { worktreePath: input.path, branch: input.branch };
+    if (input.repoPath) patch.repoPath = input.repoPath;
+    return {
+      patch,
+      events: [
+        { type: `worktree.${input.how}`, payload: { path: input.path, branch: input.branch } },
+      ],
+    };
+  });
+}
+
+/** Forget a worktree after it was removed from disk. The branch stays recorded. */
+export function clearWorktree(store: Store, id: string, auth: Auth, reason: string): Job {
+  return mutate(store, id, auth, (job) => ({
+    patch: { worktreePath: null },
+    events: [{ type: 'worktree.removed', payload: { path: job.worktreePath, reason } }],
+  }));
+}
+
+/** Record the latest observed PR state and CI rollup (from `orch gh pr status`). */
+export function recordCi(
+  store: Store,
+  id: string,
+  input: Auth & { ciStatus: CiStatus; prState?: PrState | undefined },
+): Job {
+  return mutate(store, id, input, (job, _tx, ts) => {
+    if (!job.prUrl) throw new ValidationError('No PR recorded for this job.');
+    const patch: Partial<Job> = { ciStatus: input.ciStatus, ciCheckedAt: ts };
+    if (input.prState) patch.prState = input.prState;
+    return {
+      patch,
+      events: [
+        { type: 'ci.observed', payload: { ciStatus: input.ciStatus, prState: input.prState } },
+      ],
+    };
+  });
 }
 
 export interface ReviewInput extends Auth {
@@ -272,12 +372,19 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
     if (input.verdict) {
       const rel = input.artifact ?? reviewArtifact(job.round, input.reviewer);
       const checked = validateArtifact(jobArtifactDir(id, store.paths), rel);
+      if (checked.marker !== null && checked.marker !== input.verdict) {
+        throw new ValidationError(
+          `Verdict ${input.verdict} does not match ${checked.path}, which says VERDICT: ${checked.marker.toUpperCase()}.`,
+        );
+      }
       artifactId = upsertArtifact(tx, {
         jobId: id,
         stage: 'review',
         round: job.round,
         path: checked.path,
         bytes: checked.bytes,
+        sha256: checked.sha256,
+        marker: checked.marker,
         createdAt: ts,
       }).id;
     }
@@ -332,6 +439,30 @@ export function recordPr(
       events: [{ type: 'pr.recorded', payload: { url: input.url, state: input.state } }],
     };
   });
+}
+
+/** Ownership and revision check without a write, for operations that act outside the DB first. */
+export function authorize(store: Store, id: string, auth: Auth): Job {
+  const job = getJob(store.db, id);
+  assertOwner(job, auth.token);
+  if (auth.expectRevision !== undefined && auth.expectRevision !== job.revision) {
+    throw new OwnershipError(
+      `Stale revision: expected ${String(auth.expectRevision)}, job is at ${String(job.revision)}.`,
+    );
+  }
+  return job;
+}
+
+/** Append an informational event (worktree integrated, branch pushed) as the owner. */
+export function recordEvent(
+  store: Store,
+  id: string,
+  auth: Auth,
+  type: string,
+  payload: Record<string, unknown>,
+): Job {
+  if (!/^[a-z]+\.[a-z-]+$/.test(type)) throw new ValidationError(`Bad event type: ${type}`);
+  return mutate(store, id, auth, () => ({ patch: {}, events: [{ type, payload }] }));
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -57,6 +57,7 @@ export interface JobOptions {
   status?: string;
   stage?: string;
   limit?: string;
+  replace?: boolean;
 }
 
 export const JOB_HELP = `Usage: orch job <command> [options]
@@ -71,7 +72,7 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   resume <id> --session <name> [--to <stage>] [--force]
   transition <id> <${ACTIONS.join('|')}> --token <t> [--to <stage>] [--reason <r>]
             [--revision <n>]
-  artifact add <id> <relative-path> --token <t>
+  artifact add <id> <relative-path> --token <t> [--replace]
   review record <id> --reviewer <name> [--verdict pass|changes] [--artifact <path>]
             [--summary <s>] --token <t>
   pr <id> --url <url> --state <${PR_STATES.join('|')}> --token <t>
@@ -194,7 +195,10 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
     case 'artifact': {
       if (rest[0] !== 'add') throw new UsageError('Usage: orch job artifact add <id> <path>');
       const jobId = need(rest[1], '<id>');
-      const artifact = registerArtifact(store, jobId, need(rest[2], '<relative-path>'), auth);
+      const artifact = registerArtifact(store, jobId, need(rest[2], '<relative-path>'), {
+        ...auth,
+        replace: o.replace,
+      });
       return summary(getJob(store.db, jobId), store, { artifact });
     }
     case 'review': {

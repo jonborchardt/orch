@@ -1,0 +1,157 @@
+/**
+ * Git worktree operations with argument arrays. These touch Git only; recording the result in
+ * the database happens in src/ops/worktree.ts.
+ */
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+
+import { ToolError } from '../core/errors.ts';
+import { baseRef, dirtyFiles, refExists, sameRepository } from './repo.ts';
+import { git, tryGit } from './run.ts';
+
+export interface Commit {
+  sha: string;
+  subject: string;
+}
+
+export interface WorktreeInfo {
+  path: string;
+  exists: boolean;
+  /** `path` is itself the top level of a working tree of the same repository. */
+  isWorktree: boolean;
+  branch: string | null;
+  head: string | null;
+  /** Files with uncommitted changes (staged, unstaged, or untracked). */
+  dirty: string[];
+  /** Ref the branch is compared against: origin/<base> when present, else the local base. */
+  baseRef: string | null;
+  ahead: number | null;
+  behind: number | null;
+  /** Commits on the branch that are not on the base, newest first. */
+  commits: Commit[];
+  /** Files changed by those commits relative to the merge base. */
+  changedFiles: string[];
+}
+
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => {
+    let r = resolve(p);
+    try {
+      r = realpathSync.native(r);
+    } catch {
+      /* keep unresolved */
+    }
+    return process.platform === 'win32' ? r.toLowerCase() : r;
+  };
+  return norm(a) === norm(b);
+}
+
+/** Read-only description of `path` as a candidate worktree of `repoRoot`. */
+export function inspectWorktree(repoRoot: string, path: string, baseBranch: string): WorktreeInfo {
+  const info: WorktreeInfo = {
+    path,
+    exists: existsSync(path),
+    isWorktree: false,
+    branch: null,
+    head: null,
+    dirty: [],
+    baseRef: null,
+    ahead: null,
+    behind: null,
+    commits: [],
+    changedFiles: [],
+  };
+  if (!info.exists) return info;
+  const top = tryGit(path, 'rev-parse', '--show-toplevel');
+  if (!top || !samePath(top, path) || !sameRepository(repoRoot, path)) return info;
+  info.isWorktree = true;
+  info.head = tryGit(path, 'rev-parse', 'HEAD') ?? null;
+  const branch = tryGit(path, 'rev-parse', '--abbrev-ref', 'HEAD');
+  info.branch = branch && branch !== 'HEAD' ? branch : null;
+  info.dirty = dirtyFiles(path);
+  const base = baseRef(repoRoot, baseBranch);
+  if (base && info.head) {
+    info.baseRef = base;
+    const counts = tryGit(path, 'rev-list', '--left-right', '--count', `${base}...HEAD`);
+    if (counts) {
+      const [behind, ahead] = counts.split(/\s+/).map(Number);
+      info.behind = behind ?? null;
+      info.ahead = ahead ?? null;
+    }
+    const log = tryGit(path, 'log', '--format=%H%x09%s', `${base}..HEAD`);
+    info.commits = log
+      ? log.split(/\r?\n/).map((l) => {
+          const [sha = '', ...rest] = l.split('\t');
+          return { sha, subject: rest.join('\t') };
+        })
+      : [];
+    const diff = tryGit(path, 'diff', '--name-only', `${base}...HEAD`);
+    info.changedFiles = diff ? diff.split(/\r?\n/) : [];
+  }
+  return info;
+}
+
+/**
+ * Create a worktree at `path` on `branch`. The branch is created from the base when it does not
+ * exist yet; an existing branch (from an earlier attempt) is checked out as is.
+ */
+export function addWorktree(
+  repoRoot: string,
+  path: string,
+  branch: string,
+  baseBranch: string,
+): void {
+  tryGit(repoRoot, 'worktree', 'prune');
+  mkdirSync(dirname(path), { recursive: true });
+  if (refExists(repoRoot, `refs/heads/${branch}`)) {
+    git(repoRoot, 'worktree', 'add', path, branch);
+    return;
+  }
+  const base = baseRef(repoRoot, baseBranch);
+  if (!base) {
+    throw new ToolError(`Base branch ${baseBranch} not found in ${repoRoot} (local or origin).`);
+  }
+  git(repoRoot, 'worktree', 'add', '-b', branch, path, base);
+}
+
+/** Remove a worktree directory and its registration. Callers check for uncommitted work first. */
+export function removeWorktree(repoRoot: string, path: string, force = false): void {
+  const args = ['worktree', 'remove', ...(force ? ['--force'] : []), path];
+  git(repoRoot, ...args);
+}
+
+export function pruneWorktrees(repoRoot: string): void {
+  tryGit(repoRoot, 'worktree', 'prune');
+}
+
+export interface MergeResult {
+  merged: boolean;
+  /** True when the branch already contained the base. */
+  upToDate: boolean;
+  head: string;
+}
+
+/**
+ * Merge `ref` into the worktree's branch. On conflict the merge is aborted, the worktree is
+ * left as it was, and a ToolError names the conflicting files.
+ */
+export function mergeInto(path: string, ref: string): MergeResult {
+  const before = git(path, 'rev-parse', 'HEAD');
+  try {
+    git(path, 'merge', '--no-edit', '--no-ff', ref);
+  } catch (err) {
+    const conflicts = tryGit(path, 'diff', '--name-only', '--diff-filter=U') ?? '';
+    tryGit(path, 'merge', '--abort');
+    const files = conflicts ? conflicts.split(/\r?\n/).join(', ') : '(unknown)';
+    throw new ToolError(
+      `Merging ${ref} conflicts in: ${files}. The merge was aborted. ${(err as Error).message}`,
+    );
+  }
+  const after = git(path, 'rev-parse', 'HEAD');
+  return { merged: after !== before, upToDate: after === before, head: after };
+}
+
+/** Commits reachable from `ref` and merged into the base. */
+export function containsRef(path: string, ref: string, target: string): boolean {
+  return tryGit(path, 'merge-base', '--is-ancestor', ref, target) !== undefined;
+}

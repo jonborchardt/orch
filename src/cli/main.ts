@@ -4,15 +4,19 @@ import { parseArgs } from 'node:util';
 import { packageInfo } from '../core/paths.ts';
 import { openStore } from '../storage/client.ts';
 import { formatChecks, runDoctor } from './doctor.ts';
+import { GH_HELP, runGh } from './gh.ts';
 import { runInstall } from './install.ts';
 import { JOB_HELP, runJob } from './job.ts';
 import { print, printError, UsageError } from './output.ts';
+import { runWorktree, WORKTREE_HELP } from './worktree.ts';
 
 const HELP = `Usage: orch [--json] <command>
 
 Commands:
   doctor                 Check the local environment (Node, Git, Claude Code, paths)
   job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
+  worktree <subcommand>  Create, inspect, adopt, remove a job's Git worktree (orch worktree --help)
+  gh <subcommand>        GitHub via gh: issue, push, draft PR, CI status (orch gh --help)
   install [--dry-run]    Link skills/ and agents/ into ~/.claude (--claude-dir, --source)
 
 Options:
@@ -60,6 +64,10 @@ export function main(argv: string[]): number {
         status: str,
         stage: str,
         limit: str,
+        replace: bool,
+        // worktree / gh
+        path: str,
+        'body-file': str,
         // install
         'dry-run': bool,
         'claude-dir': str,
@@ -79,7 +87,8 @@ export function main(argv: string[]): number {
     }
     const [command, ...rest] = positionals;
     if (o.help || command === undefined) {
-      console.log(command === 'job' ? JOB_HELP : HELP);
+      const helps: Record<string, string> = { job: JOB_HELP, worktree: WORKTREE_HELP, gh: GH_HELP };
+      console.log((command && helps[command]) ?? HELP);
       return o.help ? 0 : 2;
     }
 
@@ -93,6 +102,24 @@ export function main(argv: string[]): number {
         const store = openStore();
         try {
           print(runJob(store, rest, o), json);
+        } finally {
+          store.close();
+        }
+        return 0;
+      }
+      case 'worktree': {
+        const store = openStore();
+        try {
+          print(runWorktree(store, rest, o), json);
+        } finally {
+          store.close();
+        }
+        return 0;
+      }
+      case 'gh': {
+        const store = openStore();
+        try {
+          print(runGh(store, rest, o), json);
         } finally {
           store.close();
         }

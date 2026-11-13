@@ -1,27 +1,16 @@
 /** Read-only Git queries. Direct execution with argument arrays; no shell. */
-import { execFileSync } from 'node:child_process';
-import { basename } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { findProjectRoot } from '../core/paths.ts';
+import { git, tryGit } from './run.ts';
 
 export interface RepoInfo {
   root: string;
   /** Stable identity shared by all clones: normalized origin URL, else the directory name. */
   identity: string;
   currentBranch: string;
-}
-
-function git(cwd: string, ...args: string[]): string | undefined {
-  try {
-    return execFileSync('git', args, {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch {
-    return undefined;
-  }
 }
 
 /** e.g. git@github.com:org/repo.git and https://github.com/org/repo -> github.com/org/repo */
@@ -39,10 +28,53 @@ export function describeRepo(cwd: string): RepoInfo {
   const root = findProjectRoot(cwd);
   if (!root)
     throw new ValidationError(`${cwd} is not inside a Git repository (use --repo <path>).`);
-  const remote = git(root, 'remote', 'get-url', 'origin');
+  // The configured URL, not `remote get-url`, which applies url.<base>.insteadOf rewrites.
+  const remote = tryGit(root, 'config', '--get', 'remote.origin.url');
   return {
     root,
     identity: remote ? normalizeRemote(remote) : basename(root).toLowerCase(),
-    currentBranch: git(root, 'rev-parse', '--abbrev-ref', 'HEAD') ?? 'HEAD',
+    currentBranch: tryGit(root, 'rev-parse', '--abbrev-ref', 'HEAD') ?? 'HEAD',
   };
+}
+
+/** The shared `.git` directory of a checkout or worktree, resolved to an absolute real path. */
+export function commonGitDir(cwd: string): string {
+  const dir = resolve(cwd, git(cwd, 'rev-parse', '--git-common-dir'));
+  let real: string;
+  try {
+    real = realpathSync.native(dir);
+  } catch {
+    real = dir;
+  }
+  return process.platform === 'win32' ? real.toLowerCase() : real;
+}
+
+/** True when `dir` is a working tree (main checkout or linked worktree) of the same repository. */
+export function sameRepository(repoRoot: string, dir: string): boolean {
+  try {
+    return commonGitDir(repoRoot) === commonGitDir(dir);
+  } catch {
+    return false;
+  }
+}
+
+/** Paths with uncommitted changes (staged, unstaged, untracked). Empty when clean. */
+export function dirtyFiles(cwd: string): string[] {
+  const out = git(cwd, 'status', '--porcelain', '--untracked-files=all');
+  return out ? out.split(/\r?\n/).map((l) => l.slice(3)) : [];
+}
+
+export function remoteExists(repoRoot: string, name = 'origin'): boolean {
+  return tryGit(repoRoot, 'remote', 'get-url', name) !== undefined;
+}
+
+export function refExists(repoRoot: string, ref: string): boolean {
+  return tryGit(repoRoot, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`) !== undefined;
+}
+
+/** `origin/<branch>` when it exists, else the local branch, else undefined. */
+export function baseRef(repoRoot: string, branch: string): string | undefined {
+  if (refExists(repoRoot, `refs/remotes/origin/${branch}`)) return `origin/${branch}`;
+  if (refExists(repoRoot, `refs/heads/${branch}`)) return branch;
+  return undefined;
 }

@@ -27,6 +27,34 @@ export function whichSync(name: string, env: NodeJS.ProcessEnv = process.env): s
   return undefined;
 }
 
+export interface ToolResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Run a native executable with an argument array and return its exit status and output.
+ * Unlike `runTool` this never goes through cmd.exe, so arbitrary arguments (titles, bodies,
+ * paths with spaces) are safe. Returns status null with the error text when it cannot start.
+ */
+export function spawnTool(
+  exe: string,
+  args: readonly string[],
+  opts: { cwd?: string | undefined; timeout?: number | undefined; env?: NodeJS.ProcessEnv } = {},
+): ToolResult {
+  const r = spawnSync(exe, args, {
+    cwd: opts.cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: opts.timeout ?? 120_000,
+    env: opts.env ?? process.env,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.error) return { status: null, stdout: '', stderr: r.error.message };
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
 /**
  * Run a tool with an argument array and return trimmed stdout, or undefined on any failure.
  * Windows `.cmd`/`.bat` shims (npm-installed CLIs) can only be started by cmd.exe, so those are

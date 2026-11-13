@@ -38,23 +38,86 @@ export function tempStore(): TempStore {
   };
 }
 
-/** Write a non-empty Markdown artifact file relative to `dir`. */
-export function writeArtifact(dir: string, rel: string, body = '# ok\n'): string {
+/**
+ * Minimal content satisfying core/artifact-rules.ts for a workflow artifact path. `marker`
+ * overrides the default verdict / decision / blocking count.
+ */
+export function fixture(rel: string, marker?: string): string {
+  const p = rel.split('\\').join('/');
+  if (p === 'spec.md') {
+    return '# Spec\n\n## Goal\nG\n\n## Scope\nS\n\n## Acceptance criteria\n- [ ] a\n';
+  }
+  if (p === 'build.md') return '# Build\n\n## Summary\nS\n\n## Validation\nnpm test: pass\n';
+  if (/^round-\d+\/review-/.test(p)) {
+    return `# Review\n\n## Findings\nnone\n\nVERDICT: ${marker ?? 'PASS'}\n`;
+  }
+  if (/^round-\d+\/consolidated\.md$/.test(p)) {
+    return `# Consolidated\n\n## Findings\nnone\n\nBLOCKING: ${marker ?? '0'}\n`;
+  }
+  if (p === 'decision.md') {
+    return `# Decision\n\n## Rationale\nok\n\nDECISION: ${marker ?? 'APPROVE'}\n`;
+  }
+  if (p === 'pr.md') return '# PR\n\n## Validation\nok\n\n## Known limitations\nnone\n';
+  return '# ok\n';
+}
+
+/** Write a rule-compliant Markdown artifact file relative to `dir` (or the given body). */
+export function writeArtifact(dir: string, rel: string, body = fixture(rel)): string {
   const abs = join(dir, rel);
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, body);
   return abs;
 }
 
+/** Run git in `cwd`, returning trimmed stdout. */
+export function gitIn(cwd: string, ...args: string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  }).trim();
+}
+
 /** Initialize a Git repository with one commit on `main` and an optional origin URL. */
-export function makeRepo(origin?: string): string {
-  const dir = tempDir('orch-repo-');
-  const git = (...args: string[]) =>
-    execFileSync('git', args, { cwd: dir, stdio: 'ignore', encoding: 'utf8' });
+export function makeRepo(origin?: string, dir = tempDir('orch-repo-')): string {
+  const git = (...args: string[]) => gitIn(dir, ...args);
   git('init', '-q', '-b', 'main');
-  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+  git('config', 'user.email', 't@t');
+  git('config', 'user.name', 't');
+  git('commit', '-q', '--allow-empty', '-m', 'init');
   if (origin) git('remote', 'add', 'origin', origin);
   return dir;
+}
+
+/** Commit a file in `repo` (or a worktree) and return the new HEAD sha. */
+export function commitFile(
+  repo: string,
+  rel: string,
+  body: string,
+  message = `add ${rel}`,
+): string {
+  const abs = join(repo, rel);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, body);
+  gitIn(repo, 'add', '--', rel);
+  gitIn(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', message);
+  return gitIn(repo, 'rev-parse', 'HEAD');
+}
+
+/**
+ * A clone whose `origin` URL is `originUrl` (so the repository identity looks like GitHub) while
+ * fetches and pushes actually go to a local bare repository via `url.<bare>.insteadOf`.
+ */
+export function makeRepoWithOrigin(
+  originUrl = 'git@github.com:acme/alpha.git',
+  dir = tempDir('orch-repo-'),
+): { clone: string; bare: string } {
+  const bare = tempDir('orch-bare-');
+  gitIn(bare, 'init', '-q', '--bare', '-b', 'main');
+  const clone = makeRepo(originUrl, dir);
+  gitIn(clone, 'config', `url.${bare.split('\\').join('/')}.insteadOf`, originUrl);
+  gitIn(clone, 'push', '-q', '-u', 'origin', 'main');
+  return { clone, bare };
 }
 
 const MAIN = join(installRoot(), 'src', 'cli', 'main.ts');

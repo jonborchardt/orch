@@ -36,6 +36,10 @@ export type Verdict = (typeof VERDICTS)[number];
 export const PR_STATES = ['draft', 'ready', 'merged'] as const;
 export type PrState = (typeof PR_STATES)[number];
 
+/** Rollup of a PR's checks: `none` when the PR has no checks configured. */
+export const CI_STATUSES = ['pending', 'passing', 'failing', 'none'] as const;
+export type CiStatus = (typeof CI_STATUSES)[number];
+
 export const ACTIONS = ['start', 'complete', 'fail', 'escalate', 'resume', 'cancel'] as const;
 export type Action = (typeof ACTIONS)[number];
 
@@ -128,9 +132,8 @@ export function transition(
       // Reviewer completeness is reported before the consolidated artifact, since it comes first.
       if (stage === 'review') verifyReviewers(currentReviews(job, ctx.reviews));
       const required = requiredArtifact(stage, job.round);
-      if (required && !ctx.artifacts.some((a) => a.path === required)) {
-        reject(`missing required artifact ${required}`);
-      }
+      const artifact = required ? ctx.artifacts.find((a) => a.path === required) : undefined;
+      if (required && !artifact) reject(`missing required artifact ${required}`);
       const completed = { type: 'stage.completed', payload: { stage, round: job.round } };
       switch (stage) {
         case 'spec':
@@ -142,8 +145,15 @@ export function transition(
           };
         case 'review':
           return completeReview(job, ctx.reviews, completed);
-        case 'approve':
+        case 'approve': {
+          // decision.md carries DECISION: APPROVE | ESCALATE; only an approval advances.
+          if (artifact?.marker !== 'approve') {
+            reject(
+              `decision.md says ${(artifact?.marker ?? 'nothing').toUpperCase()}; use escalate`,
+            );
+          }
           return { patch: { stage: 'pr', status: 'pending' }, events: [completed] };
+        }
         case 'pr': {
           if (!job.prUrl) reject('record the PR first (orch job pr)');
           return {

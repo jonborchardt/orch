@@ -23,6 +23,13 @@ export class ValidationError extends OrchError {
   }
 }
 
+/** An external tool (git, gh) failed or refused; its stderr is in the message. */
+export class ToolError extends OrchError {
+  constructor(message: string) {
+    super(message, 1);
+  }
+}
+
 export class NotFoundError extends OrchError {
   constructor(message: string) {
     super(message, 3);
