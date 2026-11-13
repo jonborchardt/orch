@@ -6,7 +6,8 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { MergeConflictError, ToolError } from '../core/errors.ts';
-import { baseRef, canonicalPath, dirtyFiles, refExists, sameRepository } from './repo.ts';
+import { canonicalPath } from '../core/paths.ts';
+import { baseRef, dirtyFiles, refExists, sameRepository } from './repo.ts';
 import { git, tryGit } from './run.ts';
 
 export interface Commit {

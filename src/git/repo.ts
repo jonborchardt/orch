@@ -1,10 +1,9 @@
 /** Read-only Git queries. Direct execution with argument arrays; no shell. */
-import { realpathSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
 import { ToolError, ValidationError } from '../core/errors.ts';
 import { spawnTool } from '../core/exec.ts';
-import { findProjectRoot } from '../core/paths.ts';
+import { canonicalPath, findProjectRoot } from '../core/paths.ts';
 import { git, tryGit } from './run.ts';
 
 export interface RepoInfo {
@@ -36,17 +35,6 @@ export function describeRepo(cwd: string): RepoInfo {
     identity: remote ? normalizeRemote(remote) : basename(root).toLowerCase(),
     currentBranch: tryGit(root, 'rev-parse', '--abbrev-ref', 'HEAD') ?? 'HEAD',
   };
-}
-
-/** Absolute real path, lower-cased on Windows, so two spellings of one directory compare equal. */
-export function canonicalPath(p: string): string {
-  let real = resolve(p);
-  try {
-    real = realpathSync.native(real);
-  } catch {
-    /* keep unresolved */
-  }
-  return process.platform === 'win32' ? real.toLowerCase() : real;
 }
 
 /** The shared `.git` directory of a checkout or worktree, resolved to an absolute real path. */

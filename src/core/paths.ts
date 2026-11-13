@@ -6,7 +6,7 @@
  * - Project root: the Git repository the CLI was invoked from, if any.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +55,21 @@ export function runtimePaths(
     data = join(env['XDG_DATA_HOME'] ?? join(home, '.local', 'share'), APP_NAME);
   }
   return { config, data, logs: join(data, 'logs'), tmp: join(data, 'tmp') };
+}
+
+/**
+ * Absolute real path, lower-cased on Windows, so two spellings of one location compare equal
+ * (`e:\x` versus `E:\x`, a junction versus its target). A path that does not exist is only
+ * resolved and normalized.
+ */
+export function canonicalPath(p: string): string {
+  let real = resolve(p);
+  try {
+    real = realpathSync.native(real);
+  } catch {
+    /* keep unresolved */
+  }
+  return process.platform === 'win32' ? real.toLowerCase() : real;
 }
 
 /** Root of this package checkout/installation (parent of `src/` or `dist/`). */

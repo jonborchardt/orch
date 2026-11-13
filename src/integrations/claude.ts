@@ -22,6 +22,8 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
+import { canonicalPath } from '../core/paths.ts';
+
 export type LinkState = 'linked' | 'missing' | 'stale' | 'conflict' | 'error';
 export type LinkMethod = 'junction' | 'symlink' | 'hardlink' | 'copy';
 
@@ -65,7 +67,9 @@ function inspect(entry: Omit<LinkEntry, 'state'>): LinkEntry {
     } catch {
       real = undefined;
     }
-    if (real !== undefined && real === realpathSync(entry.source)) {
+    // Canonical comparison: the install root may be spelled differently from one invocation to
+    // the next (drive-letter case on Windows, a junction versus its target).
+    if (real !== undefined && canonicalPath(real) === canonicalPath(entry.source)) {
       return { ...entry, state: 'linked', method: entry.kind === 'skill' ? 'junction' : 'symlink' };
     }
     return { ...entry, state: 'conflict', detail: `existing link points to ${real ?? '(broken)'}` };
@@ -75,9 +79,10 @@ function inspect(entry: Omit<LinkEntry, 'state'>): LinkEntry {
       return { ...entry, state: 'linked', method: 'hardlink' };
     const content = readFileSync(entry.target, 'utf8');
     const marker = COPY_MARKER.exec(content);
-    if (marker?.[1] === entry.source) {
-      const fresh = withMarker(readFileSync(entry.source, 'utf8'), entry.source);
-      return content === fresh
+    if (marker?.[1] !== undefined && canonicalPath(marker[1]) === canonicalPath(entry.source)) {
+      // Compare bodies, not the whole file: the trailer records whichever spelling wrote it.
+      const body = (s: string) => s.replace(COPY_MARKER, '');
+      return body(content) === body(withMarker(readFileSync(entry.source, 'utf8'), entry.source))
         ? { ...entry, state: 'linked', method: 'copy' }
         : { ...entry, state: 'stale', method: 'copy', detail: 'copy differs from source' };
     }
@@ -131,6 +136,11 @@ export function planInstall(sourceRoot: string, claudeDir: string): LinkEntry[] 
 export type AgentMethod = Exclude<LinkMethod, 'junction'>;
 export const AGENT_METHODS: readonly AgentMethod[] = ['symlink', 'hardlink', 'copy'];
 
+/** The entry without the state it had before linking (a stale copy's `detail` must not linger). */
+function identity(entry: LinkEntry): Omit<LinkEntry, 'state'> {
+  return { kind: entry.kind, name: entry.name, source: entry.source, target: entry.target };
+}
+
 function linkAgent(entry: LinkEntry, methods: readonly AgentMethod[]): LinkEntry {
   const errors: string[] = [];
   for (const method of methods) {
@@ -149,7 +159,7 @@ function linkAgent(entry: LinkEntry, methods: readonly AgentMethod[]): LinkEntry
           writeFileSync(entry.target, withMarker(readFileSync(entry.source, 'utf8'), entry.source));
           break;
       }
-      return { ...entry, state: 'linked', method };
+      return { ...identity(entry), state: 'linked', method };
     } catch (err) {
       errors.push(`${method}: ${(err as Error).message}`);
     }
@@ -167,7 +177,7 @@ function link(entry: LinkEntry, methods: readonly AgentMethod[]): LinkEntry {
     try {
       // 'junction' needs no privilege on Windows and is ignored (plain symlink) elsewhere.
       symlinkSync(entry.source, entry.target, 'junction');
-      return { ...entry, state: 'linked', method: 'junction' };
+      return { ...identity(entry), state: 'linked', method: 'junction' };
     } catch (err) {
       return { ...entry, state: 'error', detail: (err as Error).message };
     }

@@ -4,7 +4,9 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -113,7 +115,8 @@ describe('orch install', () => {
     expect(dry.entries[1]?.state).toBe('stale');
     expect(dry.problems).toBe(false);
     const refreshed = runInstall({ source, 'claude-dir': claude });
-    expect(refreshed.entries[1]?.state).toBe('linked');
+    expect(refreshed.entries[1]).toMatchObject({ state: 'linked', method: 'copy' });
+    expect(refreshed.entries[1]?.detail).toBeUndefined();
     expect(readFileSync(target, 'utf8')).toContain('# planner v2');
 
     // A copy made from a different source, or a user's own file, is a conflict.
@@ -131,6 +134,30 @@ describe('orch install', () => {
     const user = runInstall({ source, 'claude-dir': claude });
     expect(user.entries[1]?.state).toBe('conflict');
     expect(readFileSync(target, 'utf8')).toBe('# user edited\n');
+  });
+
+  it('recognises its own links and copies when the source is spelled differently', () => {
+    // A junction (symlink elsewhere) to the source is another spelling of the same directory,
+    // like a lower-case drive letter on Windows; links and marked copies must still be "ours".
+    const alias = join(tempDir('orch-alias-'), 'src');
+    try {
+      symlinkSync(source, alias, 'junction');
+    } catch {
+      return; // no link support here; nothing to prove
+    }
+    try {
+      runInstall({ source, 'claude-dir': claude, agentMethods: ['copy'] });
+      const again = runInstall({ source: alias, 'claude-dir': claude, 'dry-run': true });
+      expect(again.problems).toBe(false);
+      expect(again.entries.map((e) => e.state)).toEqual(['linked', 'linked']);
+      writeFileSync(join(source, 'agents', 'planner.md'), '# planner v3\n');
+      expect(
+        runInstall({ source: alias, 'claude-dir': claude, 'dry-run': true }).entries[1]?.state,
+      ).toBe('stale');
+    } finally {
+      rmdirSync(alias);
+      rmSync(join(alias, '..'), { recursive: true, force: true });
+    }
   });
 
   it('is exposed on the CLI with --json and a nonzero exit on conflicts', () => {
