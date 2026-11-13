@@ -2,7 +2,7 @@
 import { basename, resolve } from 'node:path';
 
 import { ToolError, ValidationError } from '../core/errors.ts';
-import { spawnTool } from '../core/exec.ts';
+import { failureDetail, spawnTool } from '../core/exec.ts';
 import { canonicalPath, findProjectRoot } from '../core/paths.ts';
 import { git, tryGit } from './run.ts';
 
@@ -56,7 +56,7 @@ export function dirtyFiles(cwd: string): string[] {
   // Raw stdout, not `git()`: that trims, so a first line like " M path" would lose its leading
   // space and then the first character of the path.
   const r = spawnTool('git', ['status', '--porcelain', '--untracked-files=all'], { cwd });
-  if (r.status !== 0) throw new ToolError(`git status failed in ${cwd}: ${r.stderr.trim()}`);
+  if (r.status !== 0) throw new ToolError(`git status failed in ${cwd} ${failureDetail(r)}`);
   return r.stdout
     .split(/\r?\n/)
     .filter((l) => l.length > 3)

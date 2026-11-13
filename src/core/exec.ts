@@ -58,8 +58,32 @@ export function spawnTool(
     env: opts.env ?? process.env,
     maxBuffer: 64 * 1024 * 1024,
   });
-  if (r.error) return { status: null, stdout: '', stderr: r.error.message };
-  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  const signal = r.signal ?? null;
+  if (r.error) {
+    // stderr keeps the error text for callers that only print stderr.
+    const timedOut = (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
+    const out: ToolResult = { status: null, stdout: '', stderr: r.error.message, signal };
+    if (timedOut) out.timedOut = true;
+    else out.error = r.error.message;
+    return out;
+  }
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, signal };
+}
+
+/**
+ * How a tool run failed, for error messages: exit status (with the NTSTATUS in hex on Windows,
+ * e.g. 0xC0000142 when a process cannot initialise), signal, timeout, launch error, then the
+ * tool's own stderr (or stdout). Never only stderr, which is empty for a killed process.
+ */
+export function failureDetail(r: ToolResult): string {
+  const hex =
+    r.status !== null && r.status > 0xffff ? ` (0x${r.status.toString(16).toUpperCase()})` : '';
+  const parts = [`exit status ${r.status === null ? 'none' : String(r.status)}${hex}`];
+  if (r.signal) parts.push(`signal ${r.signal}`);
+  if (r.timedOut) parts.push('timed out');
+  if (r.error) parts.push('could not start');
+  const text = (r.stderr || r.stdout).trim();
+  return `(${parts.join(', ')})${text ? `: ${text}` : ''}`;
 }
 
 export interface CommandOptions {

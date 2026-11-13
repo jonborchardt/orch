@@ -56,7 +56,10 @@ export function parseNameStatus(out: string): WorktreeInfo['changes'] {
   });
 }
 
-/** Read-only description of `path` as a candidate worktree of `repoRoot`. */
+/**
+ * Read-only description of `path` as a candidate worktree of `repoRoot`. Throws ToolError when
+ * `path` is a worktree but its HEAD or status cannot be read.
+ */
 export function inspectWorktree(repoRoot: string, path: string, baseBranch: string): WorktreeInfo {
   const info: WorktreeInfo = {
     path,
@@ -78,7 +81,9 @@ export function inspectWorktree(repoRoot: string, path: string, baseBranch: stri
     return info;
   }
   info.isWorktree = true;
-  info.head = tryGit(path, 'rev-parse', 'HEAD') ?? null;
+  // Strict: a confirmed worktree always has a HEAD commit, and a failed read must not pass for a
+  // different worktree (the read-only fingerprint hashes HEAD).
+  info.head = git(path, 'rev-parse', 'HEAD');
   const branch = tryGit(path, 'rev-parse', '--abbrev-ref', 'HEAD');
   info.branch = branch && branch !== 'HEAD' ? branch : null;
   info.dirty = dirtyFiles(path);

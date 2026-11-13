@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { OwnershipError, ToolError, ValidationError } from '../src/core/errors.ts';
+import { failureDetail } from '../src/core/exec.ts';
 import { jobWorktreeDir } from '../src/core/paths.ts';
-import { describeRepo } from '../src/git/repo.ts';
+import { describeRepo, dirtyFiles } from '../src/git/repo.ts';
+import { git } from '../src/git/run.ts';
 import {
   adoptWorktree,
   createWorktree,
@@ -355,5 +357,24 @@ describe('orch worktree CLI', () => {
     );
     expect(jobBranch({ id: 'job-2', title: '!!!' })).toBe('factory/job-2');
     expect(jobBranch({ id: 'job-3', title: 'x'.repeat(100) }).length).toBeLessThanOrEqual(60);
+  });
+});
+
+describe('git failures', () => {
+  it('a failed git call reports its exit status, and a kill or timeout is named', () => {
+    const dir = tempDir('orch-not-a-repo-');
+    extra.push(dir);
+    expect(() => git(dir, 'rev-parse', 'HEAD')).toThrow(ToolError);
+    expect(() => git(dir, 'rev-parse', 'HEAD')).toThrow(
+      /git rev-parse failed in .* \(exit status 128\): fatal/,
+    );
+    expect(() => dirtyFiles(dir)).toThrow(/git status failed in .* \(exit status 128\)/);
+    // A killed process has no stderr; the message still says what happened.
+    expect(
+      failureDetail({ status: null, stdout: '', stderr: '', signal: 'SIGTERM', timedOut: true }),
+    ).toBe('(exit status none, signal SIGTERM, timed out)');
+    expect(failureDetail({ status: 3221225794, stdout: '', stderr: '' })).toBe(
+      '(exit status 3221225794 (0xC0000142))',
+    );
   });
 });

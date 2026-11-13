@@ -497,13 +497,20 @@ export function checkReadonly(
   id: string,
   expected: string,
 ): { ok: true; fingerprint: string } {
+  // A Git read failure throws ToolError from here (exit 1), never a fingerprint mismatch.
   const { worktree } = showWorktree(store, id);
-  if (!worktree.exists || !worktree.isWorktree) throw new ValidationError('Worktree is missing.');
+  if (!worktree.exists || !worktree.isWorktree) {
+    throw new ValidationError(
+      `Worktree ${worktree.path} is missing or not a worktree of the job's repository ` +
+        `(exists: ${worktree.exists ? 'yes' : 'no'}).`,
+    );
+  }
   const actual = fingerprint(worktree);
   if (actual !== expected) {
     throw new ValidationError(
-      `Worktree changed during a read-only step (HEAD ${worktree.head?.slice(0, 7) ?? '?'}, ` +
-        `dirty: ${worktree.dirty.join(', ') || 'none'}). Reviewers must not modify code; ` +
+      `Worktree changed during a read-only step (fingerprint ${expected} -> ${actual}, ` +
+        `HEAD ${worktree.head ?? '?'}, dirty: ${worktree.dirty.join(', ') || 'none'}). ` +
+        'Reviewers must not modify code; ' +
         'inspect the changes, revert or commit them deliberately, then rerun the round.',
     );
   }

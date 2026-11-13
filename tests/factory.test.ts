@@ -8,13 +8,14 @@ import { join } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { OwnershipError, ValidationError, WorkflowError } from '../src/core/errors.ts';
+import { OwnershipError, ToolError, ValidationError, WorkflowError } from '../src/core/errors.ts';
 import { ROLES } from '../src/core/roles.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
 import { verifyJob } from '../src/ops/verify.ts';
 import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
 import {
   checkReadonly,
+  fingerprint,
   loadConfig,
   type Plan,
   planJob,
@@ -277,6 +278,44 @@ describe('review rounds', () => {
     expect(checkReadonly(store, c.id, fp).ok).toBe(true);
     commitFile(c.wt, 'also.ts', 'y');
     expect(() => checkReadonly(store, c.id, fp)).toThrow(ValidationError);
+  });
+
+  it('check-readonly names both fingerprints when the worktree changed', () => {
+    const c = start();
+    const fp = next(c.id).worktree?.fingerprint ?? '';
+    writeFileSync(join(c.wt, 'sneaky.ts'), 'x');
+    const actual = next(c.id).worktree?.fingerprint ?? '';
+    expect(actual).not.toBe(fp);
+    expect(() => checkReadonly(store, c.id, fp)).toThrow(fp);
+    expect(() => checkReadonly(store, c.id, fp)).toThrow(actual);
+  });
+
+  it('an unreadable HEAD is a Git error, never a reviewer write or a fingerprint of no HEAD', () => {
+    const c = start();
+    const fp = next(c.id).worktree?.fingerprint ?? '';
+    // HEAD names a branch that does not exist; --show-toplevel and the common dir still resolve.
+    gitIn(c.wt, 'symbolic-ref', 'HEAD', 'refs/heads/no-such-branch');
+    expect(gitIn(c.wt, 'rev-parse', '--show-toplevel')).not.toBe('');
+    let err: unknown;
+    try {
+      checkReadonly(store, c.id, fp);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as Error).message).toMatch(/git rev-parse failed .*exit status 128/);
+    expect((err as Error).message).not.toMatch(/Reviewers must not modify code/);
+    expect(() => next(c.id)).toThrow(ToolError);
+  });
+
+  it('the fingerprint format is stable: 16 hex of sha256 over HEAD and the sorted dirty list', () => {
+    const info = showWorktree(store, start().id).worktree;
+    const fixed = {
+      ...info,
+      head: '0123456789abcdef0123456789abcdef01234567',
+      dirty: ['src/b.ts', 'a.ts'],
+    };
+    expect(fingerprint(fixed)).toBe('958cf9f38c7e3e5e');
   });
 
   it('rework rounds: rebuild with --replace, re-review, pass -> approve', () => {
@@ -574,7 +613,9 @@ describe('orch factory CLI', () => {
 
     const fp = status.worktree?.fingerprint ?? '';
     const readonly = orch(home, tmpdir(), ['factory', 'check-readonly', id, '--fingerprint', fp]);
-    expect(readonly.code, readonly.err).toBe(0);
+    // On failure, also show what the fingerprint was computed from.
+    const from = `plan head ${status.worktree?.head ?? 'null'}, dirty [${status.worktree?.dirty.join(', ') ?? ''}]`;
+    expect(readonly.code, `${readonly.err}\n${from}`).toBe(0);
     expect(orch(home, tmpdir(), ['factory', 'check-readonly', id]).code).toBe(2);
     expect(orch(home, tmpdir(), ['factory', 'check-readonly', id, '--fingerprint', 'x']).code).toBe(
       1,
