@@ -128,7 +128,9 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           </Stack>
           <Box sx={{ flex: 1 }} />
           <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel id="repo-label">Repository</InputLabel>
+            <InputLabel id="repo-label" shrink>
+              Repository
+            </InputLabel>
             <Select
               labelId="repo-label"
               label="Repository"
@@ -137,6 +139,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
                 setRepo(e.target.value);
               }}
               displayEmpty
+              notched
             >
               <MenuItem value="">All repositories</MenuItem>
               {repos.map((r) => (
