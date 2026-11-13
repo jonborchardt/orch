@@ -444,9 +444,11 @@ read throws ToolError (exit 1, as before) from both `factory next/status` and `c
 and no plan carries a fingerprint computed from no HEAD. Callers checked: `ops/tree.ts`
 (`worktreeOf` already rejected a null HEAD as unusable), `ops/worktree.ts` (`showWorktree`,
 `createWorktree`, `adoptWorktree`, `dropWorktree`, `integrateBase`), `ops/factory.ts` (`planJob`,
-`checkReadonly`), `cli/worktree.ts` (`show`); none relies on a null HEAD for a real worktree.
-An unborn branch in a worktree (`adopt` of an orphan worktree) now fails with the Git error rather
-than "is detached"; job worktrees are always created from a commit. `git()` and `dirtyFiles` now
+`checkReadonly`), `cli/worktree.ts` (`show`), `server/api.ts` (catches a `planJob` error into
+`planError`, so the dashboard still renders the job); none relies on a null HEAD for a real
+worktree. An unborn branch in a worktree (`adopt` of an orphan worktree) now fails with the Git
+error rather than "is detached", and `worktree drop` refuses a worktree whose HEAD cannot be read
+(remove it with Git by hand); job worktrees are always created from a commit. `git()` and `dirtyFiles` now
 name the exit status (with the NTSTATUS in hex above 0xFFFF), signal, timeout, or launch error;
 the mismatch message names both fingerprints and the full HEAD; the missing-worktree message names
 the path. The fingerprint's inputs and format are unchanged (pinned by a test), as are timeouts
