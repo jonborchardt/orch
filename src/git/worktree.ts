@@ -7,7 +7,7 @@ import { dirname } from 'node:path';
 
 import { MergeConflictError, ToolError } from '../core/errors.ts';
 import { canonicalPath } from '../core/paths.ts';
-import { baseRef, dirtyFiles, refExists, sameRepository } from './repo.ts';
+import { baseRef, commonGitDir, dirtyFiles, refExists } from './repo.ts';
 import { git, tryGit } from './run.ts';
 
 export interface Commit {
@@ -34,6 +34,11 @@ export interface WorktreeInfo {
   changedFiles: string[];
   /** The same files with their change status. */
   changes: { path: string; status: 'added' | 'modified' | 'deleted' | 'renamed' }[];
+  /**
+   * Why `isWorktree` is false or `head` is null for an existing path: the failing step and Git's
+   * error. Diagnostic only; never part of the fingerprint.
+   */
+  problem?: string;
 }
 
 const STATUS: Record<string, 'added' | 'modified' | 'deleted' | 'renamed'> = {
@@ -73,12 +78,31 @@ export function inspectWorktree(repoRoot: string, path: string, baseBranch: stri
     changes: [],
   };
   if (!info.exists) return info;
-  const top = tryGit(path, 'rev-parse', '--show-toplevel');
-  if (!top || canonicalPath(top) !== canonicalPath(path) || !sameRepository(repoRoot, path)) {
+  // Each step records its failure in `info.problem` instead of throwing, so callers that only
+  // need "is it a worktree?" behave as before while check-readonly can say why it is not.
+  const step = <T>(name: string, fn: () => T): T | undefined => {
+    try {
+      return fn();
+    } catch (err) {
+      info.problem ??= `${name}: ${(err as Error).message}`;
+      return undefined;
+    }
+  };
+  const top = step('rev-parse --show-toplevel', () => git(path, 'rev-parse', '--show-toplevel'));
+  if (!top) return info;
+  if (canonicalPath(top) !== canonicalPath(path)) {
+    info.problem = `rev-parse --show-toplevel: git reports ${canonicalPath(top)}, expected ${canonicalPath(path)}`;
+    return info;
+  }
+  const ours = step('rev-parse --git-common-dir in the repository', () => commonGitDir(repoRoot));
+  const theirs = step('rev-parse --git-common-dir in the worktree', () => commonGitDir(path));
+  if (ours === undefined || theirs === undefined) return info;
+  if (ours !== theirs) {
+    info.problem = `rev-parse --git-common-dir: ${theirs} belongs to another repository than ${ours}`;
     return info;
   }
   info.isWorktree = true;
-  info.head = tryGit(path, 'rev-parse', 'HEAD') ?? null;
+  info.head = step('rev-parse HEAD', () => git(path, 'rev-parse', 'HEAD')) ?? null;
   const branch = tryGit(path, 'rev-parse', '--abbrev-ref', 'HEAD');
   info.branch = branch && branch !== 'HEAD' ? branch : null;
   info.dirty = dirtyFiles(path);

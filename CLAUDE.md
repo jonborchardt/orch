@@ -114,6 +114,9 @@ framework. Upgrade Drizzle deliberately, both packages together.
 - The suite spawns many Git and Node processes and runs its files in parallel; on a loaded
   Windows machine a CLI-heavy file can take minutes. A single failure in `tests/factory.test.ts`
   or `tests/cli.test.ts` that passes alone is load, not a defect; rerun it in isolation first.
+- Do not edit `src/` while the suite runs: CLI tests spawn `node src/cli/main.ts`, which loads the
+  source as it is at that moment, so a half-applied multi-file edit fails whichever test spawns
+  then (decision 45). Read the failure's stderr before blaming load.
 
 ## Documentation
 

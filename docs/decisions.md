@@ -390,3 +390,63 @@ loads one agent file per subagent with no include mechanism, so sharing the text
 generated artifact; the duplication is the cost of self-contained agents and a contract test keeps
 the files consistent with `core/roles.ts`. `web/src/Actions.tsx` keeps its own stage list and
 live-lease check because the client may import only types from `src/`.
+
+## 45. The intermittent `check-readonly` failure was the source tree changing under the suite
+
+**Observed.** One full `npm run check` on Windows failed in `tests/factory.test.ts`, test "start /
+next / status / resume / config / check-readonly with --json; usage errors exit 2":
+`orch factory check-readonly` exited 1 instead of 0. Only the exit code was asserted, so stderr was
+lost. The suite started at 19:12:32Z and ran 334.8 s; the file took 322 s (244 s alone) and the
+test, the last one in the file, took 15.9 s. Isolated and later full runs passed. The test file
+was the cb0eec0 version, but the CLI subprocesses it spawns (`node src/cli/main.ts`) load `src/`
+when they start, and a Claude Code session was applying the Phase 5C edits (later 6728edc) to the
+same checkout during the run. Its transcript records the edits with timestamps.
+
+**Mechanism (reproduced).** Between 19:17:55.2Z and 19:17:59.7Z, `src/git/worktree.ts` was invalid
+on disk. One edit removed the `realpathSync` and `resolve` imports while `samePath` still used
+them. The next edit deleted `samePath` while `inspectWorktree` still called it. Imports still
+resolved, so modules loaded. Any CLI process started in that window threw `ReferenceError` from
+`inspectWorktree` when it ran, and `printError` maps a non-`OrchError` to exit 1. The suite
+ended about 19:18:07Z, so the 15.9 s test ran in roughly 19:17:51–19:18:07. `check-readonly` is
+about two thirds of the way through it and comes right after a `factory next` that succeeded. That
+timing fits the window. No other edit during the run left a module the CLI loads inconsistent.
+Reproduction: rebuild the tree at 6728edc with `worktree.ts` in each intermediate state, then run
+`orch factory check-readonly <id> --fingerprint <f>` 10 times per tree against one live job. The
+good tree and 6728edc returned exit 0, 10/10 each. The first state returned exit 1, 10/10, with
+`ReferenceError: resolve is not defined`. The second returned exit 1, 10/10, with
+`ReferenceError: samePath is not defined`. The stderr of the original failure was never captured,
+so this is the cause established by timing and reproduction, not by the original message. orch's
+code has no defect behind it. The safeguard is procedural: do not edit `src/` while the suite is
+running (CLAUDE.md, Tests).
+
+**Other hypotheses, not reproduced under load.** Load runs used a frozen snapshot of b88621d, so
+edits to the checkout could not interfere.
+
+- H1, inspection failure ("Worktree is missing."): `tryGit` and `sameRepository` dropped Git's
+  stderr. Looping `check-readonly` 300 times against a live job (8 min, the first 6 alongside a
+  full suite run of 414 s) gave 300/300 exit 0, slowest 7.0 s, far under `spawnTool`'s 120 s
+  timeout. Running the `check-readonly` tests 6 times alongside a second full run (368 s) gave
+  12/12 passes. Both full runs passed every CLI-heavy file.
+- H2, HEAD unreadable or the dirty list changed: no command in the test writes into the worktree
+  between `factory status` and `check-readonly`. Spec-stage commands are `job transition start`,
+  `artifact add spec.md`, and `transition complete`, and the artifact goes under `ORCH_HOME`. The
+  code path is real, though: with an unreadable HEAD, the fingerprint used `''` and the failure was
+  reported as "Reviewers must not modify code". That is a confirmed defect, separate from the
+  observed failure.
+- Test isolation: the store, clone, bare origin, and CLI `ORCH_HOME` are all per test. Worktrees
+  live under that home. `git worktree prune` runs only in the test's own clone. Each test
+  file runs in its own Vitest worker and its tests run one at a time, so the `ORCH_GH_SHIM`
+  environment is not shared. Nothing crosses tests.
+
+**Changes.** `inspectWorktree` records the failing step and Git's error in an optional `problem`
+field instead of discarding it. The steps are `rev-parse --show-toplevel`, the canonical-path
+comparison, `--git-common-dir` for both sides (replacing `sameRepository`, which swallowed the
+error), and `rev-parse HEAD`. `isWorktree` and every other caller behave as before. `check-readonly`
+now treats a missing HEAD as an inspection failure. It still exits 1, with the message "Worktree is
+missing or unreadable at <path>: <step>: git rev-parse failed in <path>: fatal: ...", and never
+blames a reviewer. The fingerprint inputs (HEAD plus the sorted dirty list) are unchanged. No
+timeouts, retries, or assertions changed. The regression test is `check-readonly reports a failed
+inspection with its Git error, not as a reviewer write` in `tests/factory.test.ts`. Run against
+b88621d it fails ("got 'Worktree changed during a read-only s…'"); with the change it passes. If
+the CLI test fails again, its assertion now prints stderr: a `ReferenceError` or `SyntaxError`
+means another mid-edit tree; a `rev-parse ...: fatal: ...` line names the Git step that failed.
