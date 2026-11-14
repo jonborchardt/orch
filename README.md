@@ -346,7 +346,7 @@ acts:
 
 | GitHub reports (for required checks)                                                                | `orch gh ci` does                                                                                                                                                          |
 | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| all succeeded (skipped/neutral count only when a human made them required)                          | nothing more; the plan says `complete`, which the gate accepts only while `ciHead` is still HEAD                                                                           |
+| all succeeded (at least one check ran; skipped/neutral alone never count)                           | completes the job in the same call, once the gate confirms a clean, verified HEAD; `orch job transition complete` is refused in `ci`, so no stored verdict is ever reused  |
 | any queued or running, or none reported yet (first 5 observations)                                  | nothing: the coordinator waits about a minute and runs it again, or releases the job and resumes later; the CLI never polls by itself                                      |
 | `failure` or `timed_out`                                                                            | saves each failing Actions job log under `<artifactDir>/ci/<sha7>/`, then `rework`: back to `build` with the reason; `ciRepairs` + 1                                       |
 | `cancelled`, `startup_failure`, `stale`, `action_required`, or a required check that never reported | `escalate`: not a code defect; a human re-runs the workflow and resumes `--to ci`                                                                                          |
@@ -400,8 +400,11 @@ conversation is not needed. `orch factory resume <id> --session <name>`:
 `needs-human` jobs stay blocked until a person decides; `resume --to <stage>` sends them back. A
 jump cannot skip evidence: `pr` still needs a registered `DECISION: APPROVE`, `approve` still
 refuses while the last round counts blocking findings, and `ci` still needs GitHub's passing verdict
-for HEAD. A session interrupted while CI was pending resumes into `ci` and re-reads GitHub; the
-recorded rollup is never trusted on its own. `resume --to completed` exists for one case only: a
+for HEAD. A session interrupted while CI was pending resumes into `ci` and always re-reads GitHub:
+`orch gh ci` completes the job itself when the fresh read passes for the current head, and a stored
+verdict (even a passing one) cannot complete it, so a PR that moved, was closed, or whose checks
+were rerun since the interruption is seen. The rollup that `orch gh pr create` and `orch gh pr
+status --token` store is informational and carries no head. `resume --to completed` exists for one case only: a
 job escalated from `ci` because GitHub reported no checks at all (or the PR was merged by a human);
 it is refused while checks are pending or failing.
 
@@ -414,6 +417,58 @@ fingerprint (HEAD plus dirty files) after reviewers ran. Workflow artifacts can 
 replaced only in their own stage and round, so an approval cannot be rewritten after the fact.
 `plan.checkoutDirty` lists uncommitted files in the initiating checkout; the factory never writes
 there, so a list that grows during a stage means a subagent used the wrong directory.
+
+### Dispatching jobs to other repositories
+
+One session can start several jobs, each in another repository (or this one), each run by its own
+independent session. The flow is split so that `orch` stays deterministic and never starts a
+process: the CLI prepares and records, the session mechanism belongs to the harness.
+
+```
+/factory dispatch issue 123 in E:\code\repo-b, #45 in ..\repo-c, and this repository: add CSV export
+```
+
+For each target the skill runs `orch factory dispatch --repo <path> --issue <ref> --session <s>`,
+which checks the target the way `orch init --check` does (committed, trusted, runnable
+`factory.json`; an existing base branch) and creates the job, nothing else: no claim, no worktree,
+no session. A target that is not ready is refused with the readiness verdict and nothing is created;
+the other targets proceed. Repeating a dispatch for the same repository and issue returns the
+existing active job (`duplicate: true`) instead of a second one, so a retry after a failed launch is
+safe. The result's `launch` block carries what a launcher needs: `workspace` (the repository root),
+`worktree: true`, a `title`, the `prompt` (`/factory <id>` plus one line of context), and
+`fallback` commands.
+
+The launch itself uses VS Code's documented session tools: in the Agents window the skill calls the
+host's `create_session` tool with `relationship: independent`, the repository as `workspace`, and
+`worktree: true`. VS Code creates a worktree of that repository (`<repo>.worktrees/<slug>`, branch
+`agents/<slug>`) and starts the session in it with the prompt. The child's `/factory <id>` then runs
+`orch factory resume <id> --adopt <its toplevel>`, which records that worktree as the job's (only
+when the job has none yet; a worktree the job already has is kept), and the two sessions proceed
+independently. The experiment that established this, and what the host cannot do (it cannot be
+pointed at an existing worktree: a worktree path or `file://` URI opens the project root instead),
+is recorded in [docs/session-launch.md](docs/session-launch.md). Without the tool the skill prints
+the fallbacks (`claude --worktree <id> "/factory <id>"` from the repository root, or
+`code --agents <repo>` to create the session by hand) and says that nothing was started.
+
+`orch factory list [--repo <path>]` is the initiating session's view: one row per job with stage,
+status, owner and whether its lease is live, `needsHuman` and the recorded `blockedReason`,
+worktree, branch, PR and CI rollup, the attached execution session, and the `orch factory resume`
+command for jobs no live session holds. Nothing in it is inferred from processes; a lapsed lease is
+reported as such.
+
+**Session association.** The job id is the identity of the work; a VS Code or Claude session is
+execution metadata that changes when a job is resumed or adopted. `orch job session attach <id>
+--provider <p> --ref <r>` records the current session as a `session.attached` event (the newest one
+is current, earlier ones stay in the log as history; re-attaching the same ref is a no-op). It
+needs the owner token while the job is claimed and none while it is unowned, which is the state a
+freshly dispatched job is in when the launcher records the session it created. Providers:
+`vscode-agents` (the `agent-host-session://` link the host tools return) and `claude-code` (a
+session UUID). Transcripts and private session files are never stored. The dashboard's detail view
+shows the current session with the navigation its provider documents: a `claude-code` session gets
+`vscode://anthropic.claude-code/open?session=<uuid>` and `claude --resume <uuid>`; an
+`agent-host-session://` link has no operating-system handler, so it is offered for copying with a
+note that it opens only inside VS Code, never as a button that would do nothing. The job detail,
+the worktree (`vscode://file/`), the PR, and the resume command are the other navigation targets.
 
 **Limits.** A skill cannot restart a Claude session that stopped, and there is no daemon: a lapsed
 lease is noticed only when someone runs `orch factory next` or `resume`. Ownership is advisory at
@@ -569,9 +624,9 @@ If every verdict is `pass` the job moves to `approve`; if any is `changes` it re
 unless the round equals `--max-rounds` (default 3), in which case it escalates to `needs-human`.
 
 **PRs.** `orch job pr <id> --url <u> --state draft|ready|merged` records the PR; the `pr` stage
-cannot complete without one, and completing it enters `ci`, which cannot complete until `orch gh
-ci` has recorded `ciStatus: passing` for `ciHead`, and the gate confirms `ciHead` is still the
-worktree HEAD. The PR state can be updated later (draft → ready → merged) without changing the
+cannot complete without one, and completing it enters `ci`, which only `orch gh ci` completes, in
+the call that read `ciStatus: passing` for `ciHead` from GitHub, after the gate confirms `ciHead`
+is still the worktree HEAD. The PR state can be updated later (draft → ready → merged) without changing the
 workflow, since the factory's deliverable is a draft PR.
 
 Every accepted change appends events (`job.created`, `job.claimed`, `job.released`,
@@ -656,7 +711,7 @@ identity, that the base branch exists on `origin`, and (for the PR) that `origin
 the worktree HEAD. An open (or merged) PR for the
 branch with the same base is reused instead of creating a duplicate. The PR is recorded on the job
 (`prUrl`, `prState`) together with the CI rollup (`ciStatus`: `none`, `pending`, `passing`,
-`failing`) and the head it describes (`ciHead`). `orch` never merges, force-pushes, or marks a PR
+`failing`) but no head (`ciHead` is written by `orch gh ci` alone). `orch` never merges, force-pushes, or marks a PR
 ready; a recorded draft PR is not a passing CI run, which is what the `ci` stage then establishes.
 `orch gh ci` reads check runs and statuses with `gh api` for the head SHA (not the PR rollup), the
 base branch's protection and rulesets for the required list, and Actions job logs for failures.
@@ -794,10 +849,14 @@ orch verify show <id>                  # latest run and validity for HEAD
 
 orch factory start  --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
                     [--max-rounds <n>] --session <name> [--ui|--no-ui]
+orch factory dispatch --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
+                    [--max-rounds <n>] --session <name>   # job for another repo; an independent session runs it
+orch factory list   [--repo <path|identity>]              # every job: state, owner, attention, session, PR
 orch factory next|status <id> [--ui|--no-ui]
-orch factory resume <id> --session <name> [--to <stage>] [--force]
+orch factory resume <id> --session <name> [--to <stage>] [--force] [--adopt <worktree>]
 orch factory check-readonly <id> --fingerprint <f>
 orch factory config
+orch job session attach <id> --provider vscode-agents|claude-code --ref <link|uuid> [--cwd <dir>] [--token <t>]
 
 orch ui [--port <n>] [--open]          # the only long-running command; loopback only
 ```
@@ -912,8 +971,9 @@ ui`, the loopback JSON API with Origin/CSRF/Host guards, the job board and job d
 controls through the shared domain layer, light and dark modes, API tests, component tests (jsdom),
 and Playwright browser checks over seeded fixtures).
 
-Not implemented: Claude session spawning or restoration (the dashboard records decisions; a session
-must resume), token accounting, any daemon or scheduler (the dashboard is a plain server you start
+Not implemented: Claude session spawning or restoration by `orch` itself (dispatch prepares a job
+and the VS Code host's `create_session` tool, called by the skill, starts the session; the dashboard
+records decisions; a session must resume), token accounting, any daemon or scheduler (the dashboard is a plain server you start
 and stop; nothing runs between commands), automatic crash recovery (a lapsed lease is only noticed
 when someone runs `factory next`, `resume`, or looks at the board), rebase-based integration (only
 merge commits), authentication for the dashboard (it is loopback-only and single-user by design), a

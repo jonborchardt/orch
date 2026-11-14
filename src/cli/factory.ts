@@ -1,6 +1,7 @@
 /** `orch factory ...` handlers: the skill-facing commands. */
 import { UsageError } from '../core/errors.ts';
 import { type Stage, STAGES } from '../core/workflow.ts';
+import { dispatchJob, listFactory } from '../ops/dispatch.ts';
 import {
   checkReadonly,
   configPath,
@@ -25,6 +26,7 @@ export interface FactoryOptions {
   ui?: boolean;
   'no-ui'?: boolean;
   fingerprint?: string;
+  adopt?: string;
 }
 
 export const FACTORY_HELP = `Usage: orch factory <command> [options]
@@ -32,10 +34,20 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
   start   --title <t> | --issue <ref>  [--description <d>] [--repo <path>] [--base <branch>]
           [--max-rounds <n>] --session <name> [--ui|--no-ui]
                               Create, claim, and give a worktree to a new job; print the plan + token
+  dispatch --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <branch>]
+          [--max-rounds <n>] --session <name>
+                              Create a job for another (or this) repository that an independent
+                              session will run; print what that session needs (workspace, prompt).
+                              Refused unless the repository's factory.json is ready. Nothing is
+                              claimed, no worktree is made, no session is started.
+  list [--repo <path|identity>]
+                              Every job with its state, owner, attention needed, session, PR
   next <id> [--ui|--no-ui]    What to do now: step, agents (with models), artifacts, exact commands
   status <id>                 Same as next (read-only; for humans and dashboards)
-  resume <id> --session <name> [--to <stage>] [--force] [--ui|--no-ui]
-                              Adopt an interrupted or orphaned job from persisted state
+  resume <id> --session <name> [--to <stage>] [--force] [--ui|--no-ui] [--adopt <worktree>]
+                              Adopt an interrupted or orphaned job from persisted state; --adopt
+                              records an existing worktree of the repository (the one this session
+                              runs in) when the job has none yet
   check-readonly <id> --fingerprint <f>
                               Exit 1 if the worktree changed since the plan was taken
   config                      Effective role -> model configuration and its file location
@@ -60,27 +72,40 @@ export function runFactory(
     }
     return session;
   };
+  const maxRounds = (): number | undefined => {
+    if (o['max-rounds'] === undefined) return undefined;
+    const n = Number(o['max-rounds']);
+    if (!Number.isInteger(n) || n < 1)
+      throw new UsageError('--max-rounds must be a positive integer');
+    return n;
+  };
   switch (cmd) {
-    case 'start': {
-      let maxRounds: number | undefined;
-      if (o['max-rounds'] !== undefined) {
-        maxRounds = Number(o['max-rounds']);
-        if (!Number.isInteger(maxRounds) || maxRounds < 1) {
-          throw new UsageError('--max-rounds must be a positive integer');
-        }
-      }
+    case 'start':
       return startJob(store, {
         title: o.title,
         description: o.description,
         issue: o.issue,
         repo: o.repo,
         base: o.base,
-        maxRounds,
+        maxRounds: maxRounds(),
         session: needSession(),
         cwd: process.cwd(),
         ui,
       });
-    }
+    case 'dispatch':
+      if (!o.title && !o.issue) throw new UsageError('dispatch needs --title <t> or --issue <ref>');
+      return dispatchJob(store, {
+        title: o.title,
+        description: o.description,
+        issue: o.issue,
+        repo: o.repo,
+        base: o.base,
+        maxRounds: maxRounds(),
+        session: needSession(),
+        cwd: process.cwd(),
+      });
+    case 'list':
+      return listFactory(store, { repo: o.repo });
     case 'next':
     case 'status':
       return planJob(store, needId(), { ui });
@@ -90,6 +115,7 @@ export function runFactory(
         to: oneOf<Stage>(o.to, STAGES, '--to'),
         force: o.force,
         ui,
+        adopt: o.adopt,
       });
     case 'check-readonly':
       return checkReadonly(store, needId(), need(o.fingerprint, '--fingerprint <f>'));

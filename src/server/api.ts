@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
+import { SESSION_EVENT, sessionLinks } from '../core/session.ts';
 import { now, STAGES, type Stage } from '../core/workflow.ts';
 import {
   allowedActions,
@@ -20,7 +21,7 @@ import { planJob } from '../ops/factory.ts';
 import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob, listEvents } from '../storage/events.ts';
-import { getJob, listJobs, listReviews, reviewsByJob } from '../storage/jobs.ts';
+import { getJob, listJobs, listReviews, reviewsByJob, sessionOf } from '../storage/jobs.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 import { latestRun, latestRunsByJob } from '../storage/verification.ts';
 import { BLOCKER_EVENTS, blockerOf, ciView, liveness, resumeOf } from './status.ts';
@@ -31,6 +32,7 @@ import type {
   JobDetailView,
   RoundView,
   SafeJob,
+  SessionView,
 } from './types.ts';
 
 export { liveness } from './status.ts';
@@ -153,10 +155,26 @@ export function artifactContent(store: Store, id: string, relPath: string): stri
   }
 }
 
+/** The newest attachment with documented links; earlier ones are counted, not shown. */
+function sessionView(events: Event[]): SessionView | null {
+  const attachments = events.filter((e) => e.type === SESSION_EVENT);
+  const last = attachments.at(-1);
+  const ref = sessionOf(last);
+  if (!last || !ref) return null;
+  return {
+    ...ref,
+    attachedAt: last.createdAt,
+    by: last.actor,
+    links: sessionLinks(ref),
+    previous: attachments.length - 1,
+  };
+}
+
 export function detail(store: Store, id: string): JobDetailView {
   const job = getJob(store.db, id);
   const artifacts = listArtifacts(store.db, id);
   const reviews = listReviews(store.db, id);
+  const events = listEvents(store.db, id, 500);
   const contents: Record<string, string> = {};
   for (const a of artifacts) {
     if (a.bytes > INLINE_LIMIT) continue;
@@ -185,7 +203,7 @@ export function detail(store: Store, id: string): JobDetailView {
     artifacts,
     contents,
     rounds: rounds(reviews, artifacts),
-    events: listEvents(store.db, id, 500),
+    events,
     worktree: plan?.worktree ?? null,
     plan,
     planError,
@@ -198,6 +216,7 @@ export function detail(store: Store, id: string): JobDetailView {
       checkout: vscodeLink(job.repoPath),
       pr: job.prUrl,
     },
+    session: sessionView(events),
     resume: resumeOf(job, state),
     resumeCommand: `orch factory resume ${id} --session <name>`,
   };

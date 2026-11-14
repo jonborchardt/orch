@@ -1,4 +1,5 @@
 /** Shapes shared by the API (src/server/api.ts) and the web client (web/src). Types only. */
+import type { SessionLinks, SessionRef } from '../core/session.ts';
 import type { DashboardAction } from '../ops/actions.ts';
 import type { Plan } from '../ops/factory.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
@@ -109,6 +110,19 @@ export interface BoardRow {
   ci: CiView;
 }
 
+/**
+ * The execution session last attached to the job: metadata, so the dashboard can point at it. It
+ * never implies the session is alive (the lease does that), and it is not needed to resume.
+ */
+export interface SessionView extends SessionRef {
+  attachedAt: string;
+  /** Who recorded it (the launching session or the owner). */
+  by: string | null;
+  links: SessionLinks;
+  /** Earlier attachments (the job was resumed or adopted by other sessions). */
+  previous: number;
+}
+
 export interface RoundView {
   round: number;
   reviews: (Review & { path: string | null })[];
@@ -133,6 +147,8 @@ export interface JobDetailView {
   actions: DashboardAction[];
   /** `vscode://file/...` for the worktree (when recorded) and for the initiating checkout. */
   links: { vscode: string | null; checkout: string; pr: string | null };
+  /** Current execution session, or null when none was ever attached. */
+  session: SessionView | null;
   /** Null for finished jobs; otherwise whether and how a session may resume it. */
   resume: Resume | null;
   resumeCommand: string;
