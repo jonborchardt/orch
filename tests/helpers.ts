@@ -16,9 +16,14 @@ import { dirname, join } from 'node:path';
 import { installRoot, type RuntimePaths } from '../src/core/paths.ts';
 import { openStore, type Store } from '../src/storage/client.ts';
 
+/** Every directory `tempDir` made in this test file; `tests/setup.ts` removes what is left. */
+export const createdTempDirs: string[] = [];
+
 /** A fresh temp directory by its real path: on Windows the runner's TEMP is an 8.3 alias. */
 export function tempDir(prefix = 'orch-test-'): string {
-  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  createdTempDirs.push(dir);
+  return dir;
 }
 
 /** Remove a directory link, never its target: Windows junctions need rmdir, POSIX symlinks unlink. */
