@@ -271,9 +271,14 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   }
   if (job.stage === 'completed') {
     plan.step = 'done';
+    const done = [...detail.events].reverse().find((e) => e.type === 'job.completed');
     plan.reason =
-      `Draft PR delivered (${job.prUrl ?? 'no URL'}) with required checks ${job.ciStatus ?? 'unobserved'} ` +
-      `for ${job.ciHead?.slice(0, 7) ?? 'no commit'}. Humans mark it ready and merge.`;
+      done?.payload['acceptedByHuman'] === true
+        ? `Delivery accepted by a human (${job.prUrl ?? 'no URL'}): required checks were ` +
+          `${job.ciStatus ?? 'unobserved'} for ${job.ciHead?.slice(0, 7) ?? 'no commit'}; this is a ` +
+          'manual close-out, not a CI verdict. Humans mark it ready and merge.'
+        : `Draft PR delivered (${job.prUrl ?? 'no URL'}) with required checks ${job.ciStatus ?? 'unobserved'} ` +
+          `for ${job.ciHead?.slice(0, 7) ?? 'no commit'}. Humans mark it ready and merge.`;
     plan.commands = [`orch gh pr status ${id}`];
     return plan;
   }
