@@ -163,8 +163,11 @@ export interface Readiness {
   next: string | null;
 }
 
-/** Read-only: is the policy the factory would trust committed, valid, and runnable here? */
-export function checkReadiness(cwd: string, repo?: string): Readiness {
+/**
+ * Read-only: is the policy the factory would trust committed, valid, and runnable here? `branch`
+ * names the branch a job would start from; it defaults to the checked-out branch.
+ */
+export function checkReadiness(cwd: string, repo?: string, branch?: string): Readiness {
   const where = repo ?? cwd;
   const root = findProjectRoot(where);
   const base: Readiness = {
@@ -210,11 +213,13 @@ export function checkReadiness(cwd: string, repo?: string): Readiness {
   // Exactly what a job created from this checkout does: its base branch is the current branch,
   // its worktree starts at baseRef (origin/<branch> as last fetched, else the local branch), and
   // `effectivePolicy` reads factory.json at the merge base, which for a new job is that commit.
-  const { currentBranch } = describeRepo(root);
+  const currentBranch = branch ?? describeRepo(root).currentBranch;
   const ref = baseRef(root, currentBranch);
   if (!ref) {
     const why =
-      currentBranch === 'HEAD' ? 'HEAD is detached' : `branch ${currentBranch} has no commits`;
+      currentBranch === 'HEAD'
+        ? 'HEAD is detached'
+        : `branch ${currentBranch} has no commits (locally or on origin)`;
     return at(
       'no-base-branch',
       `${why}; a job started here has no base branch to read its policy from.`,

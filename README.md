@@ -388,6 +388,58 @@ replaced only in their own stage and round, so an approval cannot be rewritten a
 `plan.checkoutDirty` lists uncommitted files in the initiating checkout; the factory never writes
 there, so a list that grows during a stage means a subagent used the wrong directory.
 
+### Dispatching jobs to other repositories
+
+One session can start several jobs, each in another repository (or this one), each run by its own
+independent session. The flow is split so that `orch` stays deterministic and never starts a
+process: the CLI prepares and records, the session mechanism belongs to the harness.
+
+```
+/factory dispatch issue 123 in E:\code\repo-b, #45 in ..\repo-c, and this repository: add CSV export
+```
+
+For each target the skill runs `orch factory dispatch --repo <path> --issue <ref> --session <s>`,
+which checks the target the way `orch init --check` does (committed, trusted, runnable
+`factory.json`; an existing base branch) and creates the job, nothing else: no claim, no worktree,
+no session. A target that is not ready is refused with the readiness verdict and nothing is created;
+the other targets proceed. Repeating a dispatch for the same repository and issue returns the
+existing active job (`duplicate: true`) instead of a second one, so a retry after a failed launch is
+safe. The result's `launch` block carries what a launcher needs: `workspace` (the repository root),
+`worktree: true`, a `title`, the `prompt` (`/factory <id>` plus one line of context), and
+`fallback` commands.
+
+The launch itself uses VS Code's documented session tools: in the Agents window the skill calls the
+host's `create_session` tool with `relationship: independent`, the repository as `workspace`, and
+`worktree: true`. VS Code creates a worktree of that repository (`<repo>.worktrees/<slug>`, branch
+`agents/<slug>`) and starts the session in it with the prompt. The child's `/factory <id>` then runs
+`orch factory resume <id> --adopt <its toplevel>`, which records that worktree as the job's (only
+when the job has none yet; a worktree the job already has is kept), and the two sessions proceed
+independently. The experiment that established this, and what the host cannot do (it cannot be
+pointed at an existing worktree: a worktree path or `file://` URI opens the project root instead),
+is recorded in [docs/session-launch.md](docs/session-launch.md). Without the tool the skill prints
+the fallbacks (`claude --worktree <id> "/factory <id>"` from the repository root, or
+`code --agents <repo>` to create the session by hand) and says that nothing was started.
+
+`orch factory list [--repo <path>]` is the initiating session's view: one row per job with stage,
+status, owner and whether its lease is live, `needsHuman` and the recorded `blockedReason`,
+worktree, branch, PR and CI rollup, the attached execution session, and the `orch factory resume`
+command for jobs no live session holds. Nothing in it is inferred from processes; a lapsed lease is
+reported as such.
+
+**Session association.** The job id is the identity of the work; a VS Code or Claude session is
+execution metadata that changes when a job is resumed or adopted. `orch job session attach <id>
+--provider <p> --ref <r>` records the current session as a `session.attached` event (the newest one
+is current, earlier ones stay in the log as history; re-attaching the same ref is a no-op). It
+needs the owner token while the job is claimed and none while it is unowned, which is the state a
+freshly dispatched job is in when the launcher records the session it created. Providers:
+`vscode-agents` (the `agent-host-session://` link the host tools return) and `claude-code` (a
+session UUID). Transcripts and private session files are never stored. The dashboard's detail view
+shows the current session with the navigation its provider documents: a `claude-code` session gets
+`vscode://anthropic.claude-code/open?session=<uuid>` and `claude --resume <uuid>`; an
+`agent-host-session://` link has no operating-system handler, so it is offered for copying with a
+note that it opens only inside VS Code, never as a button that would do nothing. The job detail,
+the worktree (`vscode://file/`), the PR, and the resume command are the other navigation targets.
+
 **Limits.** A skill cannot restart a Claude session that stopped, and there is no daemon: a lapsed
 lease is noticed only when someone runs `orch factory next` or `resume`. Ownership is advisory at
 the filesystem level (see [Worktrees](#worktrees)). Subagent APIs differ between harnesses; the
@@ -760,10 +812,14 @@ orch verify show <id>                  # latest run and validity for HEAD
 
 orch factory start  --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
                     [--max-rounds <n>] --session <name> [--ui|--no-ui]
+orch factory dispatch --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
+                    [--max-rounds <n>] --session <name>   # job for another repo; an independent session runs it
+orch factory list   [--repo <path|identity>]              # every job: state, owner, attention, session, PR
 orch factory next|status <id> [--ui|--no-ui]
-orch factory resume <id> --session <name> [--to <stage>] [--force]
+orch factory resume <id> --session <name> [--to <stage>] [--force] [--adopt <worktree>]
 orch factory check-readonly <id> --fingerprint <f>
 orch factory config
+orch job session attach <id> --provider vscode-agents|claude-code --ref <link|uuid> [--cwd <dir>] [--token <t>]
 
 orch ui [--port <n>] [--open]          # the only long-running command; loopback only
 ```
@@ -878,8 +934,9 @@ ui`, the loopback JSON API with Origin/CSRF/Host guards, the job board and job d
 controls through the shared domain layer, light and dark modes, API tests, component tests (jsdom),
 and Playwright browser checks over seeded fixtures).
 
-Not implemented: Claude session spawning or restoration (the dashboard records decisions; a session
-must resume), token accounting, any daemon or scheduler (the dashboard is a plain server you start
+Not implemented: Claude session spawning or restoration by `orch` itself (dispatch prepares a job
+and the VS Code host's `create_session` tool, called by the skill, starts the session; the dashboard
+records decisions; a session must resume), token accounting, any daemon or scheduler (the dashboard is a plain server you start
 and stop; nothing runs between commands), automatic crash recovery (a lapsed lease is only noticed
 when someone runs `factory next`, `resume`, or looks at the board), rebase-based integration (only
 merge commits), authentication for the dashboard (it is loopback-only and single-user by design), a
