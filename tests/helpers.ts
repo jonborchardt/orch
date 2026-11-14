@@ -169,7 +169,7 @@ export const NOOP_POLICY =
     2,
   ) + '\n';
 
-const MAIN = join(installRoot(), 'src', 'cli', 'main.ts');
+const main = () => join(installRoot(), 'src', 'cli', 'main.ts');
 
 export interface CliResult {
   code: number | null;
@@ -192,7 +192,7 @@ export function orch(
   args: string[],
   env: NodeJS.ProcessEnv = {},
 ): CliResult {
-  const r = spawnSync(process.execPath, [MAIN, ...args], {
+  const r = spawnSync(process.execPath, [main(), ...args], {
     cwd,
     encoding: 'utf8',
     env: cliEnv(home, env),
@@ -208,7 +208,7 @@ export function orchAsync(
   env: NodeJS.ProcessEnv = {},
 ): Promise<CliResult> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [MAIN, ...args], { cwd, env: cliEnv(home, env) });
+    const child = spawn(process.execPath, [main(), ...args], { cwd, env: cliEnv(home, env) });
     let out = '';
     let err = '';
     child.stdout.on('data', (d: Buffer) => (out += d.toString()));
