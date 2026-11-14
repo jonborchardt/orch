@@ -56,10 +56,12 @@ export function jobBranch(job: Pick<Job, 'id' | 'title'>): string {
 
 /**
  * Re-point a job at its checkout's current remote identity. Every mutation does this on its own
- * through `jobCheckout`; the command remains for operators and never adopts another repository.
+ * through `jobCheckout` when the job's worktree proves the checkout is still its repository; this
+ * command is the operator's explicit confirmation when there is no worktree to prove it. It never
+ * adopts another repository, and never overrides a worktree that contradicts the checkout.
  */
 export function repointRepo(store: Store, id: string, auth: Auth, path?: string): Job {
-  return jobCheckout(store, authorize(store, id, auth), auth, path).job;
+  return jobCheckout(store, authorize(store, id, auth), auth, path, true).job;
 }
 
 /** Read-only view of the job's worktree (or of where it would be created). */

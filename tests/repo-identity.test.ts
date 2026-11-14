@@ -13,7 +13,7 @@ import { OwnershipError, ValidationError } from '../src/core/errors.ts';
 import { resumeFactoryJob, startJob } from '../src/ops/factory.ts';
 import { findJobs, jobCheckout, sameLocalRepo } from '../src/ops/repo.ts';
 import { showVerification } from '../src/ops/verify.ts';
-import { adoptWorktree, createWorktree, repointRepo } from '../src/ops/worktree.ts';
+import { adoptWorktree, createWorktree, integrateBase, repointRepo } from '../src/ops/worktree.ts';
 import { listArtifacts } from '../src/storage/artifacts.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { claimJob, createJob, getJob } from '../src/storage/jobs.ts';
@@ -184,16 +184,41 @@ describe('existing jobs with older stored identities', () => {
       baseBranch: 'main',
     });
     const { token } = claimJob(store, legacy.id, { session: SESSION });
+    // Without a worktree nothing proves the checkout was not replaced: explicit confirmation.
+    expect(() => createWorktree(store, legacy.id, { token })).toThrow(/orch job repo/);
+    expect(getJob(store.db, legacy.id).repo).toBe(basename(clone).toLowerCase());
+    expect(events(legacy.id)).not.toContain('repo.repointed');
+    expect(repointRepo(store, legacy.id, { token }).repo).toBe('github.com/acme/alpha');
+    expect(events(legacy.id)).toContain('repo.repointed');
     const r = createWorktree(store, legacy.id, { token });
     expect(r.created).toBe(true);
-    const job = getJob(store.db, legacy.id);
-    expect(job.repo).toBe('github.com/acme/alpha');
-    expect(events(legacy.id)).toContain('repo.repointed');
     // The manual command is now a no-op for the same clone and still refuses another repository.
     expect(repointRepo(store, legacy.id, { token }).repo).toBe('github.com/acme/alpha');
     const other = localRepo();
     expect(() => repointRepo(store, legacy.id, { token }, other)).toThrow(ValidationError);
     expect(getJob(store.db, legacy.id).repoPath).toBe(clone);
+  });
+
+  it('a checkout replaced by an unrelated repository is refused, never adopted', () => {
+    const local = localRepo(join(tempDir('orch-replaced-'), 'proj'));
+    const c = start(local);
+    const before = getJob(store.db, c.id);
+    rmSync(local, { recursive: true, force: true });
+    mkdirSync(local);
+    makeRepo('https://github.com/intruder/proj.git', local);
+    const refused = /was replaced, not re-pointed/;
+    expect(() => createWorktree(store, c.id, { token: c.token })).toThrow(refused);
+    expect(() => integrateBase(store, c.id, { token: c.token })).toThrow(refused);
+    // Operator confirmation cannot override the worktree's evidence either.
+    expect(() => repointRepo(store, c.id, { token: c.token })).toThrow(refused);
+    expect(() => repointRepo(store, c.id, { token: c.token }, local)).toThrow(refused);
+    expect(() => resumeFactoryJob(store, c.id, { session: SESSION })).toThrow(refused);
+    expect(getJob(store.db, c.id)).toMatchObject({
+      repo: before.repo,
+      repoPath: before.repoPath,
+      worktreePath: before.worktreePath,
+    });
+    expect(events(c.id)).not.toContain('repo.repointed');
   });
 
   it('an identity that cannot be reconciled fails with a specific diagnostic', () => {

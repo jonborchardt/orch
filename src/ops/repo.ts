@@ -46,11 +46,18 @@ export interface Checkout {
  * The checkout a job operates on: its recorded one, or `override` (`--repo`). The job's own
  * repository is recognised by its common directory, so a remote that was added or changed since
  * the job was created is reconciled (job.repo refreshed, `repo.repointed` recorded) instead of
- * refused; the recorded checkout stays the root even when a linked worktree was named. A
- * different local repository is accepted only as another clone of the same remote identity.
- * The caller has already authorized `auth`.
+ * refused, once `requireContinuity` has ruled out a replaced directory; the recorded checkout
+ * stays the root even when a linked worktree was named. A different local repository is accepted
+ * only as another clone of the same remote identity. `explicit` is the operator's `orch job repo`
+ * confirmation. The caller has already authorized `auth`.
  */
-export function jobCheckout(store: Store, job: Job, auth: Auth, override?: string): Checkout {
+export function jobCheckout(
+  store: Store,
+  job: Job,
+  auth: Auth,
+  override?: string,
+  explicit = false,
+): Checkout {
   const candidate = override ?? job.repoPath;
   if (!existsSync(candidate)) {
     throw new ValidationError(
@@ -61,6 +68,7 @@ export function jobCheckout(store: Store, job: Job, auth: Auth, override?: strin
   if (override === undefined || sameLocalRepo(job, candidate)) {
     const root = override === undefined ? info.root : job.repoPath;
     if (info.identity === job.repo) return { job, root, auth };
+    requireContinuity(job, info, explicit);
     const updated = setRepo(store, job.id, auth, { repo: info.identity, repoPath: job.repoPath });
     const next =
       auth.expectRevision === undefined ? auth : { ...auth, expectRevision: updated.revision };
@@ -68,6 +76,30 @@ export function jobCheckout(store: Store, job: Job, auth: Auth, override?: strin
   }
   if (info.remote !== undefined && info.remote === job.repo) return { job, root: info.root, auth };
   throw new ValidationError(mismatch(job, info));
+}
+
+/**
+ * Nothing stored distinguishes a remote change from an unrelated repository placed at the recorded
+ * path, so a new identity there is adopted only on evidence. The job's worktree on disk is the
+ * evidence: it was created from the job's repository and still names its common directory, so the
+ * checkout must share it. Without a worktree, only an operator can vouch (`orch job repo`).
+ */
+function requireContinuity(job: Job, info: RepoInfo, explicit: boolean): void {
+  const found = `Repository at ${info.root} is ${info.identity}; job ${job.id} belongs to ${job.repo}`;
+  if (job.worktreePath !== null && existsSync(job.worktreePath)) {
+    const key = localRepoKey(job.worktreePath);
+    if (key !== undefined && key === localRepoKey(info.root)) return;
+    throw new ValidationError(
+      `${found}, and its worktree ${job.worktreePath} ${
+        key === undefined ? 'no longer resolves to any repository' : 'belongs to another repository'
+      }. The recorded checkout ${job.repoPath} was replaced, not re-pointed; restore it.`,
+    );
+  }
+  if (explicit) return;
+  throw new ValidationError(
+    `${found}, and has no worktree to prove the checkout is the same repository under a new ` +
+      `remote. If it is, confirm with: orch job repo ${job.id} --token <t>.`,
+  );
 }
 
 function mismatch(job: Job, info: RepoInfo): string {

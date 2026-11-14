@@ -723,7 +723,9 @@ orch ui [--port <n>] [--open]          # the only long-running command; loopback
 and does not need GitHub: `--issue` is an opaque reference. The identity is the remote's: it groups
 jobs and is checked against GitHub at delivery. The job's binding to its local repository is the
 checkout's Git common directory, so adding or re-pointing `origin` later refreshes the identity on
-the next mutation (recorded as `repo.repointed`) instead of orphaning the job; `job list --repo
+the next mutation (recorded as `repo.repointed`) instead of orphaning the job, provided the job's
+worktree still belongs to that checkout; a checkout replaced by another repository is refused, and
+a job without a worktree needs `job repo <id>` to confirm the new identity. `job list --repo
 <path>` finds a repository's jobs from its checkout or any linked worktree either way.
 
 Mutation commands return the resulting state plus what comes next:

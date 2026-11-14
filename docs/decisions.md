@@ -510,6 +510,10 @@ Rejected: storing the common directory as `job.repo`. It would change the persis
 every existing row, turn worktree slugs and dashboard groups into filesystem paths, and break
 `--repo <other clone>`, for no safety the on-demand comparison does not already give. No schema
 change was needed: `repoPath` was already the anchor; it was simply not what the gates compared.
-Limitation: if the directory at `repoPath` is replaced by an unrelated repository before the job
-has a worktree, nothing can tell that apart from a remote change; once a worktree exists its
-common directory is checked on every operation.
+A changed identity at the recorded path is adopted only on evidence, because nothing stored tells
+a remote change apart from an unrelated repository placed at that path. The job's worktree is the
+evidence: it was created from the job's repository and still names its common directory, so the
+checkout must share it; a worktree that resolves elsewhere, or no longer resolves at all, means the
+checkout was replaced and every mutation (including `orch job repo`) refuses. Without a worktree
+only an operator can vouch, so automatic reconciliation stops and `orch job repo` is the explicit
+confirmation. The check runs before `setRepo`, so a refused checkout never reaches the row.
