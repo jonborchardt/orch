@@ -4,8 +4,6 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts', 'web/src/**/*.test.tsx'],
     exclude: ['e2e/**', 'node_modules/**'],
-    // Removes the temp directories a test file created and did not remove (tests/setup.ts).
-    setupFiles: ['tests/setup.ts'],
     // CLI tests spawn many Node processes; Git and verification tests create real repositories
     // and run real subprocesses, and 19 such files run in parallel on Windows.
     testTimeout: 180_000,

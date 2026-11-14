@@ -108,10 +108,6 @@ framework. Upgrade Drizzle deliberately, both packages together.
   `origin`). GitHub tests run a stateful `gh` shim via `ORCH_GH_SHIM`; nothing reaches the network.
   Artifact fixtures come from `fixture(path, marker?)` in `tests/helpers.ts`.
 - Tests must never touch the real user data directories or `~/.claude`.
-- Make temp directories with `tempDir()` from `tests/helpers.ts` (or helpers built on it): every
-  directory it creates is recorded, and `tests/setup.ts` removes what a file left behind when the
-  file finishes. Tests still clean up as they go; the setup file is the safety net. Set
-  `ORCH_KEEP_TEMP=1` to keep the directories of a run for debugging.
 - Verification tests use real subprocesses (`node -e ...` as the configured command) and real
   `factory.json` files committed to temporary repositories; `tests/verify.test.ts`,
   `tests/sensitive.test.ts`, and `tests/integration.test.ts` cover the three Phase 5B gates.

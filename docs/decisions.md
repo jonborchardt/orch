@@ -623,8 +623,8 @@ open detail page costing a fraction of a core every 4 s is not the bottleneck of
 (`orch-a-`, `orch-gone-`, `orch-other-`, `orch-replaced-`, `orch-init-home-`, `orch-doctor-`,
 `orch-ci-cwd-`, `orch-gh-shim-`, plus `orch-test-`, `orch-repo-`, `orch-bare-` from tests whose
 cleanup was skipped by an earlier failure or refused by a Windows handle). Each is a `tempDir()`
-call without a matching removal. Rather than chase each site, `tempDir()` now records every
-directory it creates and `tests/setup.ts` (a Vitest `setupFiles` entry) removes what is left when
-the file finishes, with `rmSync` retries for Windows handle timing; `ORCH_KEEP_TEMP=1` keeps them.
-Tests keep their own cleanup; the setup file is the net under it. Nothing outside the directories
-this run created is ever touched.
+call without a matching removal. Phase 2 (PR #13) fixes it at the root: `tempDir()` records every
+directory it creates and a Vitest setup file removes what a file left behind when it finishes.
+Phase 4 wrote the same fix independently and validated the approach before finding #13: with
+`TEMP` pointed at a private directory (other sessions were running the suite in the shared one),
+the leak-prone files left nothing behind; the duplicate was dropped in favour of #13.
