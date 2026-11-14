@@ -291,7 +291,7 @@ describe('jobs: full workflow through storage', () => {
     expect([handed.stage, handed.status]).toEqual(['ci', 'pending']);
     // CI stage: GitHub's verdict for the PR head is recorded (orch gh ci) before completion.
     go(id, token, 'start');
-    expect(() => go(id, token, 'complete')).toThrow(/required checks are not observed/);
+    expect(() => go(id, token, 'complete')).toThrow(/no CI verdict has been read/);
     recordCi(store, id, { token, ciStatus: 'failing', head: 'abc123' });
     expect(() => go(id, token, 'complete')).toThrow(/required checks are failing/);
     const observed = recordCi(store, id, { token, ciStatus: 'passing', head: 'abc123' });

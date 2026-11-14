@@ -4,9 +4,9 @@
  * recorded one, verbatim, never parsed or guessed.
  */
 import { leaseExpired } from '../core/ownership.ts';
-import { blockingCount, MAX_ROUNDS_REASON, now } from '../core/workflow.ts';
+import { blockingCount, MAX_CI_REPAIRS_REASON, MAX_ROUNDS_REASON, now } from '../core/workflow.ts';
 import type { Artifact, Event, Job, VerificationRun } from '../storage/schema.ts';
-import type { Blocker, Liveness, Resume } from './types.ts';
+import type { Blocker, CiView, Liveness, Resume } from './types.ts';
 
 type Lease = Pick<Job, 'status' | 'stage' | 'leaseExpiresAt' | 'ownerSession'>;
 
@@ -20,12 +20,14 @@ export function liveness(job: Lease): Liveness {
   return 'idle';
 }
 
-/** Event types whose newest occurrence explains a stopped job. */
+/** Event types whose newest occurrence explains a stopped job or its CI state. */
 export const BLOCKER_EVENTS = [
   'job.blocked',
   'stage.failed',
   'job.interrupted',
   'job.cancelled',
+  'ci.observed',
+  'job.completed',
 ] as const;
 
 export interface Evidence {
@@ -49,8 +51,41 @@ function verificationFailed(run: VerificationRun | null, detail: string | null):
   };
 }
 
+/** What the newest `orch gh ci` reconciliation concluded, when the newest observation is one. */
+function lastOutcome(e: Event | undefined): string | null {
+  return text(e, 'outcome');
+}
+
+/** One line for a ci-stage escalation, from the recorded reason code and the last CI outcome. */
+function ciBlocker(
+  job: Pick<Job, 'ciRepairs' | 'maxCiRepairs'>,
+  blocked: Event | undefined,
+  observed: Event | undefined,
+): Blocker {
+  const reason = text(blocked, 'reason');
+  if (reason === MAX_CI_REPAIRS_REASON) {
+    return {
+      kind: 'ci',
+      summary: `CI still failing after ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)} repair cycles`,
+      detail: text(blocked, 'detail'),
+    };
+  }
+  const summaries: Record<string, string> = {
+    closed: 'PR was closed without merging',
+    outdated: 'PR head moved outside the job',
+    none: 'GitHub reports no checks for the PR head',
+    infrastructure: 'Required checks did not reach a verdict',
+  };
+  const outcome = lastOutcome(observed);
+  return {
+    kind: 'ci',
+    summary: (outcome !== null ? summaries[outcome] : undefined) ?? 'Escalated from ci',
+    detail: reason,
+  };
+}
+
 export function blockerOf(
-  job: Lease & Pick<Job, 'round'>,
+  job: Lease & Pick<Job, 'round' | 'ciRepairs' | 'maxCiRepairs'>,
   state: Liveness,
   ev: Evidence,
 ): Blocker | null {
@@ -105,6 +140,7 @@ export function blockerOf(
           detail: null,
         };
       }
+      if (from === 'ci') return ciBlocker(job, e, ev.events.get('ci.observed'));
       const decision = ev.artifacts.find((a) => a.path === 'decision.md')?.marker;
       if (from === 'approve' && decision === 'escalate') {
         return {
@@ -135,6 +171,52 @@ export function blockerOf(
       return null;
     }
   }
+}
+
+type CiRow = Pick<
+  Job,
+  'stage' | 'ciHead' | 'ciStatus' | 'ciCheckedAt' | 'ciRepairs' | 'maxCiRepairs'
+>;
+
+/**
+ * The CI state to show, from the job row and the newest `ci.observed` / `job.completed` events.
+ * `head` is the worktree HEAD when the caller inspected it (null or undefined when it could not);
+ * the rollup is "current" only when it describes that commit, so an old green verdict is never
+ * shown as current after the head moved.
+ */
+export function ciView(
+  job: CiRow,
+  events: Map<string, Event>,
+  head: string | null | undefined,
+): CiView {
+  const observed = events.get('ci.observed');
+  // A reconciliation outcome counts only when the observation describes the recorded head.
+  const forHead = observed && text(observed, 'head') === job.ciHead ? observed : undefined;
+  const failures = Array.isArray(forHead?.payload['failures'])
+    ? (forHead.payload['failures'] as CiView['failures'])
+    : [];
+  const completed = events.get('job.completed');
+  let completion: CiView['completion'] = null;
+  if (job.stage === 'completed') {
+    completion =
+      completed?.payload['acceptedByHuman'] === true
+        ? 'human'
+        : typeof completed?.payload['head'] === 'string'
+          ? 'ci'
+          : 'legacy';
+  }
+  return {
+    head: job.ciHead,
+    current: head == null ? null : job.ciHead !== null && job.ciHead === head,
+    status: job.ciStatus,
+    checkedAt: job.ciCheckedAt,
+    repairs: job.ciRepairs,
+    maxRepairs: job.maxCiRepairs,
+    outcome: lastOutcome(forHead),
+    reason: text(forHead, 'reason'),
+    failures,
+    completion,
+  };
 }
 
 /**

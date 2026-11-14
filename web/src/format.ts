@@ -96,6 +96,7 @@ export const BLOCKER_LABEL: Record<BlockerKind, string> = {
   findings: 'Blocking findings',
   decision: 'Decision needed',
   escalated: 'Escalated',
+  ci: 'CI stopped',
   waiting: 'Waiting for a session',
   cancelled: 'Cancelled',
 };
@@ -113,8 +114,14 @@ export function ciColor(v: string | null): ChipColor {
     case 'failing':
       return 'error';
     case 'pending':
+    case 'none':
       return 'warning';
     default:
       return 'default';
   }
+}
+
+/** Short head for display; "?" when nothing was observed. */
+export function sha7(sha: string | null | undefined): string {
+  return sha ? sha.slice(0, 7) : '?';
 }

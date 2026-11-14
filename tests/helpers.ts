@@ -16,9 +16,28 @@ import { dirname, join } from 'node:path';
 import { installRoot, type RuntimePaths } from '../src/core/paths.ts';
 import { openStore, type Store } from '../src/storage/client.ts';
 
-/** A fresh temp directory by its real path: on Windows the runner's TEMP is an 8.3 alias. */
+const created: string[] = [];
+
+/**
+ * A fresh temp directory by its real path: on Windows the runner's TEMP is an 8.3 alias. Every
+ * directory is remembered so tests/setup.ts can remove it when the file finishes, whether or not
+ * the test cleaned up itself; a test that wants a directory kept copies it elsewhere.
+ */
 export function tempDir(prefix = 'orch-test-'): string {
-  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  created.push(dir);
+  return dir;
+}
+
+/** Remove every directory this file's tests created through `tempDir`; busy ones are left. */
+export function cleanupTempDirs(): void {
+  for (const dir of created.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* an open handle (a store a test never closed) keeps it; nothing else will touch it */
+    }
+  }
 }
 
 /** Remove a directory link, never its target: Windows junctions need rmdir, POSIX symlinks unlink. */
@@ -150,7 +169,7 @@ export const NOOP_POLICY =
     2,
   ) + '\n';
 
-const MAIN = join(installRoot(), 'src', 'cli', 'main.ts');
+const main = () => join(installRoot(), 'src', 'cli', 'main.ts');
 
 export interface CliResult {
   code: number | null;
@@ -173,7 +192,7 @@ export function orch(
   args: string[],
   env: NodeJS.ProcessEnv = {},
 ): CliResult {
-  const r = spawnSync(process.execPath, [MAIN, ...args], {
+  const r = spawnSync(process.execPath, [main(), ...args], {
     cwd,
     encoding: 'utf8',
     env: cliEnv(home, env),
@@ -189,7 +208,7 @@ export function orchAsync(
   env: NodeJS.ProcessEnv = {},
 ): Promise<CliResult> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [MAIN, ...args], { cwd, env: cliEnv(home, env) });
+    const child = spawn(process.execPath, [main(), ...args], { cwd, env: cliEnv(home, env) });
     let out = '';
     let err = '';
     child.stdout.on('data', (d: Buffer) => (out += d.toString()));
@@ -213,8 +232,9 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * A stand-in for `gh`, run as `node gh-shim.cjs <args>` via ORCH_GH_SHIM. State (repo, issue,
  * PRs, checks, a command to fail, and the call log) lives in a JSON file tests read and change.
  * With `bare` set to the local origin repository, PR heads are read from it like GitHub would;
- * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default), `protection`,
- * `rules`, `logs` (keyed by job id), or `api` (keyed by path), else HTTP 404.
+ * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default; paginated in
+ * pages of 100 under `--paginate --slurp`), `protection`, `rules`, `logs` (keyed by job id), or
+ * `api` (keyed by path), else HTTP 404. `gh run rerun` succeeds and is only logged.
  */
 const GH_SHIM_SOURCE = String.raw`
 const fs = require('node:fs');
@@ -242,15 +262,24 @@ else if (a === 'pr' && b === 'list') out(state.prs.filter((p) => p.headRefName =
 else if (a === 'pr' && b === 'view') {
   const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
   if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else out(withHead(pr));
+} else if (a === 'run' && b === 'rerun') {
+  out('');
 } else if (a === 'api') {
   const path = b.replace(/^\//, '').split('?')[0];
+  // --paginate --slurp: pages of 100, returned as one array, like gh does.
+  const slurp = args.includes('--slurp');
+  const paged = (items, wrap) => {
+    const pages = [];
+    for (let i = 0; i < Math.max(items.length, 1); i += 100) pages.push(wrap(items.slice(i, i + 100)));
+    out(slurp ? pages : pages[0]);
+  };
   let m;
   if ((m = /\/commits\/([0-9a-f]+)\/check-runs$/.exec(path))) {
     const runs = (state.checkRuns || {})[m[1]] || (state.checkRuns || {})['*'] || [];
-    out({ total_count: runs.length, check_runs: runs });
+    paged(runs, (page) => ({ total_count: runs.length, check_runs: page }));
   } else if ((m = /\/commits\/([0-9a-f]+)\/status$/.exec(path))) {
     const statuses = (state.statuses || {})[m[1]] || (state.statuses || {})['*'] || [];
-    out({ state: statuses.some((s) => s.state !== 'success') ? 'pending' : 'success', statuses });
+    paged(statuses, (page) => ({ state: statuses.some((s) => s.state !== 'success') ? 'pending' : 'success', statuses: page }));
   } else if (/\/protection\/required_status_checks$/.test(path)) {
     if (state.protection) out(state.protection); else notFound();
   } else if (/\/rules\/branches\//.test(path)) out(state.rules || []);
@@ -280,6 +309,8 @@ export interface ShimCheckRun {
   conclusion: string | null;
   html_url?: string;
   app?: { slug: string };
+  /** Workflow run the job belongs to; attempts of one check share it. */
+  check_suite?: { id: number };
 }
 
 export interface ShimState {
