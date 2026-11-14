@@ -46,7 +46,9 @@ function withMarker(content: string, source: string): string {
 
 function sameFile(a: string, b: string): boolean {
   try {
-    const [sa, sb] = [statSync(a), statSync(b)];
+    // bigint: NTFS file ids are 64-bit and lose their low bits as doubles, so two files created
+    // back to back could compare equal and a conflicting user file would pass as a hard link.
+    const [sa, sb] = [statSync(a, { bigint: true }), statSync(b, { bigint: true })];
     return sa.ino === sb.ino && sa.dev === sb.dev;
   } catch {
     return false;
