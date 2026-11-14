@@ -15,14 +15,14 @@ import {
   evaluateChecks,
   waitSeconds,
 } from '../src/core/ci.ts';
-import { OwnershipError, ToolError, ValidationError, WorkflowError } from '../src/core/errors.ts';
+import { OwnershipError, ToolError, ValidationError } from '../src/core/errors.ts';
 import { MAX_CI_REPAIRS_REASON } from '../src/core/workflow.ts';
 import { configPath, planJob, resumeFactoryJob } from '../src/ops/factory.ts';
-import { ensureDraftPr, pushBranch, reconcileCi } from '../src/ops/github.ts';
+import { ensureDraftPr, prStatus, pushBranch, reconcileCi } from '../src/ops/github.ts';
 import { verificationStatus } from '../src/ops/verify.ts';
 import { worktreeOf } from '../src/ops/tree.ts';
 import { listEvents } from '../src/storage/events.ts';
-import { getJob, recordCi, releaseJob } from '../src/storage/jobs.ts';
+import { getJob, recordCi, releaseJob, transitionJob } from '../src/storage/jobs.ts';
 import {
   add,
   approve,
@@ -158,8 +158,13 @@ describe('evaluateChecks (pure)', () => {
     const skipped = { ...ok, conclusion: 'skipped' };
     expect(evaluateChecks([skipped], null, 1).outcome).toBe('pending');
     expect(evaluateChecks([skipped], null, CI_GRACE_POLLS).outcome).toBe('none');
-    // Skipped counts as passing only when a human made the check required.
-    expect(evaluateChecks([skipped], ['test'], CI_GRACE_POLLS).outcome).toBe('passing');
+    // Skipped-only verified nothing even when a human made the check required (GitHub would
+    // count it): the factory escalates and the human closes out explicitly if that is right.
+    expect(evaluateChecks([skipped], ['test'], 1).outcome).toBe('pending');
+    expect(evaluateChecks([skipped], ['test'], CI_GRACE_POLLS).outcome).toBe('none');
+    expect(evaluateChecks([ok, { ...skipped, name: 'lint' }], ['test', 'lint'], 1).outcome).toBe(
+      'passing',
+    );
     expect(evaluateChecks([], [], CI_GRACE_POLLS).outcome).toBe('none');
   });
 
@@ -198,8 +203,17 @@ describe('ci stage: pending, then passing', () => {
     const c = start(store, clone);
     toCi(store, c);
     const sha = head(c.wt);
-    expect(job(c)).toMatchObject({ stage: 'ci', status: 'running', ciHead: sha, ciStatus: 'none' });
-    expect(() => go(store, c, 'complete')).toThrow(/required checks are none/);
+    // PR creation records the rollup but no head: nothing has been read for this commit yet.
+    expect(job(c)).toMatchObject({
+      stage: 'ci',
+      status: 'running',
+      ciHead: null,
+      ciStatus: 'none',
+    });
+    expect(() => go(store, c, 'complete')).toThrow(/completed by orch gh ci/);
+    expect(() => transitionJob(store, c.id, 'complete', { token: c.token })).toThrow(
+      /no CI verdict has been read/,
+    );
 
     checks(sha, [run('test', null, 'in_progress')]);
     const viewsBefore = ghCalls('view').length;
@@ -218,7 +232,10 @@ describe('ci stage: pending, then passing', () => {
       ciStatus: 'pending',
       ciHead: sha,
     });
-    expect(() => go(store, c, 'complete')).toThrow(/required checks are pending/);
+    expect(() => go(store, c, 'complete')).toThrow(/completed by orch gh ci/);
+    expect(() => transitionJob(store, c.id, 'complete', { token: c.token })).toThrow(
+      /required checks are pending/,
+    );
     const plan = planJob(store, c.id);
     expect(plan.step).toBe('run-stage');
     expect(plan.commands).toEqual([
@@ -233,12 +250,9 @@ describe('ci stage: pending, then passing', () => {
     checks(sha, [run('test', 'success')]);
     const r2 = reconcile(c);
     expect(r2).toMatchObject({ outcome: 'passing', action: 'complete', polls: 2 });
-    expect(job(c)).toMatchObject({ stage: 'ci', status: 'running', ciStatus: 'passing' });
-    expect(planJob(store, c.id).commands).toEqual([
-      `orch job transition ${c.id} complete --token <token>`,
-    ]);
-    const done = go(store, c, 'complete');
-    expect([done.stage, done.status]).toEqual(['completed', 'completed']);
+    // The passing read completes the job in the same call: no separate `complete` step exists.
+    expect([r2.job.stage, r2.job.status]).toEqual(['completed', 'completed']);
+    expect(job(c)).toMatchObject({ stage: 'completed', ciStatus: 'passing', ciHead: sha });
     const final = planJob(store, c.id);
     expect(final.step).toBe('done');
     expect(final.reason).toContain(`checks passing for ${sha.slice(0, 7)}`);
@@ -334,13 +348,12 @@ describe('ci stage: failing checks and the repair cycle', () => {
     expect(ghCalls('create')).toHaveLength(1);
     expect(shim.read().prs).toHaveLength(1);
     expect(gitIn(bare, 'rev-parse', `refs/heads/${job(c).branch ?? ''}`)).toBe(sha2);
-    expect(job(c)).toMatchObject({ stage: 'ci', status: 'pending', ciHead: sha2 });
+    expect(job(c)).toMatchObject({ stage: 'ci', status: 'pending', ciHead: null });
 
     go(store, c, 'start');
     checks(sha2, [run('lint', 'success'), run('test', 'success')]);
     expect(reconcile(c)).toMatchObject({ outcome: 'passing', action: 'complete', head: sha2 });
-    expect(go(store, c, 'complete').stage).toBe('completed');
-    expect(job(c).ciRepairs).toBe(1);
+    expect(job(c)).toMatchObject({ stage: 'completed', ciRepairs: 1 });
   });
 
   it('stops after the configured number of repairs: needs-human, PR and worktree kept', () => {
@@ -394,7 +407,7 @@ describe('ci stage: failing checks and the repair cycle', () => {
     expect(h.plan.commands[0]).toContain('transition');
     go(store, c2, 'start');
     expect(reconcile(c2).action).toBe('complete');
-    expect(go(store, c2, 'complete').stage).toBe('completed');
+    expect(job(c2).stage).toBe('completed');
   });
 });
 
@@ -419,12 +432,79 @@ describe('ci stage: interruption and resume', () => {
     const c2 = { ...c, token: r.token };
     // Stale observations are not trusted: the recorded rollup is still pending until re-read.
     go(store, c2, 'start');
-    expect(() => go(store, c2, 'complete')).toThrow(/required checks are pending/);
+    expect(() => go(store, c2, 'complete')).toThrow(/completed by orch gh ci/);
     checks(sha, [run('test', 'success')]);
     const again = reconcile(c2);
     expect(again).toMatchObject({ action: 'complete', head: sha, polls: 2 });
-    expect(go(store, c2, 'complete').stage).toBe('completed');
+    expect(job(c2).stage).toBe('completed');
     expect(ghCalls('create')).toHaveLength(1);
+  });
+
+  it('a stored passing verdict is confirmed against GitHub at completion, never reused', () => {
+    // Phase 1 validation (A06): a resumed session completed on a verdict recorded before the
+    // interruption. The verdict was genuine, but between the read and the completion the PR head
+    // can move, the PR can be closed, or a check can be rerun and fail. Plant such a verdict the
+    // way the old code left it (storage-level, as the orphaned shell did) and show that nothing
+    // completes without a fresh read that still passes for this head.
+    const plant = (c: Ctx) => {
+      recordCi(store, c.id, { token: c.token, ciStatus: 'passing', head: head(c.wt) });
+      expect(job(c)).toMatchObject({ stage: 'ci', status: 'running', ciStatus: 'passing' });
+      // The plan never says `complete`, and the transition refuses it outright.
+      const plan = planJob(store, c.id);
+      expect(plan.commands).toEqual([
+        `orch gh ci ${c.id} --token <token>`,
+        `orch factory next ${c.id}`,
+      ]);
+      expect(plan.reason).toContain('confirmed against GitHub, not reused');
+      expect(() => go(store, c, 'complete')).toThrow(/completed by orch gh ci/);
+      expect(job(c).stage).toBe('ci');
+    };
+
+    // A resumed session sees the same plan: read first.
+    const a = start(store, clone);
+    toCi(store, a);
+    plant(a);
+    const r = resumeFactoryJob(store, a.id, { session: 'claude-later-0002', force: true });
+    expect(r.plan.commands).toEqual([
+      `orch job transition ${a.id} start --token <token>`,
+      `orch gh ci ${a.id} --token <token>`,
+      `orch factory next ${a.id}`,
+    ]);
+    // The PR was closed in the meantime: escalate, not complete.
+    const a2 = { ...a, token: r.token };
+    go(store, a2, 'start');
+    const st = shim.read();
+    st.prs[0] = { ...st.prs[0], state: 'CLOSED' };
+    shim.write({ prs: st.prs });
+    expect(reconcile(a2)).toMatchObject({ outcome: 'closed', action: 'escalate' });
+    expect(job(a2).stage).toBe('needs-human');
+
+    // A check was rerun for the same commit and failed: rework, not complete.
+    const b = start(store, clone);
+    toCi(store, b);
+    plant(b);
+    checks(head(b.wt), [run('test', 'failure')]);
+    expect(reconcile(b)).toMatchObject({ outcome: 'failing', action: 'rework' });
+    expect(job(b).stage).toBe('build');
+
+    // Someone pushed to the PR branch: the head moved, so the verdict is outdated.
+    const d = start(store, clone);
+    toCi(store, d);
+    plant(d);
+    const tree = gitIn(d.wt, 'rev-parse', 'HEAD^{tree}');
+    const outside = gitIn(d.wt, 'commit-tree', tree, '-p', 'HEAD', '-m', 'pushed from elsewhere');
+    gitIn(d.wt, 'push', '-q', 'origin', `${outside}:refs/heads/${job(d).branch ?? ''}`);
+    checks('*', [run('test', 'success')]);
+    expect(reconcile(d)).toMatchObject({ outcome: 'outdated', action: 'escalate', current: false });
+    expect(job(d).stage).toBe('needs-human');
+
+    // Nothing changed: the fresh read passes and completes.
+    const e = start(store, clone);
+    toCi(store, e);
+    plant(e);
+    checks(head(e.wt), [run('test', 'success')]);
+    expect(reconcile(e)).toMatchObject({ outcome: 'passing', action: 'complete' });
+    expect(job(e).stage).toBe('completed');
   });
 });
 
@@ -433,19 +513,22 @@ describe('ci stage: the verdict is bound to the PR head', () => {
     const c = start(store, clone);
     toCi(store, c);
     const sha1 = head(c.wt);
-    checks(sha1, [run('test', 'success')]);
-    expect(reconcile(c).action).toBe('complete');
+    // A passing verdict exists for the approved commit (recorded storage-level so that the stage
+    // stays open: a live read would have completed the job on the spot).
+    recordCi(store, c.id, { token: c.token, ciStatus: 'passing', head: sha1 });
     // The branch moves (here: a commit landed in the worktree and was pushed outside orch).
     const sha2 = commitFile(c.wt, 'src/late.ts', '// late\n', 'late change');
     gitIn(c.wt, 'push', '-q', 'origin', 'HEAD');
-    expect(() => go(store, c, 'complete')).toThrow(/CI was last observed for/);
+    expect(() => go(store, c, 'complete')).toThrow(/completed by orch gh ci/);
     expect(job(c).stage).toBe('ci');
     // Reconciling reads the new head, for which GitHub reports nothing yet: pending, not passing.
     const r = reconcile(c);
     expect(r).toMatchObject({ head: sha2, outcome: 'pending', action: 'wait', current: true });
     expect(job(c)).toMatchObject({ ciHead: sha2, ciStatus: 'pending' });
-    // And the unverified late commit is refused by the verification gate on top of that.
-    expect(() => go(store, c, 'complete')).toThrow(/valid verification run/);
+    // Even a passing read for the late commit is refused: it was never verified or approved.
+    checks(sha2, [run('test', 'success')]);
+    expect(() => reconcile(c)).toThrow(/valid verification run/);
+    expect(job(c)).toMatchObject({ stage: 'ci', ciHead: sha2, ciStatus: 'passing' });
   });
 
   it('a branch updated outside the job while CI runs is escalated, not completed', () => {
@@ -486,6 +569,49 @@ describe('ci stage: the verdict is bound to the PR head', () => {
 });
 
 describe('ci stage: GitHub answers that are not verdicts', () => {
+  it('a green rollup at PR creation or from pr status is not a verdict; only orch gh ci is', () => {
+    // Phase 1 validation (A06, issue I-06): `gh pr view` reports a rollup for whatever the head is,
+    // and a skipped-only rollup reads as passing. Before the fix, `pr create` stored it with the head
+    // and the ci plan went straight to `complete` without `orch gh ci` ever evaluating the commit.
+    shim.write({ checks: [{ name: 'test', status: 'COMPLETED', conclusion: 'SKIPPED' }] });
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    expect(job(c)).toMatchObject({
+      stage: 'ci',
+      status: 'running',
+      ciStatus: 'passing',
+      ciHead: null,
+    });
+    const plan = planJob(store, c.id);
+    expect(plan.commands).toEqual([
+      `orch gh ci ${c.id} --token <token>`,
+      `orch factory next ${c.id}`,
+    ]);
+    expect(plan.ci).toMatchObject({ head: null, current: false, polls: 0 });
+    expect(() => go(store, c, 'complete')).toThrow(/completed by orch gh ci/);
+
+    // The per-commit read sees the skipped-only run for what it is: nothing verified yet.
+    checks(sha, [run('test', 'skipped')]);
+    expect(reconcile(c)).toMatchObject({ outcome: 'pending', action: 'wait', head: sha });
+    expect(job(c)).toMatchObject({ ciStatus: 'pending', ciHead: sha });
+
+    // A `pr status --token` rollup in between reports the same green rollup and drops the head:
+    // still informational, still not a verdict.
+    prStatus(store, c.id, { token: c.token });
+    expect(job(c)).toMatchObject({ stage: 'ci', ciStatus: 'passing', ciHead: null });
+    expect(planJob(store, c.id).commands[0]).toBe(`orch gh ci ${c.id} --token <token>`);
+    expect(() => go(store, c, 'complete')).toThrow(/completed by orch gh ci/);
+    expect(() => transitionJob(store, c.id, 'complete', { token: c.token })).toThrow(
+      /no CI verdict has been read/,
+    );
+
+    // Only a real per-commit verdict completes.
+    checks(sha, [run('test', 'success')]);
+    expect(reconcile(c)).toMatchObject({ outcome: 'passing', action: 'complete', head: sha });
+    expect(job(c)).toMatchObject({ stage: 'completed', ciStatus: 'passing', ciHead: sha });
+  });
+
   it('an API or network failure changes nothing and is never a success', () => {
     const c = start(store, clone);
     toCi(store, c);
@@ -504,7 +630,8 @@ describe('ci stage: GitHub answers that are not verdicts', () => {
       before.revision,
     ]);
     expect(observed(c).filter((e) => e.payload['outcome'] !== undefined)).toHaveLength(0);
-    expect(() => go(store, c, 'complete')).toThrow(WorkflowError);
+    // No per-commit verdict was ever read, so the gate refuses before the pure transition does.
+    expect(() => go(store, c, 'complete')).toThrow(/completed by orch gh ci/);
   });
 
   it('a required check that never reports waits through the grace window, then escalates', () => {
@@ -540,7 +667,8 @@ describe('ci stage: GitHub answers that are not verdicts', () => {
     const r1 = reconcile(c);
     expect(r1).toMatchObject({ outcome: 'passing', action: 'complete' });
     expect(r1.evaluation.optionalFailed).toEqual(['coverage-comment', 'lint']);
-    // Rulesets are honoured too, and without any configuration every check counts.
+    expect(job(c).stage).toBe('completed');
+    // Rulesets are honoured too.
     shim.write({
       protection: null,
       rules: [
@@ -551,9 +679,14 @@ describe('ci stage: GitHub answers that are not verdicts', () => {
         },
       ],
     });
-    expect(reconcile(c).outcome).toBe('passing');
+    const d = start(store, clone);
+    toCi(store, d);
+    expect(reconcile(d)).toMatchObject({ outcome: 'passing', action: 'complete' });
+    // Without any configuration every check counts.
     shim.write({ rules: [] });
-    expect(reconcile(c)).toMatchObject({ outcome: 'failing', action: 'rework' });
+    const e = start(store, clone);
+    toCi(store, e);
+    expect(reconcile(e)).toMatchObject({ outcome: 'failing', action: 'rework' });
   });
 
   it('a PR with no checks at all escalates; a human may then close it out, but never a failing one', () => {
@@ -752,7 +885,7 @@ describe('ci stage: one bounded re-run before a repair', () => {
     expect(reconcile(c)).toMatchObject({ outcome: 'pending', action: 'wait', waitSeconds: 60 });
     checks(sha, [lint, { ...again, status: 'completed', conclusion: 'success' }]);
     expect(reconcile(c)).toMatchObject({ outcome: 'passing', action: 'complete', reruns: 1 });
-    expect(go(store, c, 'complete').stage).toBe('completed');
+    expect(job(c)).toMatchObject({ stage: 'completed', ciStatus: 'passing', ciHead: sha });
     expect(job(c).ciRepairs).toBe(0);
     expect(rerunCalls()).toHaveLength(1);
     // Nothing merged, nothing marked ready, nothing pushed by the re-run.
@@ -1074,7 +1207,7 @@ describe('ci stage: releasing a pending job', () => {
     // GitHub's verdict for the same head completes the job on the same PR; no repair was spent.
     checks(sha, [run('test', 'success')]);
     expect(reconcile(c2)).toMatchObject({ outcome: 'passing', action: 'complete', head: sha });
-    expect(go(store, c2, 'complete').stage).toBe('completed');
+    expect(job(c2)).toMatchObject({ stage: 'completed', ciStatus: 'passing', ciHead: sha });
     expect(job(c2)).toMatchObject({ ciRepairs: 0, prUrl: before.prUrl });
     expect(ghCalls('create')).toHaveLength(1);
   });

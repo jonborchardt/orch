@@ -577,7 +577,87 @@ bits above 2^53, so two files created back to back can compare equal and a confl
 passes as a hard link. It now compares bigint stats. The flake was latent, not caused by the
 workflow change.
 
-## 53. CI: every page, one bounded re-run per head, and a cadence the CLI computes
+## 51. Dispatch prepares a job; the harness starts the session; the child adopts the worktree (Phase 3)
+
+**Established by experiment** (VS Code 1.146.0, Claude Code 2.1.323, extension 2.1.322, Windows 10,
+2026-11-14; details in `docs/session-launch.md`). A session in VS Code's Agents window has the
+host's documented session tools (`create_session`, `list_sessions`, `get_session_context`,
+`send_message`, `get_current_session`). `create_session` with `relationship: independent` starts a
+separate session, visible in the Agents window, with an initial prompt, and returns an
+`agent-host-session://` link. It cannot be pointed at an existing worktree: a linked-worktree path
+or `file://` URI passed as `workspace` opened the session in the project root (the primary
+checkout) both times. With `worktree: true` it creates its own worktree at
+`<repo>.worktrees/<slug>` on branch `agents/<slug>` and starts there. Subagents, `claude -p`, and
+`claude --bg` are not Agents-window sessions; `code --agents <folder>` opens the window but takes no
+prompt; `agent-host-session://` has no operating-system URI handler (`vscode://` and `claude-cli://`
+do).
+
+**Decision.** `orch factory dispatch` validates the target (`checkReadiness`, base branch) and
+creates the job, nothing else: no claim, no worktree, no process. The skill calls `create_session`
+with the repository as the workspace and `worktree: true`; the child's `orch factory resume
+--adopt <toplevel>` records the host-made worktree through the existing `adoptWorktree` (same
+repository, on a branch, not the primary checkout, not another job's). Rejected: creating the
+ORCH worktree first and opening the session on the project root (the child's own shell would run
+in the user's checkout, which is exactly what the worktree model exists to avoid), and spawning
+`claude --bg` from `orch` (a process supervisor the CLI model forbids; the fallbacks are printed as
+commands and never claimed as started sessions). Duplicate protection is by (repository, issue)
+among active jobs, so retrying a dispatch after a failed launch returns the same job; title-only
+dispatches are new jobs, as `factory start` always was.
+
+**Session association is an event, not a column.** `session.attached` events carry the provider,
+ref, and cwd; the newest is the current session and earlier ones are history. Attaching needs the
+owner token while the job is claimed and none while it is unowned, because the launcher records
+the session it created before the child has claimed anything; it is metadata, so the relaxation
+grants no workflow power. A schema column was rejected: nothing queries it transactionally, and the
+event log already carries history. Navigation is derived per provider from documented URIs only;
+where none exists (the host link in a browser) the UI copies the reference and says why.
+
+## 52. Only `orch gh ci` records a CI head; rollups from `pr create` and `pr status` carry none
+
+**Observed (Phase 1 validation, scenario A06).** A coordinator was killed while CI was pending; its
+orphaned shell still ran `orch gh ci`, which recorded `passing` for the head. The session that
+resumed after the lease lapsed received the plan "Required checks passed for <sha>. Complete the
+job." and completed without reading GitHub again. That completion rested on a genuine per-commit
+verdict, but the same two columns (`ciStatus`, `ciHead`) were also written by `orch gh pr create`
+and `orch gh pr status --token` from the `gh pr view` rollup, where "no failing and no pending
+check" reads as `passing` even when every check was skipped. A job could therefore complete `ci`
+on a rollup, never having run the per-commit evaluation that decision 48 made the only source of
+truth (every reported check required, skipped-only is not a pass, grace window, SHA binding).
+
+**Decision.** `ciHead` is written only by `orch gh ci`. `pr create` and `pr status --token` still
+record the rollup (`ciStatus`, `ci.observed` event) for the dashboard, but with `head: null`, so
+the pure transition (`no CI verdict has been read for the PR head`), the Git-aware gate
+(`ciHead` must equal HEAD), and the plan (`ci.current`) all require a fresh `orch gh ci` before
+`complete`. Rejected: a schema change to record the source of each observation (the head column
+already distinguishes them once only one writer sets it). Decision 53 then removed the remaining
+case in which a stored verdict completed the stage.
+
+## 53. `orch gh ci` completes the ci stage itself; a stored verdict never does
+
+**Observed (Phase 1 acceptance closure).** After decision 52 a resumed session could still complete
+`ci` on a stored `orch gh ci` verdict for the current HEAD without reading GitHub again. The verdict
+was genuine for that commit, but completion is a claim about the PR, and between the read and the
+completion the PR can be closed, its head can move (a push from outside the job), or a check can be
+rerun for the same commit and fail. `reconcileCi` detects all three; the stored-verdict path skipped
+it. The gate also had no way to tell a stored verdict from a fresh one without a timestamp
+heuristic.
+
+**Decision.** The read and the completion are one operation. `reconcileCi` calls `completeCi`
+(`ops/gates.ts`: clean tree, `ciHead` equals HEAD, valid verification run, authorized policy, then
+the pure transition) in the same call that evaluated GitHub's checks for the PR head, and
+`transitionGuarded` refuses `complete` in the `ci` stage outright, so the CLI, the plan, and a
+resumed session have exactly one way to finish: run `orch gh ci`, which reads first. The plan for
+`ci` therefore always lists `orch gh ci`; a recorded passing verdict is mentioned as something to
+confirm, not reuse. Skipped-only check runs are now `none` even when a human made the checks
+required (GitHub's merge button would count them): the factory does not infer success from a check
+that did not run, and the human close-out (`resume --to completed`, recorded `acceptedByHuman`)
+remains the explicit, distinguishable exception. The normal flow makes no extra API call (the
+passing read already happened); only a resumed session with a stored verdict pays one read, which is
+the read it was missing. Rejected: a freshness window on `ciCheckedAt` (a timer standing in for a
+fact that is cheap to re-read), and re-reading GitHub inside `orch job transition complete` (a
+"transition" that calls the network and can rework the job would surprise every caller).
+
+## 54. CI: every page, one bounded re-run per head, and a cadence the CLI computes
 
 **Pagination.** `listChecksFor` read `check-runs?per_page=100` once; a commit with more runs (large
 matrices do this) was evaluated on a partial list, and a failed required check on the second page

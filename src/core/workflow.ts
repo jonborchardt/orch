@@ -196,7 +196,11 @@ export function transition(
         case 'ci': {
           // Only GitHub's verdict for the PR head counts; `orch gh ci` is what records it.
           if (!job.prUrl) reject('no PR is recorded');
-          if (job.ciStatus !== 'passing' || !job.ciHead) {
+          if (!job.ciHead) {
+            // `pr create` and `pr status` record the rollup without a head: not a verdict.
+            reject('no CI verdict has been read for the PR head; run orch gh ci');
+          }
+          if (job.ciStatus !== 'passing') {
             reject(
               `required checks are ${job.ciStatus ?? 'not observed'} for the PR head; run orch gh ci`,
             );

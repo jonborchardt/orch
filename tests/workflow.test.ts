@@ -104,7 +104,7 @@ describe('transition: happy path', () => {
     expect([j.stage, j.status]).toEqual(['ci', 'pending']);
     j = step(j, 'start');
     // A recorded PR is not a delivery: GitHub's verdict for the PR head is.
-    expect(() => run(j, 'complete')).toThrow(/required checks are not observed/);
+    expect(() => run(j, 'complete')).toThrow(/no CI verdict has been read/);
     j = { ...j, ciStatus: 'pending', ciHead: 'abc' };
     expect(() => run(j, 'complete')).toThrow(/required checks are pending/);
     j = { ...j, ciStatus: 'failing' };

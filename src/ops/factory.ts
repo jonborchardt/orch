@@ -48,7 +48,7 @@ import {
   verificationStatus,
   type VerificationStatus,
 } from './verify.ts';
-import { createWorktree, showWorktree } from './worktree.ts';
+import { adoptWorktree, createWorktree, showWorktree } from './worktree.ts';
 
 export function configPath(store: Store): string {
   return join(store.paths.config, 'factory.json');
@@ -460,10 +460,9 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     case 'ci': {
       const ci = `orch gh ci ${id}${tok}`;
       const budget = `Repairs used: ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}.`;
-      if (ciCurrent && job.ciStatus === 'passing') {
-        plan.reason = `Required checks passed for ${job.ciHead?.slice(0, 7) ?? '?'}. Complete the job.`;
-        plan.commands = [...start, complete];
-      } else if (plan.ci.release) {
+      // A stored verdict, even a passing one for HEAD, never completes the stage: orch gh ci
+      // re-reads GitHub and completes in the same call when the checks still pass for this head.
+      if (plan.ci.release) {
         plan.reason =
           `CI is still pending after ${String(sessionPolls)} observations in this session. Release the job, ` +
           `tell the user CI is running, and stop; orch factory resume re-reads GitHub later. ${budget}` +
@@ -472,11 +471,14 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       } else {
         plan.reason =
           `Reconcile CI for the PR head through orch gh ci; it records GitHub's verdict for the exact commit and ` +
-          `acts on it (passing: complete; failing: re-run once, then rework to build with saved logs; cannot run ` +
-          `or no checks: escalate). Pending checks are only an observation: sleep plan.ci.waitSeconds ` +
+          `acts on it (passing: completes the job; failing: re-run once, then rework to build with saved logs; ` +
+          `cannot run or no checks: escalate). Pending checks are only an observation: sleep plan.ci.waitSeconds ` +
           `(${String(plan.ci.waitSeconds)} s now) and run it again; the CLI never polls by itself. ${budget}` +
           (job.ciHead && !ciCurrent
             ? ` The last observation was for ${job.ciHead.slice(0, 7)}, not HEAD ${worktree.head?.slice(0, 7) ?? '?'}.`
+            : '') +
+          (ciCurrent && job.ciStatus === 'passing'
+            ? ` A passing verdict is recorded for ${job.ciHead?.slice(0, 7) ?? '?'}; it is confirmed against GitHub, not reused.`
             : '') +
           (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
         plan.commands = [...start, ci, `orch factory next ${id}`];
@@ -543,12 +545,20 @@ export interface ResumeInput {
   to?: Stage | undefined;
   force?: boolean | undefined;
   ui?: boolean | undefined;
+  /**
+   * An existing worktree of the job's repository to adopt when the job has none yet: the one a
+   * dispatched session was launched in (VS Code creates it before the session starts). Ignored
+   * once the job has a worktree, so a session may always pass its own.
+   */
+  adopt?: string | undefined;
 }
 
 export interface ResumeResult extends StartResult {
   /** Whether a different session previously owned the job. */
   tookOver: boolean;
   previousOwner: string | null;
+  /** What happened to `adopt`: null when it was not given. */
+  adopted: 'adopted' | 'kept-existing' | null;
 }
 
 /**
@@ -564,8 +574,15 @@ export function resumeFactoryJob(store: Store, id: string, input: ResumeInput): 
     force: input.force,
   });
   let job = getJob(store.db, id);
+  let adopted: ResumeResult['adopted'] = null;
   if (job.stage !== 'needs-human' && job.stage !== 'completed' && job.status !== 'cancelled') {
-    job = createWorktree(store, id, { token }).job;
+    if (input.adopt !== undefined && job.worktreePath === null) {
+      job = adoptWorktree(store, id, { token }, input.adopt).job;
+      adopted = 'adopted';
+    } else {
+      if (input.adopt !== undefined) adopted = 'kept-existing';
+      job = createWorktree(store, id, { token }).job;
+    }
   }
   return {
     plan: planJob(store, id, { ui: input.ui }),
@@ -573,6 +590,7 @@ export function resumeFactoryJob(store: Store, id: string, input: ResumeInput): 
     job,
     tookOver: previousOwner !== null && previousOwner !== input.session,
     previousOwner,
+    adopted,
   };
 }
 

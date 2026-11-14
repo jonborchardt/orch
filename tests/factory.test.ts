@@ -405,12 +405,12 @@ describe('approval, rejection, delivery', () => {
       ciStatus: 'none',
     });
     expect(ci.ci).toMatchObject({ head: null, current: false, repairs: 0, maxRepairs: 2 });
-    // Completing ci without GitHub's verdict for this head is refused: the gate sees no observed
-    // commit, and the pure rules would refuse the `none` rollup anyway.
+    // Completing ci by hand is refused outright (only orch gh ci completes it, after a fresh
+    // read), and the pure rules would refuse the headless `none` rollup anyway.
     go(c, 'start');
-    expect(() => go(c, 'complete')).toThrow(/CI was last observed for no commit/);
+    expect(() => go(c, 'complete')).toThrow(/completed by orch gh ci/);
     expect(() => transitionJob(store, c.id, 'complete', { token: c.token })).toThrow(
-      /required checks are none/,
+      /no CI verdict has been read/,
     );
     // The shim saw exactly one create, with a draft flag and the pr.md body.
     const creates = shim.read().calls.filter((x) => x[1] === 'create');
