@@ -25,6 +25,8 @@ function row(over: Partial<BoardRow>): BoardRow {
     branch: 'factory/job-00000001-job',
     reviews: [],
     blocking: null,
+    blocker: null,
+    resume: null,
     createdAt: '2026-11-13T08:00:00.000Z',
     updatedAt: '2026-11-13T08:30:00.000Z',
     completedAt: null,
@@ -48,6 +50,12 @@ const rows: BoardRow[] = [
     ],
     blocking: 2,
     round: 1,
+    blocker: {
+      kind: 'interrupted',
+      summary: 'Session claude-2 stopped renewing its lease; presumed gone',
+      detail: null,
+    },
+    resume: '/factory resume job-00000002',
   }),
   row({
     id: 'job-00000003',
@@ -56,11 +64,32 @@ const rows: BoardRow[] = [
     stage: 'needs-human',
     status: 'blocked',
     liveness: 'blocked',
+    blocker: {
+      kind: 'decision',
+      summary: 'Approver escalated: a human must decide',
+      detail: 'AC2 needs deployment verification',
+    },
+    resume: '/factory resume job-00000003',
     pr: {
       url: 'https://github.com/x/y/pull/1',
       state: 'draft',
       ciStatus: 'failing',
       ciCheckedAt: null,
+    },
+  }),
+  row({
+    id: 'job-00000004',
+    title: 'Delta cancelled',
+    repo: 'gamma',
+    stage: 'build',
+    status: 'cancelled',
+    liveness: 'cancelled',
+    owner: null,
+    completedAt: '2026-11-13T08:40:00.000Z',
+    blocker: {
+      kind: 'cancelled',
+      summary: 'Cancelled during build by dashboard',
+      detail: 'superseded by job-00000005',
     },
   }),
 ];
@@ -111,13 +140,25 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     worktree: null,
     plan: null,
     planError: 'config broken',
-    links: { vscode: 'vscode://file//wt/g', pr: null },
+    blocker: {
+      kind: 'decision',
+      summary: 'Approver escalated: a human must decide',
+      detail: 'AC2 needs deployment verification',
+    },
+    actions: ['approve', 'request-review', 'request-rework', 'cancel'],
+    links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null },
+    resume: '/factory resume job-00000003',
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
     ...over,
   };
 }
 
 type FetchMock = ReturnType<typeof vi.fn>;
+
+function must<T>(x: T | null | undefined): T {
+  if (x === null || x === undefined) throw new Error('expected an element');
+  return x;
+}
 let data: { rows: BoardRow[]; detail: JobDetailView; actionStatus: number; actionBody: unknown };
 
 function mockFetch(): FetchMock {
@@ -186,14 +227,86 @@ describe('App board', () => {
     mockFetch();
     mount();
     const table = await screen.findByRole('table', { name: 'Factory jobs' });
-    expect(within(table).getAllByRole('row')).toHaveLength(4);
-    expect(within(table).getByText('running (lease live)')).toBeInTheDocument();
-    expect(within(table).getByText('last reported running')).toBeInTheDocument();
-    expect(within(table).getByText('needs human')).toBeInTheDocument();
+    expect(within(table).getAllByRole('row')).toHaveLength(5);
+    expect(within(table).getByText(/running \(lease live\)/)).toBeInTheDocument();
+    expect(within(table).getByText(/last reported running/)).toBeInTheDocument();
+    expect(within(table).getByText(/needs human/)).toBeInTheDocument();
     expect(within(table).getByText('correctness: pending')).toBeInTheDocument();
     expect(within(table).getByText('CI failing')).toBeInTheDocument();
     expect(within(table).getByText('github.com/acme/beta')).toBeInTheDocument();
     expect(screen.getByText('1 stale')).toBeInTheDocument();
+  });
+
+  it('never styles a cancelled job as a success, and keeps stage apart from status', async () => {
+    mockFetch();
+    mount();
+    const table = await screen.findByRole('table', { name: 'Factory jobs' });
+    const cancelled = must(table.querySelector<HTMLElement>('[data-job-id="job-00000004"]'));
+    const chip = must(cancelled.querySelector<HTMLElement>('[data-state]'));
+    expect(chip).toHaveAttribute('data-state', 'cancelled');
+    expect(chip).toHaveTextContent('cancelled');
+    expect(chip.className).toContain('MuiChip-colorDefault');
+    expect(chip.className).not.toContain('MuiChip-colorSuccess');
+    // The workflow stage it stopped in is still shown, as a stage, next to the cancelled status.
+    expect(within(cancelled).getByText('build')).toBeInTheDocument();
+    expect(within(cancelled).getByText(/superseded by job-00000005/)).toBeInTheDocument();
+    // A cancelled job cannot be resumed, so no resume control is offered.
+    expect(
+      within(cancelled).queryByRole('button', { name: /Copy resume command/ }),
+    ).not.toBeInTheDocument();
+    // Only a truly completed job gets the success colour.
+    data.rows = [row({ id: 'job-00000001', liveness: 'completed', status: 'completed' })];
+    await waitFor(() => {
+      expect(screen.getByText(/✓ completed/)).toBeInTheDocument();
+    });
+    expect(
+      must(screen.getByText(/✓ completed/).closest<HTMLElement>('[data-state]')).className,
+    ).toContain('MuiChip-colorSuccess');
+  });
+
+  it('explains blockers on the board and offers resume only for eligible jobs', async () => {
+    const write = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: write },
+      configurable: true,
+    });
+    const f = mockFetch();
+    mount();
+    const table = await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(
+      within(table).getByText(
+        'Approver escalated: a human must decide: AC2 needs deployment verification',
+      ),
+    ).toBeInTheDocument();
+    expect(within(table).getByText(/presumed gone/)).toBeInTheDocument();
+    const copies = within(table).getAllByRole('button', { name: /Copy resume command/ });
+    expect(copies.map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Copy resume command for job-00000002',
+      'Copy resume command for job-00000003',
+    ]);
+    fireEvent.click(must(copies[1]));
+    await waitFor(() => {
+      expect(write).toHaveBeenCalledWith('/factory resume job-00000003');
+    });
+    expect(
+      await screen.findByText(/Paste it into a Claude Code session opened in \/r/),
+    ).toBeVisible();
+    // Copying is presentation only: nothing was posted.
+    expect(
+      f.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST'),
+    ).toBe(false);
+  });
+
+  it('filters cancelled jobs separately from finished ones', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'cancelled' }));
+    await waitFor(() => {
+      expect(screen.getAllByRole('row')).toHaveLength(2);
+    });
+    expect(screen.getByText('Delta cancelled')).toBeInTheDocument();
   });
 
   it('refreshes while state changes underneath it', async () => {
@@ -204,13 +317,13 @@ describe('App board', () => {
       row({
         id: 'job-00000001',
         title: 'Alpha running',
-        liveness: 'finished',
+        liveness: 'completed',
         status: 'completed',
         stage: 'completed',
       }),
     ];
     await waitFor(() => {
-      expect(screen.getByText('finished')).toBeInTheDocument();
+      expect(screen.getByText(/✓ completed/)).toBeInTheDocument();
     });
     expect(f.mock.calls.length).toBeGreaterThan(2);
   });
@@ -265,7 +378,9 @@ describe('Job detail', () => {
       expect(screen.getByRole('status')).toHaveTextContent('No session is running it');
     });
     expect(
-      screen.getByText('orch factory resume job-00000003 --session <name>'),
+      within(screen.getByRole('status')).getByText(
+        'orch factory resume job-00000003 --session <name>',
+      ),
     ).toBeInTheDocument();
   });
 
@@ -289,6 +404,85 @@ describe('Job detail', () => {
         within(dialog).getByText(/ValidationError: Session claude-9 holds a live lease/),
       ).toBeInTheDocument();
     });
+  });
+
+  it('makes Approve primary only at a genuine approval gate, with the resume affordance', async () => {
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByText('Decision needed.')).toBeInTheDocument();
+    expect(screen.getByText(/Recorded reason: AC2 needs deployment verification/)).toBeVisible();
+    const approve = screen.getByRole('button', { name: 'Approve' }).className;
+    expect(approve).toContain('MuiButton-contained');
+    expect(approve).toContain('MuiButton-colorSuccess');
+    expect(screen.queryByTestId('approve-caution')).not.toBeInTheDocument();
+    const resume = screen.getByTestId('resume');
+    expect(within(resume).getByText('/factory resume job-00000003')).toBeInTheDocument();
+    expect(within(resume).getByText(/opened in/).textContent).toContain('/g');
+    expect(within(resume).getByText(/Copying does not resume anything/)).toBeInTheDocument();
+    expect(within(resume).getByRole('link', { name: 'Open checkout in VS Code' })).toHaveAttribute(
+      'href',
+      'vscode://file//g',
+    );
+    expect(screen.getByText(/stage: needs-human/)).toBeInTheDocument();
+  });
+
+  it('demotes Approve and admits an unknown reason when the escalation is not a decision', async () => {
+    mockFetch();
+    data.detail = detail({
+      blocker: { kind: 'escalated', summary: 'Escalated from build', detail: null },
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByText(/No reason was recorded/)).toBeInTheDocument();
+    const approve = screen.getByRole('button', { name: 'Approve' });
+    expect(approve.className).toContain('MuiButton-outlined');
+    expect(approve.className).not.toContain('MuiButton-colorSuccess');
+    expect(screen.getByTestId('approve-caution')).toHaveTextContent('not waiting for an approval');
+    expect(screen.getByRole('button', { name: 'Request rework' }).className).toContain(
+      'MuiButton-contained',
+    );
+  });
+
+  it('offers recovery, not approval, for an interrupted job and nothing for a cancelled one', async () => {
+    mockFetch();
+    const base = detail();
+    data.detail = detail({
+      job: { ...base.job, stage: 'build', status: 'interrupted', round: 0, returnStage: null },
+      liveness: 'interrupted',
+      blocker: {
+        kind: 'interrupted',
+        summary: 'Interrupted while running under session claude-7',
+        detail: null,
+      },
+      actions: ['request-rework', 'cancel'],
+      resume: '/factory resume job-00000003',
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(screen.getByText('Interrupted.')).toBeInTheDocument();
+    expect(screen.getByTestId('resume')).toHaveTextContent('/factory resume job-00000003');
+    expect(screen.getByTestId('resume')).toHaveTextContent('takes the job over');
+    expect(screen.getByRole('button', { name: 'Cancel job' })).toBeInTheDocument();
+    cleanup();
+
+    data.detail = detail({
+      job: { ...base.job, stage: 'build', status: 'cancelled', completedAt: base.job.updatedAt },
+      liveness: 'cancelled',
+      blocker: { kind: 'cancelled', summary: 'Cancelled during build', detail: 'dup' },
+      actions: [],
+      resume: null,
+    });
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByText('No actions: the job is cancelled.')).toBeInTheDocument();
+    expect(screen.queryByTestId('resume')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel job' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Recorded reason: dup/)).toBeInTheDocument();
   });
 
   it('Markdown renders headings, lists, code, markers, and never HTML', () => {

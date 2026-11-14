@@ -4,8 +4,11 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { board, detail, liveness } from '../src/server/api.ts';
+import { blockerOf, type Evidence, resumeCommand } from '../src/server/status.ts';
+import type { Artifact, Event, VerificationRun } from '../src/storage/schema.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
 import type { ActionResponse, BoardRow, JobDetailView, SessionInfo } from '../src/server/types.ts';
 import { getJob } from '../src/storage/jobs.ts';
@@ -64,9 +67,11 @@ describe('seeded board and detail', () => {
 
   it('lists every job across repositories with honest liveness and review state', async () => {
     const rows = (await (await api('/api/jobs')).json()) as BoardRow[];
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(7);
     const by = (id: string) => rows.find((r) => r.id === id) ?? ({} as BoardRow);
     expect(by(ids.reviewing).liveness).toBe('running');
+    expect(by(ids.reviewing).blocker).toBeNull();
+    expect(by(ids.reviewing).resume).toBeNull(); // a live session is working on it
     expect(by(ids.reviewing).owner?.live).toBe(true);
     expect(by(ids.reviewing).reviews.map((v) => `${v.reviewer}:${v.verdict ?? 'pending'}`)).toEqual(
       ['security:pass', 'correctness:pending', 'code-quality:pending'],
@@ -74,16 +79,49 @@ describe('seeded board and detail', () => {
     expect(by(ids.reviewing).blocking).toBe(2); // from round 1 while round 2 is open
     expect(by(ids.stale).liveness).toBe('stale');
     expect(by(ids.stale).owner?.live).toBe(false);
+    expect(by(ids.stale).blocker?.kind).toBe('interrupted');
+    expect(by(ids.stale).resume).toBe(`/factory resume ${ids.stale}`);
     expect(by(ids.blocked).liveness).toBe('blocked');
-    expect(by(ids.completed).liveness).toBe('finished');
+    // The approver's escalation is a decision gate; its recorded reason is shown verbatim.
+    expect(by(ids.blocked).blocker).toEqual({
+      kind: 'decision',
+      summary: 'Approver escalated: a human must decide',
+      detail: 'AC2 needs deployment verification; unrequested logging change',
+    });
+    expect(by(ids.blocked).resume).toBe(`/factory resume ${ids.blocked}`);
+    expect(by(ids.completed).liveness).toBe('completed');
+    expect(by(ids.completed).blocker).toBeNull();
+    expect(by(ids.completed).resume).toBeNull();
     expect(by(ids.completed).pr).toMatchObject({
       url: 'https://github.com/acme/alpha/pull/41',
       state: 'draft',
       ciStatus: 'failing',
     });
+    // Cancelled is its own state, never "finished" like a success, and carries its reason.
     expect(by(ids.cancelled).status).toBe('cancelled');
+    expect(by(ids.cancelled).liveness).toBe('cancelled');
+    expect(by(ids.cancelled).blocker).toMatchObject({
+      kind: 'cancelled',
+      detail: 'decided against it',
+    });
+    expect(by(ids.cancelled).blocker?.summary).toContain('by claude-20261110-1200-0000');
+    expect(by(ids.cancelled).resume).toBeNull();
     expect(by(ids.fresh).owner).toBeNull();
     expect(by(ids.fresh).liveness).toBe('idle');
+    expect(by(ids.fresh).blocker).toEqual({
+      kind: 'waiting',
+      summary: 'No session owns this job',
+      detail: null,
+    });
+    expect(by(ids.fresh).resume).toBe(`/factory resume ${ids.fresh}`);
+    expect(by(ids.failed).liveness).toBe('failed');
+    expect(by(ids.failed).stage).toBe('build'); // stage and execution state stay distinct
+    expect(by(ids.failed).blocker).toEqual({
+      kind: 'failed',
+      summary: 'Stage build failed',
+      detail: 'required check "test" failed twice',
+    });
+    expect(by(ids.failed).resume).toBe(`/factory resume ${ids.failed}`);
     expect(rows.every((r) => r.elapsedMs >= 0)).toBe(true);
     expect(await (await api('/api/repos')).json()).toEqual([
       'gamma',
@@ -94,6 +132,14 @@ describe('seeded board and detail', () => {
       await api('/api/jobs?repo=github.com%2Facme%2Fbeta')
     ).json()) as BoardRow[];
     expect(beta.map((r) => r.id).sort()).toEqual([ids.blocked, ids.stale].sort());
+  });
+
+  it('reading the board or a detail never mutates a job', async () => {
+    const snapshot = () => JSON.stringify(board(store).map((r) => [r.id, r.status, r.updatedAt]));
+    const before = snapshot();
+    await api('/api/jobs');
+    await api(`/api/jobs/${ids.stale}`);
+    expect(snapshot()).toBe(before);
   });
 
   it('never exposes owner tokens anywhere', async () => {
@@ -122,11 +168,22 @@ describe('seeded board and detail', () => {
     expect(d.plan?.step).toBe('done');
     expect(d.links.pr).toBe('https://github.com/acme/alpha/pull/41');
     expect(d.links.vscode).toBeNull(); // no worktree recorded for the fixture
+    expect(d.links.checkout).toMatch(/^vscode:\/\/file\/.*alpha/);
     expect(d.resumeCommand).toContain(ids.completed);
-    expect(d.liveness).toBe('finished');
+    expect(d.liveness).toBe('completed');
+    expect(d.actions).toEqual([]);
+    expect(d.resume).toBeNull();
     const blocked = (await (await api(`/api/jobs/${ids.blocked}`)).json()) as JobDetailView;
     expect(blocked.plan?.step).toBe('needs-human');
     expect(blocked.plan?.blockedReason).toContain('deployment');
+    expect(blocked.blocker?.kind).toBe('decision');
+    expect(blocked.actions).toEqual(['approve', 'request-review', 'request-rework', 'cancel']);
+    expect(blocked.resume).toBe(`/factory resume ${ids.blocked}`);
+    const failed = (await (await api(`/api/jobs/${ids.failed}`)).json()) as JobDetailView;
+    expect(failed.actions).toEqual(['request-rework', 'cancel']); // no approve: not a gate
+    const cancelled = (await (await api(`/api/jobs/${ids.cancelled}`)).json()) as JobDetailView;
+    expect(cancelled.actions).toEqual([]);
+    expect(cancelled.resume).toBeNull();
   });
 
   it('serves only registered artifacts and rejects traversal', async () => {
@@ -287,6 +344,11 @@ describe('mutations', () => {
       await post(ids.blocked, { action: 'approve', reason: 'checked' }, h)
     ).json()) as ActionResponse;
     expect([approved.job.stage, approved.job.status]).toEqual(['approve', 'pending']);
+    // Released and pending: the board now says a session must resume it.
+    const row = board(store).find((r) => r.id === ids.blocked);
+    expect(row?.liveness).toBe('idle');
+    expect(row?.blocker?.kind).toBe('waiting');
+    expect(row?.resume).toBe(`/factory resume ${ids.blocked}`);
     // Stale job (lapsed lease): no force needed; request another review round.
     const stale = (await (
       await post(ids.stale, { action: 'request-rework' }, h)
@@ -325,8 +387,188 @@ describe('liveness', () => {
     expect(liveness(j('running', 'build', null))).toBe('stale');
     expect(liveness(j('pending'))).toBe('idle');
     expect(liveness(j('blocked', 'needs-human'))).toBe('blocked');
-    expect(liveness(j('completed', 'completed'))).toBe('finished');
-    expect(liveness(j('cancelled'))).toBe('finished');
+    expect(liveness(j('failed'))).toBe('failed');
+    expect(liveness(j('interrupted'))).toBe('interrupted');
+    expect(liveness(j('completed', 'completed'))).toBe('completed');
+    expect(liveness(j('cancelled'))).toBe('cancelled');
+  });
+});
+
+describe('blocker and resume derivation', () => {
+  const future = '2999-01-01T00:00:00.000Z';
+  const past = '2000-01-01T00:00:00.000Z';
+  const job = (over: Partial<Parameters<typeof blockerOf>[0]> = {}) => ({
+    status: 'blocked' as const,
+    stage: 'needs-human' as const,
+    round: 2,
+    leaseExpiresAt: null,
+    ownerSession: null,
+    ...over,
+  });
+  const event = (type: string, payload: Record<string, unknown>, actor = 's'): Event => ({
+    id: 1,
+    jobId: 'job-00000001',
+    type,
+    payload,
+    actor,
+    createdAt: past,
+  });
+  const artifact = (path: string, marker: string | null): Artifact => ({
+    id: 1,
+    jobId: 'job-00000001',
+    stage: 'review',
+    round: null,
+    path,
+    bytes: 1,
+    sha256: null,
+    marker,
+    head: null,
+    createdAt: past,
+  });
+  const evidence = (over: Partial<Evidence> = {}): Evidence => ({
+    events: new Map(),
+    artifacts: [],
+    latestRun: null,
+    ...over,
+  });
+  const failedRun = { status: 'failed', head: 'abcdef0123456789' } as VerificationRun;
+
+  it('does not invent a reason when none is recorded', () => {
+    expect(blockerOf(job(), 'blocked', evidence())).toEqual({
+      kind: 'escalated',
+      summary: 'Escalated',
+      detail: null,
+    });
+    const blank = new Map([['job.blocked', event('job.blocked', { from: 'build', reason: '  ' })]]);
+    expect(blockerOf(job(), 'blocked', evidence({ events: blank }))).toEqual({
+      kind: 'escalated',
+      summary: 'Escalated from build',
+      detail: null,
+    });
+    expect(blockerOf(job({ status: 'failed', stage: 'build' }), 'failed', evidence())).toEqual({
+      kind: 'failed',
+      summary: 'Stage build failed',
+      detail: null,
+    });
+  });
+
+  it('classifies from structured fields only: max rounds, decision marker, failed run', () => {
+    const maxRounds = new Map([
+      ['job.blocked', event('job.blocked', { from: 'review', reason: MAX_ROUNDS_REASON })],
+    ]);
+    expect(
+      blockerOf(
+        job(),
+        'blocked',
+        evidence({ events: maxRounds, artifacts: [artifact('round-2/consolidated.md', '3')] }),
+      ),
+    ).toMatchObject({ kind: 'findings', detail: null });
+    expect(
+      blockerOf(
+        job(),
+        'blocked',
+        evidence({ events: maxRounds, artifacts: [artifact('round-2/consolidated.md', '3')] }),
+      )?.summary,
+    ).toContain('3 blocking');
+    expect(blockerOf(job(), 'blocked', evidence({ events: maxRounds }))?.summary).toContain(
+      'still request changes',
+    );
+    // The same `from: review` without the code-generated reason is just an escalation.
+    const other = new Map([['job.blocked', event('job.blocked', { from: 'review', reason: 'x' })]]);
+    expect(blockerOf(job(), 'blocked', evidence({ events: other }))?.kind).toBe('escalated');
+
+    const fromApprove = new Map([
+      ['job.blocked', event('job.blocked', { from: 'approve', reason: 'needs a product call' })],
+    ]);
+    expect(
+      blockerOf(
+        job(),
+        'blocked',
+        evidence({ events: fromApprove, artifacts: [artifact('decision.md', 'escalate')] }),
+      ),
+    ).toEqual({
+      kind: 'decision',
+      summary: 'Approver escalated: a human must decide',
+      detail: 'needs a product call',
+    });
+    // From approve but decision.md says APPROVE (or is absent): not a decision gate.
+    expect(
+      blockerOf(
+        job(),
+        'blocked',
+        evidence({ events: fromApprove, artifacts: [artifact('decision.md', 'approve')] }),
+      )?.kind,
+    ).toBe('escalated');
+
+    expect(blockerOf(job(), 'blocked', evidence({ latestRun: failedRun }))).toEqual({
+      kind: 'verification',
+      summary: 'Verification failed at abcdef0',
+      detail: null,
+    });
+    const failedJob = job({ status: 'failed', stage: 'build' });
+    expect(blockerOf(failedJob, 'failed', evidence({ latestRun: failedRun }))?.kind).toBe(
+      'verification',
+    );
+  });
+
+  it('explains interruptions, waiting, and cancellation; nothing for running or completed', () => {
+    const running = { status: 'running', stage: 'build', ownerSession: 'c1' } as const;
+    const stale = blockerOf(job({ ...running, leaseExpiresAt: past }), 'stale', evidence());
+    expect(stale?.kind).toBe('interrupted');
+    expect(stale?.summary).toContain('c1');
+    const interrupted = evidence({
+      events: new Map([['job.interrupted', event('job.interrupted', { previousSession: 'c0' })]]),
+    });
+    expect(
+      blockerOf(job({ status: 'interrupted', stage: 'build' }), 'interrupted', interrupted)
+        ?.summary,
+    ).toContain('under session c0');
+    const pending = { status: 'pending', stage: 'build' } as const;
+    expect(blockerOf(job(pending), 'idle', evidence())?.kind).toBe('waiting');
+    const owned = job({ ...pending, ownerSession: 'c1', leaseExpiresAt: future });
+    expect(blockerOf(owned, 'idle', evidence())).toBeNull();
+    const lapsed = job({ ...pending, ownerSession: 'c1', leaseExpiresAt: past });
+    expect(blockerOf(lapsed, 'idle', evidence())?.summary).toContain('lapsed');
+    const cancelled = evidence({
+      events: new Map([
+        [
+          'job.cancelled',
+          event('job.cancelled', { stage: 'pr', reason: 'superseded' }, 'dashboard'),
+        ],
+      ]),
+    });
+    expect(blockerOf(job({ status: 'cancelled', stage: 'pr' }), 'cancelled', cancelled)).toEqual({
+      kind: 'cancelled',
+      summary: 'Cancelled during pr by dashboard',
+      detail: 'superseded',
+    });
+    expect(blockerOf(job(running), 'running', evidence())).toBeNull();
+    expect(
+      blockerOf(job({ status: 'completed', stage: 'completed' }), 'completed', evidence()),
+    ).toBeNull();
+  });
+
+  it('offers resume only when a session may take the job', () => {
+    const id = 'job-00000001';
+    const j = (over: Partial<Parameters<typeof resumeCommand>[0]>) => ({
+      id,
+      status: 'pending' as const,
+      stage: 'build' as const,
+      leaseExpiresAt: null,
+      ownerSession: null,
+      ...over,
+    });
+    const cmd = `/factory resume ${id}`;
+    expect(resumeCommand(j({}), 'idle')).toBe(cmd);
+    expect(resumeCommand(j({ ownerSession: 'c1', leaseExpiresAt: future }), 'idle')).toBeNull();
+    expect(resumeCommand(j({ ownerSession: 'c1', leaseExpiresAt: past }), 'idle')).toBe(cmd);
+    expect(resumeCommand(j({ status: 'running', ownerSession: 'c1' }), 'running')).toBeNull();
+    expect(resumeCommand(j({ status: 'running', ownerSession: 'c1' }), 'stale')).toBe(cmd);
+    for (const s of ['interrupted', 'failed', 'blocked'] as const) {
+      expect(resumeCommand(j({ status: s }), s)).toBe(cmd);
+    }
+    expect(resumeCommand(j({ status: 'completed' }), 'completed')).toBeNull();
+    expect(resumeCommand(j({ status: 'cancelled' }), 'cancelled')).toBeNull();
   });
 });
 

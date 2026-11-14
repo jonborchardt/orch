@@ -13,7 +13,8 @@ import {
 } from '@mui/material';
 
 import type { BoardRow } from '../../src/server/types.ts';
-import { LIVENESS_COLOR, LIVENESS_LABEL, ago, ciColor, elapsed, verdictColor } from './format.ts';
+import { BlockerText, CopyResume, StatusChip } from './Status.tsx';
+import { ago, ciColor, elapsed, verdictColor } from './format.ts';
 
 export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
   if (rows.length === 0) {
@@ -63,14 +64,13 @@ export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
                 <Chip label={r.stage} variant="outlined" />
               </TableCell>
               <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                <Chip
-                  label={LIVENESS_LABEL[r.liveness]}
-                  color={LIVENESS_COLOR[r.liveness]}
-                  variant={r.liveness === 'stale' ? 'outlined' : 'filled'}
-                />
-                <Typography component="div" variant="caption" color="text.secondary">
-                  {r.status}
-                </Typography>
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                  <StatusChip state={r.liveness} />
+                  {r.resume && (
+                    <CopyResume id={r.id} command={r.resume} checkout={r.repoPath} compact />
+                  )}
+                </Stack>
+                {r.blocker && <BlockerText blocker={r.blocker} compact />}
               </TableCell>
               <TableCell sx={{ whiteSpace: 'nowrap' }}>
                 {r.owner ? (

@@ -3,7 +3,7 @@
  * write is an owner mutation through `mutate` in jobs.ts, so a revoked token stops the record
  * mid-run and the run stays `running` (which never counts as evidence).
  */
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 
 import { NotFoundError } from '../core/errors.ts';
 
@@ -169,6 +169,20 @@ export function listRuns(db: Db, jobId: string): VerificationRun[] {
     .where(eq(verificationRuns.jobId, jobId))
     .orderBy(desc(verificationRuns.id))
     .all();
+}
+
+/** Newest run per job (checks not loaded); one query for the whole board. */
+export function latestRunsByJob(db: Db, jobIds: readonly string[]): Map<string, VerificationRun> {
+  const out = new Map<string, VerificationRun>();
+  if (jobIds.length === 0) return out;
+  const rows = db
+    .select()
+    .from(verificationRuns)
+    .where(inArray(verificationRuns.jobId, [...jobIds]))
+    .orderBy(verificationRuns.id)
+    .all();
+  for (const r of rows) out.set(r.jobId, r);
+  return out;
 }
 
 export function listChecks(db: Db, runId: number): VerificationCheck[] {

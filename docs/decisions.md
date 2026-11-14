@@ -390,3 +390,20 @@ loads one agent file per subagent with no include mechanism, so sharing the text
 generated artifact; the duplication is the cost of self-contained agents and a contract test keeps
 the files consistent with `core/roles.ts`. `web/src/Actions.tsx` keeps its own stage list and
 live-lease check because the client may import only types from `src/`.
+
+## 45. Dashboard status is derived, explained from structured fields, and actions come from the server
+
+`liveness` used to fold `completed` and `cancelled` into one green `finished`, and the only
+explanation for a stopped job lived in the detail view's plan. The dashboard now derives one
+execution state per job (`src/server/status.ts`), separate from the workflow stage, and a
+`blocker` built only from persisted fields: the newest `job.blocked` / `stage.failed` /
+`job.interrupted` / `job.cancelled` event (its `from`, `reason`, and actor), the `decision.md`
+marker, the consolidation's BLOCKING count, and the newest verification run. The recorded reason is
+shown verbatim and never parsed; the code-generated `max review rounds reached` reason is the only
+string compared. An escalation the state cannot classify is labelled exactly that. Parsing prose,
+and inferring duplicate jobs from matching titles, were rejected: both would be guesses shown as
+facts. The detail API also lists the actions the workflow allows in the current state
+(`allowedActions` in `ops/actions.ts`), which supersedes the client-side copy of those rules noted
+in §44; the server still validates every POST. The resume affordance is a copied
+`/factory resume <id>` plus the checkout to run it in: nothing on the server starts or wakes a
+session, and copying mutates nothing.

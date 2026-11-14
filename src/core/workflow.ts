@@ -53,6 +53,9 @@ export type Action = (typeof ACTIONS)[number];
 
 export const TERMINAL_STATUSES: readonly Status[] = ['completed', 'cancelled'];
 
+/** Reason recorded on `job.blocked` when a review round still requests changes at `maxRounds`. */
+export const MAX_ROUNDS_REASON = 'max review rounds reached';
+
 /** Artifact a stage must register (relative to the job artifact dir) before it can complete. */
 export function requiredArtifact(stage: Stage, round: number): string | undefined {
   switch (stage) {
@@ -281,7 +284,7 @@ function completeReview(
       patch: { stage: 'needs-human', status: 'blocked', returnStage: 'build' },
       events: [
         { ...completed, payload },
-        { type: 'job.blocked', payload: { from: 'review', reason: 'max review rounds reached' } },
+        { type: 'job.blocked', payload: { from: 'review', reason: MAX_ROUNDS_REASON } },
       ],
     };
   }
