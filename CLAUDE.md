@@ -116,7 +116,9 @@ framework. Upgrade Drizzle deliberately, both packages together.
   or `tests/cli.test.ts` that passes alone is load, not a defect; rerun it in isolation first.
 - CLI tests load `src/` from the checkout they run in, so editing that checkout while its suite
   runs produces spurious failures (`docs/decisions.md` #45). One session per checkout: a parallel
-  session works in its own worktree, never in the primary checkout alongside another.
+  session works in its own worktree, never in the primary checkout alongside another. Read a
+  failing CLI test's stderr before blaming load: a `ReferenceError` or `SyntaxError` means a
+  mid-edit tree.
 
 ## Documentation
 

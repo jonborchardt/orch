@@ -94,7 +94,11 @@ export function showWorktree(store: Store, id: string): WorktreeResult {
   const root = existsSync(job.repoPath) ? job.repoPath : undefined;
   const worktree = root
     ? inspectWorktree(root, path, job.baseBranch)
-    : { ...inspectWorktree(path, path, job.baseBranch), isWorktree: false };
+    : {
+        ...inspectWorktree(path, path, job.baseBranch),
+        isWorktree: false,
+        problem: `repository checkout ${job.repoPath} does not exist`,
+      };
   return { job, worktree };
 }
 

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { OwnershipError, ValidationError, WorkflowError } from '../src/core/errors.ts';
+import { OwnershipError, WorkflowError } from '../src/core/errors.ts';
 import { ROLES } from '../src/core/roles.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
 import { verifyJob } from '../src/ops/verify.ts';
@@ -276,7 +276,30 @@ describe('review rounds', () => {
     rmSync(join(c.wt, 'sneaky.ts'));
     expect(checkReadonly(store, c.id, fp).ok).toBe(true);
     commitFile(c.wt, 'also.ts', 'y');
-    expect(() => checkReadonly(store, c.id, fp)).toThrow(ValidationError);
+    expect(() => checkReadonly(store, c.id, fp)).toThrow(/Reviewers must not modify code/);
+  });
+
+  it('check-readonly reports a failed inspection with its Git error, not as a reviewer write', () => {
+    const c = start();
+    const fp = next(c.id).worktree?.fingerprint ?? '';
+    // Still a worktree, but HEAD names a branch that does not exist, so it cannot be read.
+    const head = join(gitIn(c.wt, 'rev-parse', '--absolute-git-dir'), 'HEAD');
+    const saved = readFileSync(head, 'utf8');
+    writeFileSync(head, 'ref: refs/heads/no-such-branch\n');
+    expect(() => checkReadonly(store, c.id, fp)).toThrow(
+      /^Worktree is missing or unreadable at .*: rev-parse HEAD: git rev-parse failed in .*HEAD/s,
+    );
+    writeFileSync(head, saved);
+    expect(checkReadonly(store, c.id, fp).ok).toBe(true);
+    // The worktree's .git file points at a gitdir that is gone: no longer a worktree at all.
+    // (Removed first: Git marks it hidden, and Windows refuses to overwrite a hidden file.)
+    rmSync(join(c.wt, '.git'));
+    writeFileSync(join(c.wt, '.git'), `gitdir: ${join(c.wt, 'missing-gitdir')}\n`);
+    const r = orch(store.home, tmpdir(), ['factory', 'check-readonly', c.id, '--fingerprint', fp]);
+    expect(r.code, r.err).toBe(1);
+    expect(r.err).toContain('rev-parse --show-toplevel: git rev-parse failed');
+    expect(r.err).toContain('fatal: '); // Git's own message (its wording varies by version)
+    expect(r.err).not.toContain('Reviewers must not modify code');
   });
 
   it('rework rounds: rebuild with --replace, re-review, pass -> approve', () => {
