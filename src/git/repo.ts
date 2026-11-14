@@ -1,5 +1,6 @@
 /** Read-only Git queries. Direct execution with argument arrays; no shell. */
-import { basename, resolve } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
 
 import { ToolError, ValidationError } from '../core/errors.ts';
 import { spawnTool } from '../core/exec.ts';
@@ -44,6 +45,40 @@ export function describeRepo(cwd: string): RepoInfo {
 /** The shared `.git` directory of a checkout or worktree, resolved to an absolute real path. */
 export function commonGitDir(cwd: string): string {
   return canonicalPath(resolve(cwd, git(cwd, 'rev-parse', '--git-common-dir')));
+}
+
+export interface CheckoutIdentity {
+  /** Canonical Git directory: `.git` for the primary checkout, `.git/worktrees/<n>` for a linked one. */
+  key: string;
+  /** Top level of the working tree, as Git reports it. */
+  root: string;
+  /** Canonical common directory shared by the checkout and all its linked worktrees. */
+  commonDir: string;
+  kind: 'primary' | 'worktree';
+}
+
+/**
+ * Identify the checkout containing `path` (a file, a directory, or a path that does not exist
+ * yet, resolved through its nearest existing ancestor). Every checkout has its own Git directory,
+ * so two worktrees of one repository get distinct keys while two spellings of one checkout get
+ * the same one; two unrelated repositories never share a key however their directories are named.
+ * Undefined when `path` is not inside a Git repository.
+ */
+export function checkoutIdentity(path: string): CheckoutIdentity | undefined {
+  let probe = resolve(path);
+  while (!existsSync(probe)) {
+    const parent = dirname(probe);
+    if (parent === probe) return undefined;
+    probe = parent;
+  }
+  if (!statSync(probe).isDirectory()) probe = dirname(probe);
+  const root = findProjectRoot(probe);
+  if (!root) return undefined;
+  const gitDir = tryGit(root, 'rev-parse', '--absolute-git-dir');
+  if (!gitDir) return undefined;
+  const key = canonicalPath(gitDir);
+  const commonDir = commonGitDir(root);
+  return { key, root, commonDir, kind: key === commonDir ? 'primary' : 'worktree' };
 }
 
 /** Paths with uncommitted changes (staged, unstaged, untracked). Empty when clean. */

@@ -2,7 +2,14 @@
  * Database schema. The single source of truth; `npm run db:generate` turns changes into
  * versioned SQL migrations under `drizzle/`. Never edit generated SQL by hand.
  */
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  type AnySQLiteColumn,
+  index,
+  integer,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 import type {
   CheckStatus,
@@ -56,6 +63,8 @@ export const jobs = sqliteTable(
     policy: text({ mode: 'json' }).$type<VerificationPolicy>(),
     /** Commit whose factory.json was authorized. */
     policyHead: text(),
+    /** Job that replaced this one (`orch job supersede`); both histories are kept. */
+    supersededBy: text().references((): AnySQLiteColumn => jobs.id),
     /** Incremented on every mutation; optimistic concurrency check for callers. */
     revision: integer().notNull().default(1),
     createdAt: text().notNull(),

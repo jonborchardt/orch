@@ -5,10 +5,10 @@
  */
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
-import { now, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
+import { cannotAcceptDelivery, now, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
 import type { Store } from '../storage/client.ts';
 import { policyFingerprint } from '../core/verification.ts';
-import { claimJob, getJob, releaseJob, transitionJob } from '../storage/jobs.ts';
+import { claimJob, getJob, releaseJob, supersedeJob, transitionJob } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { authorizePolicy } from '../storage/verification.ts';
 import { worktreeOf } from './tree.ts';
@@ -19,6 +19,7 @@ export const DASHBOARD_ACTIONS = [
   'request-review',
   'request-rework',
   'accept-policy',
+  'accept-delivery',
   'cancel',
 ] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
@@ -45,7 +46,10 @@ export function withoutToken(job: Job): Omit<Job, 'ownerToken'> {
  * these; the server still re-checks every POST, so this is presentation, not authorization.
  */
 export function allowedActions(
-  job: Pick<Job, 'status' | 'stage' | 'round'>,
+  job: Pick<
+    Job,
+    'status' | 'stage' | 'round' | 'returnStage' | 'prUrl' | 'ciHead' | 'ciStatus' | 'prState'
+  >,
   policyDrift: boolean,
 ): DashboardAction[] {
   if (TERMINAL_STATUSES.includes(job.status)) return [];
@@ -54,6 +58,8 @@ export function allowedActions(
   if (job.round > 0) out.push('request-review');
   out.push('request-rework');
   if (policyDrift) out.push('accept-policy');
+  // The same rule the transition applies: never for a pending or failing CI result.
+  if (cannotAcceptDelivery(job) === null) out.push('accept-delivery');
   out.push('cancel');
   return out;
 }
@@ -80,6 +86,57 @@ function target(action: DashboardAction, job: Job, to: Stage | undefined): Stage
   return stage;
 }
 
+/**
+ * A short ownership episode: claim the job as `session` for one minute, run `fn` with the token,
+ * release. A live lease held by another session is respected unless the job is waiting in
+ * needs-human (its session is idle, not working) or the caller forces the takeover.
+ */
+function withLease<T>(
+  store: Store,
+  before: Job,
+  session: string,
+  force: boolean | undefined,
+  fn: (token: string) => T,
+): T {
+  const waiting = before.stage === 'needs-human';
+  const liveOwner =
+    before.ownerSession !== null && before.ownerSession !== session && !leaseExpired(before, now());
+  if (liveOwner && !waiting && !force) {
+    throw new ValidationError(
+      `Session ${String(before.ownerSession)} holds a live lease on this job` +
+        (before.status === 'running' ? ' and reports it running' : '') +
+        '. Use that session, wait for the lease to lapse, or confirm a forced takeover.',
+    );
+  }
+  const { token } = claimJob(store, before.id, {
+    session,
+    force: force ?? (liveOwner && waiting),
+    leaseMinutes: 1,
+  });
+  try {
+    return fn(token);
+  } finally {
+    // Give the job up so a real session can resume it; a dashboard is not a worker.
+    releaseJob(store, before.id, { token });
+  }
+}
+
+export interface SupersedeInput {
+  /** The replacement job. */
+  by: string;
+  session: string;
+  force?: boolean | undefined;
+}
+
+/** `orch job supersede`: record that another job replaced this one, as a short episode. */
+export function supersede(store: Store, id: string, input: SupersedeInput): Job {
+  const before = getJob(store.db, id);
+  withLease(store, before, input.session, input.force, (token) =>
+    supersedeJob(store, id, { token }, input.by),
+  );
+  return getJob(store.db, id);
+}
+
 export function dashboardAction(store: Store, id: string, input: ActionInput): ActionResult {
   const before = getJob(store.db, id);
   if (TERMINAL_STATUSES.includes(before.status)) {
@@ -88,31 +145,24 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   if (input.action === 'approve' && before.stage !== 'needs-human') {
     throw new ValidationError('Only a job waiting in needs-human can be approved from here.');
   }
-  // A session that escalated to needs-human is waiting, not working: no takeover ceremony.
-  const waiting = before.stage === 'needs-human';
-  const liveOwner =
-    before.ownerSession !== null &&
-    before.ownerSession !== DASHBOARD_SESSION &&
-    !leaseExpired(before, now());
-  if (liveOwner && !waiting && !input.force) {
-    throw new ValidationError(
-      `Session ${String(before.ownerSession)} holds a live lease on this job` +
-        (before.status === 'running' ? ' and reports it running' : '') +
-        '. Use that session, wait for the lease to lapse, or confirm a forced takeover.',
-    );
+  if (input.action === 'accept-delivery') {
+    const refused = cannotAcceptDelivery(before);
+    if (refused) throw new ValidationError(`Cannot accept delivery: ${refused}.`);
+    // A manual close-out is recorded with why the human made it; there is no default reason.
+    if (!input.reason?.trim()) {
+      throw new ValidationError('Accepting delivery needs a reason; it is recorded with the job.');
+    }
   }
-  const { token } = claimJob(store, id, {
-    session: DASHBOARD_SESSION,
-    force: input.force ?? (liveOwner && waiting),
-    leaseMinutes: 1,
-  });
   const text = input.reason?.trim();
   const reason = `dashboard: ${text !== undefined && text !== '' ? text : input.action}`;
   let job: Job;
-  try {
+  withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
     const current = getJob(store.db, id);
     if (input.action === 'cancel') {
       job = transitionJob(store, id, 'cancel', { token, reason });
+    } else if (input.action === 'accept-delivery') {
+      // The pure transition re-checks the rule; this is the only path that completes a job by hand.
+      job = transitionJob(store, id, 'resume', { token, to: 'completed', reason });
     } else if (input.action === 'accept-policy') {
       // A human adopts the worktree's factory.json at HEAD as this job's verification policy.
       const tree = worktreeOf(current);
@@ -129,15 +179,21 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
       }
       job = transitionJob(store, id, 'resume', { token, to, reason });
     }
-  } finally {
-    // Give the job up so a real session can resume it; a dashboard is not a worker.
-    releaseJob(store, id, { token });
-  }
+  });
   job = getJob(store.db, id);
   const safe = withoutToken(job);
   const resume = `orch factory resume ${id} --session <name>`;
   if (input.action === 'cancel') {
     return { job: safe, message: `Job cancelled (${reason}).` };
+  }
+  if (input.action === 'accept-delivery') {
+    return {
+      job: safe,
+      message:
+        `Delivery accepted by a human (${reason}): the job is completed without a passing CI verdict. ` +
+        `CI was ${job.ciStatus ?? 'not observed'} for ${job.ciHead?.slice(0, 7) ?? '?'}; the PR is ` +
+        `${job.prState ?? 'in an unknown state'}. Nothing was merged or marked ready.`,
+    };
   }
   if (input.action === 'accept-policy') {
     return {

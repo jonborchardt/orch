@@ -132,7 +132,7 @@ export function jobUsage(store: Store, id: string): UsageReport {
       reason:
         'Claude Code does not expose subagent token counts or cost to the coordinating session or ' +
         'to orch through a supported interface; durations and configured models are the measured ' +
-        'cost drivers. See docs/decisions.md #54.',
+        'cost drivers. See docs/decisions.md #61.',
     },
     models,
   };
