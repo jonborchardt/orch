@@ -3,7 +3,7 @@
  * the database happens in src/ops/worktree.ts.
  */
 import { existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import { MergeConflictError, ToolError } from '../core/errors.ts';
 import { canonicalPath } from '../core/paths.ts';
@@ -88,22 +88,31 @@ export function inspectWorktree(repoRoot: string, path: string, baseBranch: stri
       return undefined;
     }
   };
-  const top = step('rev-parse --show-toplevel', () => git(path, 'rev-parse', '--show-toplevel'));
+  // One rev-parse answers several questions, one line per argument in order: every gate inspects
+  // the worktree, and on Windows each Git process costs tens of milliseconds.
+  const ids = step('rev-parse --show-toplevel', () =>
+    git(path, 'rev-parse', '--show-toplevel', '--git-common-dir').split(/\r?\n/),
+  );
+  const top = ids?.[0];
   if (!top) return info;
   if (canonicalPath(top) !== canonicalPath(path)) {
     info.problem = `rev-parse --show-toplevel: git reports ${canonicalPath(top)}, expected ${canonicalPath(path)}`;
     return info;
   }
   const ours = step('rev-parse --git-common-dir in the repository', () => commonGitDir(repoRoot));
-  const theirs = step('rev-parse --git-common-dir in the worktree', () => commonGitDir(path));
-  if (ours === undefined || theirs === undefined) return info;
+  const theirs = canonicalPath(resolve(path, ids[1] ?? ''));
+  if (ours === undefined) return info;
   if (ours !== theirs) {
     info.problem = `rev-parse --git-common-dir: ${theirs} belongs to another repository than ${ours}`;
     return info;
   }
   info.isWorktree = true;
-  info.head = step('rev-parse HEAD', () => git(path, 'rev-parse', 'HEAD')) ?? null;
-  const branch = tryGit(path, 'rev-parse', '--abbrev-ref', 'HEAD');
+  // HEAD and its branch name together; both fail together on an unborn branch (head stays null).
+  const [head, branch] =
+    step('rev-parse HEAD', () => git(path, 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'))?.split(
+      /\r?\n/,
+    ) ?? [];
+  info.head = head ?? null;
   info.branch = branch && branch !== 'HEAD' ? branch : null;
   info.dirty = dirtyFiles(path);
   const base = baseRef(repoRoot, baseBranch);
