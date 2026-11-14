@@ -9,6 +9,7 @@ import {
   runtimePaths,
 } from '../core/paths.ts';
 import { planInstall } from '../integrations/claude.ts';
+import { checkReadiness } from '../ops/init.ts';
 
 export const MIN_NODE = '24.0.0';
 
@@ -64,6 +65,16 @@ function installCheck(claudeDir: string): Check {
   };
 }
 
+/** The repository's verification policy as the factory would trust it; `orch init --check` has the detail. */
+function policyCheck(cwd: string): Check {
+  const r = checkReadiness(cwd);
+  return {
+    name: 'Verification policy',
+    status: r.ready ? 'ok' : 'warn',
+    detail: r.ready ? r.detail : `${r.status}: ${r.detail}${r.next ? ` ${r.next}` : ''}`,
+  };
+}
+
 export function runDoctor(cwd: string = process.cwd(), claudeDir: string = claudeHome()): Check[] {
   const paths = runtimePaths();
   const project = findProjectRoot(cwd);
@@ -82,6 +93,7 @@ export function runDoctor(cwd: string = process.cwd(), claudeDir: string = claud
       status: project ? 'ok' : 'warn',
       detail: project ?? `${cwd} is not inside a Git repository.`,
     },
+    policyCheck(cwd),
     { name: 'Install root', status: 'ok', detail: installRoot() },
     { name: 'Config dir', status: 'ok', detail: paths.config },
     { name: 'Data dir', status: 'ok', detail: paths.data },
