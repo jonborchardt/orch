@@ -108,7 +108,9 @@ For each target, in order, continuing with the next target when one fails:
    creating nothing, when the repository's `factory.json` is not committed and trusted (the message
    carries `orch init --check`'s verdict) or the base branch does not exist; report that target and
    move on. A repeat for the same repository and issue returns the existing job with
-   `duplicate: true`, so retrying after a failed launch never creates a second job.
+   `duplicate: true`, so retrying after a failed launch never creates a second job. A title-only
+   dispatch has no such key: before retrying one, find the job it created in
+   `orch factory list --repo <path>` and launch that.
 
 2. Launch the session from the result's `launch` block. In VS Code's Agents window this harness has
    the `create_session` tool: call it with `relationship: "independent"`,

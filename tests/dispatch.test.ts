@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { OwnershipError, ValidationError } from '../src/core/errors.ts';
 import { SESSION_EVENT, sessionLinks, validateSessionRef } from '../src/core/session.ts';
 import { dispatchJob, listFactory, normalizeIssue } from '../src/ops/dispatch.ts';
-import { resumeFactoryJob } from '../src/ops/factory.ts';
+import { planJob, resumeFactoryJob } from '../src/ops/factory.ts';
 import { transitionGuarded } from '../src/ops/gates.ts';
 import { detail } from '../src/server/api.ts';
 import { listEvents } from '../src/storage/events.ts';
@@ -206,6 +206,41 @@ describe('independent sessions adopt their worktrees and progress separately', (
     // Separate artifact directories and event histories.
     expect(r1.plan.artifactDir).not.toBe(r2.plan.artifactDir);
     expect(listEvents(store.db, j1.id).every((e) => e.jobId === j1.id)).toBe(true);
+  });
+
+  it('a failed adoption leaves the job claimed by the child without a worktree; that child retries', () => {
+    const job = dispatch(beta, { issue: '#4' }).job;
+    const foreign = hostWorktree(alpha, 'foreign'); // the host made a worktree of the wrong repository
+    const plain = tempDir('orch-plain-');
+    dirs.push(plain);
+    for (const dir of [foreign, plain]) {
+      expect(() => resumeFactoryJob(store, job.id, { session: 'child-4', adopt: dir })).toThrow(
+        /is not a worktree of .*without --adopt/,
+      );
+    }
+    // The claim preceded the refusal: the child holds the job, nothing was adopted or created.
+    const after = getJob(store.db, job.id);
+    expect(after.worktreePath).toBeNull();
+    expect(after.ownerSession).toBe('child-4');
+    expect(listFactory(store).find((r) => r.id === job.id)).toMatchObject({
+      owner: { session: 'child-4', live: true },
+      worktreePath: null,
+      resume: null,
+    });
+    expect(planJob(store, job.id).step).toBe('create-worktree');
+    // Nobody else slips in while the lease is live; the parent's retry finds the same job.
+    expect(() => resumeFactoryJob(store, job.id, { session: 'child-5' })).toThrow(OwnershipError);
+    expect(dispatch(beta, { issue: '#4' })).toMatchObject({ duplicate: true, job: { id: job.id } });
+    // The child resumes again from a worktree of the right repository.
+    const wt = hostWorktree(beta, 'four');
+    const r = resumeFactoryJob(store, job.id, { session: 'child-4', adopt: wt });
+    expect(r.adopted).toBe('adopted');
+    expect(r.job.worktreePath).toBe(wt);
+    expect(listJobs(store.db)).toHaveLength(1);
+    const taken = dispatch(beta, { issue: '#5' }).job;
+    expect(() => resumeFactoryJob(store, taken.id, { session: 'child-6', adopt: wt })).toThrow(
+      /already assigned to job .*from another worktree/,
+    );
   });
 
   it('one refused dispatch leaves the job dispatched before it untouched', () => {

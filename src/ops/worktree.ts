@@ -144,7 +144,12 @@ export function adoptWorktree(
   const path = resolve(dir);
   const info = inspectWorktree(root, path, job.baseBranch);
   if (!info.exists) throw new ValidationError(`${path} does not exist.`);
-  if (!info.isWorktree) throw new ValidationError(`${path} is not a worktree of ${job.repo}.`);
+  if (!info.isWorktree) {
+    throw new ValidationError(
+      `${path} is not a worktree of ${job.repo}. Pass a worktree of that repository, or resume ` +
+        "without --adopt so orch creates the job's worktree.",
+    );
+  }
   // Compare canonically: an alias spelling (8.3 short name, case, junction) must not slip past.
   const primary = canonicalPath(root);
   const target = canonicalPath(path);
@@ -164,7 +169,10 @@ export function adoptWorktree(
     (j) => j.id !== id && j.worktreePath !== null && canonicalPath(j.worktreePath) === target,
   );
   if (holder) {
-    throw new ValidationError(`Worktree ${path} is already assigned to job ${holder.id}.`);
+    throw new ValidationError(
+      `Worktree ${path} is already assigned to job ${holder.id}. Resume that job there, or run job ` +
+        `${id} from another worktree.`,
+    );
   }
   const updated = setWorktree(store, id, {
     ...auth,
