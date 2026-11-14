@@ -114,6 +114,10 @@ describe('transition: happy path', () => {
     expect(() => run(j, 'complete')).toThrow(/required checks are none/);
     j = { ...j, ciStatus: 'passing', ciHead: null };
     expect(() => run(j, 'complete')).toThrow(/run orch gh ci/);
+    // A PR closed without merging cannot be completed, even with a passing head recorded.
+    expect(() => run({ ...j, ciHead: 'abc', prState: 'closed' }, 'complete')).toThrow(
+      /closed without merging/,
+    );
     j = { ...j, ciHead: 'abc' };
     const done = run(j, 'complete');
     expect(done.patch.stage).toBe('completed');

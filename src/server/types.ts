@@ -107,6 +107,9 @@ export interface BoardRow {
     ciStatus: string | null;
     ciCheckedAt: string | null;
   };
+  /** Job that replaced this one, and jobs this one replaced (`orch job supersede`). */
+  supersededBy: string | null;
+  supersedes: string[];
   ci: CiView;
 }
 
@@ -152,6 +155,8 @@ export interface JobDetailView {
   /** Null for finished jobs; otherwise whether and how a session may resume it. */
   resume: Resume | null;
   resumeCommand: string;
+  /** Ids of the jobs this one replaced (`job.supersededBy` names its own replacement). */
+  supersedes: string[];
 }
 
 export interface ActionRequest {

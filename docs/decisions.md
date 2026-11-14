@@ -709,3 +709,30 @@ was already persisted (decision #48 made sure the SHA binding and the budget wer
 it); reimplementing the gate in React (the client renders the server's list and only decides
 prominence); promoting Request rework for CI infrastructure failures (not a code defect); any
 automatic merge or ready-for-review action.
+
+## 56. A PR closed without merging is its own state
+
+`jobs.prState` knew `draft`, `ready`, and `merged`; `prWorkflowState` answered `undefined` for a
+closed PR, and `recordCi` skips an undefined state, so a factory PR that a human closed stayed
+recorded as `draft` for ever. `closed` is now the fourth value. It is written only from GitHub's
+answer (`orch gh pr status`, `orch gh ci`) or by the owner through `orch job pr`; cancelling a
+job never implies it, because a cancelled job's PR may well still be open. The pure transition
+refuses to complete the `ci` stage, and `resume --to completed` refuses to accept delivery, while
+the PR is `closed`: a closed PR is not a deliverable whatever its checks said. Reopening is
+observed the same way (the next observation records `draft` or `ready` again). Historical rows and
+events are untouched: a job whose PR was closed before this change keeps `draft` until the next
+authoritative observation, and the `pr.recorded` / `ci.observed` log is append-only. No migration:
+the column is free text typed in TypeScript.
+
+## 57. Supersession is a column on the old job, recorded explicitly
+
+The board showed several jobs with the same title (a cancelled attempt and its restart) with no
+way to tell which replaced which; the only trace was free text in a cancel reason. `jobs.supersededBy`
+now names the replacement, written by `orch job supersede <old> --by <new>`, never inferred. A
+column rather than an event-only record because the relationship is state the board and `orch job
+show` query (decision 15: events are an audit log, columns hold state); the `job.superseded` event
+keeps the history of changed replacements. The rule set is deliberately small: same repository, no
+self-reference, no loop, nothing deleted or merged, no generalized dependency graph. The command is
+a short ownership episode (decision 33), shared with the dashboard actions through `withLease`, so
+a cancelled or abandoned job needs no manual claim and a live session's lease is still respected.
+Rows created before the migration carry null and are never back-filled.

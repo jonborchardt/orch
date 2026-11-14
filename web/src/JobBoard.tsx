@@ -14,7 +14,7 @@ import {
 
 import type { BoardRow } from '../../src/server/types.ts';
 import { CiChip } from './Ci.tsx';
-import { BlockerText, CopyResume, StatusChip } from './Status.tsx';
+import { BlockerText, CopyResume, StatusChip, Supersession } from './Status.tsx';
 import { ago, elapsed, verdictColor } from './format.ts';
 
 export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
@@ -60,6 +60,7 @@ export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
                 <Typography component="div" variant="caption" color="text.secondary">
                   {r.id}
                 </Typography>
+                <Supersession supersededBy={r.supersededBy} supersedes={r.supersedes} />
               </TableCell>
               <TableCell>
                 <Chip label={r.stage} variant="outlined" />

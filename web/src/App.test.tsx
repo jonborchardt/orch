@@ -33,6 +33,8 @@ function row(over: Partial<BoardRow>): BoardRow {
     completedAt: null,
     elapsedMs: 1_800_000,
     pr: { url: null, state: null, ciStatus: null, ciCheckedAt: null },
+    supersededBy: null,
+    supersedes: [],
     ci: noCi(),
     ...over,
   };
@@ -151,6 +153,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       completedAt: null,
       policy: null,
       policyHead: null,
+      supersededBy: null,
     },
     liveness: 'blocked',
     artifacts: [],
@@ -173,6 +176,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     session: null,
     resume: { command: '/factory resume job-00000003', heldBy: null },
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
+    supersedes: [],
     ...over,
   };
 }
@@ -229,6 +233,7 @@ beforeEach(() => {
       job: detail().job,
       message: 'Recorded: job returned to approve (pending). No session is running it; resume it',
       resumeCommand: 'orch factory resume job-00000003 --session <name>',
+      supersedes: [],
     },
   };
 });
