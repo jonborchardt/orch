@@ -2,8 +2,10 @@
 import { parseArgs } from 'node:util';
 
 import { UsageError } from '../core/errors.ts';
+import { runtimePaths } from '../core/paths.ts';
 import { packageInfo } from '../core/paths.ts';
 import { openStore, type Store } from '../storage/client.ts';
+import { CHECKOUT_HELP, runCheckout } from './checkout.ts';
 import { formatChecks, runDoctor } from './doctor.ts';
 import { FACTORY_HELP, runFactory } from './factory.ts';
 import { GH_HELP, runGh } from './gh.ts';
@@ -11,6 +13,7 @@ import { formatInit, INIT_HELP, runInit } from './init.ts';
 import { formatInstall, runInstall } from './install.ts';
 import { JOB_HELP, runJob } from './job.ts';
 import { print, printError } from './output.ts';
+import type { HookOutcome } from '../ops/checkout.ts';
 import { runUi, UI_HELP } from './ui.ts';
 import { runVerify, VERIFY_HELP } from './verify.ts';
 import { runWorktree, WORKTREE_HELP } from './worktree.ts';
@@ -20,9 +23,10 @@ const HELP = `Usage: orch [--json] <command>
 Commands:
   doctor                 Check the local environment (Node, Git, Claude Code, paths)
   init                   Write a repository's factory.json verification policy, or --check its readiness (orch init --help)
-  factory <subcommand>   Start, plan, and resume factory jobs for the /factory skill (orch factory --help)
+  factory <subcommand>   Start, plan, resume, dispatch, and list factory jobs for the /factory skill (orch factory --help)
   job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
   worktree <subcommand>  Create, inspect, adopt, remove a job's Git worktree (orch worktree --help)
+  checkout <subcommand>  Which session is working in a checkout; the Claude Code hook (orch checkout --help)
   gh <subcommand>        GitHub via gh: issue, push, draft PR, CI status (orch gh --help)
   verify <job-id>        Run the repository's verification policy in the job worktree (orch verify --help)
   install [--dry-run]    Link skills/ and agents/ into ~/.claude (--claude-dir, --source)
@@ -41,6 +45,7 @@ operation, prints the result, and exits. It runs no background work.
 const SUBCOMMAND_HELP: Record<string, string> = {
   job: JOB_HELP,
   worktree: WORKTREE_HELP,
+  checkout: CHECKOUT_HELP,
   gh: GH_HELP,
   factory: FACTORY_HELP,
   verify: VERIFY_HELP,
@@ -95,13 +100,20 @@ export async function main(argv: string[]): Promise<number> {
         stage: str,
         limit: str,
         replace: bool,
-        // worktree / gh
+        by: str,
+        // worktree / gh / checkout
         path: str,
+        all: bool,
         'body-file': str,
         // factory
         ui: bool,
         'no-ui': bool,
         fingerprint: str,
+        adopt: str,
+        // job session attach
+        provider: str,
+        ref: str,
+        cwd: str,
         // ui
         port: str,
         open: bool,
@@ -156,6 +168,18 @@ export async function main(argv: string[]): Promise<number> {
           json,
         );
         return 0;
+      case 'checkout': {
+        // No database: the guard runs from any checkout and must never migrate the shared store.
+        const { result, exitCode } = runCheckout(runtimePaths(), rest, o);
+        if (rest[0] === 'hook' && !json) {
+          const h = result as HookOutcome;
+          if (h.stdout) process.stdout.write(h.stdout + '\n');
+          if (h.stderr) process.stderr.write(h.stderr + '\n');
+        } else {
+          print(result, json);
+        }
+        return exitCode;
+      }
       case 'gh':
         print(
           withStore((store) => runGh(store, rest, o)),

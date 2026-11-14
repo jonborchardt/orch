@@ -1,0 +1,1 @@
+ALTER TABLE `jobs` ADD `supersededBy` text REFERENCES jobs(id);

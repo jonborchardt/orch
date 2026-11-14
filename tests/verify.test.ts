@@ -233,6 +233,58 @@ describe('orch verify: runs and records', () => {
     expect(log).toContain('eeeeeeeeee');
   });
 
+  it.runIf(process.platform === 'win32')(
+    'Windows: a timed-out check started through cmd.exe leaves no descendants behind',
+    async () => {
+      // The check is the shape of `npm test` on Windows: cmd.exe in front of a Node tree.
+      const pidFile = join(tempDir('orch-tree-'), 'pids.txt');
+      extra.push(join(pidFile, '..'));
+      commitFile(
+        clone,
+        'tree.cjs',
+        "const { spawn } = require('node:child_process');\n" +
+          "const fs = require('node:fs');\n" +
+          'const [file, depth] = [process.argv[2], Number(process.argv[3])];\n' +
+          "fs.appendFileSync(file, depth + ':' + process.pid + '\\n');\n" +
+          'if (depth < 2) spawn(process.execPath, [__filename, file, String(depth + 1)], { stdio: "ignore" });\n' +
+          'setTimeout(() => {}, 60000);\n',
+      );
+      setBaselinePolicy([
+        {
+          id: 'tree',
+          command: 'cmd',
+          args: ['/c', 'node', 'tree.cjs', pidFile, '0'],
+          timeoutMs: 4000,
+          required: false,
+        },
+      ]);
+      const c = start(store, clone);
+      inBuild(c);
+      const r = verify(store, c);
+      const tree = r.checks.find((x) => x.checkId === 'tree');
+      expect(tree?.status).toBe('timed-out');
+      expect(tree?.error).toBeNull(); // every descendant was terminated
+      const log = readFileSync(join(c.dir, 'verification', String(r.runId), 'tree.log'), 'utf8');
+      expect(log).toMatch(/descendants: killed [1-9]/);
+      const pids = readFileSync(pidFile, 'utf8')
+        .trim()
+        .split('\n')
+        .map((l) => Number(l.split(':')[1]));
+      expect(pids.length).toBeGreaterThan(0);
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (err) {
+          return (err as NodeJS.ErrnoException).code === 'EPERM';
+        }
+      };
+      const until = Date.now() + 3000;
+      while (pids.some(alive) && Date.now() < until) await new Promise((w) => setTimeout(w, 100));
+      expect(pids.filter(alive)).toEqual([]);
+    },
+  );
+
   it('refuses a working directory that is a link out of the worktree', () => {
     setBaselinePolicy([{ id: 'esc', command: 'node', args: ['-e', '0'], cwd: 'link' }]);
     const c = start(store, clone);

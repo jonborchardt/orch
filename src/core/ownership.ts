@@ -22,8 +22,13 @@ export function leaseUntil(nowIso: string, minutes: number): string {
 
 export type ClaimKind = 'new' | 'renew' | 'reclaim';
 
-/** Decide whether `session` may take the job. Throws when another live owner holds it. */
-export function decideClaim(job: Lease, session: string, nowIso: string, force = false): ClaimKind {
+/** Decide whether `session` may take the job (or a checkout). Throws when another live owner holds it. */
+export function decideClaim(
+  job: Pick<Lease, 'ownerSession' | 'leaseExpiresAt'>,
+  session: string,
+  nowIso: string,
+  force = false,
+): ClaimKind {
   if (job.ownerSession === null) return 'new';
   if (job.ownerSession === session) return 'renew';
   if (force || leaseExpired(job, nowIso)) return 'reclaim';

@@ -38,6 +38,114 @@ export interface ToolResult {
   timedOut?: boolean;
   /** Set when the process could not be started (missing executable, EACCES, ...). */
   error?: string;
+  /** Descendant processes dealt with after a kill (Windows only; see `sweepDescendants`). */
+  cleanup?: Cleanup;
+}
+
+/** Outcome of terminating what a killed command left behind. */
+export interface Cleanup {
+  killed: number[];
+  /** Still alive after a termination attempt (permission denied). */
+  failed: number[];
+  /** The process table could not be read; nothing beyond the direct child was terminated. */
+  error?: string;
+}
+
+export interface ProcRow {
+  pid: number;
+  ppid: number;
+  /** Creation time, Unix milliseconds. */
+  created: number;
+}
+
+/**
+ * Every process under `root` in the table (children, grandchildren, ...), restricted to those
+ * created at or after `since`. Windows keeps an orphan's parent id pointing at its dead parent, so
+ * the tree can still be walked from a pid that no longer exists; the time bound keeps a reused
+ * pid from pulling in an unrelated process that merely shares the number.
+ */
+export function descendantsOf(rows: readonly ProcRow[], root: number, since: number): number[] {
+  const children = new Map<number, ProcRow[]>();
+  for (const r of rows) {
+    const list = children.get(r.ppid);
+    if (list) list.push(r);
+    else children.set(r.ppid, [r]);
+  }
+  const found: number[] = [];
+  const seen = new Set<number>([root]);
+  const queue = [root];
+  for (let p = queue.shift(); p !== undefined; p = queue.shift()) {
+    for (const c of children.get(p) ?? []) {
+      if (c.created < since || seen.has(c.pid)) continue;
+      seen.add(c.pid);
+      found.push(c.pid);
+      queue.push(c.pid);
+    }
+  }
+  return found;
+}
+
+const PS_TABLE =
+  'Get-CimInstance Win32_Process | ForEach-Object { if ($_.CreationDate) { ' +
+  "'{0},{1},{2}' -f $_.ProcessId, $_.ParentProcessId, " +
+  '([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } }';
+
+/** The live process table (pid, parent pid, creation time) through PowerShell. */
+function processTable(): ProcRow[] {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PS_TABLE], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 20_000,
+    windowsHide: true,
+  });
+  if (r.error || r.status !== 0) {
+    throw new Error(
+      r.error?.message ?? `powershell exited ${String(r.status)}: ${r.stderr.trim()}`,
+    );
+  }
+  return r.stdout
+    .split(/\r?\n/)
+    .map((line) => line.split(',').map(Number))
+    .filter((f) => f.length === 3 && f.every((n) => Number.isFinite(n)))
+    .map(([pid, ppid, created]) => ({ pid: pid ?? 0, ppid: ppid ?? 0, created: created ?? 0 }));
+}
+
+/**
+ * Terminate what a killed command left running. `spawnSync` kills only the direct child; on
+ * Windows a shell between us and the real work (the npm shim is `cmd.exe`) dies alone and the
+ * tree under it survives, still holding files and CPU. Each pass reads the table and kills every
+ * descendant created since `since`; it stops when a pass finds nothing or after three passes,
+ * which bounds the cleanup to a few seconds. Safe to call for a root that already exited.
+ */
+export function sweepDescendants(
+  root: number,
+  since: number,
+  table: () => ProcRow[] = processTable,
+): Cleanup {
+  const out: Cleanup = { killed: [], failed: [] };
+  // ponytail: three passes catch processes spawned during a pass; a Job Object would need native code.
+  for (let pass = 0; pass < 3; pass++) {
+    let pids: number[];
+    try {
+      pids = descendantsOf(table(), root, since).filter(
+        (p) => !out.killed.includes(p) && !out.failed.includes(p),
+      );
+    } catch (err) {
+      out.error = (err as Error).message;
+      return out;
+    }
+    if (pids.length === 0) return out;
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+        out.killed.push(pid);
+      } catch (err) {
+        // ESRCH: gone on its own; anything else (EPERM) is a process we could not stop.
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') out.failed.push(pid);
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -96,6 +204,7 @@ export function spawnCommand(
     windowsHide: true,
   };
   const ext = extname(exe).toLowerCase();
+  const startedAt = Date.now();
   let r;
   if (WIN && (ext === '.cmd' || ext === '.bat')) {
     if (!isAbsolute(exe) || CMD_META.test(exe)) return launchError(`Unsafe shim path: ${exe}`);
@@ -122,6 +231,10 @@ export function spawnCommand(
   const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'ETIMEDOUT') out.timedOut = true;
   else if (r.error) out.error = r.error.message;
+  // spawnSync killed the child (timeout or output cap); take its descendants with it.
+  if (WIN && r.pid && (code === 'ETIMEDOUT' || code === 'ENOBUFS')) {
+    out.cleanup = sweepDescendants(r.pid, startedAt);
+  }
   return out;
 }
 
