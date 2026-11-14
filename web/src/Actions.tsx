@@ -10,6 +10,7 @@ import {
   MenuItem,
   Stack,
   TextField,
+  Typography,
 } from '@mui/material';
 import { useState } from 'react';
 
@@ -41,8 +42,15 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   const [error, setError] = useState<string | null>(null);
 
   const finished = detail.job.status === 'completed' || detail.job.status === 'cancelled';
-  const blocked = detail.job.stage === 'needs-human';
-  const policyDrift = detail.plan?.verification?.policy.authorization === 'required';
+  // The server lists what the workflow allows here; the client only decides prominence.
+  const allowed = new Set(detail.actions);
+  const kind = detail.blocker?.kind;
+  // Approve is the primary action only at a genuine approval gate (the approver escalated).
+  const approvalGate = kind === 'decision';
+  // Rework is primary only where the workflow itself would go back to build: reviewers still
+  // requested changes at the last allowed round. Interruptions, verification failures, and
+  // unclassified escalations get neutral controls; the right transition is a human call.
+  const reworkPrimary = allowed.has('request-rework') && kind === 'findings';
   const liveOwner =
     detail.job.ownerSession !== null &&
     detail.job.ownerSession !== 'dashboard' &&
@@ -78,56 +86,79 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
 
   return (
     <Stack spacing={1}>
+      {allowed.size === 0 && (
+        <Typography variant="body2" color="text.secondary">
+          No actions: the job is {detail.job.status}.
+        </Typography>
+      )}
       <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-        <Button
-          variant="contained"
-          color="success"
-          disabled={finished || !blocked}
-          onClick={() => {
-            start('approve');
-          }}
-        >
-          Approve
-        </Button>
-        <Button
-          variant="outlined"
-          disabled={finished || detail.job.round === 0}
-          onClick={() => {
-            start('request-review');
-          }}
-        >
-          Request review round
-        </Button>
-        <Button
-          variant="outlined"
-          disabled={finished}
-          onClick={() => {
-            start('request-rework');
-          }}
-        >
-          Request rework
-        </Button>
-        <Button
-          variant="outlined"
-          color="warning"
-          disabled={finished || !policyDrift}
-          onClick={() => {
-            start('accept-policy');
-          }}
-        >
-          Accept verification policy
-        </Button>
-        <Button
-          variant="outlined"
-          color="error"
-          disabled={finished}
-          onClick={() => {
-            start('cancel');
-          }}
-        >
-          Cancel job
-        </Button>
+        {allowed.has('approve') && (
+          <Button
+            variant={approvalGate ? 'contained' : 'outlined'}
+            color={approvalGate ? 'success' : 'inherit'}
+            onClick={() => {
+              start('approve');
+            }}
+          >
+            Approve
+          </Button>
+        )}
+        {allowed.has('request-rework') && (
+          <Button
+            variant={reworkPrimary ? 'contained' : 'outlined'}
+            onClick={() => {
+              start('request-rework');
+            }}
+          >
+            Request rework
+          </Button>
+        )}
+        {allowed.has('request-review') && (
+          <Button
+            variant="outlined"
+            onClick={() => {
+              start('request-review');
+            }}
+          >
+            Request review round
+          </Button>
+        )}
+        {allowed.has('accept-policy') && (
+          <Button
+            variant="outlined"
+            color="warning"
+            onClick={() => {
+              start('accept-policy');
+            }}
+          >
+            Accept verification policy
+          </Button>
+        )}
+        {allowed.has('cancel') && (
+          <Button
+            variant="outlined"
+            color="error"
+            onClick={() => {
+              start('cancel');
+            }}
+          >
+            Cancel job
+          </Button>
+        )}
       </Stack>
+      {allowed.has('approve') && !approvalGate && (
+        <Alert severity="warning" variant="outlined" data-testid="approve-caution">
+          This job is not waiting for an approval; it stopped because of a problem (
+          {detail.blocker?.summary ?? 'see the status above'}). Approve only moves it back to a
+          stage without fixing anything; use it only once you have decided the job may continue.
+        </Alert>
+      )}
+      {allowed.has('accept-policy') && (
+        <Alert severity="warning" variant="outlined">
+          The worktree changes the verification policy (factory.json). Gates stay closed until a
+          human accepts it here or it is reverted.
+        </Alert>
+      )}
       {liveOwner && !finished && (
         <Alert severity="info" variant="outlined">
           Session <b>{detail.job.ownerSession}</b> holds a live lease. Actions will be refused

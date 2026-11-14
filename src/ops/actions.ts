@@ -40,6 +40,24 @@ export function withoutToken(job: Job): Omit<Job, 'ownerToken'> {
   return copy as Omit<Job, 'ownerToken'>;
 }
 
+/**
+ * Actions `dashboardAction` would not refuse outright in this state. The dashboard renders only
+ * these; the server still re-checks every POST, so this is presentation, not authorization.
+ */
+export function allowedActions(
+  job: Pick<Job, 'status' | 'stage' | 'round'>,
+  policyDrift: boolean,
+): DashboardAction[] {
+  if (TERMINAL_STATUSES.includes(job.status)) return [];
+  const out: DashboardAction[] = [];
+  if (job.stage === 'needs-human') out.push('approve');
+  if (job.round > 0) out.push('request-review');
+  out.push('request-rework');
+  if (policyDrift) out.push('accept-policy');
+  out.push('cancel');
+  return out;
+}
+
 export interface ActionResult {
   job: Omit<Job, 'ownerToken'>;
   message: string;

@@ -6,10 +6,42 @@ import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 export type SafeJob = Omit<Job, 'ownerToken'>;
 
 /**
- * What the lease tells us, honestly: `running` means the status is running AND the lease is
- * live, which still only proves a session touched the job recently, not that it is alive now.
+ * Execution state, distinct from the workflow stage. `running` means the status is running AND
+ * the lease is live, which still only proves a session touched the job recently, not that it is
+ * alive now; `stale` is running with a lapsed lease. `completed` and `cancelled` are never merged:
+ * a cancelled job is not a success.
  */
-export type Liveness = 'running' | 'stale' | 'idle' | 'blocked' | 'finished';
+export type Liveness =
+  'running' | 'stale' | 'idle' | 'interrupted' | 'failed' | 'blocked' | 'completed' | 'cancelled';
+
+/** Why a job is not progressing, derived from persisted state only (never from prose). */
+export type BlockerKind =
+  | 'interrupted' // execution stopped: the lease lapsed or another session took the job over
+  | 'failed' // a stage was marked failed
+  | 'verification' // the latest verification run failed
+  | 'findings' // reviewers still requested changes at the last allowed round
+  | 'decision' // the approver escalated: a human product or policy decision
+  | 'escalated' // escalated for a reason the persisted state does not classify
+  | 'waiting' // no live session owns it; a session must resume it
+  | 'cancelled';
+
+export interface Blocker {
+  kind: BlockerKind;
+  /** One line for the board, built from structured fields. */
+  summary: string;
+  /** The recorded free-text reason, verbatim, when one exists. */
+  detail: string | null;
+}
+
+/**
+ * Resume availability. `command` is `/factory resume <id>` when a session may take the job now;
+ * null while a live lease is held, with the holder named so the UI can say why. The dashboard
+ * never forces ownership.
+ */
+export interface Resume {
+  command: string | null;
+  heldBy: { session: string; leaseExpiresAt: string | null } | null;
+}
 
 export interface Verdict {
   reviewer: string;
@@ -32,6 +64,9 @@ export interface BoardRow {
   reviews: Verdict[];
   /** BLOCKING count from the newest consolidated.md, or null when there is none. */
   blocking: number | null;
+  blocker: Blocker | null;
+  /** Null for finished jobs; otherwise whether and how a session may resume it. */
+  resume: Resume | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -62,7 +97,13 @@ export interface JobDetailView {
   worktree: Plan['worktree'] | null;
   plan: Plan | null;
   planError: string | null;
-  links: { vscode: string | null; pr: string | null };
+  blocker: Blocker | null;
+  /** Dashboard actions the workflow allows in this state (the server re-checks on POST). */
+  actions: DashboardAction[];
+  /** `vscode://file/...` for the worktree (when recorded) and for the initiating checkout. */
+  links: { vscode: string | null; checkout: string; pr: string | null };
+  /** Null for finished jobs; otherwise whether and how a session may resume it. */
+  resume: Resume | null;
   resumeCommand: string;
 }
 

@@ -34,7 +34,7 @@ function useHashRoute(): string {
   return hash;
 }
 
-const STATUS_FILTERS = ['all', 'active', 'needs human', 'finished'] as const;
+const STATUS_FILTERS = ['all', 'active', 'needs human', 'finished', 'cancelled'] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 function matches(row: BoardRow, f: StatusFilter): boolean {
@@ -42,11 +42,13 @@ function matches(row: BoardRow, f: StatusFilter): boolean {
     case 'all':
       return true;
     case 'active':
-      return row.liveness === 'running' || row.liveness === 'stale' || row.liveness === 'idle';
+      return !['blocked', 'completed', 'cancelled'].includes(row.liveness);
     case 'needs human':
       return row.liveness === 'blocked';
     case 'finished':
-      return row.liveness === 'finished';
+      return row.liveness === 'completed' || row.liveness === 'cancelled';
+    case 'cancelled':
+      return row.liveness === 'cancelled';
   }
 }
 

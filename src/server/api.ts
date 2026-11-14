@@ -8,8 +8,9 @@ import { join } from 'node:path';
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
-import { now, STAGES, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
+import { now, STAGES, type Stage } from '../core/workflow.ts';
 import {
+  allowedActions,
   DASHBOARD_ACTIONS,
   type DashboardAction,
   dashboardAction,
@@ -18,18 +19,21 @@ import {
 import { planJob } from '../ops/factory.ts';
 import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import { listEvents } from '../storage/events.ts';
+import { latestEventsByJob, listEvents } from '../storage/events.ts';
 import { getJob, listJobs, listReviews, reviewsByJob } from '../storage/jobs.ts';
 import type { Artifact, Job, Review } from '../storage/schema.ts';
+import { latestRun, latestRunsByJob } from '../storage/verification.ts';
+import { BLOCKER_EVENTS, blockerOf, liveness, resumeOf } from './status.ts';
 import type {
   ActionRequest,
   ActionResponse,
   BoardRow,
   JobDetailView,
-  Liveness,
   RoundView,
   SafeJob,
 } from './types.ts';
+
+export { liveness } from './status.ts';
 
 export const JOB_ID = /^job-[0-9a-f]{8}$/;
 /** Artifact contents above this size are omitted from the detail view (fetch them individually). */
@@ -37,15 +41,6 @@ const INLINE_LIMIT = 512 * 1024;
 
 export function safeJob(job: Job): SafeJob {
   return withoutToken(job);
-}
-
-export function liveness(
-  job: Pick<Job, 'status' | 'stage' | 'leaseExpiresAt' | 'ownerSession'>,
-): Liveness {
-  if (TERMINAL_STATUSES.includes(job.status)) return 'finished';
-  if (job.stage === 'needs-human' || job.status === 'blocked') return 'blocked';
-  if (job.status === 'running') return leaseExpired(job, now()) ? 'stale' : 'running';
-  return 'idle';
 }
 
 function blockingOf(artifacts: Artifact[], round: number): number | null {
@@ -59,12 +54,20 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
   const ts = now();
   const jobs = listJobs(store.db, { repo: filter.repo });
   const ids = jobs.map((j) => j.id);
-  // Three queries for the whole board rather than two per job, since it is polled every few seconds.
+  // Five queries for the whole board rather than several per job: it is polled every few seconds.
   const reviewsOf = reviewsByJob(store.db, ids);
   const artifactsOf = artifactsByJob(store.db, ids);
+  const eventsOf = latestEventsByJob(store.db, ids, BLOCKER_EVENTS);
+  const runsOf = latestRunsByJob(store.db, ids);
   return jobs.map((job) => {
     const reviews = (reviewsOf.get(job.id) ?? []).filter((r) => r.round === job.round);
     const artifacts = artifactsOf.get(job.id) ?? [];
+    const state = liveness(job);
+    const evidence = {
+      events: eventsOf.get(job.id) ?? new Map(),
+      artifacts,
+      latestRun: runsOf.get(job.id) ?? null,
+    };
     const owner = job.ownerSession
       ? {
           session: job.ownerSession,
@@ -80,7 +83,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       repoPath: job.repoPath,
       stage: job.stage,
       status: job.status,
-      liveness: liveness(job),
+      liveness: state,
       round: job.round,
       maxRounds: job.maxRounds,
       owner,
@@ -88,6 +91,8 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       branch: job.branch,
       reviews: reviews.map((r) => ({ reviewer: r.reviewer, verdict: r.verdict })),
       blocking: blockingOf(artifacts, job.round) ?? blockingOf(artifacts, job.round - 1),
+      blocker: blockerOf(job, state, evidence),
+      resume: resumeOf(job, state),
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
       completedAt: job.completedAt,
@@ -166,9 +171,15 @@ export function detail(store: Store, id: string): JobDetailView {
   } catch (err) {
     planError = (err as Error).message;
   }
+  const state = liveness(job);
+  const evidence = {
+    events: latestEventsByJob(store.db, [id], BLOCKER_EVENTS).get(id) ?? new Map(),
+    artifacts,
+    latestRun: latestRun(store.db, id)?.run ?? null,
+  };
   return {
     job: safeJob(job),
-    liveness: liveness(job),
+    liveness: state,
     artifacts,
     contents,
     rounds: rounds(reviews, artifacts),
@@ -176,12 +187,20 @@ export function detail(store: Store, id: string): JobDetailView {
     worktree: plan?.worktree ?? null,
     plan,
     planError,
+    blocker: blockerOf(job, state, evidence),
+    actions: allowedActions(job, plan?.verification?.policy.authorization === 'required'),
     links: {
-      vscode: job.worktreePath ? `vscode://file/${job.worktreePath.split('\\').join('/')}` : null,
+      vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,
+      checkout: vscodeLink(job.repoPath),
       pr: job.prUrl,
     },
+    resume: resumeOf(job, state),
     resumeCommand: `orch factory resume ${id} --session <name>`,
   };
+}
+
+function vscodeLink(dir: string): string {
+  return `vscode://file/${dir.split('\\').join('/')}`;
 }
 
 /** Validate an action request body from the network before it reaches the domain layer. */

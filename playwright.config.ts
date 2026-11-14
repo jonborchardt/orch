@@ -12,7 +12,8 @@ export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',
   use: {
-    baseURL: process.env['ORCH_E2E_URL'] ?? 'http://127.0.0.1:4799/',
+    baseURL:
+      process.env['ORCH_E2E_URL'] ?? `http://127.0.0.1:${process.env['ORCH_E2E_PORT'] ?? '4799'}/`,
     trace: 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],

@@ -122,22 +122,43 @@ ORCH_HOME=/tmp/demo npm run ui:seed && ORCH_HOME=/tmp/demo orch ui   # represent
 
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
 worktree, review round, per-reviewer verdicts for the current round, blocking-finding count from
-the latest consolidation, elapsed time, last update, PR link and CI rollup. The status column is
-honest about liveness: `running (lease live)` means a session renewed its lease recently;
-`last reported running` means the status is still `running` but the lease lapsed, so the session is
-presumed gone; `needs human`, `idle`, `finished` otherwise. A lease never proves a process is
-alive. Filter by repository and by active / needs human / finished; the page refreshes every few
-seconds while visible.
+the latest consolidation, elapsed time, last update, PR link and CI rollup. The stage column is the
+workflow position; the status column is the execution state, kept separate so a job stopped in
+`build` never reads as done. Its states (each with a glyph and label, never colour alone):
+`running (lease live)` means a session renewed its lease recently; `last reported running` means
+the status is still `running` but the lease lapsed, so the session is presumed gone;
+`interrupted`, `failed`, `needs human`, `idle` (pending), `completed`, and `cancelled`, which is
+grey and never styled like a success. Under the chip, one line says why a stopped job stopped,
+derived from persisted fields only (`src/server/status.ts`): the latest `job.blocked`,
+`stage.failed`, `job.interrupted`, or `job.cancelled` event and its recorded reason, the
+`decision.md` marker, the consolidation's BLOCKING count, and the newest verification run. When
+the state does not classify an escalation the line says so (`Escalated from build`) rather than
+guessing. Jobs a session may resume get a **Copy resume** control. Filter by repository and by
+active / needs human / finished / cancelled; the page refreshes every few seconds while visible.
 
 **Job detail** (`#/jobs/<id>`): next step and agents from the plan, the request, and tabs for the
 spec, build summary, review history per round (verdict, summary, full review text), consolidated
 findings per round, the approval decision, registered artifacts (size, marker, hash), the event
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
 the PR with its CI status. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
-GitHub.
+GitHub. A status panel above the controls repeats the board's explanation with the full recorded
+reason and a **Resume** block. When no live lease is held (unowned, lapsed lease, interrupted,
+failed, or released at `needs-human`) it shows the `/factory resume <id>` command with a copy
+button, the checkout to run it in (the repository the job was started from, with an "open in VS
+Code" link), and the note that copying changes nothing; only a Claude Code session opened in that
+checkout resumes the job. While any session holds a live lease the command is withheld and the
+holder is named, because `orch factory resume` would be refused without a deliberate `--force`;
+the dashboard never forces ownership.
 
 **Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
-short-lived `dashboard` session and then releases the job:
+short-lived `dashboard` session and then releases the job. The detail API lists the actions the
+workflow allows in the current state (`allowedActions`) and the client renders only those; the
+server re-checks every request. Approve is the primary control only when the approver escalated
+(`decision.md` says ESCALATE); for any other blocker it is demoted behind a warning, because
+approving moves the job without fixing anything. Request rework is primary only when reviewers
+still requested changes at the last allowed round, which is where the workflow itself would go
+back to `build`; for interruptions, verification failures, and unclassified escalations every
+control stays neutral, since the right transition is a human call.
 
 | Action                     | Allowed when                    | Effect                                              |
 | -------------------------- | ------------------------------- | --------------------------------------------------- |

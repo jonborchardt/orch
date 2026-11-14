@@ -9,7 +9,8 @@ import { seedDashboard } from '../tests/fixtures/dashboard.ts';
 import { openStore } from '../src/storage/client.ts';
 
 export const STATE_FILE = join(import.meta.dirname, '.state.json');
-const PORT = 4799;
+/** Override with ORCH_E2E_PORT when several checkouts run the suite on one machine. */
+const PORT = Number(process.env['ORCH_E2E_PORT'] ?? 4799);
 
 export default async function globalSetup(): Promise<void> {
   const home = mkdtempSync(join(tmpdir(), 'orch-e2e-'));

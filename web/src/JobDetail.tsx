@@ -21,8 +21,9 @@ import { useEffect, useState } from 'react';
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
 import { Markdown } from './Markdown.tsx';
+import { BlockerText, ResumeBox, StatusChip } from './Status.tsx';
 import { ApiFailure, fetchDetail } from './api.ts';
-import { LIVENESS_COLOR, LIVENESS_LABEL, ago, ciColor, verdictColor } from './format.ts';
+import { STATE, ago, ciColor, verdictColor } from './format.ts';
 
 const TABS = [
   'Overview',
@@ -103,8 +104,8 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
           {job.title}
         </Typography>
         <Typography color="text.secondary">{job.id}</Typography>
-        <Chip label={job.stage} variant="outlined" />
-        <Chip label={LIVENESS_LABEL[detail.liveness]} color={LIVENESS_COLOR[detail.liveness]} />
+        <Chip label={`stage: ${job.stage}`} variant="outlined" />
+        <StatusChip state={detail.liveness} />
         <Chip label={`round ${String(job.round)}/${String(job.maxRounds)}`} />
         {error && <Chip label={`refresh failed: ${error}`} color="warning" />}
       </Stack>
@@ -142,6 +143,27 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
           Refresh
         </Button>
       </Stack>
+
+      <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }} component="section" aria-label="Status">
+        <Stack spacing={1}>
+          {detail.blocker ? (
+            <BlockerText blocker={detail.blocker} />
+          ) : (
+            <Typography>{STATE[detail.liveness].describe}</Typography>
+          )}
+          {detail.resume && (
+            <ResumeBox
+              id={job.id}
+              resume={detail.resume}
+              cli={detail.resumeCommand}
+              state={detail.liveness}
+              checkout={job.repoPath}
+              checkoutLink={detail.links.checkout}
+              worktree={job.worktreePath}
+            />
+          )}
+        </Stack>
+      </Paper>
 
       <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }}>
         <Typography variant="subtitle2">Controls</Typography>
@@ -187,9 +209,6 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
             ) : (
               <Alert severity="warning">Plan unavailable: {detail.planError}</Alert>
             )}
-            <Typography variant="body2">
-              Resume from a session: <code>{detail.resumeCommand}</code>
-            </Typography>
             {job.description && (
               <>
                 <Divider />

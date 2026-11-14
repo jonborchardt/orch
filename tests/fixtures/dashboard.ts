@@ -1,7 +1,8 @@
 /**
  * Representative factory state for dashboard tests and manual runs: several repositories,
  * a live running job, a stale one, a needs-human escalation, multiple review rounds with long
- * findings, a completed job with a failing CI PR, a cancelled job, and a fresh unowned job.
+ * findings, a completed job with a failing CI PR, a cancelled job, a fresh unowned job, and a job
+ * whose build stage failed.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -15,6 +16,7 @@ import {
   recordPr,
   recordReview,
   registerArtifact,
+  releaseJob,
   transitionJob,
 } from '../../src/storage/jobs.ts';
 
@@ -178,6 +180,7 @@ export interface SeededJobs {
   blocked: string;
   cancelled: string;
   fresh: string;
+  failed: string;
 }
 
 /**
@@ -353,6 +356,18 @@ export function seedDashboard(
     description: 'GET /healthz returning build info',
   });
 
+  // 7. Build stage marked failed by its session (reason recorded), which then released the job.
+  const failed = mk('Retry flaky uploads', 'gamma', repos.gamma);
+  {
+    const { token } = claimJob(store, failed.id, { session: 'claude-20261113-1000-fa11' });
+    run(failed.id, token, 'start');
+    art(failed.id, token, 'spec.md', SPEC.replace('Export reports as CSV', 'Retry flaky uploads'));
+    run(failed.id, token, 'complete');
+    run(failed.id, token, 'start');
+    run(failed.id, token, 'fail', { reason: 'required check "test" failed twice' });
+    releaseJob(store, failed.id, { token });
+  }
+
   return {
     completed: completed.id,
     reviewing: reviewing.id,
@@ -360,5 +375,6 @@ export function seedDashboard(
     blocked: blocked.id,
     cancelled: cancelled.id,
     fresh: fresh.id,
+    failed: failed.id,
   };
 }
