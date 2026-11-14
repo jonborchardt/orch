@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"${CLAUDE_PROJECT_DIR:-.}\"; if [ -f \"$d/src/cli/checkout.ts\" ]; then exec node \"$d/src/cli/main.ts\" checkout hook; fi; if orch checkout list --json >/dev/null 2>&1 </dev/null; then exec orch checkout hook; fi; echo \"orch checkout guard is INACTIVE here: this branch has no src/cli/checkout.ts and the installed orch has no checkout command. Edits in this checkout are not protected from another session; build and install orch from a branch that has it.\" >&2; exit 1",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"${CLAUDE_PROJECT_DIR:-.}\"; if [ -f \"$d/src/cli/checkout.ts\" ]; then exec node \"$d/src/cli/main.ts\" checkout hook; fi; if orch checkout list --json >/dev/null 2>&1 </dev/null; then exec orch checkout hook; fi; echo \"orch checkout guard is INACTIVE here: this branch has no src/cli/checkout.ts and the installed orch has no checkout command. Edits in this checkout are not protected from another session; build and install orch from a branch that has it.\" >&2; exit 1",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"${CLAUDE_PROJECT_DIR:-.}\"; if [ -f \"$d/src/cli/checkout.ts\" ]; then exec node \"$d/src/cli/main.ts\" checkout hook; fi; if orch checkout list --json >/dev/null 2>&1 </dev/null; then exec orch checkout hook; fi; echo \"orch checkout guard is INACTIVE here: this branch has no src/cli/checkout.ts and the installed orch has no checkout command. Edits in this checkout are not protected from another session; build and install orch from a branch that has it.\" >&2; exit 1",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
