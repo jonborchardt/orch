@@ -66,6 +66,7 @@ Pick a session name once and reuse it for the whole job: `claude-<YYYYMMDD-HHMM>
 | ------------------------------- | ------------------------------------------------------------- |
 | `status <job-id>`               | `orch factory status <id> --json`; summarize; stop.           |
 | `resume <job-id>` or `<job-id>` | `orch factory resume <id> --session <s> --json`; go to step 3 |
+| `dispatch <targets>`            | step 2b: one job per target, each in its own session          |
 | anything else (a request)       | step 2                                                        |
 
 Job ids look like `job-1a2b3c4d`. Arguments can also be `status`, `resume`, or `cancel <job-id>`
@@ -87,6 +88,53 @@ omitted); `--base <branch>` if the target branch is not the current one. The out
 `token` (keep it; it is the only credential for this job), `job.worktreePath`, `job.branch`, and
 `plan`. Tell the user the job id, worktree, and branch in one line, then continue.
 
+## 2b. Dispatch jobs to other repositories, or several at once
+
+A request such as "start a job for issue 123 in repository B, one for #45 in repository C, and one
+for this repository" is a dispatch: this session prepares each job and launches an independent
+session per job, then returns to its own work. It never runs the children's stages itself, and it
+does not wait for them.
+
+For each target, in order, continuing with the next target when one fails:
+
+1. Resolve the repository path (a path the user gave, or `git rev-parse --show-toplevel` for "this
+   repository") and prepare the job:
+
+   ```sh
+   orch factory dispatch --repo <path> --issue <#N|url> [--title <t>] [--description <d>] [--base <b>] --session <s> --json
+   ```
+
+   `dispatch` creates the job and nothing else: no claim, no worktree, no session. It is refused,
+   creating nothing, when the repository's `factory.json` is not committed and trusted (the message
+   carries `orch init --check`'s verdict) or the base branch does not exist; report that target and
+   move on. A repeat for the same repository and issue returns the existing job with
+   `duplicate: true`, so retrying after a failed launch never creates a second job. A title-only
+   dispatch has no such key: before retrying one, find the job it created in
+   `orch factory list --repo <path>` and launch that.
+
+2. Launch the session from the result's `launch` block. In VS Code's Agents window this harness has
+   the `create_session` tool: call it with `relationship: "independent"`,
+   `workspace: launch.workspace`, `worktree: true`, `title: launch.title`, `prompt: launch.prompt`.
+   VS Code creates a worktree of that repository and starts the session in it; the child's
+   `/factory <id>` adopts that worktree as the job's (step 3). Record the link the tool returned:
+
+   ```sh
+   orch job session attach <id> --provider vscode-agents --ref <agent-host-session://... link> --session <s>
+   ```
+
+   No token: the job is unowned until the child claims it. Without the tool, give the user
+   `launch.fallback` verbatim (a terminal `claude --worktree ... "/factory <id>"` from the
+   repository root, or `code --agents <repo>` to create the session by hand and paste the prompt)
+   and say that the session was not started by you.
+
+3. Report one line per target: job id, repository, session link or fallback command, and the
+   refusal reason for targets that failed.
+
+Afterwards, `orch factory list --json` shows every job's stage, status, owner, `needsHuman`,
+`blockedReason`, `session`, PR, and the resume command for jobs no live session holds;
+`orch factory status <id> --json` has the detail. A child that stopped is resumed from any session
+with `/factory <id>`.
+
 ## 3. The loop
 
 Repeat until `plan.step` is `done`, `needs-human`, or `cancelled`:
@@ -100,6 +148,16 @@ Act on `plan.step`:
 - `resume`: `orch factory resume <id> --session <s> --json` (adds `--force` only if the user
   explicitly said to take over a live session). Every claim or resume issues a new token and
   invalidates the old one; use the new `token` from now on.
+- A session dispatched into a worktree (its working directory is a linked worktree:
+  `git rev-parse --git-common-dir` is not `<toplevel>/.git`) resumes a job that has no worktree yet
+  (`job.worktreePath` is null in `orch factory status`) with `--adopt <toplevel>`, so the job's
+  worktree is the one this session is isolated in. The result says `adopted` or `kept-existing`; a
+  worktree the job already has is never replaced.
+- After `start` or `resume` succeeds, record this session on the job when the harness can name it:
+  in VS Code's Agents window call `get_current_session` and run `orch job session attach <id>
+--provider vscode-agents --ref <openLink> --cwd <toplevel> --token <t>`. Re-attaching the same
+  link is a no-op; a different one keeps the earlier ones in the events as history. This is
+  navigation metadata only; ownership stays the lease.
 - `create-worktree`: run the listed command, then `next` again.
 - `needs-human`: release the job (`orch job release <id> --token <t>`) so a human or another
   session can act on it, report `plan.blockedReason`, the job id, and the exact resume command;
@@ -215,7 +273,9 @@ when the job is `completed`. Distinguish what was verified by commands from what
 
 ## Limits
 
-This skill cannot restart a Claude session that stopped; it only resumes from state. Ownership is a
+This skill cannot restart a Claude session that stopped; it only resumes from state. Dispatch
+starts sessions only through the host's documented `create_session` tool; `orch` never starts a
+Claude process, and a printed fallback command is not a started session. Ownership is a
 database lease: it stops two sessions from both recording changes to one job, but any process can
 still write into a worktree directory it is pointed at, which is why prompts always carry the
 worktree path, evidence is accepted only from a clean worktree at a recorded commit, and reviews

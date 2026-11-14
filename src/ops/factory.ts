@@ -47,7 +47,7 @@ import {
   verificationStatus,
   type VerificationStatus,
 } from './verify.ts';
-import { createWorktree, showWorktree } from './worktree.ts';
+import { adoptWorktree, createWorktree, showWorktree } from './worktree.ts';
 
 export function configPath(store: Store): string {
   return join(store.paths.config, 'factory.json');
@@ -518,12 +518,20 @@ export interface ResumeInput {
   to?: Stage | undefined;
   force?: boolean | undefined;
   ui?: boolean | undefined;
+  /**
+   * An existing worktree of the job's repository to adopt when the job has none yet: the one a
+   * dispatched session was launched in (VS Code creates it before the session starts). Ignored
+   * once the job has a worktree, so a session may always pass its own.
+   */
+  adopt?: string | undefined;
 }
 
 export interface ResumeResult extends StartResult {
   /** Whether a different session previously owned the job. */
   tookOver: boolean;
   previousOwner: string | null;
+  /** What happened to `adopt`: null when it was not given. */
+  adopted: 'adopted' | 'kept-existing' | null;
 }
 
 /**
@@ -539,8 +547,15 @@ export function resumeFactoryJob(store: Store, id: string, input: ResumeInput): 
     force: input.force,
   });
   let job = getJob(store.db, id);
+  let adopted: ResumeResult['adopted'] = null;
   if (job.stage !== 'needs-human' && job.stage !== 'completed' && job.status !== 'cancelled') {
-    job = createWorktree(store, id, { token }).job;
+    if (input.adopt !== undefined && job.worktreePath === null) {
+      job = adoptWorktree(store, id, { token }, input.adopt).job;
+      adopted = 'adopted';
+    } else {
+      if (input.adopt !== undefined) adopted = 'kept-existing';
+      job = createWorktree(store, id, { token }).job;
+    }
   }
   return {
     plan: planJob(store, id, { ui: input.ui }),
@@ -548,6 +563,7 @@ export function resumeFactoryJob(store: Store, id: string, input: ResumeInput): 
     job,
     tookOver: previousOwner !== null && previousOwner !== input.session,
     previousOwner,
+    adopted,
   };
 }
 

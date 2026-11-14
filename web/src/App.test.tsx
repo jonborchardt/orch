@@ -150,6 +150,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     },
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null },
+    session: null,
     resume: { command: '/factory resume job-00000003', heldBy: null },
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
     ...over,
@@ -578,5 +579,82 @@ describe('Job detail', () => {
     expect(screen.getByText('<script>alert(1)</script>')).toBeInTheDocument();
     expect(document.querySelector('script')).toBeNull();
     expect(screen.getByText('VERDICT: CHANGES')).toHaveAttribute('data-marker', 'VERDICT');
+  });
+});
+
+describe('Job detail: execution session', () => {
+  const link = 'agent-host-session://ahp-session/17b6e18f-4046-422b-8336-cb43a130967f';
+  const uuid = '565e2b23-152d-4533-b6b3-e1d4981c7297';
+
+  it('says so when no session was recorded', async () => {
+    window.location.hash = '#/jobs/job-00000003';
+    mockFetch();
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId('session-none')).toHaveTextContent('No execution session');
+    });
+  });
+
+  it('offers an in-VS-Code link for copying, never as a dead browser control', async () => {
+    data.detail = detail({
+      session: {
+        provider: 'vscode-agents',
+        ref: link,
+        cwd: '/wt/g',
+        attachedAt: '2026-11-13T08:20:00.000Z',
+        by: 'claude-parent',
+        links: {
+          open: { url: link, scope: 'vscode-chat' },
+          resume: null,
+          note: 'Opens from inside VS Code only.',
+        },
+        previous: 1,
+      },
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mockFetch();
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId('session')).toBeInTheDocument();
+    });
+    const s = screen.getByTestId('session');
+    expect(s).toHaveTextContent('vscode-agents');
+    expect(s).toHaveTextContent(link);
+    expect(s).toHaveTextContent('by claude-parent');
+    expect(s).toHaveTextContent('1 earlier attachment');
+    expect(s).toHaveTextContent('Opens from inside VS Code only.');
+    expect(within(s).queryByRole('link')).toBeNull();
+    expect(within(s).getByRole('button', { name: 'Copy session link' })).toBeInTheDocument();
+  });
+
+  it('gives a claude-code session its VS Code link and resume command', async () => {
+    data.detail = detail({
+      session: {
+        provider: 'claude-code',
+        ref: uuid,
+        cwd: null,
+        attachedAt: '2026-11-13T08:20:00.000Z',
+        by: null,
+        links: {
+          open: { url: `vscode://anthropic.claude-code/open?session=${uuid}`, scope: 'os' },
+          resume: `claude --resume ${uuid}`,
+          note: 'The VS Code link resumes the session.',
+        },
+        previous: 0,
+      },
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mockFetch();
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId('session')).toBeInTheDocument();
+    });
+    const s = screen.getByTestId('session');
+    expect(within(s).getByRole('link', { name: 'Open session in VS Code' })).toHaveAttribute(
+      'href',
+      `vscode://anthropic.claude-code/open?session=${uuid}`,
+    );
+    expect(s).toHaveTextContent(`claude --resume ${uuid}`);
+    expect(s).not.toHaveTextContent('earlier attachment');
   });
 });
