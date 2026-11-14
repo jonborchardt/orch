@@ -26,6 +26,7 @@ import {
   authorize,
   clearWorktree,
   getJob,
+  listJobs,
   setRepo,
   setWorktree,
   transitionJob,
@@ -164,7 +165,10 @@ export function adoptWorktree(
   const info = inspectWorktree(root, path, job.baseBranch);
   if (!info.exists) throw new ValidationError(`${path} does not exist.`);
   if (!info.isWorktree) throw new ValidationError(`${path} is not a worktree of ${job.repo}.`);
-  if (resolve(root) === path || path.startsWith(resolve(root) + sep)) {
+  // Compare canonically: an alias spelling (8.3 short name, case, junction) must not slip past.
+  const primary = canonicalPath(root);
+  const target = canonicalPath(path);
+  if (target === primary || target.startsWith(primary + sep)) {
     throw new ValidationError(
       'The primary checkout (or a directory inside it) cannot be a job worktree.',
     );
@@ -174,6 +178,13 @@ export function adoptWorktree(
     throw new ValidationError(
       `${path} is on the base branch ${job.baseBranch}; jobs never work on it.`,
     );
+  }
+  // The storage index compares spellings; an alias of another job's worktree must not slip past.
+  const holder = listJobs(store.db).find(
+    (j) => j.id !== id && j.worktreePath !== null && canonicalPath(j.worktreePath) === target,
+  );
+  if (holder) {
+    throw new ValidationError(`Worktree ${path} is already assigned to job ${holder.id}.`);
   }
   const updated = setWorktree(store, id, {
     ...auth,

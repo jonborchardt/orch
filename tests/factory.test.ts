@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { OwnershipError, ValidationError, WorkflowError } from '../src/core/errors.ts';
+import { OwnershipError, WorkflowError } from '../src/core/errors.ts';
 import { ROLES } from '../src/core/roles.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
 import { verifyJob } from '../src/ops/verify.ts';
@@ -276,7 +276,7 @@ describe('review rounds', () => {
     rmSync(join(c.wt, 'sneaky.ts'));
     expect(checkReadonly(store, c.id, fp).ok).toBe(true);
     commitFile(c.wt, 'also.ts', 'y');
-    expect(() => checkReadonly(store, c.id, fp)).toThrow(ValidationError);
+    expect(() => checkReadonly(store, c.id, fp)).toThrow(/Reviewers must not modify code/);
   });
 
   it('check-readonly reports a failed inspection with its Git error, not as a reviewer write', () => {

@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -26,6 +27,7 @@ import {
   makeRepo,
   makeRepoWithOrigin,
   orch,
+  removeLink,
   tempDir,
   type TempStore,
   tempStore,
@@ -244,6 +246,69 @@ describe('worktree show, adopt, remove', () => {
     expect(() =>
       adoptWorktree(store, a.id, { token: a.token }, created.job.worktreePath ?? ''),
     ).toThrow(/already assigned/);
+  });
+
+  it('refuses the primary checkout, and a worktree inside it, through a junction or symlink alias', () => {
+    const { id, token } = newJob();
+    gitIn(clone, 'worktree', 'add', '-q', '-b', 'nested', join(clone, 'nested-wt'), 'main');
+    const alias = join(tempDir('orch-alias-'), 'clone');
+    extra.push(join(alias, '..'));
+    try {
+      symlinkSync(clone, alias, 'junction');
+    } catch {
+      return; // no link support here; nothing to prove
+    }
+    try {
+      expect(() => adoptWorktree(store, id, { token }, alias)).toThrow(/primary checkout/);
+      expect(() => adoptWorktree(store, id, { token }, join(alias, 'nested-wt'))).toThrow(
+        /inside it/,
+      );
+    } finally {
+      removeLink(alias);
+    }
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'refuses the primary checkout, and a worktree inside it, through its 8.3 short name',
+    (ctx) => {
+      const { id, token } = newJob();
+      gitIn(clone, 'worktree', 'add', '-q', '-b', 'nested', join(clone, 'nested-wt'), 'main');
+      const long = realpathSync.native(clone);
+      // cmd's %~sI prints the short (8.3) spelling; the same quoting Node uses for shell: true.
+      const short = spawnSync('cmd', ['/d', '/s', '/c', `"for %I in ("${long}") do @echo %~sI"`], {
+        encoding: 'utf8',
+        windowsVerbatimArguments: true,
+      }).stdout.trim();
+      // Empty: the probe failed; equal: 8.3 names are disabled here. Neither proves anything.
+      if (!short || short.toLowerCase() === long.toLowerCase()) ctx.skip();
+      expect(() => adoptWorktree(store, id, { token }, short)).toThrow(/primary checkout/);
+      expect(() => adoptWorktree(store, id, { token }, join(short, 'nested-wt'))).toThrow(
+        /inside it/,
+      );
+    },
+  );
+
+  it('refuses an alias spelling of a worktree another job already holds', () => {
+    const a = newJob();
+    const b = newJob(store, clone, 'Second job');
+    const wt = createWorktree(store, a.id, { token: a.token }).job.worktreePath ?? '';
+    // On a branch no job records, so only the path can reveal the clash.
+    gitIn(wt, 'switch', '-q', '-c', 'feature/moved');
+    const alias = join(tempDir('orch-alias-'), 'wt');
+    extra.push(join(alias, '..'));
+    try {
+      symlinkSync(wt, alias, 'junction');
+    } catch {
+      return; // no link support here; nothing to prove
+    }
+    try {
+      expect(() => adoptWorktree(store, b.id, { token: b.token }, alias)).toThrow(
+        /already assigned to job/,
+      );
+      expect(getJob(store.db, b.id).worktreePath).toBeNull();
+    } finally {
+      removeLink(alias);
+    }
   });
 
   it('a job cannot take a branch another job in the same repository owns', () => {

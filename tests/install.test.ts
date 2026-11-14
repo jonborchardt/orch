@@ -4,7 +4,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  rmdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,7 +14,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { runInstall } from '../src/cli/install.ts';
-import { json, orch, tempDir } from './helpers.ts';
+import { json, orch, removeLink, tempDir } from './helpers.ts';
 
 let source: string;
 let claude: string;
@@ -155,7 +154,7 @@ describe('orch install', () => {
         runInstall({ source: alias, 'claude-dir': claude, 'dry-run': true }).entries[1]?.state,
       ).toBe('stale');
     } finally {
-      rmdirSync(alias);
+      removeLink(alias);
       rmSync(join(alias, '..'), { recursive: true, force: true });
     }
   });
