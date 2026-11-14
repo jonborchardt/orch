@@ -147,6 +147,8 @@ export interface JobDetail {
   reviews: Review[];
   events: Event[];
   artifactDir: string;
+  /** Ids of the jobs this one replaced. */
+  supersedes: string[];
 }
 
 export function jobDetail(store: Store, id: string, eventLimit = 20): JobDetail {
@@ -157,7 +159,37 @@ export function jobDetail(store: Store, id: string, eventLimit = 20): JobDetail 
     reviews: listReviews(store.db, id),
     events: listEvents(store.db, id, eventLimit),
     artifactDir: jobArtifactDir(id, store.paths),
+    supersedes: predecessorsOf(store.db, id).map((j) => j.id),
   };
+}
+
+/** Jobs that record `id` as their replacement. */
+export function predecessorsOf(db: Db, id: string): Job[] {
+  return db.select().from(jobs).where(eq(jobs.supersededBy, id)).all();
+}
+
+/**
+ * Record that `by` replaced job `id`. Nothing is deleted or merged: both jobs keep their rows,
+ * events, and artifacts. The two must belong to the same repository and must not form a loop.
+ */
+export function supersedeJob(store: Store, id: string, auth: Auth, by: string): Job {
+  return mutate(store, id, auth, (job, tx) => {
+    if (by === id) throw new ValidationError('A job cannot supersede itself.');
+    const next = getJob(tx, by);
+    if (next.repo !== job.repo) {
+      throw new ValidationError(`${by} belongs to ${next.repo}; ${id} belongs to ${job.repo}.`);
+    }
+    for (let cur: Job | undefined = next; cur?.supersededBy;) {
+      if (cur.supersededBy === id) {
+        throw new ValidationError(`${by} is already superseded by ${id}; refusing a loop.`);
+      }
+      cur = tx.select().from(jobs).where(eq(jobs.id, cur.supersededBy)).get();
+    }
+    return {
+      patch: { supersededBy: by },
+      events: [{ type: 'job.superseded', payload: { by, previous: job.supersededBy } }],
+    };
+  });
 }
 
 export interface ClaimOptions {

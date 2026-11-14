@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { WorkflowError } from '../src/core/errors.ts';
 import {
   type Action,
+  cannotAcceptDelivery,
   describeNext,
   requiredArtifact,
   type Stage,
@@ -113,6 +114,10 @@ describe('transition: happy path', () => {
     expect(() => run(j, 'complete')).toThrow(/required checks are none/);
     j = { ...j, ciStatus: 'passing', ciHead: null };
     expect(() => run(j, 'complete')).toThrow(/run orch gh ci/);
+    // A PR closed without merging cannot be completed, even with a passing head recorded.
+    expect(() => run({ ...j, ciHead: 'abc', prState: 'closed' }, 'complete')).toThrow(
+      /closed without merging/,
+    );
     j = { ...j, ciHead: 'abc' };
     const done = run(j, 'complete');
     expect(done.patch.stage).toBe('completed');
@@ -324,6 +329,30 @@ describe('transition: escalation, resume, cancel', () => {
       expect(r.patch.status).toBe('cancelled');
       expect(r.patch.completedAt).toBeTruthy();
     }
+  });
+});
+
+describe('cannotAcceptDelivery', () => {
+  const base = {
+    stage: 'needs-human' as const,
+    returnStage: 'ci' as const,
+    prUrl: 'https://github.com/o/r/pull/1',
+    ciHead: 'abc',
+    ciStatus: 'none' as const,
+    prState: 'draft' as const,
+  };
+  it('allows a ci escalation with no checks, or a PR merged by hand; refuses everything else', () => {
+    expect(cannotAcceptDelivery(base)).toBeNull();
+    expect(cannotAcceptDelivery({ ...base, ciStatus: 'failing', prState: 'merged' })).toBeNull();
+    expect(cannotAcceptDelivery({ ...base, ciStatus: 'pending' })).toMatch(/pending/);
+    expect(cannotAcceptDelivery({ ...base, ciStatus: 'failing' })).toMatch(/failing/);
+    expect(cannotAcceptDelivery({ ...base, ciStatus: null })).toMatch(/not observed/);
+    expect(cannotAcceptDelivery({ ...base, ciHead: null })).toMatch(/no PR head/);
+    expect(cannotAcceptDelivery({ ...base, prUrl: null })).toMatch(/no PR head/);
+    expect(cannotAcceptDelivery({ ...base, returnStage: 'approve' })).toMatch(
+      /escalated from the ci/,
+    );
+    expect(cannotAcceptDelivery({ ...base, stage: 'ci' })).toMatch(/escalated from the ci/);
   });
 });
 

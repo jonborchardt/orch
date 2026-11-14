@@ -17,6 +17,7 @@ import {
 } from '../core/workflow.ts';
 import { SESSION_PROVIDERS, type SessionProvider, validateSessionRef } from '../core/session.ts';
 import { describeRepo } from '../git/repo.ts';
+import { supersede } from '../ops/actions.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
 import { findJobs } from '../ops/repo.ts';
 import { repointRepo } from '../ops/worktree.ts';
@@ -59,6 +60,7 @@ export interface JobOptions {
   stage?: string;
   limit?: string;
   replace?: boolean;
+  by?: string;
   provider?: string;
   ref?: string;
   cwd?: string;
@@ -81,6 +83,8 @@ export const JOB_HELP = `Usage: orch job <command> [options]
             [--summary <s>] --token <t>
   pr <id> --url <url> --state <${PR_STATES.join('|')}> --token <t>
   repo <id> [--repo <path>] --token <t>     confirm the checkout's current remote identity
+  supersede <id> --by <new-id> --session <name> [--force]
+            record that <new-id> replaced <id> (same repository; both histories are kept)
   session attach <id> --provider <${SESSION_PROVIDERS.join('|')}> --ref <link|uuid> [--cwd <dir>] [--token <t>]
             record the execution session driving the job (metadata; the owner's token is
             required while the job is claimed, none while it is unowned)
@@ -193,6 +197,15 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
     }
     case 'repo':
       return summary(repointRepo(store, id(), auth, o.repo), store);
+    case 'supersede':
+      return summary(
+        supersede(store, id(), {
+          by: need(o.by, '--by <new-id>'),
+          session: need(session, '--session'),
+          force: o.force,
+        }),
+        store,
+      );
     case 'session': {
       if (rest[0] !== 'attach') throw new UsageError('Usage: orch job session attach <id> ...');
       const jobId = need(rest[1], '<id>');

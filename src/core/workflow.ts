@@ -34,7 +34,8 @@ export type Status = (typeof STATUSES)[number];
 export const VERDICTS = ['pass', 'changes'] as const;
 export type Verdict = (typeof VERDICTS)[number];
 
-export const PR_STATES = ['draft', 'ready', 'merged'] as const;
+/** `closed` means closed without merging, as GitHub reported it; cancelling a job never implies it. */
+export const PR_STATES = ['draft', 'ready', 'merged', 'closed'] as const;
 export type PrState = (typeof PR_STATES)[number];
 
 /** Rollup of a PR's checks: `none` when the PR has no checks configured. */
@@ -196,6 +197,7 @@ export function transition(
         case 'ci': {
           // Only GitHub's verdict for the PR head counts; `orch gh ci` is what records it.
           if (!job.prUrl) reject('no PR is recorded');
+          if (job.prState === 'closed') reject('the PR was closed without merging');
           if (!job.ciHead) {
             // `pr create` and `pr status` record the rollup without a head: not a verdict.
             reject('no CI verdict has been read for the PR head; run orch gh ci');
@@ -291,19 +293,29 @@ export function transition(
 }
 
 /**
- * A human closes out a delivery the factory could not verify: `resume --to completed` from a CI
- * escalation is allowed only when GitHub reported no checks at all for the PR head, or the PR was
- * merged outside the factory. A failing or pending CI result can never be accepted this way.
+ * Why a human may not close out this job as delivered (`resume --to completed`), or null when
+ * they may: only a job escalated from the ci stage, with an observed PR head, whose PR either
+ * reported no checks at all or was merged outside the factory. A failing or pending CI result can
+ * never be accepted this way. The dashboard lists the action from this same rule.
  */
-function acceptDelivery(job: JobState, ctx: TransitionContext): TransitionResult {
-  const why = (w: string): never => {
-    throw new WorkflowError(`Cannot resume job to completed: ${w}`);
-  };
-  if (job.returnStage !== 'ci') why('only a job escalated from the ci stage can be closed out');
-  if (!job.prUrl || !job.ciHead) why('no PR head has been observed');
-  if (job.ciStatus !== 'none' && job.prState !== 'merged') {
-    why(`required checks are ${job.ciStatus ?? 'not observed'}; fix CI and resume --to ci instead`);
+export function cannotAcceptDelivery(
+  job: Pick<JobState, 'stage' | 'returnStage' | 'prUrl' | 'ciHead' | 'ciStatus' | 'prState'>,
+): string | null {
+  if (job.stage !== 'needs-human' || job.returnStage !== 'ci') {
+    return 'only a job escalated from the ci stage can be closed out';
   }
+  if (!job.prUrl || !job.ciHead) return 'no PR head has been observed';
+  if (job.prState === 'closed')
+    return 'the PR was closed without merging; reopen it or cancel the job';
+  if (job.ciStatus !== 'none' && job.prState !== 'merged') {
+    return `required checks are ${job.ciStatus ?? 'not observed'}; fix CI and resume --to ci instead`;
+  }
+  return null;
+}
+
+function acceptDelivery(job: JobState, ctx: TransitionContext): TransitionResult {
+  const refused = cannotAcceptDelivery(job);
+  if (refused) throw new WorkflowError(`Cannot resume job to completed: ${refused}`);
   return {
     patch: { stage: 'completed', status: 'completed', returnStage: null, completedAt: now() },
     events: [

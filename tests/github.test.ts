@@ -123,7 +123,9 @@ describe('gh wrapper', () => {
     expect(prWorkflowState({ state: 'OPEN', isDraft: true })).toBe('draft');
     expect(prWorkflowState({ state: 'OPEN', isDraft: false })).toBe('ready');
     expect(prWorkflowState({ state: 'MERGED', isDraft: false })).toBe('merged');
-    expect(prWorkflowState({ state: 'CLOSED', isDraft: false })).toBeUndefined();
+    expect(prWorkflowState({ state: 'CLOSED', isDraft: false })).toBe('closed');
+    expect(prWorkflowState({ state: 'CLOSED', isDraft: true })).toBe('closed');
+    expect(prWorkflowState({ state: 'WEIRD', isDraft: false })).toBeUndefined();
   });
 
   it('resolves the repository and refuses a mismatch; failures carry gh stderr', () => {
@@ -223,6 +225,29 @@ describe('push and draft PR delivery', () => {
     st2.prs[0] = { ...st2.prs[0], isDraft: false };
     writeState({ prs: st2.prs });
     expect(prStatus(store, id, { token }).job.prState).toBe('ready');
+    // Closed without merging is its own state, recorded only from GitHub's answer; reopening
+    // and merging are observed the same way, and the earlier events stay as they were.
+    const setState = (state: string, isDraft = false) => {
+      const s = readState();
+      s.prs[0] = { ...s.prs[0], state, isDraft };
+      writeState({ prs: s.prs });
+    };
+    setState('CLOSED');
+    expect(prStatus(store, id).prState).toBe('closed');
+    expect(getJob(store.db, id).prState).toBe('ready'); // read-only: nothing recorded
+    expect(prStatus(store, id, { token }).job.prState).toBe('closed');
+    setState('OPEN', true);
+    expect(prStatus(store, id, { token }).job.prState).toBe('draft');
+    setState('MERGED');
+    expect(prStatus(store, id, { token }).job.prState).toBe('merged');
+    const recorded = listEvents(store.db, id, 1000).filter((e) => e.type === 'pr.recorded');
+    expect(recorded.map((e) => e.payload['state'])).toEqual(['draft', 'draft']);
+    expect(
+      listEvents(store.db, id, 1000)
+        .filter((e) => e.type === 'ci.observed')
+        .map((e) => e.payload['prState'])
+        .slice(-4),
+    ).toEqual(['ready', 'closed', 'draft', 'merged']);
   });
 
   it('refuses PR creation outside the pr stage, on a mismatched repo, or a missing base', () => {

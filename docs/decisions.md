@@ -657,7 +657,87 @@ the read it was missing. Rejected: a freshness window on `ciCheckedAt` (a timer 
 fact that is cheap to re-read), and re-reading GitHub inside `orch job transition complete` (a
 "transition" that calls the network and can rework the job would surprise every caller).
 
-## 54. CI: every page, one bounded re-run per head, and a cadence the CLI computes
+## 54. Test runs own their resources: free ports, per-run state, scratch homes (Phase 2, C02)
+
+**Audit.** Vitest fixtures were already `mkdtemp` directories (stores, repositories, bare origins,
+`gh` shims, worktrees under the store's home) and the CLI helper always set `ORCH_HOME`, so two
+Vitest runs did not collide on state. Three things were fixed across runs: the Playwright suite
+wrote its state to `e2e/.state.json` inside the checkout and listened on 4799 unless
+`ORCH_E2E_PORT` said otherwise, so two runs in one checkout fought over both; a test that failed
+before its own `rmSync` left its temp directories behind (146 `orch-*` directories were sitting in
+this machine's `%TEMP%`); and nothing stopped a test that reached `runtimePaths()` without an
+explicit home from opening the developer's database if `ORCH_HOME` happened to be set in the
+shell (a second validation campaign on this machine runs with exactly such a shell).
+
+**Decision.** `e2e/global-setup.ts` starts `orch ui` on port 0 (or the pinned `ORCH_E2E_PORT`,
+failing with a message naming the port when it is in use rather than connecting to whatever is
+already there), reads the URL the server prints, and writes `{home, pid, ids, url}` to a state
+file under the run's own scratch home; the path travels to the workers and the teardown as
+`ORCH_E2E_STATE`, and the spec sets `baseURL` from it with `test.use`. `ORCH_E2E_KEEP=1` keeps the
+home. `tests/setup.ts` runs before every Vitest file: it points `ORCH_HOME` at a scratch
+directory and removes every directory the file created through `tempDir()` in `afterAll`, which
+Vitest runs after failures as well; a directory held open by an unclosed store is left rather than
+fought over. Two concurrent `npx playwright test` runs from one checkout passed with no shared
+resource (see the Phase 2 report).
+
+**Left alone.** Playwright's `test-results/` and `playwright-report/` stay where they are: they
+are per checkout, the rule is one session per checkout, and moving them would hide the traces
+developers look for. A global lock across runs was not needed once nothing was shared.
+
+## 55. The dashboard shows CI with its commit, and close-out is the transition's own rule (Phase 2, C03)
+
+**Found.** The board and detail showed `jobs.ciStatus` alone, so a rollup could read as current
+after the PR head moved, a ci-stage escalation was an unclassified `Escalated from ci`, the repair
+budget and failure logs that `orch gh ci` records were invisible, a job completed by `resume --to
+completed` looked like a passing build, and the only human close-out lived in the CLI.
+
+**Decision.** One read model, `ciView` (`src/server/status.ts`), built from persisted fields: the
+rollup columns (`ciStatus`, `ciHead`, `ciCheckedAt`, `ciRepairs`, `maxCiRepairs`), the newest
+`ci.observed` event (an `orch gh ci` reconciliation carries `outcome`, `reason`, and `failures`; a
+`pr status` observation does not and contributes nothing), and the `job.completed` event
+(`acceptedByHuman`, or a `head` for GitHub's verdict, or neither for jobs older than the ci stage).
+The verdict is shown with its SHA; the detail compares it to the worktree HEAD and marks a stale one,
+the board does not inspect worktrees and says so with `current: null`. A ci escalation is its own
+blocker kind, classified from the reason code (`max CI repair cycles reached`) and the last
+outcome, never from prose. Close-out: `cannotAcceptDelivery` is extracted from the pure transition
+and used both by `acceptDelivery` and by `allowedActions`, so the dashboard offers Accept delivery
+exactly where `resume --to completed` would succeed; the action requires a reason, is never
+primary, and the result is labelled a human close-out everywhere. No schema change: every field
+was already persisted (decision #48 made sure the SHA binding and the budget were columns).
+
+**Rejected.** A `closed`/`merged-by-hand` status column (the newest observation already records
+it); reimplementing the gate in React (the client renders the server's list and only decides
+prominence); promoting Request rework for CI infrastructure failures (not a code defect); any
+automatic merge or ready-for-review action.
+
+## 56. A PR closed without merging is its own state
+
+`jobs.prState` knew `draft`, `ready`, and `merged`; `prWorkflowState` answered `undefined` for a
+closed PR, and `recordCi` skips an undefined state, so a factory PR that a human closed stayed
+recorded as `draft` for ever. `closed` is now the fourth value. It is written only from GitHub's
+answer (`orch gh pr status`, `orch gh ci`) or by the owner through `orch job pr`; cancelling a
+job never implies it, because a cancelled job's PR may well still be open. The pure transition
+refuses to complete the `ci` stage, and `resume --to completed` refuses to accept delivery, while
+the PR is `closed`: a closed PR is not a deliverable whatever its checks said. Reopening is
+observed the same way (the next observation records `draft` or `ready` again). Historical rows and
+events are untouched: a job whose PR was closed before this change keeps `draft` until the next
+authoritative observation, and the `pr.recorded` / `ci.observed` log is append-only. No migration:
+the column is free text typed in TypeScript.
+
+## 57. Supersession is a column on the old job, recorded explicitly
+
+The board showed several jobs with the same title (a cancelled attempt and its restart) with no
+way to tell which replaced which; the only trace was free text in a cancel reason. `jobs.supersededBy`
+now names the replacement, written by `orch job supersede <old> --by <new>`, never inferred. A
+column rather than an event-only record because the relationship is state the board and `orch job
+show` query (decision 15: events are an audit log, columns hold state); the `job.superseded` event
+keeps the history of changed replacements. The rule set is deliberately small: same repository, no
+self-reference, no loop, nothing deleted or merged, no generalized dependency graph. The command is
+a short ownership episode (decision 33), shared with the dashboard actions through `withLease`, so
+a cancelled or abandoned job needs no manual claim and a live session's lease is still respected.
+Rows created before the migration carry null and are never back-filled.
+
+## 58. CI: every page, one bounded re-run per head, and a cadence the CLI computes
 
 **Pagination.** `listChecksFor` read `check-runs?per_page=100` once; a commit with more runs (large
 matrices do this) was evaluated on a partial list, and a failed required check on the second page

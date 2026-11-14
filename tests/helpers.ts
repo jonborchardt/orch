@@ -16,9 +16,28 @@ import { dirname, join } from 'node:path';
 import { installRoot, type RuntimePaths } from '../src/core/paths.ts';
 import { openStore, type Store } from '../src/storage/client.ts';
 
-/** A fresh temp directory by its real path: on Windows the runner's TEMP is an 8.3 alias. */
+const created: string[] = [];
+
+/**
+ * A fresh temp directory by its real path: on Windows the runner's TEMP is an 8.3 alias. Every
+ * directory is remembered so tests/setup.ts can remove it when the file finishes, whether or not
+ * the test cleaned up itself; a test that wants a directory kept copies it elsewhere.
+ */
 export function tempDir(prefix = 'orch-test-'): string {
-  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  created.push(dir);
+  return dir;
+}
+
+/** Remove every directory this file's tests created through `tempDir`; busy ones are left. */
+export function cleanupTempDirs(): void {
+  for (const dir of created.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* an open handle (a store a test never closed) keeps it; nothing else will touch it */
+    }
+  }
 }
 
 /** Remove a directory link, never its target: Windows junctions need rmdir, POSIX symlinks unlink. */
@@ -150,7 +169,7 @@ export const NOOP_POLICY =
     2,
   ) + '\n';
 
-const MAIN = join(installRoot(), 'src', 'cli', 'main.ts');
+const main = () => join(installRoot(), 'src', 'cli', 'main.ts');
 
 export interface CliResult {
   code: number | null;
@@ -173,7 +192,7 @@ export function orch(
   args: string[],
   env: NodeJS.ProcessEnv = {},
 ): CliResult {
-  const r = spawnSync(process.execPath, [MAIN, ...args], {
+  const r = spawnSync(process.execPath, [main(), ...args], {
     cwd,
     encoding: 'utf8',
     env: cliEnv(home, env),
@@ -189,7 +208,7 @@ export function orchAsync(
   env: NodeJS.ProcessEnv = {},
 ): Promise<CliResult> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [MAIN, ...args], { cwd, env: cliEnv(home, env) });
+    const child = spawn(process.execPath, [main(), ...args], { cwd, env: cliEnv(home, env) });
     let out = '';
     let err = '';
     child.stdout.on('data', (d: Buffer) => (out += d.toString()));
