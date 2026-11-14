@@ -240,11 +240,15 @@ ci <id> --token <t>`, then `orch factory next`. `orch gh ci` reads GitHub's chec
 head and acts for you; read its `action`:
 
 - `wait`: required checks are queued, running, or not registered yet. Wait about 60 seconds
-  (`sleep 60`), then run `orch factory next` and the command again. Do not call it in a tight loop.
-  After roughly 30 pending observations in one session (`plan.ci.polls`), release the job
+  (`sleep 60`) in a Bash call of its own, then run `orch factory next` and the command again in the
+  next call: never chain the wait and the `orch` commands in one script, so that a session killed
+  while waiting leaves no scheduled write behind. Do not call it in a tight loop. After roughly 30
+  pending observations in one session (`plan.ci.polls`), release the job
   (`orch job release <id> --token <t>`), tell the user CI is still running and give the resume
   command, and stop; `orch factory resume` later re-reads GitHub and continues here.
-- `complete`: required checks passed for this head; run the plan's `complete`. The job is `done`.
+- `complete`: required checks passed for this head and the job is `completed` in the same call;
+  `orch factory next` confirms `done`. There is no separate `complete` step for `ci`: a stored
+  verdict, even a passing one, is never reused, so a resumed session always runs `orch gh ci`.
 - `rework`: a required check failed. `orch` saved the failing logs under `<artifactDir>/ci/<sha7>/`
   and moved the job to `build` with `plan.ci.repairs` incremented. Run the loop as usual: the build
   plan names the logs; give the builder the log paths and the failing check names, and require a

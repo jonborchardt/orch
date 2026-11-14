@@ -132,6 +132,32 @@ function evidenceHead(
   }
 }
 
+/** Delivery stages complete from a clean, verified HEAD under an authorized policy. */
+function requireDeliverable(store: Store, job: Job, tree: Tree): void {
+  requireClean(tree, `completing ${job.stage} must describe a committed state.`);
+  // GitHub's verdict counts only for the commit it was read for.
+  if (job.stage === 'ci' && job.ciHead !== tree.head) {
+    throw new ValidationError(
+      `CI was last observed for ${job.ciHead?.slice(0, 7) ?? 'no commit'} but HEAD is ` +
+        `${tree.head.slice(0, 7)}; run orch gh ci ${job.id} again.`,
+    );
+  }
+  requireVerified(store, job, tree, `completing ${job.stage}`);
+  requireAuthorizedPolicy(job, tree, `completing ${job.stage}`);
+}
+
+/**
+ * Complete the ci stage. Only `orch gh ci` calls this, in the same run that read GitHub for the
+ * PR head, so a stored verdict is never reused after the PR moved, was closed, or its checks were
+ * rerun (decision 52).
+ */
+export function completeCi(store: Store, id: string, auth: TransitionOptions): Job {
+  const job = authorize(store, id, auth);
+  const tree = job.worktreePath ? worktreeOf(job) : null;
+  if (tree) requireDeliverable(store, job, tree);
+  return transitionJob(store, id, 'complete', auth);
+}
+
 /** `orch job transition`: `complete` is refused when the worktree moved past its evidence. */
 export function transitionGuarded(
   store: Store,
@@ -141,6 +167,12 @@ export function transitionGuarded(
 ): Job {
   if (action === 'complete') {
     const job = authorize(store, id, opts);
+    if (job.stage === 'ci') {
+      throw new ValidationError(
+        `The ci stage is completed by orch gh ci ${id}, which re-reads GitHub for the PR head; ` +
+          'a stored verdict cannot complete it.',
+      );
+    }
     const evidence = evidenceHead(job, listArtifacts(store.db, id), listReviews(store.db, id));
     const info = evidence && job.worktreePath ? worktreeOf(job) : null;
     if (info && evidence) {
@@ -161,20 +193,9 @@ export function transitionGuarded(
       }
       if (job.stage === 'approve') requireAuthorizedPolicy(job, info, 'completing approve');
     }
-    if ((job.stage === 'pr' || job.stage === 'ci') && job.worktreePath) {
+    if (job.stage === 'pr' && job.worktreePath) {
       const tree = worktreeOf(job);
-      if (tree) {
-        requireClean(tree, `completing ${job.stage} must describe a committed state.`);
-        // GitHub's verdict counts only for the commit it was read for.
-        if (job.stage === 'ci' && job.ciHead !== tree.head) {
-          throw new ValidationError(
-            `CI was last observed for ${job.ciHead?.slice(0, 7) ?? 'no commit'} but HEAD is ` +
-              `${tree.head.slice(0, 7)}; run orch gh ci ${job.id} again.`,
-          );
-        }
-        requireVerified(store, job, tree, `completing ${job.stage}`);
-        requireAuthorizedPolicy(job, tree, `completing ${job.stage}`);
-      }
+      if (tree) requireDeliverable(store, job, tree);
     }
   }
   return transitionJob(store, id, action, opts);

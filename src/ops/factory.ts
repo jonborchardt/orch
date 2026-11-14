@@ -441,21 +441,21 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     case 'ci': {
       const ci = `orch gh ci ${id}${tok}`;
       const budget = `Repairs used: ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}.`;
-      if (ciCurrent && job.ciStatus === 'passing') {
-        plan.reason = `Required checks passed for ${job.ciHead?.slice(0, 7) ?? '?'}. Complete the job.`;
-        plan.commands = [...start, complete];
-      } else {
-        plan.reason =
-          `Reconcile CI for the PR head through orch gh ci; it records GitHub's verdict for the exact commit and ` +
-          `acts on it (passing: complete; failing: rework to build with saved logs; cannot run or no checks: escalate). ` +
-          `Pending checks are only an observation: wait about a minute and run it again, or release the job and resume ` +
-          `later; the CLI never polls by itself. ${budget}` +
-          (job.ciHead && !ciCurrent
-            ? ` The last observation was for ${job.ciHead.slice(0, 7)}, not HEAD ${worktree.head?.slice(0, 7) ?? '?'}.`
-            : '') +
-          (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
-        plan.commands = [...start, ci, `orch factory next ${id}`];
-      }
+      // A stored verdict, even a passing one for HEAD, never completes the stage: orch gh ci
+      // re-reads GitHub and completes in the same call when the checks still pass for this head.
+      plan.reason =
+        `Reconcile CI for the PR head through orch gh ci; it records GitHub's verdict for the exact commit and ` +
+        `acts on it (passing: completes the job; failing: rework to build with saved logs; cannot run or no checks: escalate). ` +
+        `Pending checks are only an observation: wait about a minute and run it again, or release the job and resume ` +
+        `later; the CLI never polls by itself. ${budget}` +
+        (job.ciHead && !ciCurrent
+          ? ` The last observation was for ${job.ciHead.slice(0, 7)}, not HEAD ${worktree.head?.slice(0, 7) ?? '?'}.`
+          : '') +
+        (ciCurrent && job.ciStatus === 'passing'
+          ? ` A passing verdict is recorded for ${job.ciHead?.slice(0, 7) ?? '?'}; it is confirmed against GitHub, not reused.`
+          : '') +
+        (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
+      plan.commands = [...start, ci, `orch factory next ${id}`];
       break;
     }
     default:
