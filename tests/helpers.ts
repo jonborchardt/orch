@@ -166,17 +166,19 @@ function cliEnv(home: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...base, ...env };
 }
 
-/** Run the CLI from source in `cwd` with ORCH_HOME pointed at `home`. */
+/** Run the CLI from source in `cwd` with ORCH_HOME pointed at `home`; `input` feeds stdin. */
 export function orch(
   home: string,
   cwd: string,
   args: string[],
   env: NodeJS.ProcessEnv = {},
+  input?: string,
 ): CliResult {
   const r = spawnSync(process.execPath, [MAIN, ...args], {
     cwd,
     encoding: 'utf8',
     env: cliEnv(home, env),
+    input,
   });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }

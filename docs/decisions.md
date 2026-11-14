@@ -576,3 +576,40 @@ a user file. `sameFile` compared `stat().ino` as doubles; NTFS file ids are 64-b
 bits above 2^53, so two files created back to back can compare equal and a conflicting agent file
 passes as a hard link. It now compares bigint stats. The flake was latent, not caused by the
 workflow change.
+
+## 52. Checkout ownership is a per-checkout lease, enforced at the editor hook (Phase 2, A04)
+
+**Problem.** Job leases protect the job row. The collisions that actually happened (#45) were two
+Claude Code sessions editing one checkout while its test suite ran: no job was involved, and no
+`orch` command stood between the session and the file. The available identity that is reliable
+and documented is Claude Code's own: hooks receive `session_id`, `cwd`, and for `PreToolUse` the
+`tool_input.file_path`, and an exit code 2 from a `PreToolUse` hook refuses the tool call with
+stderr as the reason. VS Code's agent window exposes no documented checkout ownership, and
+parsing its session files was rejected as fragile.
+
+**Decision.** A checkout is identified by its canonical Git directory (`git rev-parse
+--absolute-git-dir`): the primary checkout's `.git` versus each linked worktree's
+`.git/worktrees/<name>`, through `canonicalPath`, so spellings, 8.3 aliases, and junctions
+collapse and two repositories that share a directory name never do. A claim is a JSON file under
+`<data>/checkouts/` keyed by that identity and decided by the same `decideClaim` as job leases
+(new, renew, reclaim after expiry, refuse while live, `--force`). A fresh claim is created with
+`wx`, so two sessions racing for an unclaimed checkout cannot both win; renewals replace the file
+by rename. `orch checkout hook` reads the hook payload: an Edit/Write claims the checkout
+containing the file and exits 2 while another live session holds it; `SessionStart` only reports
+a holder, so a read-only session never claims; `SessionEnd` releases. The hook is shipped in this
+repository's `.claude/settings.json` running `src/cli/main.ts`, so every worktree of this
+repository is covered by its own source without a build or install, and users enable it
+elsewhere through `~/.claude/settings.json`.
+
+**Why files, not the database.** The hook runs from whichever checkout a session is in, under
+whatever `ORCH_HOME` that session has. Opening the shared SQLite store from a feature branch would
+apply that branch's migrations to the user's database as a side effect of an edit. A directory of
+small files has no schema, needs no migration, and is cheap enough for one write per edit.
+
+**Rejected.** A `checkouts` table (migration for a cooperative guard; the side effect above); a
+`.git/orch-session.lock` inside the repository (the project rule is that `orch` never writes into
+a project checkout); tying hook claims to job sessions (job session names are chosen by the
+coordinator, the hook's id is Claude Code's, so a job's own session would be refused); hooking
+Bash (the command text does not say what it writes); a daemon or process registry. What remains
+cooperative: Bash writes and any process that does not ask are not stopped, which the README says
+in the same place it describes the guard.

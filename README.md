@@ -724,6 +724,33 @@ Several VS Code sessions may run at once, so each job has at most one owner.
   repeating `start` on a running stage is refused.
 - `orch job release <id>` gives the job up voluntarily.
 
+### Checkout ownership (cooperative)
+
+A job lease protects the job record; it does not stop two Claude Code sessions from editing the
+same checkout, which is how the intermittent failures in `docs/decisions.md` #45 happened. `orch
+checkout` adds a lease per **checkout**, identified by its Git directory (`.git` for the primary
+checkout, `.git/worktrees/<name>` for each linked worktree, compared canonically so case, 8.3
+aliases, and junctions are one checkout and two repositories that merely share a directory name are
+not). Claims live as JSON files under `<data>/checkouts/`, never inside a repository and never in
+the database, so the guard can run from any checkout without touching the shared store.
+
+- `orch checkout claim --session <s> [--path <p>] [--lease <min>] [--force]` takes or renews the
+  checkout containing `<p>`; exit 4 while another session's lease is live. `--force` takes it over
+  deliberately. `status` and `list` are read-only; `release [--all]` gives claims back.
+- `orch checkout hook` is a Claude Code hook. This repository ships it in `.claude/settings.json`:
+  `PreToolUse` on `Edit|Write|MultiEdit|NotebookEdit` claims the checkout that contains the file
+  and exits 2 (the tool call is refused, with the holder and the recovery command as the reason)
+  while another live session holds it; `SessionStart` only reports a live holder as context, so a
+  read-only session never claims anything; `SessionEnd` releases the session's claims. A session
+  that died without `SessionEnd` simply lets its lease lapse (30 minutes without a write), after
+  which the next session reclaims; the old session's next write is then refused instead of racing.
+  To protect every repository, add the same three entries to `~/.claude/settings.json` with the
+  installed `orch` (`orch checkout hook`) instead of the source path.
+
+This detects accidental sharing of one checkout between sessions. It is not filesystem isolation:
+Bash commands are not hooked, a process that writes without asking is not stopped, and the hook
+session id is Claude Code's, unrelated to the `--session` names used for job leases.
+
 ## CLI reference
 
 Global flags: `--json` (machine output; errors become `{"error":{...}}` on stderr), `--help`,
