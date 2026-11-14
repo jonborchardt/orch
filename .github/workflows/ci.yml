@@ -48,3 +48,24 @@ jobs:
           cd "$RUNNER_TEMP"
           node "$GITHUB_WORKSPACE/dist/cli/main.js" --json job list
           test -f "$ORCH_HOME/orch.sqlite"
+
+  # Temporary measurement: how many Vitest workers the 2-core runners can use profitably.
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, workers: 2 }
+          - { os: windows-latest, workers: 3 }
+          - { os: ubuntu-latest, workers: 2 }
+          - { os: ubuntu-latest, workers: 3 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node -e "console.log('availableParallelism', require('node:os').availableParallelism())"
+      - run: npx vitest run --maxWorkers=${{ matrix.workers }} ${{ runner.os == 'Linux' && '--coverage' || '' }}
