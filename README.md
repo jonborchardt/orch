@@ -177,6 +177,52 @@ orch install                  # link skills/ and agents/ into ~/.claude (see Glo
 gh auth login                 # only needed for the draft PR at the end
 ```
 
+### Preparing a repository
+
+The factory runs only the verification checks a repository has committed in `factory.json` (see
+[Verification evidence](#verification-evidence)). A repository that has never used the factory is
+onboarded once:
+
+```sh
+cd ~/code/my-app                                  # 1. an existing Git repository
+orch init --from-package-json                     # 2. factory.json from package.json scripts (or --command)
+cat factory.json                                  # 3. review: executables on PATH, argument arrays, no shell
+git add factory.json && git commit -m "Add factory verification policy" && git push   # 4. commit (and push)
+orch init --check                                 # 5. READY, or what is still missing
+/factory Add a feature to export reports as CSV   # 6. first job
+```
+
+For a TypeScript/npm project whose `package.json` defines `check` (typecheck + lint + test) and
+`build`, step 2 writes:
+
+```json
+{
+  "verification": {
+    "commands": [
+      { "id": "check", "command": "npm", "args": ["run", "check"] },
+      { "id": "build", "command": "npm", "args": ["run", "build"] }
+    ]
+  }
+}
+```
+
+`--from-package-json` proposes `npm run <script>` for `check` (or, without one, `test`, `lint`,
+`typecheck`) and `build`; it never guesses from a language or lockfile alone, so a repository
+without those scripts needs `--command "<id>=<executable> [args...]"` for each check
+(`orch init --command "test=cargo test" --command "lint=cargo clippy"`). Running `orch init` with
+neither flag prints the suggestions and writes nothing. An existing `factory.json` is never
+overwritten without `--force`; the file is written atomically and nothing is committed.
+
+The policy must be committed before the first job because `orch verify` reads `factory.json` from
+the merge base of the job branch and its base branch, never from the job's own commits: a builder
+that edits the file changes nothing until a human accepts the change. `orch init --check`
+(also summarized by `orch doctor`) reports the state the factory would see: `no-git-repository`,
+`missing`, `invalid`, `ignored` (by `.gitignore`), `uncommitted`, `unpushed` (committed locally
+but `origin/<branch>`, which jobs start from, has a different policy), `unconfigured` (no
+commands), `missing-tools` (an executable not on `PATH`), or `ready`. It reads files and Git
+only; it never runs a check. A repository with no commits yet is reported `uncommitted`: there is
+no trusted revision until the policy is committed.
+
 Restart Claude Code (skills are read at session start), open any project repository, and:
 
 ```
@@ -611,6 +657,8 @@ Global flags: `--json` (machine output; errors become `{"error":{...}}` on stder
 
 ```
 orch doctor                            # also reports stale or missing installed skills/agents
+orch init  [--repo <path>] --command "<id>=<exe> [args...]"... | --from-package-json [--force]
+orch init  [--repo <path>] --check     # policy present, valid, committed, pushed, tools on PATH; exit 1 unless ready
 orch install [--dry-run] [--source <dir>] [--claude-dir <dir>]
 
 orch job create    --title <t> [--description <d>] [--issue <ref>] [--repo <path>] [--base <branch>]

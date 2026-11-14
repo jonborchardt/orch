@@ -34,7 +34,8 @@ Rules that are never relaxed:
 - `plan.verification.configured === false` means the base branch has no verification policy. Do
   not invent checks or skip the gate: ask the builder to propose a `factory.json` in the worktree
   (never run it), then escalate with reason "verification policy needs human acceptance". The
-  dashboard's **Accept verification policy** records the decision; resume afterwards.
+  dashboard's **Accept verification policy** records the decision; resume afterwards. (The human
+  may instead run `orch init` in the primary checkout, commit and push `factory.json`, and resume.)
 - `plan.verification.policy.authorization === 'required'` means the worktree changed the policy.
   The effective policy stays the base branch's until a human accepts the change the same way.
 - `plan.sensitive.needsReview` lists test, CI, dependency, or policy files that changed, disabled

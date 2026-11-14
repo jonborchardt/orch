@@ -289,7 +289,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   if (verification && !verification.configured) {
     notes.push(
       `No verification policy (factory.json) on the base branch: the job cannot pass its gates ` +
-        'until one exists or a human accepts a proposed policy (dashboard: accept-policy).',
+        'until one exists (orch init, then commit on the base branch) or a human accepts a proposed ' +
+        'policy (dashboard: accept-policy).',
     );
   }
   if (verification?.policy.authorization === 'required') {

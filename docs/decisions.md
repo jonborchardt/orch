@@ -390,3 +390,18 @@ loads one agent file per subagent with no include mechanism, so sharing the text
 generated artifact; the duplication is the cost of self-contained agents and a contract test keeps
 the files consistent with `core/roles.ts`. `web/src/Actions.tsx` keeps its own stage list and
 live-lease check because the client may import only types from `src/`.
+
+## 45. `orch init` writes a policy; it never makes one trusted
+
+Onboarding a repository is a plain file write: `orch init` validates the checks the developer names
+(or the `package.json` scripts they explicitly accept with `--from-package-json`) through the same
+`parsePolicy` the gates use, writes `factory.json` atomically (temp file and rename, refusing to
+replace an existing file without `--force`), and prints the review/commit/check sequence. It never
+commits, never pushes, never runs a check, and does not touch the baseline rule in `ops/verify.ts`:
+a policy written into a job worktree is still just a proposed change the plan reports as
+`authorization: required`. A placeholder or empty starter policy was rejected because a committed
+empty policy leaves every job at `configuration-required`; guessing commands from a language or
+lockfile was rejected because an unreviewed guess that happens to pass is exactly the policy the
+trust model exists to prevent. `orch init --check` answers the question the factory will ask
+(`factory.json` at `origin/<branch>` or `<branch>`), using `whichSync` for the executables rather
+than executing anything; `orch doctor` carries a one-line summary of the same result.
