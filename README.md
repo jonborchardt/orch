@@ -373,8 +373,10 @@ conversation is not needed. `orch factory resume <id> --session <name>`:
 `needs-human` jobs stay blocked until a person decides; `resume --to <stage>` sends them back. A
 jump cannot skip evidence: `pr` still needs a registered `DECISION: APPROVE`, `approve` still
 refuses while the last round counts blocking findings, and `ci` still needs GitHub's passing verdict
-for HEAD. A session interrupted while CI was pending resumes into `ci` and re-reads GitHub; the
-recorded rollup is never trusted on its own. `resume --to completed` exists for one case only: a
+for HEAD. A session interrupted while CI was pending resumes into `ci` and re-reads GitHub unless
+`orch gh ci` itself already recorded a passing verdict for the current HEAD; the rollup that
+`orch gh pr create` and `orch gh pr status --token` store is informational and carries no head, so
+it can never complete the stage. `resume --to completed` exists for one case only: a
 job escalated from `ci` because GitHub reported no checks at all (or the PR was merged by a human);
 it is refused while checks are pending or failing.
 

@@ -10,10 +10,10 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CI_GRACE_POLLS, evaluateChecks } from '../src/core/ci.ts';
-import { ToolError, ValidationError, WorkflowError } from '../src/core/errors.ts';
+import { ToolError, ValidationError } from '../src/core/errors.ts';
 import { MAX_CI_REPAIRS_REASON } from '../src/core/workflow.ts';
 import { configPath, planJob, resumeFactoryJob } from '../src/ops/factory.ts';
-import { ensureDraftPr, pushBranch, reconcileCi } from '../src/ops/github.ts';
+import { ensureDraftPr, prStatus, pushBranch, reconcileCi } from '../src/ops/github.ts';
 import { verificationStatus } from '../src/ops/verify.ts';
 import { worktreeOf } from '../src/ops/tree.ts';
 import { listEvents } from '../src/storage/events.ts';
@@ -185,8 +185,14 @@ describe('ci stage: pending, then passing', () => {
     const c = start(store, clone);
     toCi(store, c);
     const sha = head(c.wt);
-    expect(job(c)).toMatchObject({ stage: 'ci', status: 'running', ciHead: sha, ciStatus: 'none' });
-    expect(() => go(store, c, 'complete')).toThrow(/required checks are none/);
+    // PR creation records the rollup but no head: nothing has been read for this commit yet.
+    expect(job(c)).toMatchObject({
+      stage: 'ci',
+      status: 'running',
+      ciHead: null,
+      ciStatus: 'none',
+    });
+    expect(() => go(store, c, 'complete')).toThrow(/run orch gh ci/);
 
     checks(sha, [run('test', null, 'in_progress')]);
     const viewsBefore = ghCalls('view').length;
@@ -321,7 +327,7 @@ describe('ci stage: failing checks and the repair cycle', () => {
     expect(ghCalls('create')).toHaveLength(1);
     expect(shim.read().prs).toHaveLength(1);
     expect(gitIn(bare, 'rev-parse', `refs/heads/${job(c).branch ?? ''}`)).toBe(sha2);
-    expect(job(c)).toMatchObject({ stage: 'ci', status: 'pending', ciHead: sha2 });
+    expect(job(c)).toMatchObject({ stage: 'ci', status: 'pending', ciHead: null });
 
     go(store, c, 'start');
     checks(sha2, [run('lint', 'success'), run('test', 'success')]);
@@ -473,6 +479,46 @@ describe('ci stage: the verdict is bound to the PR head', () => {
 });
 
 describe('ci stage: GitHub answers that are not verdicts', () => {
+  it('a green rollup at PR creation or from pr status is not a verdict; only orch gh ci is', () => {
+    // Phase 1 validation (A06, issue I-06): `gh pr view` reports a rollup for whatever the head is,
+    // and a skipped-only rollup reads as passing. Before the fix, `pr create` stored it with the head
+    // and the ci plan went straight to `complete` without `orch gh ci` ever evaluating the commit.
+    shim.write({ checks: [{ name: 'test', status: 'COMPLETED', conclusion: 'SKIPPED' }] });
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    expect(job(c)).toMatchObject({
+      stage: 'ci',
+      status: 'running',
+      ciStatus: 'passing',
+      ciHead: null,
+    });
+    const plan = planJob(store, c.id);
+    expect(plan.commands).toEqual([
+      `orch gh ci ${c.id} --token <token>`,
+      `orch factory next ${c.id}`,
+    ]);
+    expect(plan.ci).toMatchObject({ head: null, current: false, polls: 0 });
+    expect(() => go(store, c, 'complete')).toThrow(/run orch gh ci/);
+
+    // The per-commit read sees the skipped-only run for what it is: nothing verified yet.
+    checks(sha, [run('test', 'skipped')]);
+    expect(reconcile(c)).toMatchObject({ outcome: 'pending', action: 'wait', head: sha });
+    expect(() => go(store, c, 'complete')).toThrow(/required checks are pending/);
+
+    // A real verdict completes; a later `pr status --token` rollup drops the head again, so the
+    // next completion needs a fresh `orch gh ci`.
+    checks(sha, [run('test', 'success')]);
+    expect(reconcile(c)).toMatchObject({ outcome: 'passing', action: 'complete', head: sha });
+    expect(job(c)).toMatchObject({ ciStatus: 'passing', ciHead: sha });
+    prStatus(store, c.id, { token: c.token });
+    expect(job(c)).toMatchObject({ ciStatus: 'passing', ciHead: null });
+    expect(planJob(store, c.id).commands[0]).toBe(`orch gh ci ${c.id} --token <token>`);
+    expect(() => go(store, c, 'complete')).toThrow(/run orch gh ci/);
+    expect(reconcile(c)).toMatchObject({ outcome: 'passing', head: sha });
+    expect(go(store, c, 'complete').stage).toBe('completed');
+  });
+
   it('an API or network failure changes nothing and is never a success', () => {
     const c = start(store, clone);
     toCi(store, c);
@@ -491,7 +537,8 @@ describe('ci stage: GitHub answers that are not verdicts', () => {
       before.revision,
     ]);
     expect(observed(c).filter((e) => e.payload['outcome'] !== undefined)).toHaveLength(0);
-    expect(() => go(store, c, 'complete')).toThrow(WorkflowError);
+    // No per-commit verdict was ever read, so the gate refuses before the pure transition does.
+    expect(() => go(store, c, 'complete')).toThrow(/run orch gh ci/);
   });
 
   it('a required check that never reports waits through the grace window, then escalates', () => {

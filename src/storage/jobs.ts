@@ -415,7 +415,7 @@ export function clearWorktree(store: Store, id: string, auth: Auth, reason: stri
 export interface CiInput extends Auth {
   ciStatus: CiStatus;
   prState?: PrState | undefined;
-  /** PR head commit the rollup describes; `orch gh ci` always supplies it. */
+  /** Commit the verdict was read for. Only `orch gh ci` supplies one; `pr create` and `pr status` pass null. */
   head?: string | null | undefined;
   /** Further detail for the `ci.observed` event (outcome, checks, diagnostics). */
   detail?: Record<string, unknown> | undefined;

@@ -410,7 +410,7 @@ describe('approval, rejection, delivery', () => {
     go(c, 'start');
     expect(() => go(c, 'complete')).toThrow(/CI was last observed for no commit/);
     expect(() => transitionJob(store, c.id, 'complete', { token: c.token })).toThrow(
-      /required checks are none/,
+      /no CI verdict has been read/,
     );
     // The shim saw exactly one create, with a draft flag and the pr.md body.
     const creates = shim.read().calls.filter((x) => x[1] === 'create');
