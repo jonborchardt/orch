@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR}/src/cli/main.ts\" checkout hook",
+            "command": "[ -f \"${CLAUDE_PROJECT_DIR}/src/cli/checkout.ts\" ] || exit 0; node \"${CLAUDE_PROJECT_DIR}/src/cli/main.ts\" checkout hook",
             "timeout": 30
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR}/src/cli/main.ts\" checkout hook",
+            "command": "[ -f \"${CLAUDE_PROJECT_DIR}/src/cli/checkout.ts\" ] || exit 0; node \"${CLAUDE_PROJECT_DIR}/src/cli/main.ts\" checkout hook",
             "timeout": 30
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR}/src/cli/main.ts\" checkout hook",
+            "command": "[ -f \"${CLAUDE_PROJECT_DIR}/src/cli/checkout.ts\" ] || exit 0; node \"${CLAUDE_PROJECT_DIR}/src/cli/main.ts\" checkout hook",
             "timeout": 30
           }
         ]

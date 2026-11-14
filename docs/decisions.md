@@ -613,3 +613,11 @@ coordinator, the hook's id is Claude Code's, so a job's own session would be ref
 Bash (the command text does not say what it writes); a daemon or process registry. What remains
 cooperative: Bash writes and any process that does not ask are not stopped, which the README says
 in the same place it describes the guard.
+
+**Found in live use.** The authoring session switched to a branch without `src/cli/checkout.ts`
+while Claude Code still held the hook configuration it had loaded; `node src/cli/main.ts checkout
+hook` then failed with "Unknown command" (a `UsageError`, exit 2), which `PreToolUse` reads as a
+refusal, and every Edit/Write in the session was blocked until hooks were disabled. The shipped
+command therefore exits 0 unless `src/cli/checkout.ts` exists, so the guard fails open on a branch
+that lacks it; the orch side cannot help there, because the code that would decide is exactly what
+is missing. Shell-form hooks run through Git Bash on Windows, which Claude Code needs anyway.

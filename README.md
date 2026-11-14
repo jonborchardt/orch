@@ -744,8 +744,11 @@ the database, so the guard can run from any checkout without touching the shared
   read-only session never claims anything; `SessionEnd` releases the session's claims. A session
   that died without `SessionEnd` simply lets its lease lapse (30 minutes without a write), after
   which the next session reclaims; the old session's next write is then refused instead of racing.
-  To protect every repository, add the same three entries to `~/.claude/settings.json` with the
-  installed `orch` (`orch checkout hook`) instead of the source path.
+  The command first checks that `src/cli/checkout.ts` exists and otherwise exits 0, so a session
+  that switches to a branch without the command is not locked out of editing (Claude Code keeps
+  the hook configuration it loaded; a failing hook command would refuse every write). To protect
+  every repository, add the same three entries to `~/.claude/settings.json` with the installed
+  `orch` (`orch checkout hook`) instead of the source path.
 
 This detects accidental sharing of one checkout between sessions. It is not filesystem isolation:
 Bash commands are not hooked, a process that writes without asking is not stopped, and the hook
