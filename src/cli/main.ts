@@ -95,6 +95,7 @@ export async function main(argv: string[]): Promise<number> {
         stage: str,
         limit: str,
         replace: bool,
+        by: str,
         // worktree / gh
         path: str,
         'body-file': str,

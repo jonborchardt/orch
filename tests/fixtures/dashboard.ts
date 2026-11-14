@@ -17,6 +17,7 @@ import {
   recordReview,
   registerArtifact,
   releaseJob,
+  supersedeJob,
   transitionJob,
 } from '../../src/storage/jobs.ts';
 
@@ -354,10 +355,15 @@ export function seedDashboard(
     run(cancelled.id, token, 'cancel', { reason: 'decided against it' });
   }
 
-  // 6. Fresh, unowned.
+  // 6. Fresh, unowned; it replaces the cancelled job (recorded on the cancelled one).
   const fresh = mk('Add health endpoint', 'gamma', repos.gamma, {
     description: 'GET /healthz returning build info',
   });
+  {
+    const { token } = claimJob(store, cancelled.id, { session: 'claude-20261110-1200-0000' });
+    supersedeJob(store, cancelled.id, { token }, fresh.id);
+    releaseJob(store, cancelled.id, { token });
+  }
 
   // 7. Build stage marked failed by its session (reason recorded), which then released the job.
   const failed = mk('Retry flaky uploads', 'gamma', repos.gamma);

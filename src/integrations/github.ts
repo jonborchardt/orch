@@ -308,9 +308,10 @@ export function summarizeChecks(checks: GhCheck[]): CiStatus {
   return 'passing';
 }
 
-/** Workflow PR state for a GitHub PR; undefined for a closed, unmerged PR. */
+/** Workflow PR state for a GitHub PR; undefined only for a state GitHub does not document. */
 export function prWorkflowState(pr: Pick<GhPr, 'state' | 'isDraft'>): PrState | undefined {
   if (pr.state === 'MERGED') return 'merged';
+  if (pr.state === 'CLOSED') return 'closed';
   if (pr.state === 'OPEN') return pr.isDraft ? 'draft' : 'ready';
   return undefined;
 }

@@ -1,4 +1,4 @@
-import { Button, Chip, Snackbar, Stack, Tooltip, Typography } from '@mui/material';
+import { Button, Chip, Link, Snackbar, Stack, Tooltip, Typography } from '@mui/material';
 import { useState } from 'react';
 
 import type { Blocker, Liveness, Resume } from '../../src/server/types.ts';
@@ -193,5 +193,37 @@ export function ResumeBox({
         Equivalent CLI: <code>{cli}</code>.
       </Typography>
     </Stack>
+  );
+}
+
+/** Links between a job and the job that replaced it, or the jobs it replaced. */
+export function Supersession({
+  supersededBy,
+  supersedes,
+}: {
+  supersededBy: string | null;
+  supersedes: string[];
+}) {
+  if (!supersededBy && supersedes.length === 0) return null;
+  return (
+    <Typography component="div" variant="caption" color="text.secondary">
+      {supersededBy && (
+        <>
+          superseded by <Link href={`#/jobs/${supersededBy}`}>{supersededBy}</Link>
+        </>
+      )}
+      {supersededBy && supersedes.length > 0 && ' · '}
+      {supersedes.length > 0 && (
+        <>
+          replaces{' '}
+          {supersedes.map((id, i) => (
+            <span key={id}>
+              {i > 0 && ', '}
+              <Link href={`#/jobs/${id}`}>{id}</Link>
+            </span>
+          ))}
+        </>
+      )}
+    </Typography>
   );
 }

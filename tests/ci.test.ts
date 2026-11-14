@@ -579,8 +579,26 @@ describe('ci stage: GitHub answers that are not verdicts', () => {
     st.prs[0] = { ...st.prs[0], state: 'CLOSED' };
     shim.write({ prs: st.prs });
     expect(reconcile(c)).toMatchObject({ outcome: 'closed', action: 'escalate' });
-    expect(job(c).stage).toBe('needs-human');
+    expect(job(c)).toMatchObject({ stage: 'needs-human', prState: 'closed' });
     expect(gitIn(bare, 'rev-parse', `refs/heads/${job(c).branch ?? ''}`)).toBe(head(c.wt));
+    // A closed PR is not a delivery a human can accept, whatever its checks said.
+    expect(() =>
+      resumeFactoryJob(store, c.id, { session: 'human-decided', to: 'completed', force: true }),
+    ).toThrow(/closed without merging/);
+    // Reopened on GitHub: the next observation records it as a draft again and CI proceeds.
+    st.prs[0] = { ...st.prs[0], state: 'OPEN' };
+    shim.write({ prs: st.prs });
+    checks('*', [run('test', 'success')]);
+    const h = resumeFactoryJob(store, c.id, {
+      session: 'claude-later-bbbb',
+      to: 'ci',
+      force: true,
+    });
+    const c2 = { ...c, token: h.token };
+    go(store, c2, 'start');
+    expect(reconcile(c2)).toMatchObject({ outcome: 'passing', action: 'complete' });
+    expect(job(c2).prState).toBe('draft');
+    expect(go(store, c2, 'complete').stage).toBe('completed');
   });
 });
 

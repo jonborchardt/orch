@@ -21,7 +21,7 @@ import { useEffect, useState } from 'react';
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
 import { Markdown } from './Markdown.tsx';
-import { BlockerText, ResumeBox, StatusChip } from './Status.tsx';
+import { BlockerText, ResumeBox, StatusChip, Supersession } from './Status.tsx';
 import { ApiFailure, fetchDetail } from './api.ts';
 import { STATE, ago, ciColor, verdictColor } from './format.ts';
 
@@ -117,6 +117,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
           : ''}{' '}
         · updated {ago(job.updatedAt)}
       </Typography>
+      <Supersession supersededBy={job.supersededBy} supersedes={detail.supersedes} />
       <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap' }}>
         {detail.links.vscode && (
           <Button variant="outlined" href={detail.links.vscode} component="a">

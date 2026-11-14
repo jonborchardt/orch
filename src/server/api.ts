@@ -20,7 +20,7 @@ import { planJob } from '../ops/factory.ts';
 import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob, listEvents } from '../storage/events.ts';
-import { getJob, listJobs, listReviews, reviewsByJob } from '../storage/jobs.ts';
+import { getJob, listJobs, listReviews, predecessorsOf, reviewsByJob } from '../storage/jobs.ts';
 import type { Artifact, Job, Review } from '../storage/schema.ts';
 import { latestRun, latestRunsByJob } from '../storage/verification.ts';
 import { BLOCKER_EVENTS, blockerOf, liveness, resumeOf } from './status.ts';
@@ -59,6 +59,13 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
   const artifactsOf = artifactsByJob(store.db, ids);
   const eventsOf = latestEventsByJob(store.db, ids, BLOCKER_EVENTS);
   const runsOf = latestRunsByJob(store.db, ids);
+  // Supersession stays within one repository, so the filtered list already holds both ends.
+  const predecessors = new Map<string, string[]>();
+  for (const j of jobs) {
+    if (j.supersededBy) {
+      predecessors.set(j.supersededBy, [...(predecessors.get(j.supersededBy) ?? []), j.id]);
+    }
+  }
   return jobs.map((job) => {
     const reviews = (reviewsOf.get(job.id) ?? []).filter((r) => r.round === job.round);
     const artifacts = artifactsOf.get(job.id) ?? [];
@@ -103,6 +110,8 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
         ciStatus: job.ciStatus,
         ciCheckedAt: job.ciCheckedAt,
       },
+      supersededBy: job.supersededBy,
+      supersedes: predecessors.get(job.id) ?? [],
     };
   });
 }
@@ -196,6 +205,7 @@ export function detail(store: Store, id: string): JobDetailView {
     },
     resume: resumeOf(job, state),
     resumeCommand: `orch factory resume ${id} --session <name>`,
+    supersedes: predecessorsOf(store.db, id).map((j) => j.id),
   };
 }
 

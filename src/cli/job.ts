@@ -16,6 +16,7 @@ import {
   VERDICTS,
 } from '../core/workflow.ts';
 import { describeRepo } from '../git/repo.ts';
+import { supersede } from '../ops/actions.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
 import { findJobs } from '../ops/repo.ts';
 import { repointRepo } from '../ops/worktree.ts';
@@ -57,6 +58,7 @@ export interface JobOptions {
   stage?: string;
   limit?: string;
   replace?: boolean;
+  by?: string;
 }
 
 export const JOB_HELP = `Usage: orch job <command> [options]
@@ -76,6 +78,8 @@ export const JOB_HELP = `Usage: orch job <command> [options]
             [--summary <s>] --token <t>
   pr <id> --url <url> --state <${PR_STATES.join('|')}> --token <t>
   repo <id> [--repo <path>] --token <t>     confirm the checkout's current remote identity
+  supersede <id> --by <new-id> --session <name> [--force]
+            record that <new-id> replaced <id> (same repository; both histories are kept)
 
 --token defaults to $ORCH_TOKEN, --session to $ORCH_SESSION. Add --json for machine output.
 `;
@@ -185,6 +189,15 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
     }
     case 'repo':
       return summary(repointRepo(store, id(), auth, o.repo), store);
+    case 'supersede':
+      return summary(
+        supersede(store, id(), {
+          by: need(o.by, '--by <new-id>'),
+          session: need(session, '--session'),
+          force: o.force,
+        }),
+        store,
+      );
     case 'pr': {
       const job = recordPr(store, id(), {
         ...auth,

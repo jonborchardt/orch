@@ -325,7 +325,7 @@ acts:
 | `cancelled`, `startup_failure`, `stale`, `action_required`, or a required check that never reported | `escalate`: not a code defect; a human re-runs the workflow and resumes `--to ci`                                                                                          |
 | no checks at all after the grace window, or only skipped ones                                       | `escalate`: the factory does not invent success; a human adds CI (resume `--to ci`) or closes out with resume `--to completed`, which only this case and a merged PR allow |
 | PR head differs from the worktree HEAD or `origin/<branch>`                                         | `escalate`: the branch changed outside the job; no verdict is borrowed from another commit                                                                                 |
-| PR closed                                                                                           | `escalate`                                                                                                                                                                 |
+| PR closed without merging                                                                           | `escalate`; `prState` becomes `closed` (a cancelled job never implies a closed PR)                                                                                         |
 | `gh` or the API failed                                                                              | exit 1, nothing recorded                                                                                                                                                   |
 
 Without a configured required-check list every reported check counts as required, and the PR
@@ -534,16 +534,28 @@ runs, then with `--verdict pass|changes`). `complete` is refused while any revie
 If every verdict is `pass` the job moves to `approve`; if any is `changes` it returns to `build`,
 unless the round equals `--max-rounds` (default 3), in which case it escalates to `needs-human`.
 
-**PRs.** `orch job pr <id> --url <u> --state draft|ready|merged` records the PR; the `pr` stage
+**PRs.** `orch job pr <id> --url <u> --state draft|ready|merged|closed` records the PR; the `pr` stage
 cannot complete without one, and completing it enters `ci`, which cannot complete until `orch gh
 ci` has recorded `ciStatus: passing` for `ciHead`, and the gate confirms `ciHead` is still the
 worktree HEAD. The PR state can be updated later (draft → ready → merged) without changing the
-workflow, since the factory's deliverable is a draft PR.
+workflow, since the factory's deliverable is a draft PR. `closed` means GitHub reported the PR closed
+without merging; it is recorded from `orch gh pr status` or `orch gh ci`, never inferred from the
+job, and a job whose PR is `closed` can neither complete nor be accepted with `resume --to
+completed`.
+
+**Superseded jobs.** When a job is abandoned and started again, `orch job supersede <old> --by
+<new> --session <name>` records the replacement on the old job (`supersededBy`, event
+`job.superseded`). Both jobs keep their rows, events, and artifacts; nothing is merged or deleted,
+and nothing is inferred from matching titles. The two must belong to the same repository and may
+not form a loop. The command is a short ownership episode like a dashboard action: it claims the
+old job for a minute, records, and releases, refusing (without `--force`) while another session
+holds a live lease on it. `orch job show` lists the jobs a job replaced (`supersedes`), and the
+dashboard links both directions.
 
 Every accepted change appends events (`job.created`, `job.claimed`, `job.released`,
 `stage.started`, `stage.completed`, `stage.failed`, `artifact.registered`, `artifact.replaced`,
 `review.recorded`, `job.blocked`, `job.resumed`, `job.interrupted`, `job.cancelled`,
-`job.completed`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
+`job.completed`, `job.superseded`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
 `integration.started`, `integration.completed`, `verification.started`,
 `verification.completed`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
 `ci.observed`) in the same transaction. A `ci.observed` event from `orch gh ci` carries the head,
@@ -610,7 +622,7 @@ orch gh repo [--repo <path>]            # nameWithOwner, default branch, identit
 orch gh issue <#N|N|url> [--repo <path>]
 orch gh push <id>                       # git push --set-upstream origin <job branch>; never force
 orch gh pr create <id> --body-file <md> [--title <t>]   # draft PR, or the existing open one
-orch gh pr status <id>                  # state, draft/ready/merged, CI rollup; recorded with --token
+orch gh pr status <id>                  # state, draft/ready/merged/closed, CI rollup; recorded with --token
 orch gh ci <id> --token <t>             # ci stage: GitHub's verdict for the exact PR head, acted on (see above)
 ```
 
@@ -749,8 +761,9 @@ orch job transition <id> start|complete|fail|escalate|resume|rework|cancel --tok
 orch job artifact add <id> <relative-path> --token <t> [--replace] [--revision <n>]
 orch job review record <id> --reviewer <name> [--verdict pass|changes] [--artifact <path>]
                    [--summary <s>] --token <t>
-orch job pr        <id> --url <url> --state draft|ready|merged --token <t>
+orch job pr        <id> --url <url> --state draft|ready|merged|closed --token <t>
 orch job repo      <id> [--repo <path>] --token <t>   # refresh the identity now (mutations do it anyway)
+orch job supersede <id> --by <new-id> --session <name> [--force]   # record that <new-id> replaced <id>
 
 orch worktree create|show|adopt|remove|integrate <id> [--path <dir>] [--repo <clone>] --token <t>
 orch gh repo | issue <ref> | push <id> | pr create <id> --body-file <md> | pr status <id>
