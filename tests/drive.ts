@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 import { planJob, startJob } from '../src/ops/factory.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
+import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
 import { verifyJob } from '../src/ops/verify.ts';
 import type { Store } from '../src/storage/client.ts';
 import { getJob, transitionJob } from '../src/storage/jobs.ts';
@@ -138,3 +139,19 @@ export function toPr(store: Store, c: Ctx): void {
 }
 
 export const prFile = (c: Ctx) => join(c.dir, 'pr.md');
+
+/** Push, create (or reuse) the draft PR, register pr.md, complete pr: the job is in ci, pending. */
+export function deliverPr(store: Store, c: Ctx): void {
+  pushBranch(store, c.id, { token: c.token });
+  writeArtifact(c.dir, 'pr.md', prBody(store, c));
+  ensureDraftPr(store, c.id, { token: c.token, bodyFile: prFile(c) });
+  add(store, c, 'pr.md', prBody(store, c), true);
+  go(store, c, 'complete');
+}
+
+/** All the way to the ci stage, running. */
+export function toCi(store: Store, c: Ctx): void {
+  toPr(store, c);
+  deliverPr(store, c);
+  go(store, c, 'start');
+}

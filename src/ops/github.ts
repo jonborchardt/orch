@@ -3,20 +3,26 @@
  * PR and CI state. Every mutation checks job ownership first and validates that the GitHub
  * repository and base branch match the job before anything is pushed or created.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
+import { type CiCheck, type CiEvaluation, ciStatusOf, evaluateChecks } from '../core/ci.ts';
 import { ValidationError } from '../core/errors.ts';
+import { jobArtifactDir } from '../core/paths.ts';
 import type { CiStatus, PrState } from '../core/workflow.ts';
 import { baseRef, describeRepo } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
 import { editedMerges } from '../git/worktree.ts';
 import {
+  actionsJobLog,
   createDraftPr,
   type GhIssue,
   type GhPr,
   type GhRepo,
+  listChecksFor,
   listPrsForBranch,
   prWorkflowState,
+  requiredChecksFor,
   summarizeChecks,
   viewIssue,
   viewPr,
@@ -24,11 +30,20 @@ import {
 } from '../integrations/github.ts';
 import { findArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import { type Auth, authorize, getJob, recordCi, recordEvent, recordPr } from '../storage/jobs.ts';
+import { listEvents } from '../storage/events.ts';
+import {
+  type Auth,
+  authorize,
+  getJob,
+  recordCi,
+  recordEvent,
+  recordPr,
+  transitionJob,
+} from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { jobCheckout } from './repo.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
-import { effectivePolicy, verificationStatus } from './verify.ts';
+import { cap, effectivePolicy, verificationStatus } from './verify.ts';
 
 /** The job's worktree, inspected once, with the job branch checked out. */
 function requireWorktree(job: Job): Tree & { branch: string } {
@@ -207,7 +222,7 @@ export function ensureDraftPr(store: Store, id: string, input: EnsurePrInput): P
   const state: PrState = prWorkflowState(pr) ?? 'draft';
   recordPr(store, id, { token: input.token, url: pr.url, state });
   const ciStatus = summarizeChecks(pr.checks);
-  const updated = recordCi(store, id, { token: input.token, ciStatus });
+  const updated = recordCi(store, id, { token: input.token, ciStatus, head: pr.headSha });
   return { job: updated, pr, created: existing === undefined, ciStatus };
 }
 
@@ -234,8 +249,185 @@ export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): Pr
       expectRevision: auth.expectRevision,
       ciStatus,
       prState: state,
+      head: pr.headSha,
     });
     return { job: updated, pr, ciStatus, prState: state, recorded: true };
   }
   return { job, pr, ciStatus, prState: state, recorded: false };
+}
+
+// ---------------------------------------------------------------------------------------------
+// CI reconciliation: the ci stage's only source of truth.
+
+export interface CiFailure {
+  name: string;
+  conclusion: string;
+  url: string | null;
+  /** Log saved under the artifact directory (relative path), when GitHub provided one. */
+  log: string | null;
+}
+
+export interface CiReconcileResult {
+  job: Job;
+  pr: GhPr;
+  /** PR head commit GitHub reported; the verdict is bound to it. */
+  head: string;
+  /** True when that commit is the worktree HEAD and origin/<branch>. */
+  current: boolean;
+  outcome: CiEvaluation['outcome'] | 'outdated' | 'closed';
+  ciStatus: CiStatus;
+  evaluation: CiEvaluation;
+  failures: CiFailure[];
+  /** Observations of this head so far, including this one. */
+  polls: number;
+  /** What this call did to the workflow. */
+  action: 'wait' | 'complete' | 'rework' | 'escalate' | 'exhausted';
+  reason: string;
+}
+
+/** Reconciliations already recorded for `head` (`pr status` observations carry no outcome). */
+function pollsFor(store: Store, id: string, head: string): number {
+  return listEvents(store.db, id, 1000).filter(
+    (e) =>
+      e.type === 'ci.observed' && e.payload['head'] === head && e.payload['outcome'] !== undefined,
+  ).length;
+}
+
+/** Save each failed required check's log under <artifactDir>/ci/<sha7>/; never throws. */
+function collectDiagnostics(
+  store: Store,
+  job: Job,
+  nameWithOwner: string,
+  head: string,
+  checks: CiCheck[],
+  cwd: string,
+): CiFailure[] {
+  const dir = join('ci', head.slice(0, 7));
+  const abs = join(jobArtifactDir(job.id, store.paths), dir);
+  return checks.map((c) => {
+    let log: string | null = null;
+    if (c.jobId !== null) {
+      const text = actionsJobLog(nameWithOwner, c.jobId, cwd);
+      if (text !== null) {
+        const file = `${c.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80) || 'check'}.log`;
+        mkdirSync(abs, { recursive: true });
+        writeFileSync(join(abs, file), cap(text).text);
+        log = `${dir.split('\\').join('/')}/${file}`;
+      }
+    }
+    return { name: c.name, conclusion: c.conclusion, url: c.url, log };
+  });
+}
+
+/**
+ * Read GitHub's verdict for the PR head and act on it. Runs only while the ci stage is running
+ * and needs the owner token. The result is recorded with the head SHA it describes; a verdict
+ * for any other commit (an outdated PR head, a branch pushed outside the job) never completes
+ * the job. Failing required checks collect diagnostics and send the job back to build through
+ * `rework`, which is bounded by `maxCiRepairs` and escalates when exhausted. Checks that did not
+ * run (cancelled, startup failure, never reported) and a PR with no checks at all are escalated,
+ * not retried blindly and not counted as repairs. Pending checks record only the observation:
+ * the caller waits or resumes later.
+ */
+export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileResult {
+  const job = authorize(store, id, auth);
+  if (job.stage !== 'ci' || job.status !== 'running') {
+    throw new ValidationError(
+      `CI is reconciled while the ci stage is running (job is in ${job.stage}/${job.status}).`,
+    );
+  }
+  if (!job.prUrl) throw new ValidationError(`Job ${id} has no PR recorded.`);
+  const tree = requireWorktree(job);
+  const repo = resolveRepo(job, tree.path);
+  const pr = viewPr(job.prUrl, tree.path);
+  const head = pr.headSha;
+  if (!head) throw new ValidationError(`GitHub did not report a head commit for ${job.prUrl}.`);
+  const prState = prWorkflowState(pr);
+  const remote = remoteHead(tree.path, tree.branch);
+  const current = head === tree.head && remote === tree.head;
+  const polls = pollsFor(store, id, head) + 1;
+  const configured = requiredChecksFor(repo.nameWithOwner, job.baseBranch, tree.path);
+  const checks = listChecksFor(repo.nameWithOwner, head, tree.path);
+  const evaluation = evaluateChecks(checks, configured, polls);
+  const ciStatus = ciStatusOf(evaluation.outcome);
+
+  let outcome: CiReconcileResult['outcome'] = evaluation.outcome;
+  let action: CiReconcileResult['action'] = 'wait';
+  let reason = evaluation.reason;
+  let failures: CiFailure[] = [];
+  const tok = { token: auth.token };
+
+  if (pr.state === 'CLOSED') {
+    outcome = 'closed';
+    action = 'escalate';
+    reason = `${pr.url} was closed without merging; a human reopens it (then resume --to ci) or cancels the job`;
+  } else if (!current) {
+    outcome = 'outdated';
+    action = 'escalate';
+    reason =
+      `PR head is ${head.slice(0, 7)}, origin/${tree.branch} is ${remote?.slice(0, 7) ?? 'absent'}, ` +
+      `worktree HEAD is ${tree.head.slice(0, 7)}: the branch changed outside the job. ` +
+      'A human reconciles it (resume --to pr re-pushes an approved HEAD; resume --to ci re-reads checks).';
+  } else if (evaluation.outcome === 'failing') {
+    failures = collectDiagnostics(
+      store,
+      job,
+      repo.nameWithOwner,
+      head,
+      evaluation.failed,
+      tree.path,
+    );
+    const logs = failures.flatMap((f) => (f.log ? [f.log] : []));
+    action = job.ciRepairs >= job.maxCiRepairs ? 'exhausted' : 'rework';
+    reason =
+      `CI failed for ${head.slice(0, 7)}: ${evaluation.failed.map((c) => c.name).join(', ')}` +
+      (logs.length ? `; logs under the artifact directory: ${logs.join(', ')}` : '');
+  } else if (evaluation.outcome === 'infrastructure' || evaluation.outcome === 'none') {
+    action = 'escalate';
+    reason =
+      evaluation.outcome === 'none'
+        ? `${evaluation.reason}; no required checks are configured for ${job.baseBranch}. ` +
+          'A human adds CI and resumes --to ci, or accepts delivery without CI with resume --to completed.'
+        : `${evaluation.reason}. Not a code defect: a human re-runs the workflow or fixes CI, then resumes --to ci.`;
+  } else if (evaluation.outcome === 'passing') {
+    action = 'complete';
+  }
+
+  recordCi(store, id, {
+    ...tok,
+    ciStatus,
+    prState,
+    head,
+    detail: {
+      current,
+      outcome,
+      polls,
+      required: evaluation.required,
+      configured: evaluation.configured,
+      checks: checks.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion })),
+      failures,
+      reason,
+    },
+  });
+  let updated: Job;
+  if (action === 'rework' || action === 'exhausted') {
+    updated = transitionJob(store, id, 'rework', { ...tok, reason });
+  } else if (action === 'escalate') {
+    updated = transitionJob(store, id, 'escalate', { ...tok, reason });
+  } else {
+    updated = getJob(store.db, id);
+  }
+  return {
+    job: updated,
+    pr,
+    head,
+    current,
+    outcome,
+    ciStatus,
+    evaluation,
+    failures,
+    polls,
+    action,
+    reason,
+  };
 }

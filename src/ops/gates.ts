@@ -161,12 +161,19 @@ export function transitionGuarded(
       }
       if (job.stage === 'approve') requireAuthorizedPolicy(job, info, 'completing approve');
     }
-    if (job.stage === 'pr' && job.worktreePath) {
+    if ((job.stage === 'pr' || job.stage === 'ci') && job.worktreePath) {
       const tree = worktreeOf(job);
       if (tree) {
-        requireClean(tree, 'completing pr must describe a committed state.');
-        requireVerified(store, job, tree, 'completing pr');
-        requireAuthorizedPolicy(job, tree, 'completing pr');
+        requireClean(tree, `completing ${job.stage} must describe a committed state.`);
+        // GitHub's verdict counts only for the commit it was read for.
+        if (job.stage === 'ci' && job.ciHead !== tree.head) {
+          throw new ValidationError(
+            `CI was last observed for ${job.ciHead?.slice(0, 7) ?? 'no commit'} but HEAD is ` +
+              `${tree.head.slice(0, 7)}; run orch gh ci ${job.id} again.`,
+          );
+        }
+        requireVerified(store, job, tree, `completing ${job.stage}`);
+        requireAuthorizedPolicy(job, tree, `completing ${job.stage}`);
       }
     }
   }

@@ -46,6 +46,7 @@ export interface CreateJobInput {
   issueRef?: string | undefined;
   baseBranch: string;
   maxRounds?: number | undefined;
+  maxCiRepairs?: number | undefined;
   actor?: string | undefined;
 }
 
@@ -73,6 +74,7 @@ export function createJob(store: Store, input: CreateJobInput): Job {
           stage: 'spec',
           status: 'pending',
           maxRounds: input.maxRounds ?? DEFAULT_CONFIG.maxRounds,
+          maxCiRepairs: input.maxCiRepairs ?? DEFAULT_CONFIG.maxCiRepairs,
           createdAt: ts,
           updatedAt: ts,
         })
@@ -410,20 +412,34 @@ export function clearWorktree(store: Store, id: string, auth: Auth, reason: stri
   }));
 }
 
-/** Record the latest observed PR state and CI rollup (from `orch gh pr status`). */
-export function recordCi(
-  store: Store,
-  id: string,
-  input: Auth & { ciStatus: CiStatus; prState?: PrState | undefined },
-): Job {
+export interface CiInput extends Auth {
+  ciStatus: CiStatus;
+  prState?: PrState | undefined;
+  /** PR head commit the rollup describes; `orch gh ci` always supplies it. */
+  head?: string | null | undefined;
+  /** Further detail for the `ci.observed` event (outcome, checks, diagnostics). */
+  detail?: Record<string, unknown> | undefined;
+}
+
+/** Record the latest observed PR state and CI rollup (from `orch gh pr status` or `orch gh ci`). */
+export function recordCi(store: Store, id: string, input: CiInput): Job {
   return mutate(store, id, input, (job, _tx, ts) => {
     if (!job.prUrl) throw new ValidationError('No PR recorded for this job.');
     const patch: Partial<Job> = { ciStatus: input.ciStatus, ciCheckedAt: ts };
     if (input.prState) patch.prState = input.prState;
+    if (input.head !== undefined) patch.ciHead = input.head;
     return {
       patch,
       events: [
-        { type: 'ci.observed', payload: { ciStatus: input.ciStatus, prState: input.prState } },
+        {
+          type: 'ci.observed',
+          payload: {
+            ciStatus: input.ciStatus,
+            prState: input.prState,
+            head: input.head ?? null,
+            ...input.detail,
+          },
+        },
       ],
     };
   });

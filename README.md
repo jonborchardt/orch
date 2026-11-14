@@ -7,7 +7,7 @@ skill starts a factory job from a Claude Code session in any repo. Each job owns
 a primary Claude session, which delegates planning, implementation, testing, and review to
 specialized subagents. The workflow moves through deterministic states enforced by TypeScript, with
 shared state in a single local SQLite database and a CLI (`orch`) that agents and humans both use.
-Output is a draft GitHub PR; humans keep merge authority.
+Output is a draft GitHub PR whose required checks pass; humans keep merge authority.
 
 **Status:** Phase 5 complete. The factory works end to end from any repository: the global
 `/factory` skill coordinates ten source-controlled subagents (spec writer, builder, seven
@@ -270,9 +270,10 @@ orch factory config                                                       # role
 ### How a job runs
 
 ```
-request ─→ spec ─→ build ─→ review (N reviewers in parallel) ─┬─ all PASS ─→ approve ─┬─ APPROVE ─→ pr ─→ done
+request ─→ spec ─→ build ─→ review (N reviewers in parallel) ─┬─ all PASS ─→ approve ─┬─ APPROVE ─→ pr ─→ ci ─→ done
                      ▲                                       │                      └─ ESCALATE ─→ needs-human
-                     └──────── any CHANGES (round < max) ◀───┘   round == max ─→ needs-human
+                     │         any CHANGES (round < max) ◀───┘   round == max ─→ needs-human
+                     └──────── required checks failed (repairs < max) ◀── ci ── repairs == max ─→ needs-human
 ```
 
 The coordinating Claude session owns the job (a lease with a token) and loops on
@@ -283,13 +284,14 @@ artifact each must write, the registered artifacts re-verified against disk, the
 commands to run, in order. The skill substitutes the token and runs them. Every state change is a
 CLI call that `orch` validates; the skill never edits the database or workflow tables.
 
-| Stage     | Agent(s)                      | Produces                                                           | `orch` checks before advancing                                                                                                                                                         |
-| --------- | ----------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spec`    | `factory-spec-writer` (Opus)  | `spec.md`                                                          | Goal, Scope, Acceptance criteria present                                                                                                                                               |
-| `build`   | `factory-builder` (Opus)      | commits on the job branch + `orch verify` run + `build.md`         | Summary, Validation present; worktree clean; HEAD unchanged since `build.md`; valid verification run for HEAD; round > 1 needs `--replace`                                             |
-| `review`  | reviewers below, concurrently | `round-N/review-<r>.md` each + `consolidated.md`                   | every verdict matches its `VERDICT:` line and was recorded against the same clean HEAD, still current; `BLOCKING: 0` to advance; `check-readonly`                                      |
-| `approve` | `factory-approver` (Opus)     | `decision.md`                                                      | `DECISION: APPROVE` against the current HEAD; no blocking findings left in the last round; valid verification run; no unauthorized policy change; `ESCALATE` forces `escalate`         |
-| `pr`      | the coordinator + `orch gh`   | integrated base, verified commit, pushed branch, draft PR, `pr.md` | approval recorded; only clean base-integration merges since it; policy not drifted; valid `orch verify` run for the pushed HEAD; branch pushed and current; repo identity; PR recorded |
+| Stage     | Agent(s)                       | Produces                                                           | `orch` checks before advancing                                                                                                                                                         |
+| --------- | ------------------------------ | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`    | `factory-spec-writer` (Opus)   | `spec.md`                                                          | Goal, Scope, Acceptance criteria present                                                                                                                                               |
+| `build`   | `factory-builder` (Opus)       | commits on the job branch + `orch verify` run + `build.md`         | Summary, Validation present; worktree clean; HEAD unchanged since `build.md`; valid verification run for HEAD; round > 1 needs `--replace`                                             |
+| `review`  | reviewers below, concurrently  | `round-N/review-<r>.md` each + `consolidated.md`                   | every verdict matches its `VERDICT:` line and was recorded against the same clean HEAD, still current; `BLOCKING: 0` to advance; `check-readonly`                                      |
+| `approve` | `factory-approver` (Opus)      | `decision.md`                                                      | `DECISION: APPROVE` against the current HEAD; no blocking findings left in the last round; valid verification run; no unauthorized policy change; `ESCALATE` forces `escalate`         |
+| `pr`      | the coordinator + `orch gh`    | integrated base, verified commit, pushed branch, draft PR, `pr.md` | approval recorded; only clean base-integration merges since it; policy not drifted; valid `orch verify` run for the pushed HEAD; branch pushed and current; repo identity; PR recorded |
+| `ci`      | the coordinator + `orch gh ci` | GitHub's verdict on the PR head's required checks                  | `orch gh ci` read the checks of the exact PR head; that head is the worktree HEAD and `origin/<branch>`; required checks passed (not merely "no failures")                             |
 
 Reviewers always include **security** (Opus), **correctness**, and **code-quality** (Sonnet). When
 the job's diff touches rendered UI (`.tsx`, `.vue`, `.css`, `.html`, ... per
@@ -304,8 +306,39 @@ coordinator deduplicates findings into `round-N/consolidated.md`; any `CHANGES` 
 The approver reads the spec, `build.md`, the full diff, every review, and reruns validation before
 writing `decision.md`. Approval permits a draft PR; it never merges. In the `pr` stage the plan says
 to integrate `origin/<base>` first if it advanced (then re-validate), push, create or reuse the draft
-PR with `pr.md` as the body, and record it. A recorded draft PR with `ciStatus: pending` is reported
-as exactly that.
+PR with `pr.md` as the body, and record it. Completing `pr` is not delivery: the job enters `ci`.
+
+### CI reconciliation
+
+A draft PR whose checks fail is not a deliverable, so the `ci` stage exists to find out. The
+coordinator runs `orch gh ci <id> --token <t>`, which reads from GitHub, for the PR's exact head
+commit, the check runs and commit statuses plus the base branch's required-check configuration
+(classic protection and rulesets), evaluates them with the pure rules in `src/core/ci.ts`, records
+the observation on the job (`ciStatus`, `ciHead`, a `ci.observed` event listing every check), and
+acts:
+
+| GitHub reports (for required checks)                                                                | `orch gh ci` does                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| all succeeded (skipped/neutral count only when a human made them required)                          | nothing more; the plan says `complete`, which the gate accepts only while `ciHead` is still HEAD                                                                           |
+| any queued or running, or none reported yet (first 5 observations)                                  | nothing: the coordinator waits about a minute and runs it again, or releases the job and resumes later; the CLI never polls by itself                                      |
+| `failure` or `timed_out`                                                                            | saves each failing Actions job log under `<artifactDir>/ci/<sha7>/`, then `rework`: back to `build` with the reason; `ciRepairs` + 1                                       |
+| `cancelled`, `startup_failure`, `stale`, `action_required`, or a required check that never reported | `escalate`: not a code defect; a human re-runs the workflow and resumes `--to ci`                                                                                          |
+| no checks at all after the grace window, or only skipped ones                                       | `escalate`: the factory does not invent success; a human adds CI (resume `--to ci`) or closes out with resume `--to completed`, which only this case and a merged PR allow |
+| PR head differs from the worktree HEAD or `origin/<branch>`                                         | `escalate`: the branch changed outside the job; no verdict is borrowed from another commit                                                                                 |
+| PR closed                                                                                           | `escalate`                                                                                                                                                                 |
+| `gh` or the API failed                                                                              | exit 1, nothing recorded                                                                                                                                                   |
+
+Without a configured required-check list every reported check counts as required, and the PR
+passes only when at least one check actually ran and succeeded; with one, optional checks may fail.
+Private repositories on GitHub's free plan answer both configuration endpoints with HTTP 403, so
+for them the list is always "unknown" and every reported check must pass.
+A CI repair goes through the normal cycle: the builder gets the saved logs in its plan, commits,
+`orch verify`, a new review round, a new approval, `orch gh push` to the same branch, and `orch gh
+pr create` reuses the open PR. Repairs are bounded by `maxCiRepairs` (default 2, from the
+orchestrator's `factory.json`; stored per job); when spent, the next failure escalates with reason
+`max CI repair cycles reached`, keeping the PR and worktree. A job completes only when GitHub's
+verdict for the current head is passing; `completed` therefore means "draft PR with passing required
+checks", never "PR created".
 
 ### Model configuration
 
@@ -317,7 +350,8 @@ per agent so the skill can pass it to the subagent tool. Override per machine in
 {
   "models": { "security": "sonnet", "builder": "opus" },
   "uiPatterns": ["\\.(tsx|jsx|css)$"],
-  "maxRounds": 2
+  "maxRounds": 2,
+  "maxCiRepairs": 1
 }
 ```
 
@@ -337,8 +371,12 @@ conversation is not needed. `orch factory resume <id> --session <name>`:
 4. Returns the plan, so the new session continues exactly where the state says.
 
 `needs-human` jobs stay blocked until a person decides; `resume --to <stage>` sends them back. A
-jump cannot skip evidence: `pr` still needs a registered `DECISION: APPROVE`, and `approve` still
-refuses while the last round counts blocking findings.
+jump cannot skip evidence: `pr` still needs a registered `DECISION: APPROVE`, `approve` still
+refuses while the last round counts blocking findings, and `ci` still needs GitHub's passing verdict
+for HEAD. A session interrupted while CI was pending resumes into `ci` and re-reads GitHub; the
+recorded rollup is never trusted on its own. `resume --to completed` exists for one case only: a
+job escalated from `ci` because GitHub reported no checks at all (or the PR was merged by a human);
+it is refused while checks are pending or failing.
 
 **Evidence is pinned to commits.** `build.md`, every review verdict, and `decision.md` are accepted
 only from a clean worktree and are recorded with its HEAD (`artifacts.head`, `reviews.head`). A
@@ -419,15 +457,15 @@ recreates a database, and `drizzle-kit push` is never used.
 
 Tables:
 
-| Table                 | Purpose                                                                                            |
-| --------------------- | -------------------------------------------------------------------------------------------------- |
-| `jobs`                | One row per job: identity, repo, branch, worktree, stage, status, round, owner lease, PR, CI, rev. |
-| `events`              | Append-only activity log (`type`, JSON `payload`, `actor`, timestamp) per job                      |
-| `artifacts`           | Registered artifact files: relative path, stage, round, size, sha256, parsed marker, HEAD          |
-| `reviews`             | One row per reviewer per round: verdict (`pass`/`changes`/pending), artifact, summary, HEAD        |
-| `verification_runs`   | One `orch verify` invocation: commit, tree, policy fingerprint and source, status                  |
-| `verification_checks` | One row per check of a run: command, cwd, status, exit code, duration, log path and hash           |
-| `integrations`        | One base-integration attempt: inputs recorded before Git runs, outcome after                       |
+| Table                 | Purpose                                                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `jobs`                | One row per job: identity, repo, branch, worktree, stage, status, round, owner lease, PR, CI (rollup, head, repairs), rev. |
+| `events`              | Append-only activity log (`type`, JSON `payload`, `actor`, timestamp) per job                                              |
+| `artifacts`           | Registered artifact files: relative path, stage, round, size, sha256, parsed marker, HEAD                                  |
+| `reviews`             | One row per reviewer per round: verdict (`pass`/`changes`/pending), artifact, summary, HEAD                                |
+| `verification_runs`   | One `orch verify` invocation: commit, tree, policy fingerprint and source, status                                          |
+| `verification_checks` | One row per check of a run: command, cwd, status, exit code, duration, log path and hash                                   |
+| `integrations`        | One base-integration attempt: inputs recorded before Git runs, outcome after                                               |
 
 `jobs.worktreePath` and (`repo`, `branch`) are unique, so a managed worktree or branch belongs to
 at most one job.
@@ -438,9 +476,11 @@ SQLite's write lock instead of corrupting state. Every job mutation increments `
 ## Workflow
 
 ```
-spec → build → review → approve → pr → completed
-                 │  changes            │
-                 └──────→ build        └─ (requires a recorded PR)
+spec → build → review → approve → pr → ci → completed
+                 │  changes            │     │
+                 └──────→ build        │     └─ (requires passing required checks for HEAD)
+                 ▲                     └─ (requires a recorded PR)
+                 └── rework (CI failed, repairs < max) ── ci
          any stage ── escalate ──→ needs-human ── resume --to <stage> ──→ back
 ```
 
@@ -449,15 +489,15 @@ spec → build → review → approve → pr → completed
 
 Claude requests an action; `orch job transition <id> <action>` validates and applies it:
 
-| Action     | Allowed when                                              | Effect                                                  |
-| ---------- | --------------------------------------------------------- | ------------------------------------------------------- |
-| `start`    | status `pending`, `failed`, or `interrupted`              | status `running`                                        |
-| `complete` | status `running` and required artifact registered         | next stage, status `pending` (see below)                |
-| `fail`     | status `running`                                          | status `failed`                                         |
-| `escalate` | any live stage                                            | stage `needs-human`, status `blocked`, remembers origin |
-| `resume`   | `needs-human`, or status `interrupted`/`failed`/`blocked` | back to the origin or `--to` stage, status `pending`    |
-| `rework`   | stage `pr` (base integration needs the builder)           | stage `build`, status `pending`; re-review follows      |
-| `cancel`   | any job not already finished                              | status `cancelled`                                      |
+| Action     | Allowed when                                                                     | Effect                                                                                                                       |
+| ---------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `start`    | status `pending`, `failed`, or `interrupted`                                     | status `running`                                                                                                             |
+| `complete` | status `running` and required artifact registered                                | next stage, status `pending` (see below)                                                                                     |
+| `fail`     | status `running`                                                                 | status `failed`                                                                                                              |
+| `escalate` | any live stage                                                                   | stage `needs-human`, status `blocked`, remembers origin                                                                      |
+| `resume`   | `needs-human`, or status `interrupted`/`failed`/`blocked`                        | back to the origin or `--to` stage, status `pending`                                                                         |
+| `rework`   | stage `pr` (base integration needs the builder) or `ci` (required checks failed) | stage `build`, status `pending`; re-review follows; from `ci` counts a repair, or `needs-human` when `maxCiRepairs` is spent |
+| `cancel`   | any job not already finished                                                     | status `cancelled`                                                                                                           |
 
 Required artifacts, relative to the job's artifact directory and registered with
 `orch job artifact add`: `spec.md`, `build.md`, `round-N/consolidated.md`, `decision.md`, `pr.md`.
@@ -492,8 +532,10 @@ If every verdict is `pass` the job moves to `approve`; if any is `changes` it re
 unless the round equals `--max-rounds` (default 3), in which case it escalates to `needs-human`.
 
 **PRs.** `orch job pr <id> --url <u> --state draft|ready|merged` records the PR; the `pr` stage
-cannot complete without one. The state can be updated later (draft → ready → merged) without
-changing the workflow, since the factory's deliverable is a draft PR.
+cannot complete without one, and completing it enters `ci`, which cannot complete until `orch gh
+ci` has recorded `ciStatus: passing` for `ciHead`, and the gate confirms `ciHead` is still the
+worktree HEAD. The PR state can be updated later (draft → ready → merged) without changing the
+workflow, since the factory's deliverable is a draft PR.
 
 Every accepted change appends events (`job.created`, `job.claimed`, `job.released`,
 `stage.started`, `stage.completed`, `stage.failed`, `artifact.registered`, `artifact.replaced`,
@@ -501,7 +543,8 @@ Every accepted change appends events (`job.created`, `job.claimed`, `job.release
 `job.completed`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
 `integration.started`, `integration.completed`, `verification.started`,
 `verification.completed`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
-`ci.observed`) in the same transaction.
+`ci.observed`) in the same transaction. A `ci.observed` event from `orch gh ci` carries the head,
+outcome, required-check list, every check's status and conclusion, and saved log paths.
 `orch job events <id>` lists them.
 
 ## Worktrees
@@ -565,6 +608,7 @@ orch gh issue <#N|N|url> [--repo <path>]
 orch gh push <id>                       # git push --set-upstream origin <job branch>; never force
 orch gh pr create <id> --body-file <md> [--title <t>]   # draft PR, or the existing open one
 orch gh pr status <id>                  # state, draft/ready/merged, CI rollup; recorded with --token
+orch gh ci <id> --token <t>             # ci stage: GitHub's verdict for the exact PR head, acted on (see above)
 ```
 
 Before pushing or creating a PR, `orch` checks that the job is in the `pr` stage, that
@@ -575,8 +619,10 @@ identity, that the base branch exists on `origin`, and (for the PR) that `origin
 the worktree HEAD. An open (or merged) PR for the
 branch with the same base is reused instead of creating a duplicate. The PR is recorded on the job
 (`prUrl`, `prState`) together with the CI rollup (`ciStatus`: `none`, `pending`, `passing`,
-`failing`). `orch` never merges, force-pushes, or marks a PR ready; a recorded draft PR is not a
-passing CI run.
+`failing`) and the head it describes (`ciHead`). `orch` never merges, force-pushes, or marks a PR
+ready; a recorded draft PR is not a passing CI run, which is what the `ci` stage then establishes.
+`orch gh ci` reads check runs and statuses with `gh api` for the head SHA (not the PR rollup), the
+base branch's protection and rulesets for the required list, and Actions job logs for failures.
 
 Tests never call GitHub: setting `ORCH_GH_SHIM=<file.cjs>` makes `orch` run `node <file> <args>`
 instead of `gh`, and the suite uses a stateful shim plus a local bare repository as `origin`.
@@ -705,6 +751,7 @@ orch job repo      <id> [--repo <path>] --token <t>   # refresh the identity now
 
 orch worktree create|show|adopt|remove|integrate <id> [--path <dir>] [--repo <clone>] --token <t>
 orch gh repo | issue <ref> | push <id> | pr create <id> --body-file <md> | pr status <id>
+orch gh ci <id> --token <t>            # reconcile CI for the PR head (ci stage only)
 orch verify <id> --token <t>           # run the repository's verification policy; exit 1 on failure
 orch verify show <id>                  # latest run and validity for HEAD
 
@@ -801,19 +848,28 @@ policy, only in the job worktree, only on a clean commit, with argument arrays; 
 is recomputed from HEAD, tree, policy fingerprint, and the run's rows at every gate; delivery is
 bound to the pushed commit; conflict resolutions and edits inside merge commits are detected and
 routed back through review; integration attempts are recorded before Git runs and reconciled on
-resume; `consolidated.md` and `pr.md` must name every sensitive path.
+resume; `consolidated.md` and `pr.md` must name every sensitive path; a job completes only on
+GitHub's passing verdict for the exact PR head, CI repairs re-enter build/review/approve and are
+bounded, and a stale or foreign head can never complete the job.
 
-Cooperative (prose only): reviewers actually reading the verification logs and the sensitive
+Cooperative (prose only): the coordinator waiting between `orch gh ci` calls and releasing the job
+instead of polling for hours (the CLI records every observation but cannot stop a session from
+calling it again); reviewers actually reading the verification logs and the sensitive
 diffs; builders not disabling tests in ways the scan does not recognise; the policy on the base
 branch being meaningful (an empty or weak `factory.json` merged by humans is trusted as policy);
 subagents staying inside the worktree; checks not being influenced by ignored files
 (`node_modules`, build caches) that `git status` cannot see; child processes of a timed-out check
-being cleaned up on Windows (the direct child is killed; grandchildren may linger).
+being cleaned up on Windows (the direct child is killed; grandchildren may linger); one
+implementation session per checkout (a parallel session takes its own Git worktree, `docs/decisions.md`
+#45); and the factory never being run against `orch` itself, since the installed CLI is the checkout
+under change.
 
 ## Limits
 
 Implemented: the durable core, worktrees, validated artifacts pinned to commits, executed
 verification evidence, sensitive-change labelling, recorded base integration, GitHub via `gh`,
+post-PR CI reconciliation bound to the PR head with bounded repair cycles (tested against a `gh`
+shim, not yet against a live repository),
 `orch factory`, the `/factory` skill, ten agents, Windows-safe install, and the dashboard (`orch
 ui`, the loopback JSON API with Origin/CSRF/Host guards, the job board and job detail, human
 controls through the shared domain layer, light and dark modes, API tests, component tests (jsdom),
@@ -824,7 +880,10 @@ must resume), token accounting, any daemon or scheduler (the dashboard is a plai
 and stop; nothing runs between commands), automatic crash recovery (a lapsed lease is only noticed
 when someone runs `factory next`, `resume`, or looks at the board), rebase-based integration (only
 merge commits), authentication for the dashboard (it is loopback-only and single-user by design), a
-workflow definition language, and plugin distribution. Ordinary CI never calls a model: the skill
+workflow definition language, plugin distribution, re-running a failed GitHub workflow (a flaky
+required check consumes a repair cycle or is escalated; a human re-runs it), CI providers other than
+GitHub checks and statuses, and pagination beyond the first 100 check runs of a commit. Ordinary CI
+never calls a model: the skill
 and agents are exercised by their contracts (frontmatter, templates, commands), and a live run
 requires a Claude Code session. The `events` table is an audit log, not an event-sourcing store.
 See `docs/decisions.md` for the reasoning behind what exists.

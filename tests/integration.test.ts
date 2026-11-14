@@ -77,7 +77,7 @@ function deliver(c: Ctx): void {
   writeArtifact(c.dir, 'pr.md', prBody(store, c));
   ensureDraftPr(store, c.id, { token: c.token, bodyFile: prFile(c) });
   add(store, c, 'pr.md', prBody(store, c));
-  expect(go(store, c, 'complete').stage).toBe('completed');
+  expect(go(store, c, 'complete').stage).toBe('ci');
 }
 
 describe('clean and no-op integration', () => {

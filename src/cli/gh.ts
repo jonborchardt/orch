@@ -1,7 +1,14 @@
 /** `orch gh ...` handlers: GitHub operations through the gh CLI. */
 import { UsageError } from '../core/errors.ts';
 import { describeRepo } from '../git/repo.ts';
-import { ensureDraftPr, issue, prStatus, pushBranch, resolveRepo } from '../ops/github.ts';
+import {
+  ensureDraftPr,
+  issue,
+  prStatus,
+  pushBranch,
+  reconcileCi,
+  resolveRepo,
+} from '../ops/github.ts';
 import type { Store } from '../storage/client.ts';
 import { authFrom, need } from './args.ts';
 
@@ -21,6 +28,9 @@ export const GH_HELP = `Usage: orch gh <command> [options]
   pr create <job-id> --body-file <md> [--title <t>]
                                       Create a draft PR, or reuse the existing one (pr stage only)
   pr status <job-id>                  PR state and CI rollup; recorded on the job when --token is given
+  ci <job-id>                         Reconcile CI for the PR head (ci stage): record GitHub's verdict for
+                                      that exact commit; failing checks save logs and rework, checks that
+                                      cannot run escalate, pending checks wait for the next call
 
 gh must be installed and authenticated (gh auth login). Nothing here merges, force-pushes, or
 marks a PR ready; humans do that.
@@ -38,6 +48,8 @@ export function runGh(store: Store, args: string[], o: GhOptions, env = process.
       return issue(need(rest[0], '<ref>', GH_HELP), o.repo ?? process.cwd());
     case 'push':
       return pushBranch(store, need(rest[0], '<job-id>', GH_HELP), auth);
+    case 'ci':
+      return reconcileCi(store, need(rest[0], '<job-id>', GH_HELP), auth);
     case 'pr': {
       const [sub, id] = rest;
       if (sub === 'create') {

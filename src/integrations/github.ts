@@ -3,19 +3,29 @@
  * or marks a PR ready. Set ORCH_GH_SHIM to a JavaScript file to replace `gh` with
  * `node <shim> <args>` in tests.
  */
+import type { CiCheck } from '../core/ci.ts';
 import { ToolError } from '../core/errors.ts';
-import { spawnTool, whichSync } from '../core/exec.ts';
+import { spawnTool, type ToolResult, whichSync } from '../core/exec.ts';
 import type { CiStatus, PrState } from '../core/workflow.ts';
 import { normalizeRemote } from '../git/repo.ts';
 
 export const GH_SHIM_ENV = 'ORCH_GH_SHIM';
 
-export function gh(args: string[], cwd?: string, env: NodeJS.ProcessEnv = process.env): string {
+/** Run gh and return the raw result; callers decide what a non-zero exit means. */
+export function ghResult(
+  args: string[],
+  cwd?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ToolResult {
   const shim = env[GH_SHIM_ENV];
   const exe = shim ? process.execPath : whichSync('gh', env);
   if (!exe)
     throw new ToolError('GitHub CLI (gh) not found on PATH. Install it and run gh auth login.');
-  const r = spawnTool(exe, shim ? [shim, ...args] : args, { cwd, env });
+  return spawnTool(exe, shim ? [shim, ...args] : args, { cwd, env });
+}
+
+export function gh(args: string[], cwd?: string, env: NodeJS.ProcessEnv = process.env): string {
+  const r = ghResult(args, cwd, env);
   if (r.status !== 0) {
     throw new ToolError(
       `gh ${args.slice(0, 2).join(' ')} failed: ${(r.stderr || r.stdout).trim()}`,
@@ -92,12 +102,14 @@ export interface GhPr {
   baseRefName: string;
   headRefName: string;
   title: string;
+  /** Commit at the head of the PR branch as GitHub sees it. */
+  headSha: string | null;
   mergeable?: string;
   checks: GhCheck[];
 }
 
 const PR_FIELDS =
-  'number,url,state,isDraft,baseRefName,headRefName,title,mergeable,statusCheckRollup';
+  'number,url,state,isDraft,baseRefName,headRefName,headRefOid,title,mergeable,statusCheckRollup';
 
 interface RawPr {
   number: number;
@@ -106,6 +118,7 @@ interface RawPr {
   isDraft: boolean;
   baseRefName: string;
   headRefName: string;
+  headRefOid?: string | null;
   title: string;
   mergeable?: string;
   statusCheckRollup?: RawCheck[] | null;
@@ -132,6 +145,7 @@ function toPr(raw: RawPr): GhPr {
     isDraft: raw.isDraft,
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
+    headSha: raw.headRefOid ?? null,
     title: raw.title,
     checks,
   };
@@ -180,6 +194,103 @@ export function createDraftPr(input: CreatePrInput, cwd: string): GhPr {
   const url = out.split(/\s+/).find((w) => w.startsWith('https://'));
   if (!url) throw new ToolError(`gh pr create did not return a PR URL: ${out}`);
   return viewPr(url, cwd);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Checks for one exact commit. `gh pr view` only rolls up the current head; these read the
+// check runs and commit statuses of a given SHA, so a verdict is never borrowed from another one.
+
+interface RawCheckRun {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  html_url?: string | null;
+  details_url?: string | null;
+  app?: { slug?: string | null } | null;
+}
+
+interface RawStatus {
+  context: string;
+  state: string;
+  target_url?: string | null;
+}
+
+/** Check runs plus commit statuses reported for `sha`, as one list. */
+export function listChecksFor(nameWithOwner: string, sha: string, cwd: string): CiCheck[] {
+  // ponytail: first 100 check runs; paginate when a repository really has more
+  const runs = ghJson<{ check_runs?: RawCheckRun[] }>(
+    ['api', `repos/${nameWithOwner}/commits/${sha}/check-runs?per_page=100`],
+    cwd,
+  );
+  const status = ghJson<{ statuses?: RawStatus[] }>(
+    ['api', `repos/${nameWithOwner}/commits/${sha}/status`],
+    cwd,
+  );
+  const fromRuns: CiCheck[] = (runs.check_runs ?? []).map((r) => ({
+    name: r.name,
+    status: r.status,
+    conclusion: r.conclusion ?? '',
+    url: r.html_url ?? r.details_url ?? null,
+    jobId: r.app?.slug === 'github-actions' ? r.id : null,
+  }));
+  const fromStatuses: CiCheck[] = (status.statuses ?? []).map((s) => ({
+    name: s.context,
+    status: s.state === 'pending' ? 'pending' : 'completed',
+    conclusion: s.state === 'pending' ? '' : s.state,
+    url: s.target_url ?? null,
+    jobId: null,
+  }));
+  return [...fromRuns, ...fromStatuses];
+}
+
+/** 404 means "no such configuration", which is an answer; anything else is "could not tell". */
+function optionalJson<T>(args: string[], cwd: string, onNotFound: T): T | null {
+  const r = ghResult(args, cwd);
+  if (r.status === 0) {
+    try {
+      return JSON.parse(r.stdout) as T;
+    } catch {
+      return null;
+    }
+  }
+  return /HTTP 404|Not Found/i.test(r.stderr + r.stdout) ? onNotFound : null;
+}
+
+/**
+ * Check names the base branch requires, from classic branch protection and rulesets. An empty
+ * list means GitHub answered and requires nothing; null means it could not be determined.
+ */
+export function requiredChecksFor(
+  nameWithOwner: string,
+  base: string,
+  cwd: string,
+): string[] | null {
+  const protection = optionalJson<{ contexts?: string[]; checks?: { context: string }[] } | null>(
+    ['api', `repos/${nameWithOwner}/branches/${base}/protection/required_status_checks`],
+    cwd,
+    null,
+  );
+  const rules = optionalJson<
+    { type: string; parameters?: { required_status_checks?: { context: string }[] } }[]
+  >(['api', `repos/${nameWithOwner}/rules/branches/${base}`], cwd, []);
+  if (protection === null && rules === null) return null;
+  const names = new Set<string>();
+  if (protection) {
+    for (const c of protection.contexts ?? []) names.add(c);
+    for (const c of protection.checks ?? []) names.add(c.context);
+  }
+  for (const rule of rules ?? []) {
+    if (rule.type !== 'required_status_checks') continue;
+    for (const c of rule.parameters?.required_status_checks ?? []) names.add(c.context);
+  }
+  return [...names];
+}
+
+/** Plain-text log of a GitHub Actions job, or null when it is not retrievable. */
+export function actionsJobLog(nameWithOwner: string, jobId: number, cwd: string): string | null {
+  const r = ghResult(['api', `repos/${nameWithOwner}/actions/jobs/${String(jobId)}/logs`], cwd);
+  return r.status === 0 ? r.stdout : null;
 }
 
 /** Collapse a PR's checks into one status. */

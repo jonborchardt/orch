@@ -81,6 +81,7 @@ describe('skill', () => {
       'orch job review record',
       'orch job artifact add',
       'orch gh pr status',
+      'orch gh ci',
     ]) {
       expect(body, cmd).toContain(cmd);
     }

@@ -183,7 +183,7 @@ export interface VerifyResult {
 }
 
 /** Keep the head and tail of a long stream; the middle is replaced by a marker. */
-function cap(text: string): { text: string; truncated: boolean } {
+export function cap(text: string): { text: string; truncated: boolean } {
   if (text.length <= OUTPUT_CAP) return { text, truncated: false };
   const half = Math.floor(OUTPUT_CAP / 2);
   const dropped = text.length - 2 * half;

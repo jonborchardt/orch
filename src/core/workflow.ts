@@ -14,6 +14,7 @@ export const STAGES = [
   'review',
   'approve',
   'pr',
+  'ci',
   'needs-human',
   'completed',
 ] as const;
@@ -55,6 +56,8 @@ export const TERMINAL_STATUSES: readonly Status[] = ['completed', 'cancelled'];
 
 /** Reason recorded on `job.blocked` when a review round still requests changes at `maxRounds`. */
 export const MAX_ROUNDS_REASON = 'max review rounds reached';
+/** Reason recorded on `job.blocked` when CI still fails after `maxCiRepairs` repair cycles. */
+export const MAX_CI_REPAIRS_REASON = 'max CI repair cycles reached';
 
 /** Artifact a stage must register (relative to the job artifact dir) before it can complete. */
 export function requiredArtifact(stage: Stage, round: number): string | undefined {
@@ -112,7 +115,17 @@ export interface TransitionResult {
 
 type JobState = Pick<
   Job,
-  'stage' | 'status' | 'round' | 'maxRounds' | 'returnStage' | 'prUrl' | 'prState'
+  | 'stage'
+  | 'status'
+  | 'round'
+  | 'maxRounds'
+  | 'returnStage'
+  | 'prUrl'
+  | 'prState'
+  | 'ciStatus'
+  | 'ciHead'
+  | 'ciRepairs'
+  | 'maxCiRepairs'
 >;
 
 /** Pure decision: throws WorkflowError when the action is illegal in the current state. */
@@ -178,9 +191,22 @@ export function transition(
           if (ctx.artifacts.find((a) => a.path === 'decision.md')?.marker !== 'approve') {
             reject('no DECISION: APPROVE is registered in decision.md');
           }
+          return { patch: { stage: 'ci', status: 'pending' }, events: [completed] };
+        }
+        case 'ci': {
+          // Only GitHub's verdict for the PR head counts; `orch gh ci` is what records it.
+          if (!job.prUrl) reject('no PR is recorded');
+          if (job.ciStatus !== 'passing' || !job.ciHead) {
+            reject(
+              `required checks are ${job.ciStatus ?? 'not observed'} for the PR head; run orch gh ci`,
+            );
+          }
           return {
             patch: { stage: 'completed', status: 'completed', completedAt: now() },
-            events: [completed, { type: 'job.completed', payload: { prUrl: job.prUrl } }],
+            events: [
+              completed,
+              { type: 'job.completed', payload: { prUrl: job.prUrl, head: job.ciHead } },
+            ],
           };
         }
         default:
@@ -207,7 +233,8 @@ export function transition(
     case 'resume': {
       if (stage === 'needs-human') {
         const to = ctx.to ?? job.returnStage;
-        if (!to || to === 'needs-human' || to === 'completed') reject('specify --to <stage>');
+        if (to === 'completed') return acceptDelivery(job, ctx);
+        if (!to || to === 'needs-human') reject('specify --to <stage>');
         return {
           patch: { stage: to, status: 'pending', returnStage: null },
           events: [{ type: 'job.resumed', payload: { to } }],
@@ -221,12 +248,30 @@ export function transition(
     }
 
     case 'rework': {
-      // Base integration needed the builder (conflicts or edits inside the merge): the result is
-      // new code, so it goes through build, review, and approval again.
-      if (stage !== 'pr') reject('rework is only for the pr stage');
+      // Base integration needed the builder (conflicts or edits inside the merge), or CI failed on
+      // the delivered commit: the result is new code, so it goes through build, review, and
+      // approval again, then is pushed to the same PR. CI repairs are bounded per job.
+      if (stage !== 'pr' && stage !== 'ci') reject('rework is only for the pr and ci stages');
+      const reworked = {
+        type: 'job.reworked',
+        payload: { from: stage, reason: ctx.reason ?? null, ciRepairs: job.ciRepairs },
+      };
+      if (stage !== 'ci')
+        return { patch: { stage: 'build', status: 'pending' }, events: [reworked] };
+      if (job.ciRepairs >= job.maxCiRepairs) {
+        return {
+          patch: { stage: 'needs-human', status: 'blocked', returnStage: 'build' },
+          events: [
+            {
+              type: 'job.blocked',
+              payload: { from: stage, reason: MAX_CI_REPAIRS_REASON, detail: ctx.reason ?? null },
+            },
+          ],
+        };
+      }
       return {
-        patch: { stage: 'build', status: 'pending' },
-        events: [{ type: 'job.reworked', payload: { from: stage, reason: ctx.reason ?? null } }],
+        patch: { stage: 'build', status: 'pending', ciRepairs: job.ciRepairs + 1 },
+        events: [{ ...reworked, payload: { ...reworked.payload, ciRepairs: job.ciRepairs + 1 } }],
       };
     }
 
@@ -239,6 +284,38 @@ export function transition(
       };
     }
   }
+}
+
+/**
+ * A human closes out a delivery the factory could not verify: `resume --to completed` from a CI
+ * escalation is allowed only when GitHub reported no checks at all for the PR head, or the PR was
+ * merged outside the factory. A failing or pending CI result can never be accepted this way.
+ */
+function acceptDelivery(job: JobState, ctx: TransitionContext): TransitionResult {
+  const why = (w: string): never => {
+    throw new WorkflowError(`Cannot resume job to completed: ${w}`);
+  };
+  if (job.returnStage !== 'ci') why('only a job escalated from the ci stage can be closed out');
+  if (!job.prUrl || !job.ciHead) why('no PR head has been observed');
+  if (job.ciStatus !== 'none' && job.prState !== 'merged') {
+    why(`required checks are ${job.ciStatus ?? 'not observed'}; fix CI and resume --to ci instead`);
+  }
+  return {
+    patch: { stage: 'completed', status: 'completed', returnStage: null, completedAt: now() },
+    events: [
+      { type: 'job.resumed', payload: { to: 'completed' } },
+      {
+        type: 'job.completed',
+        payload: {
+          prUrl: job.prUrl,
+          head: job.ciHead,
+          ciStatus: job.ciStatus,
+          acceptedByHuman: true,
+          reason: ctx.reason ?? null,
+        },
+      },
+    ],
+  };
 }
 
 function currentReviews(job: Pick<JobState, 'round'>, reviews: Review[]): Review[] {

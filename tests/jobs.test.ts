@@ -17,6 +17,7 @@ import {
   getJob,
   jobDetail,
   listJobs,
+  recordCi,
   recordPr,
   recordReview,
   registerArtifact,
@@ -286,6 +287,15 @@ describe('jobs: full workflow through storage', () => {
     expect(() => go(id, token, 'complete')).toThrow(/record the PR/);
     const pr = recordPr(store, id, { token, url: 'https://github.com/o/r/pull/7', state: 'draft' });
     expect(pr.prState).toBe('draft');
+    const handed = go(id, token, 'complete');
+    expect([handed.stage, handed.status]).toEqual(['ci', 'pending']);
+    // CI stage: GitHub's verdict for the PR head is recorded (orch gh ci) before completion.
+    go(id, token, 'start');
+    expect(() => go(id, token, 'complete')).toThrow(/required checks are not observed/);
+    recordCi(store, id, { token, ciStatus: 'failing', head: 'abc123' });
+    expect(() => go(id, token, 'complete')).toThrow(/required checks are failing/);
+    const observed = recordCi(store, id, { token, ciStatus: 'passing', head: 'abc123' });
+    expect([observed.ciStatus, observed.ciHead]).toEqual(['passing', 'abc123']);
     const done = go(id, token, 'complete');
     expect([done.stage, done.status]).toEqual(['completed', 'completed']);
     expect(done.completedAt).toBeTruthy();
