@@ -390,3 +390,27 @@ loads one agent file per subagent with no include mechanism, so sharing the text
 generated artifact; the duplication is the cost of self-contained agents and a contract test keeps
 the files consistent with `core/roles.ts`. `web/src/Actions.tsx` keeps its own stage list and
 live-lease check because the client may import only types from `src/`.
+
+## 45. The `check-readonly` flake: what is established and what is not
+
+One `orch factory check-readonly` exit 1 was seen in `tests/factory.test.ts` during a full parallel
+`npm run check` on Windows; its stderr was not kept. Two factory jobs investigated it (PRs #1 and
+#2). Both were closed without merging, so nothing below is fixed on `main` yet; their branches
+`factory/job-12e65ef2-*` and `factory/job-e2ac0925-*` hold two competing implementations.
+
+Confirmed (by reading the code, and by a deterministic test in each PR): `inspectWorktree` reads
+HEAD through `tryGit`, so a failed `git rev-parse HEAD` in a real worktree becomes `head: null`,
+changes the fingerprint, and `check-readonly` reports "Reviewers must not modify code" for what
+was a Git failure. This is a real error-handling defect. It was never shown to be the cause of the
+observed run.
+
+Reported by PR #2 and reconstructed, not observed: a second session was editing
+`src/git/worktree.ts` in the same checkout while the suite ran, and CLI test processes that
+started in that window loaded a half-edited module. The edit timeline matched and each half-edited
+state failed deterministically, but the original run left no artefact that ties it to this.
+Neither job reproduced the flake under load (PR #1: 0 of 14 runs; PR #2: 0 of 312).
+
+Unverified: the cause of that one run. Until the unreadable-HEAD handling lands with its
+regression test, a recurrence will again read as a reviewer write; treat it as unexplained unless
+the worktree really changed. Operationally: one Claude session per checkout (a parallel session
+takes its own worktree), and no edits to a checkout while its suite runs.
