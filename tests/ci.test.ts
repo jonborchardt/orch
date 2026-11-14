@@ -15,14 +15,14 @@ import {
   evaluateChecks,
   waitSeconds,
 } from '../src/core/ci.ts';
-import { ToolError, ValidationError, WorkflowError } from '../src/core/errors.ts';
+import { OwnershipError, ToolError, ValidationError, WorkflowError } from '../src/core/errors.ts';
 import { MAX_CI_REPAIRS_REASON } from '../src/core/workflow.ts';
 import { configPath, planJob, resumeFactoryJob } from '../src/ops/factory.ts';
 import { ensureDraftPr, pushBranch, reconcileCi } from '../src/ops/github.ts';
 import { verificationStatus } from '../src/ops/verify.ts';
 import { worktreeOf } from '../src/ops/tree.ts';
 import { listEvents } from '../src/storage/events.ts';
-import { getJob, recordCi } from '../src/storage/jobs.ts';
+import { getJob, recordCi, releaseJob } from '../src/storage/jobs.ts';
 import {
   add,
   approve,
@@ -126,6 +126,7 @@ function repair(c: Ctx, file: string): string {
 describe('evaluateChecks (pure)', () => {
   const ok = {
     id: 1,
+    suiteId: null,
     name: 'test',
     status: 'completed',
     conclusion: 'success',
@@ -599,6 +600,7 @@ describe('ci stage: GitHub answers that are not verdicts', () => {
 describe('evaluateChecks: duplicate names and the polling schedule', () => {
   const ok = {
     id: 1,
+    suiteId: null,
     name: 'test',
     status: 'completed',
     conclusion: 'success',
@@ -616,6 +618,48 @@ describe('evaluateChecks: duplicate names and the polling schedule', () => {
     expect(evaluateChecks([cancelled, running], null, 1).outcome).toBe('pending');
     expect(evaluateChecks([ok, cancelled], ['test'], 1).outcome).toBe('infrastructure');
     expect(evaluateChecks([running, failed], null, 1).outcome).toBe('failing');
+  });
+
+  it('attempts of one check (same suite and name) collapse to the newest; independent checks do not', () => {
+    const inSuite = (c: typeof ok, suiteId: number) => ({ ...c, suiteId });
+    const oldFail = inSuite({ ...ok, id: 2, conclusion: 'failure' }, 10);
+    const oldPass = inSuite({ ...ok, id: 2 }, 10);
+    const newPass = inSuite({ ...ok, id: 3 }, 10);
+    const newFail = inSuite({ ...ok, id: 3, conclusion: 'failure' }, 10);
+    const newQueued = inSuite({ ...ok, id: 3, status: 'queued', conclusion: '' }, 10);
+    // The initial attempt failed and its re-run passed, whichever page each came on.
+    expect(evaluateChecks([oldFail, newPass], ['test'], 1).outcome).toBe('passing');
+    expect(evaluateChecks([newPass, oldFail], ['test'], 1).outcome).toBe('passing');
+    // The initial attempt passed and its re-run failed: the current attempt is the verdict.
+    expect(evaluateChecks([oldPass, newFail], ['test'], 1)).toMatchObject({
+      outcome: 'failing',
+      failed: [newFail],
+    });
+    // The newest attempt is still running while an older one passed.
+    expect(evaluateChecks([oldPass, newQueued], ['test'], 1)).toMatchObject({
+      outcome: 'pending',
+      pending: ['test'],
+    });
+    // Several attempts: only the newest id counts.
+    const midFail = inSuite({ ...ok, id: 4, conclusion: 'failure' }, 10);
+    const last = inSuite({ ...ok, id: 5 }, 10);
+    expect(evaluateChecks([midFail, oldFail, last], ['test'], 1).outcome).toBe('passing');
+    // A re-run of the failed jobs only: lint keeps its first attempt, test gets a new one.
+    const lint = inSuite({ ...ok, id: 1, name: 'lint' }, 10);
+    expect(evaluateChecks([lint, oldFail, newPass], ['lint', 'test'], 1).outcome).toBe('passing');
+    // Two independent checks with the same name (different suites): the worst one counts.
+    const other = inSuite({ ...ok, id: 3 }, 11);
+    expect(evaluateChecks([oldFail, other], ['test'], 1).outcome).toBe('failing');
+    expect(evaluateChecks([other, oldFail], ['test'], 1).outcome).toBe('failing');
+    // Without a suite id the duplicate is ambiguous and still counts at its worst.
+    const noSuite = [
+      { ...ok, id: 2, conclusion: 'failure' },
+      { ...ok, id: 3 },
+    ];
+    expect(evaluateChecks(noSuite, ['test'], 1).outcome).toBe('failing');
+    // A commit status with a check run's name is another check, never an attempt of it.
+    const status = { ...ok, id: null, jobId: null, conclusion: 'failure' };
+    expect(evaluateChecks([newPass, status], ['test'], 1).outcome).toBe('failing');
   });
 
   it('the wait grows with the observations of a head and is capped at five minutes', () => {
@@ -713,6 +757,48 @@ describe('ci stage: one bounded re-run before a repair', () => {
     expect(rerunCalls()).toHaveLength(1);
     // Nothing merged, nothing marked ready, nothing pushed by the re-run.
     expect(shim.read().calls.some((x) => x[1] === 'merge' || x[1] === 'ready')).toBe(false);
+  });
+
+  it('when GitHub still lists the replaced attempt next to the new one, the new one decides', () => {
+    const suite = { id: 500 };
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    const lint = { ...run('lint', 'success'), check_suite: suite };
+    const failed = { ...run('test', 'failure'), check_suite: suite };
+    workflowRun(failed, 7);
+    checks(sha, [lint, failed]);
+    expect(reconcile(c)).toMatchObject({ action: 'wait', reruns: 1 });
+    // The old attempt stays on the first page; the new one (same suite, newer id) is on the second.
+    const filler = Array.from({ length: 98 }, (_, i) => run(`matrix-${String(i)}`, 'success'));
+    const again = { ...run('test', 'success'), check_suite: suite };
+    checks(sha, [lint, failed, ...filler, again]);
+    const r = reconcile(c);
+    expect(r).toMatchObject({ outcome: 'passing', action: 'complete', reruns: 1 });
+    expect(r.evaluation.required).toHaveLength(100);
+    expect(job(c)).toMatchObject({ ciStatus: 'passing', ciHead: sha, ciRepairs: 0 });
+    expect(rerunCalls()).toHaveLength(1);
+
+    // The inverse: the new attempt fails too. The second verdict is the current attempt's, and
+    // its log (not the replaced run's) is what the builder gets.
+    const d = start(store, clone);
+    toCi(store, d);
+    const shaD = head(d.wt);
+    const first = { ...run('test', 'failure'), check_suite: suite };
+    workflowRun(first, 8);
+    checks(shaD, [first]);
+    expect(reconcile(d)).toMatchObject({ action: 'wait', reruns: 1 });
+    const second = { ...run('test', 'failure'), check_suite: suite };
+    shim.write({ logs: { [String(second.id)]: 'npm test\nFAIL second attempt\n' } });
+    checks(shaD, [first, second]);
+    const rd = reconcile(d);
+    expect(rd).toMatchObject({ outcome: 'failing', action: 'rework', reruns: 1 });
+    expect(rd.evaluation.failed.map((x) => x.id)).toEqual([second.id]);
+    expect(rd.failures[0]?.log).toBe(`ci/${shaD.slice(0, 7)}/test.log`);
+    expect(readFileSync(join(d.dir, rd.failures[0]?.log ?? ''), 'utf8')).toContain(
+      'second attempt',
+    );
+    expect(job(d)).toMatchObject({ stage: 'build', ciRepairs: 1 });
   });
 
   it('a second failure of the same commit is a defect: logs, rework, no further re-run', () => {
@@ -899,6 +985,98 @@ describe('ci stage: polling cadence in the plan', () => {
       action: 'wait',
     });
     expect(planJob(store, c.id).ci).toMatchObject({ sessionPolls: 1, release: false });
+  });
+});
+
+describe('ci stage: releasing a pending job', () => {
+  it('changes ownership only; an ordinary resume reconciles GitHub afresh with the same budgets', () => {
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    const failed = run('test', 'failure');
+    shim.write({
+      api: {
+        ...shim.read().api,
+        [`repos/acme/alpha/actions/jobs/${String(failed.id)}`]: { run_id: 7 },
+      },
+    });
+    checks(sha, [failed]);
+    // The head's one re-run is spent; the new attempt is queued for the rest of the session.
+    expect(reconcile(c)).toMatchObject({ action: 'wait', reruns: 1 });
+    checks(sha, [run('test', null, 'queued')]);
+    expect(reconcile(c)).toMatchObject({ outcome: 'pending', action: 'wait' });
+    for (let i = 3; i <= CI_MAX_SESSION_POLLS; i++) {
+      recordCi(store, c.id, {
+        token: c.token,
+        ciStatus: 'pending',
+        head: sha,
+        detail: { outcome: 'pending', polls: i, reason: 'waiting for: test' },
+      });
+    }
+    expect(planJob(store, c.id).commands).toEqual([`orch job release ${c.id} --token <token>`]);
+    const before = job(c);
+    const eventsBefore = listEvents(store.db, c.id, 1000).length;
+
+    // Only the owner can release; releasing records one event and touches nothing but the lease.
+    expect(() => releaseJob(store, c.id, { token: 'not-the-owner' })).toThrow(OwnershipError);
+    const released = releaseJob(store, c.id, { token: c.token });
+    expect(released).toMatchObject({
+      stage: 'ci',
+      status: 'running',
+      ciStatus: 'pending',
+      ciHead: sha,
+      ciRepairs: 0,
+      prUrl: before.prUrl,
+      prState: before.prState,
+      ownerSession: null,
+      ownerToken: null,
+      leaseExpiresAt: null,
+    });
+    const events = listEvents(store.db, c.id, 1000);
+    expect(events).toHaveLength(eventsBefore + 1);
+    expect(events.at(-1)?.type).toBe('job.released');
+    expect(existsSync(before.worktreePath ?? '')).toBe(true);
+    // The released token is dead: nothing can act on the job without claiming it.
+    expect(() => reconcile(c)).toThrow(OwnershipError);
+    expect(() => go(store, c, 'complete')).toThrow(OwnershipError);
+
+    // An ordinary resume (no force, no takeover) starts the session count again and keeps the rest.
+    const h = resumeFactoryJob(store, c.id, { session: 'claude-later-0004' });
+    expect(h.tookOver).toBe(false);
+    expect(h.plan.ci).toMatchObject({
+      head: sha,
+      current: true,
+      polls: CI_MAX_SESSION_POLLS,
+      sessionPolls: 0,
+      reruns: 1,
+      release: false,
+    });
+    expect(h.plan.commands).toEqual([
+      `orch gh ci ${c.id} --token <token>`,
+      `orch factory next ${c.id}`,
+    ]);
+    expect(h.job).toMatchObject({
+      stage: 'ci',
+      status: 'running',
+      ciRepairs: 0,
+      prUrl: before.prUrl,
+    });
+    const c2 = { ...c, token: h.token };
+    // Still pending: the head gets no second re-run, and the new session has its own release budget.
+    expect(reconcile(c2)).toMatchObject({
+      action: 'wait',
+      reruns: 1,
+      polls: CI_MAX_SESSION_POLLS + 1,
+      waitSeconds: 300,
+    });
+    expect(shim.read().calls.filter((x) => x[0] === 'run' && x[1] === 'rerun')).toHaveLength(1);
+    expect(planJob(store, c.id).ci).toMatchObject({ sessionPolls: 1, release: false });
+    // GitHub's verdict for the same head completes the job on the same PR; no repair was spent.
+    checks(sha, [run('test', 'success')]);
+    expect(reconcile(c2)).toMatchObject({ outcome: 'passing', action: 'complete', head: sha });
+    expect(go(store, c2, 'complete').stage).toBe('completed');
+    expect(job(c2)).toMatchObject({ ciRepairs: 0, prUrl: before.prUrl });
+    expect(ghCalls('create')).toHaveLength(1);
   });
 });
 

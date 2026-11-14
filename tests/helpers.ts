@@ -290,6 +290,8 @@ export interface ShimCheckRun {
   conclusion: string | null;
   html_url?: string;
   app?: { slug: string };
+  /** Workflow run the job belongs to; attempts of one check share it. */
+  check_suite?: { id: number };
 }
 
 export interface ShimState {

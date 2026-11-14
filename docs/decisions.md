@@ -584,8 +584,14 @@ matrices do this) was evaluated on a partial list, and a failed required check o
 would have passed unnoticed when the list was unconfigured. It now reads every page of both the
 check-runs and the combined-status endpoints with `gh api --paginate --slurp` (one JSON array of
 pages; needs `gh` 2.41, December 2023). A page failure fails the call, so a partial view is never
-recorded. With several runs of one name (two workflows, or a duplicate GitHub has not yet
-replaced) the worst conclusion counts instead of whichever came first.
+recorded. Several runs of one name are either attempts of one check or independent checks, and
+GitHub says which: a re-run creates a new check run with a higher id in the same check suite, so
+runs sharing a suite and a name collapse to the newest; runs with the same name in different suites
+(two workflows posting the same job name), or without a suite id, count at their worst instead of
+whichever came first. Rejected: "worst of all runs with the name" (a superseded failure would
+outvote the attempt that replaced it, and a re-run could never pass while GitHub still listed the
+old run) and `filter=all` (the default `latest` already hides most superseded attempts; the suite
+rule only has to be right about the ones it does return).
 
 **Re-runs.** Decision 48 rejected re-running failed workflows as "indefinite retries with no new
 information". The bound is what was missing. A flaky test or a lost runner cost a repair cycle:

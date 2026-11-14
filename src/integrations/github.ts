@@ -208,6 +208,7 @@ interface RawCheckRun {
   html_url?: string | null;
   details_url?: string | null;
   app?: { slug?: string | null } | null;
+  check_suite?: { id?: number | null } | null;
 }
 
 interface RawStatus {
@@ -236,6 +237,7 @@ export function listChecksFor(nameWithOwner: string, sha: string, cwd: string): 
   const statuses = allPages<RawStatus>(`${commit}/status`, 'statuses', cwd);
   const fromRuns: CiCheck[] = runs.map((r) => ({
     id: r.id,
+    suiteId: typeof r.check_suite?.id === 'number' ? r.check_suite.id : null,
     name: r.name,
     status: r.status,
     conclusion: r.conclusion ?? '',
@@ -244,6 +246,7 @@ export function listChecksFor(nameWithOwner: string, sha: string, cwd: string): 
   }));
   const fromStatuses: CiCheck[] = statuses.map((s) => ({
     id: null,
+    suiteId: null,
     name: s.context,
     status: s.state === 'pending' ? 'pending' : 'completed',
     conclusion: s.state === 'pending' ? '' : s.state,

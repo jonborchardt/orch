@@ -7,6 +7,11 @@ import type { CiStatus } from './workflow.ts';
 export interface CiCheck {
   /** GitHub check-run id; null for a commit status. A re-run creates a new id for the same name. */
   id: number | null;
+  /**
+   * Check suite (one per workflow run) the run belongs to; null for a commit status or when GitHub
+   * did not say. Same suite and name means another attempt of the same check, not another check.
+   */
+  suiteId: number | null;
   name: string;
   /** `queued`, `in_progress`, `completed`, or the commit-status `pending`. */
   status: string;
@@ -84,8 +89,29 @@ function conclusionOf(c: CiCheck): Conclusion {
   return 'infrastructure';
 }
 
-/** When several runs share a name (two workflows, or a stale duplicate), the worst one counts. */
+/** When independent runs share a name (two workflows posting the same check), the worst one counts. */
 const SEVERITY: Record<Conclusion, number> = { defect: 3, pending: 2, infrastructure: 1, ok: 0 };
+
+/**
+ * Drop superseded attempts: runs with the same name in the same check suite are attempts of one
+ * check (a re-run creates a new, higher id in the same suite), and only the newest is GitHub's
+ * current verdict. Runs whose suite is unknown are never collapsed, so an ambiguous duplicate
+ * still counts at its worst.
+ */
+function currentAttempts(checks: CiCheck[]): CiCheck[] {
+  const newest = new Map<string, CiCheck>();
+  const rest: CiCheck[] = [];
+  for (const c of checks) {
+    if (c.suiteId === null || c.id === null) {
+      rest.push(c);
+      continue;
+    }
+    const key = `${String(c.suiteId)}:${c.name}`; // ids are digits: the first colon splits
+    const seen = newest.get(key);
+    if (!seen || (seen.id ?? 0) < c.id) newest.set(key, c);
+  }
+  return [...newest.values(), ...rest];
+}
 
 /**
  * Decide the CI outcome for one commit. `configured` is the base branch's required-check list
@@ -103,6 +129,7 @@ export function evaluateChecks(
     ? [...new Set(configured)]
     : [...new Set(checks.map((c) => c.name))];
   const requiredSet = new Set(required);
+  checks = currentAttempts(checks);
   const byName = new Map<string, CiCheck>();
   for (const c of checks) {
     const seen = byName.get(c.name);

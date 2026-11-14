@@ -332,8 +332,10 @@ acts:
 Without a configured required-check list every reported check counts as required, and the PR
 passes only when at least one check actually ran and succeeded; with one, optional checks may fail.
 Check runs and statuses are read across every page (`gh api --paginate --slurp`, so `gh` 2.41 or
-newer), and when several runs share a name the worst one counts; a page that fails to load fails
-the whole observation rather than passing a partial list.
+newer); a page that fails to load fails the whole observation rather than passing a partial list.
+Runs with one name in one check suite are attempts of the same check (a re-run creates a new one in
+the same suite) and only the newest counts; runs with one name in different suites, or whose suite
+GitHub did not report, are independent checks and the worst one counts.
 Private repositories on GitHub's free plan answer both configuration endpoints with HTTP 403, so
 for them the list is always "unknown" and every reported check must pass.
 A CI repair goes through the normal cycle: the builder gets the saved logs in its plan, commits,
