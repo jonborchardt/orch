@@ -416,7 +416,7 @@ export interface CiInput extends Auth {
   ciStatus: CiStatus;
   prState?: PrState | undefined;
   /** Commit the verdict was read for. Only `orch gh ci` supplies one; `pr create` and `pr status` pass null. */
-  head?: string | null | undefined;
+  head: string | null;
   /** Further detail for the `ci.observed` event (outcome, checks, diagnostics). */
   detail?: Record<string, unknown> | undefined;
 }
@@ -427,7 +427,7 @@ export function recordCi(store: Store, id: string, input: CiInput): Job {
     if (!job.prUrl) throw new ValidationError('No PR recorded for this job.');
     const patch: Partial<Job> = { ciStatus: input.ciStatus, ciCheckedAt: ts };
     if (input.prState) patch.prState = input.prState;
-    if (input.head !== undefined) patch.ciHead = input.head;
+    patch.ciHead = input.head;
     return {
       patch,
       events: [
@@ -436,7 +436,7 @@ export function recordCi(store: Store, id: string, input: CiInput): Job {
           payload: {
             ciStatus: input.ciStatus,
             prState: input.prState,
-            head: input.head ?? null,
+            head: input.head,
             ...input.detail,
           },
         },

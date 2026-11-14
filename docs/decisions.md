@@ -593,10 +593,31 @@ truth (every reported check required, skipped-only is not a pass, grace window, 
 record the rollup (`ciStatus`, `ci.observed` event) for the dashboard, but with `head: null`, so
 the pure transition (`no CI verdict has been read for the PR head`), the Git-aware gate
 (`ciHead` must equal HEAD), and the plan (`ci.current`) all require a fresh `orch gh ci` before
-`complete`. A resumed session with a recorded `orch gh ci` verdict for the current head may
-complete without a second read: the verdict is bound to the commit and was produced by the
-evaluation rules. The README now says so instead of claiming the rollup is never trusted.
-Rejected: re-reading GitHub unconditionally in the ci plan (the plan would then never say
-`complete` after a passing read without a second column to remember it), and a schema change to
-record the source of each observation (the head column already distinguishes them once only one
-writer sets it).
+`complete`. Rejected: a schema change to record the source of each observation (the head column
+already distinguishes them once only one writer sets it). Decision 52 then removed the remaining
+case in which a stored verdict completed the stage.
+
+## 52. `orch gh ci` completes the ci stage itself; a stored verdict never does
+
+**Observed (Phase 1 acceptance closure).** After decision 51 a resumed session could still complete
+`ci` on a stored `orch gh ci` verdict for the current HEAD without reading GitHub again. The verdict
+was genuine for that commit, but completion is a claim about the PR, and between the read and the
+completion the PR can be closed, its head can move (a push from outside the job), or a check can be
+rerun for the same commit and fail. `reconcileCi` detects all three; the stored-verdict path skipped
+it. The gate also had no way to tell a stored verdict from a fresh one without a timestamp
+heuristic.
+
+**Decision.** The read and the completion are one operation. `reconcileCi` calls `completeCi`
+(`ops/gates.ts`: clean tree, `ciHead` equals HEAD, valid verification run, authorized policy, then
+the pure transition) in the same call that evaluated GitHub's checks for the PR head, and
+`transitionGuarded` refuses `complete` in the `ci` stage outright, so the CLI, the plan, and a
+resumed session have exactly one way to finish: run `orch gh ci`, which reads first. The plan for
+`ci` therefore always lists `orch gh ci`; a recorded passing verdict is mentioned as something to
+confirm, not reuse. Skipped-only check runs are now `none` even when a human made the checks
+required (GitHub's merge button would count them): the factory does not infer success from a check
+that did not run, and the human close-out (`resume --to completed`, recorded `acceptedByHuman`)
+remains the explicit, distinguishable exception. The normal flow makes no extra API call (the
+passing read already happened); only a resumed session with a stored verdict pays one read, which is
+the read it was missing. Rejected: a freshness window on `ciCheckedAt` (a timer standing in for a
+fact that is cheap to re-read), and re-reading GitHub inside `orch job transition complete` (a
+"transition" that calls the network and can rework the job would surprise every caller).

@@ -41,6 +41,7 @@ import {
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
+import { completeCi } from './gates.ts';
 import { jobCheckout } from './repo.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
 import { cap, effectivePolicy, verificationStatus } from './verify.ts';
@@ -416,6 +417,9 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     updated = transitionJob(store, id, 'rework', { ...tok, reason });
   } else if (action === 'escalate') {
     updated = transitionJob(store, id, 'escalate', { ...tok, reason });
+  } else if (action === 'complete') {
+    // The read and the completion are one operation: no stored verdict is ever reused.
+    updated = completeCi(store, id, tok);
   } else {
     updated = getJob(store.db, id);
   }

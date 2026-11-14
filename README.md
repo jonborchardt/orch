@@ -319,7 +319,7 @@ acts:
 
 | GitHub reports (for required checks)                                                                | `orch gh ci` does                                                                                                                                                          |
 | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| all succeeded (skipped/neutral count only when a human made them required)                          | nothing more; the plan says `complete`, which the gate accepts only while `ciHead` is still HEAD                                                                           |
+| all succeeded (at least one check ran; skipped/neutral alone never count)                           | completes the job in the same call, once the gate confirms a clean, verified HEAD; `orch job transition complete` is refused in `ci`, so no stored verdict is ever reused  |
 | any queued or running, or none reported yet (first 5 observations)                                  | nothing: the coordinator waits about a minute and runs it again, or releases the job and resumes later; the CLI never polls by itself                                      |
 | `failure` or `timed_out`                                                                            | saves each failing Actions job log under `<artifactDir>/ci/<sha7>/`, then `rework`: back to `build` with the reason; `ciRepairs` + 1                                       |
 | `cancelled`, `startup_failure`, `stale`, `action_required`, or a required check that never reported | `escalate`: not a code defect; a human re-runs the workflow and resumes `--to ci`                                                                                          |
@@ -373,10 +373,11 @@ conversation is not needed. `orch factory resume <id> --session <name>`:
 `needs-human` jobs stay blocked until a person decides; `resume --to <stage>` sends them back. A
 jump cannot skip evidence: `pr` still needs a registered `DECISION: APPROVE`, `approve` still
 refuses while the last round counts blocking findings, and `ci` still needs GitHub's passing verdict
-for HEAD. A session interrupted while CI was pending resumes into `ci` and re-reads GitHub unless
-`orch gh ci` itself already recorded a passing verdict for the current HEAD; the rollup that
-`orch gh pr create` and `orch gh pr status --token` store is informational and carries no head, so
-it can never complete the stage. `resume --to completed` exists for one case only: a
+for HEAD. A session interrupted while CI was pending resumes into `ci` and always re-reads GitHub:
+`orch gh ci` completes the job itself when the fresh read passes for the current head, and a stored
+verdict (even a passing one) cannot complete it, so a PR that moved, was closed, or whose checks
+were rerun since the interruption is seen. The rollup that `orch gh pr create` and `orch gh pr
+status --token` store is informational and carries no head. `resume --to completed` exists for one case only: a
 job escalated from `ci` because GitHub reported no checks at all (or the PR was merged by a human);
 it is refused while checks are pending or failing.
 
@@ -537,9 +538,9 @@ If every verdict is `pass` the job moves to `approve`; if any is `changes` it re
 unless the round equals `--max-rounds` (default 3), in which case it escalates to `needs-human`.
 
 **PRs.** `orch job pr <id> --url <u> --state draft|ready|merged` records the PR; the `pr` stage
-cannot complete without one, and completing it enters `ci`, which cannot complete until `orch gh
-ci` has recorded `ciStatus: passing` for `ciHead`, and the gate confirms `ciHead` is still the
-worktree HEAD. The PR state can be updated later (draft → ready → merged) without changing the
+cannot complete without one, and completing it enters `ci`, which only `orch gh ci` completes, in
+the call that read `ciStatus: passing` for `ciHead` from GitHub, after the gate confirms `ciHead`
+is still the worktree HEAD. The PR state can be updated later (draft → ready → merged) without changing the
 workflow, since the factory's deliverable is a draft PR.
 
 Every accepted change appends events (`job.created`, `job.claimed`, `job.released`,
@@ -624,7 +625,7 @@ identity, that the base branch exists on `origin`, and (for the PR) that `origin
 the worktree HEAD. An open (or merged) PR for the
 branch with the same base is reused instead of creating a duplicate. The PR is recorded on the job
 (`prUrl`, `prState`) together with the CI rollup (`ciStatus`: `none`, `pending`, `passing`,
-`failing`) and the head it describes (`ciHead`). `orch` never merges, force-pushes, or marks a PR
+`failing`) but no head (`ciHead` is written by `orch gh ci` alone). `orch` never merges, force-pushes, or marks a PR
 ready; a recorded draft PR is not a passing CI run, which is what the `ci` stage then establishes.
 `orch gh ci` reads check runs and statuses with `gh api` for the head SHA (not the PR rollup), the
 base branch's protection and rulesets for the required list, and Actions job logs for failures.
