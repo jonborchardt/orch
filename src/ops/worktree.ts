@@ -160,7 +160,10 @@ export function adoptWorktree(
   const info = inspectWorktree(root, path, job.baseBranch);
   if (!info.exists) throw new ValidationError(`${path} does not exist.`);
   if (!info.isWorktree) throw new ValidationError(`${path} is not a worktree of ${job.repo}.`);
-  if (resolve(root) === path || path.startsWith(resolve(root) + sep)) {
+  // Compare canonically: an alias spelling (8.3 short name, case, junction) must not slip past.
+  const primary = canonicalPath(root);
+  const target = canonicalPath(path);
+  if (target === primary || target.startsWith(primary + sep)) {
     throw new ValidationError(
       'The primary checkout (or a directory inside it) cannot be a job worktree.',
     );

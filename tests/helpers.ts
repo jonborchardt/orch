@@ -1,6 +1,14 @@
 /** Shared fixtures: temp ORCH_HOME, temp Git repositories, and a CLI runner. */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -9,6 +17,16 @@ import { openStore, type Store } from '../src/storage/client.ts';
 
 export function tempDir(prefix = 'orch-test-'): string {
   return mkdtempSync(join(tmpdir(), prefix));
+}
+
+/** Remove a directory link, never its target: Windows junctions need rmdir, POSIX symlinks unlink. */
+export function removeLink(path: string): void {
+  try {
+    rmdirSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOTDIR') throw err;
+    unlinkSync(path);
+  }
 }
 
 export function homePaths(home: string): RuntimePaths {
