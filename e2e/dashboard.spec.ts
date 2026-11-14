@@ -30,8 +30,12 @@ test('job board shows every repository and job with honest liveness', async ({ p
   await expect(table.locator('[data-state="cancelled"]')).toHaveText(/cancelled/);
   await expect(table.locator('[data-state="cancelled"]')).not.toHaveClass(/colorSuccess/);
   await expect(table.locator('[data-state="completed"]')).toHaveClass(/colorSuccess/);
-  // Resume is offered for the stale, blocked, failed, and unowned jobs, not the live or finished ones.
-  await expect(table.getByRole('button', { name: /Copy resume command/ })).toHaveCount(4);
+  // Resume is offered for the stale (lapsed lease), failed (released), and unowned jobs only; the
+  // blocked job's session still holds a live lease, so the board says so instead.
+  await expect(table.getByRole('button', { name: /Copy resume command/ })).toHaveCount(3);
+  await expect(
+    table.getByText(/Resume unavailable: session claude-20261113-0800-1d2e/),
+  ).toBeVisible();
 });
 
 test('filters by repository and status', async ({ page }) => {
@@ -107,6 +111,9 @@ test('a stopped job explains itself and offers recovery, not approval', async ({
   await page.goto(`/#/jobs/${ids.blocked}`);
   await expect(page.getByText('Decision needed.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Approve' })).toHaveClass(/MuiButton-contained/);
+  // Its session holds a live lease, so no resume command is advertised; the holder is named.
+  await expect(page.getByTestId('resume')).toHaveCount(0);
+  await expect(page.getByTestId('resume-unavailable')).toContainText('claude-20261113-0800-1d2e');
 });
 
 test('dark mode toggles and persists across reload', async ({ page }) => {
@@ -128,7 +135,9 @@ test('controls cannot bypass workflow rules, and never claim to wake a session',
   const { ids } = state();
   // The reviewing job has a live lease: an action without a forced takeover is refused.
   await page.goto(`/#/jobs/${ids.reviewing}`);
-  await expect(page.getByText(/holds a live lease/)).toBeVisible();
+  await expect(page.getByText(/Actions will be refused/)).toBeVisible();
+  // A live lease also means no resume command is advertised; the holder is named instead.
+  await expect(page.getByTestId('resume-unavailable')).toContainText('claude-20261113-0900-ab12');
   await page.getByRole('button', { name: 'Request rework' }).click();
   await page.getByRole('button', { name: 'Confirm' }).click();
   await expect(page.getByRole('dialog').getByText(/live lease/)).toBeVisible();

@@ -55,7 +55,7 @@ const rows: BoardRow[] = [
       summary: 'Session claude-2 stopped renewing its lease; presumed gone',
       detail: null,
     },
-    resume: '/factory resume job-00000002',
+    resume: { command: '/factory resume job-00000002', heldBy: null },
   }),
   row({
     id: 'job-00000003',
@@ -69,7 +69,7 @@ const rows: BoardRow[] = [
       summary: 'Approver escalated: a human must decide',
       detail: 'AC2 needs deployment verification',
     },
-    resume: '/factory resume job-00000003',
+    resume: { command: '/factory resume job-00000003', heldBy: null },
     pr: {
       url: 'https://github.com/x/y/pull/1',
       state: 'draft',
@@ -147,7 +147,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     },
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null },
-    resume: '/factory resume job-00000003',
+    resume: { command: '/factory resume job-00000003', heldBy: null },
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
     ...over,
   };
@@ -441,7 +441,76 @@ describe('Job detail', () => {
     expect(approve.className).toContain('MuiButton-outlined');
     expect(approve.className).not.toContain('MuiButton-colorSuccess');
     expect(screen.getByTestId('approve-caution')).toHaveTextContent('not waiting for an approval');
+    // Unknown blocker: no control is promoted.
     expect(screen.getByRole('button', { name: 'Request rework' }).className).toContain(
+      'MuiButton-outlined',
+    );
+  });
+
+  it('promotes Request rework only when review rounds are exhausted', async () => {
+    mockFetch();
+    data.detail = detail({
+      blocker: {
+        kind: 'findings',
+        summary: '2 blocking finding(s) remain after the last allowed review round',
+        detail: null,
+      },
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByRole('button', { name: 'Request rework' }).className).toContain(
+      'MuiButton-contained',
+    );
+    expect(screen.getByRole('button', { name: 'Approve' }).className).toContain(
+      'MuiButton-outlined',
+    );
+  });
+
+  it('withholds the resume command while another session holds a live lease', async () => {
+    mockFetch();
+    const base = detail();
+    data.rows = [
+      row({
+        id: 'job-00000003',
+        title: 'Gamma blocked',
+        stage: 'needs-human',
+        status: 'blocked',
+        liveness: 'blocked',
+        blocker: base.blocker,
+        resume: {
+          command: null,
+          heldBy: { session: 'claude-9', leaseExpiresAt: '2999-01-01T00:00:00.000Z' },
+        },
+      }),
+    ];
+    data.detail = detail({
+      job: { ...base.job, ownerSession: 'claude-9', leaseExpiresAt: '2999-01-01T00:00:00.000Z' },
+      resume: {
+        command: null,
+        heldBy: { session: 'claude-9', leaseExpiresAt: '2999-01-01T00:00:00.000Z' },
+      },
+    });
+    mount();
+    const table = await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(
+      within(table).queryByRole('button', { name: /Copy resume command/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(table).getByText(/Resume unavailable: session claude-9 holds a live lease/),
+    ).toBeInTheDocument();
+    cleanup();
+
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByTestId('resume')).not.toBeInTheDocument();
+    const unavailable = screen.getByTestId('resume-unavailable');
+    expect(unavailable).toHaveTextContent('claude-9');
+    expect(unavailable).toHaveTextContent('never forces ownership');
+    expect(screen.queryByRole('button', { name: /Copy resume command/ })).not.toBeInTheDocument();
+    // The decision gate itself is unaffected by who holds the lease.
+    expect(screen.getByRole('button', { name: 'Approve' }).className).toContain(
       'MuiButton-contained',
     );
   });
@@ -458,12 +527,16 @@ describe('Job detail', () => {
         detail: null,
       },
       actions: ['request-rework', 'cancel'],
-      resume: '/factory resume job-00000003',
+      resume: { command: '/factory resume job-00000003', heldBy: null },
     });
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    // An interruption is not a rework decision: every remaining control stays neutral.
+    expect(screen.getByRole('button', { name: 'Request rework' }).className).toContain(
+      'MuiButton-outlined',
+    );
     expect(screen.getByText('Interrupted.')).toBeInTheDocument();
     expect(screen.getByTestId('resume')).toHaveTextContent('/factory resume job-00000003');
     expect(screen.getByTestId('resume')).toHaveTextContent('takes the job over');

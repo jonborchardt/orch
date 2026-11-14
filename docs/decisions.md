@@ -406,4 +406,9 @@ facts. The detail API also lists the actions the workflow allows in the current 
 (`allowedActions` in `ops/actions.ts`), which supersedes the client-side copy of those rules noted
 in §44; the server still validates every POST. The resume affordance is a copied
 `/factory resume <id>` plus the checkout to run it in: nothing on the server starts or wakes a
-session, and copying mutates nothing.
+session, and copying mutates nothing. The command is withheld while any session holds a live
+lease (the holder is named instead), because `orch factory resume` would be refused without a
+deliberate `--force`; the dashboard never takes ownership by itself. Among the controls, only two
+blockers promote an action: an approver escalation promotes Approve, and exhausted review rounds
+promote Request rework, since that is the transition the workflow itself would make. Every other
+blocker gets neutral controls rather than a guessed recommendation.

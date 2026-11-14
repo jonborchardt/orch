@@ -6,7 +6,7 @@
 import { leaseExpired } from '../core/ownership.ts';
 import { blockingCount, MAX_ROUNDS_REASON, now } from '../core/workflow.ts';
 import type { Artifact, Event, Job, VerificationRun } from '../storage/schema.ts';
-import type { Blocker, Liveness } from './types.ts';
+import type { Blocker, Liveness, Resume } from './types.ts';
 
 type Lease = Pick<Job, 'status' | 'stage' | 'leaseExpiresAt' | 'ownerSession'>;
 
@@ -138,11 +138,18 @@ export function blockerOf(
 }
 
 /**
- * The skill command a Claude Code session runs to carry on. Null while a live session is working
- * (resuming would take the job over) and for finished jobs (the workflow refuses).
+ * Whether a Claude Code session may resume the job now. Null for finished jobs (the workflow
+ * refuses). A live lease, whoever holds it, means `orch factory resume` would be refused without
+ * a deliberate `--force` from that session's owner, so the command is withheld and the holder is
+ * named instead; a lapsed lease is the normal resume case. Nothing here changes ownership.
  */
-export function resumeCommand(job: Lease & Pick<Job, 'id'>, state: Liveness): string | null {
-  if (state === 'running' || state === 'completed' || state === 'cancelled') return null;
-  if (state === 'idle' && job.ownerSession !== null && !leaseExpired(job, now())) return null;
-  return `/factory resume ${job.id}`;
+export function resumeOf(job: Lease & Pick<Job, 'id'>, state: Liveness): Resume | null {
+  if (state === 'completed' || state === 'cancelled') return null;
+  if (job.ownerSession !== null && !leaseExpired(job, now())) {
+    return {
+      command: null,
+      heldBy: { session: job.ownerSession, leaseExpiresAt: job.leaseExpiresAt },
+    };
+  }
+  return { command: `/factory resume ${job.id}`, heldBy: null };
 }

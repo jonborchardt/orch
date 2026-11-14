@@ -16,6 +16,7 @@ import {
   recordPr,
   recordReview,
   registerArtifact,
+  releaseJob,
   transitionJob,
 } from '../../src/storage/jobs.ts';
 
@@ -355,7 +356,7 @@ export function seedDashboard(
     description: 'GET /healthz returning build info',
   });
 
-  // 7. Build stage marked failed by its session, with the recorded reason.
+  // 7. Build stage marked failed by its session (reason recorded), which then released the job.
   const failed = mk('Retry flaky uploads', 'gamma', repos.gamma);
   {
     const { token } = claimJob(store, failed.id, { session: 'claude-20261113-1000-fa11' });
@@ -364,6 +365,7 @@ export function seedDashboard(
     run(failed.id, token, 'complete');
     run(failed.id, token, 'start');
     run(failed.id, token, 'fail', { reason: 'required check "test" failed twice' });
+    releaseJob(store, failed.id, { token });
   }
 
   return {

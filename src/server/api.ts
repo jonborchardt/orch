@@ -23,7 +23,7 @@ import { latestEventsByJob, listEvents } from '../storage/events.ts';
 import { getJob, listJobs, listReviews, reviewsByJob } from '../storage/jobs.ts';
 import type { Artifact, Job, Review } from '../storage/schema.ts';
 import { latestRun, latestRunsByJob } from '../storage/verification.ts';
-import { BLOCKER_EVENTS, blockerOf, liveness, resumeCommand } from './status.ts';
+import { BLOCKER_EVENTS, blockerOf, liveness, resumeOf } from './status.ts';
 import type {
   ActionRequest,
   ActionResponse,
@@ -92,7 +92,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       reviews: reviews.map((r) => ({ reviewer: r.reviewer, verdict: r.verdict })),
       blocking: blockingOf(artifacts, job.round) ?? blockingOf(artifacts, job.round - 1),
       blocker: blockerOf(job, state, evidence),
-      resume: resumeCommand(job, state),
+      resume: resumeOf(job, state),
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
       completedAt: job.completedAt,
@@ -194,7 +194,7 @@ export function detail(store: Store, id: string): JobDetailView {
       checkout: vscodeLink(job.repoPath),
       pr: job.prUrl,
     },
-    resume: resumeCommand(job, state),
+    resume: resumeOf(job, state),
     resumeCommand: `orch factory resume ${id} --session <name>`,
   };
 }

@@ -154,7 +154,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
           {detail.resume && (
             <ResumeBox
               id={job.id}
-              command={detail.resume}
+              resume={detail.resume}
               cli={detail.resumeCommand}
               state={detail.liveness}
               checkout={job.repoPath}

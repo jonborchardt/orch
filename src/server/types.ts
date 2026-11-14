@@ -33,6 +33,16 @@ export interface Blocker {
   detail: string | null;
 }
 
+/**
+ * Resume availability. `command` is `/factory resume <id>` when a session may take the job now;
+ * null while a live lease is held, with the holder named so the UI can say why. The dashboard
+ * never forces ownership.
+ */
+export interface Resume {
+  command: string | null;
+  heldBy: { session: string; leaseExpiresAt: string | null } | null;
+}
+
 export interface Verdict {
   reviewer: string;
   verdict: Review['verdict'];
@@ -55,8 +65,8 @@ export interface BoardRow {
   /** BLOCKING count from the newest consolidated.md, or null when there is none. */
   blocking: number | null;
   blocker: Blocker | null;
-  /** `/factory resume <id>` when a Claude Code session may resume the job; null otherwise. */
-  resume: string | null;
+  /** Null for finished jobs; otherwise whether and how a session may resume it. */
+  resume: Resume | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -92,8 +102,8 @@ export interface JobDetailView {
   actions: DashboardAction[];
   /** `vscode://file/...` for the worktree (when recorded) and for the initiating checkout. */
   links: { vscode: string | null; checkout: string; pr: string | null };
-  /** `/factory resume <id>` when a Claude Code session may resume the job; null otherwise. */
-  resume: string | null;
+  /** Null for finished jobs; otherwise whether and how a session may resume it. */
+  resume: Resume | null;
   resumeCommand: string;
 }
 

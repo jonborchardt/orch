@@ -66,11 +66,21 @@ export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
               <TableCell sx={{ whiteSpace: 'nowrap' }}>
                 <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
                   <StatusChip state={r.liveness} />
-                  {r.resume && (
-                    <CopyResume id={r.id} command={r.resume} checkout={r.repoPath} compact />
+                  {r.resume?.command && (
+                    <CopyResume
+                      id={r.id}
+                      command={r.resume.command}
+                      checkout={r.repoPath}
+                      compact
+                    />
                   )}
                 </Stack>
                 {r.blocker && <BlockerText blocker={r.blocker} compact />}
+                {r.blocker && r.resume?.heldBy && (
+                  <Typography component="div" variant="caption" color="text.secondary">
+                    Resume unavailable: session {r.resume.heldBy.session} holds a live lease
+                  </Typography>
+                )}
               </TableCell>
               <TableCell sx={{ whiteSpace: 'nowrap' }}>
                 {r.owner ? (

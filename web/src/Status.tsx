@@ -1,7 +1,7 @@
 import { Button, Chip, Snackbar, Stack, Tooltip, Typography } from '@mui/material';
 import { useState } from 'react';
 
-import type { Blocker, Liveness } from '../../src/server/types.ts';
+import type { Blocker, Liveness, Resume } from '../../src/server/types.ts';
 import { BLOCKER_LABEL, STATE } from './format.ts';
 
 /** Execution state chip: glyph plus label, never colour alone. Same look on board and detail. */
@@ -120,7 +120,7 @@ const RESUME_NOTE: Partial<Record<Liveness, string>> = {
   blocked:
     'The job is waiting for a human. Resuming without a recorded decision sends it back to the stage it was escalated from; record a decision with the controls first if one is needed.',
   stale:
-    'The previous session is presumed gone; resuming takes the job over and continues from saved state.',
+    'The lease lapsed, so the previous session is presumed gone; resuming takes the job over and continues from saved state.',
   interrupted: 'Resuming takes the job over and continues from saved state.',
   failed: 'Resuming puts the failed stage back to pending and runs it again from saved state.',
   idle: 'No live session owns the job; resuming picks it up where it stopped.',
@@ -129,7 +129,7 @@ const RESUME_NOTE: Partial<Record<Liveness, string>> = {
 /** The full affordance for the detail view: command, where to run it, copy, open the checkout. */
 export function ResumeBox({
   id,
-  command,
+  resume,
   cli,
   state,
   checkout,
@@ -137,7 +137,7 @@ export function ResumeBox({
   worktree,
 }: {
   id: string;
-  command: string;
+  resume: Resume;
   /** The orch CLI form of the same resume, from the server. */
   cli: string;
   state: Liveness;
@@ -145,6 +145,23 @@ export function ResumeBox({
   checkoutLink: string;
   worktree: string | null;
 }) {
+  if (resume.command === null) {
+    const held = resume.heldBy;
+    return (
+      <Stack spacing={0.5} data-testid="resume-unavailable">
+        <Typography variant="subtitle2">Resume unavailable</Typography>
+        <Typography variant="body2">
+          Session <b>{held?.session}</b> holds a live lease
+          {held?.leaseExpiresAt ? <> until {held.leaseExpiresAt}</> : ''}
+          {state === 'running' ? ' and reports the job running' : ''}.{' '}
+          <code>orch factory resume</code> would be refused until that lease lapses; continue from
+          that session, or take the job over deliberately from a session of your own with{' '}
+          <code>--force</code>. The dashboard never forces ownership on its own.
+        </Typography>
+      </Stack>
+    );
+  }
+  const command = resume.command;
   return (
     <Stack spacing={1} data-testid="resume">
       <Typography variant="subtitle2">Resume</Typography>

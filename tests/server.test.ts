@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { board, detail, liveness } from '../src/server/api.ts';
-import { blockerOf, type Evidence, resumeCommand } from '../src/server/status.ts';
+import { blockerOf, type Evidence, resumeOf } from '../src/server/status.ts';
 import type { Artifact, Event, VerificationRun } from '../src/storage/schema.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
 import type { ActionResponse, BoardRow, JobDetailView, SessionInfo } from '../src/server/types.ts';
@@ -71,7 +71,14 @@ describe('seeded board and detail', () => {
     const by = (id: string) => rows.find((r) => r.id === id) ?? ({} as BoardRow);
     expect(by(ids.reviewing).liveness).toBe('running');
     expect(by(ids.reviewing).blocker).toBeNull();
-    expect(by(ids.reviewing).resume).toBeNull(); // a live session is working on it
+    // A live session is working on it: no command, and the holder is named.
+    expect(by(ids.reviewing).resume).toEqual({
+      command: null,
+      heldBy: {
+        session: 'claude-20261113-0900-ab12',
+        leaseExpiresAt: expect.any(String) as string,
+      },
+    });
     expect(by(ids.reviewing).owner?.live).toBe(true);
     expect(by(ids.reviewing).reviews.map((v) => `${v.reviewer}:${v.verdict ?? 'pending'}`)).toEqual(
       ['security:pass', 'correctness:pending', 'code-quality:pending'],
@@ -80,7 +87,7 @@ describe('seeded board and detail', () => {
     expect(by(ids.stale).liveness).toBe('stale');
     expect(by(ids.stale).owner?.live).toBe(false);
     expect(by(ids.stale).blocker?.kind).toBe('interrupted');
-    expect(by(ids.stale).resume).toBe(`/factory resume ${ids.stale}`);
+    expect(by(ids.stale).resume).toEqual({ command: `/factory resume ${ids.stale}`, heldBy: null });
     expect(by(ids.blocked).liveness).toBe('blocked');
     // The approver's escalation is a decision gate; its recorded reason is shown verbatim.
     expect(by(ids.blocked).blocker).toEqual({
@@ -88,7 +95,9 @@ describe('seeded board and detail', () => {
       summary: 'Approver escalated: a human must decide',
       detail: 'AC2 needs deployment verification; unrequested logging change',
     });
-    expect(by(ids.blocked).resume).toBe(`/factory resume ${ids.blocked}`);
+    // Escalated but its session never released it: the lease is live, so no resume command.
+    expect(by(ids.blocked).resume?.command).toBeNull();
+    expect(by(ids.blocked).resume?.heldBy?.session).toBe('claude-20261113-0800-1d2e');
     expect(by(ids.completed).liveness).toBe('completed');
     expect(by(ids.completed).blocker).toBeNull();
     expect(by(ids.completed).resume).toBeNull();
@@ -113,7 +122,7 @@ describe('seeded board and detail', () => {
       summary: 'No session owns this job',
       detail: null,
     });
-    expect(by(ids.fresh).resume).toBe(`/factory resume ${ids.fresh}`);
+    expect(by(ids.fresh).resume).toEqual({ command: `/factory resume ${ids.fresh}`, heldBy: null });
     expect(by(ids.failed).liveness).toBe('failed');
     expect(by(ids.failed).stage).toBe('build'); // stage and execution state stay distinct
     expect(by(ids.failed).blocker).toEqual({
@@ -121,7 +130,10 @@ describe('seeded board and detail', () => {
       summary: 'Stage build failed',
       detail: 'required check "test" failed twice',
     });
-    expect(by(ids.failed).resume).toBe(`/factory resume ${ids.failed}`);
+    expect(by(ids.failed).resume).toEqual({
+      command: `/factory resume ${ids.failed}`,
+      heldBy: null,
+    });
     expect(rows.every((r) => r.elapsedMs >= 0)).toBe(true);
     expect(await (await api('/api/repos')).json()).toEqual([
       'gamma',
@@ -178,7 +190,8 @@ describe('seeded board and detail', () => {
     expect(blocked.plan?.blockedReason).toContain('deployment');
     expect(blocked.blocker?.kind).toBe('decision');
     expect(blocked.actions).toEqual(['approve', 'request-review', 'request-rework', 'cancel']);
-    expect(blocked.resume).toBe(`/factory resume ${ids.blocked}`);
+    expect(blocked.resume?.command).toBeNull();
+    expect(blocked.resume?.heldBy?.session).toBe('claude-20261113-0800-1d2e');
     const failed = (await (await api(`/api/jobs/${ids.failed}`)).json()) as JobDetailView;
     expect(failed.actions).toEqual(['request-rework', 'cancel']); // no approve: not a gate
     const cancelled = (await (await api(`/api/jobs/${ids.cancelled}`)).json()) as JobDetailView;
@@ -348,7 +361,7 @@ describe('mutations', () => {
     const row = board(store).find((r) => r.id === ids.blocked);
     expect(row?.liveness).toBe('idle');
     expect(row?.blocker?.kind).toBe('waiting');
-    expect(row?.resume).toBe(`/factory resume ${ids.blocked}`);
+    expect(row?.resume).toEqual({ command: `/factory resume ${ids.blocked}`, heldBy: null });
     // Stale job (lapsed lease): no force needed; request another review round.
     const stale = (await (
       await post(ids.stale, { action: 'request-rework' }, h)
@@ -548,9 +561,9 @@ describe('blocker and resume derivation', () => {
     ).toBeNull();
   });
 
-  it('offers resume only when a session may take the job', () => {
+  it('offers the resume command only when no live lease is held, and names the holder', () => {
     const id = 'job-00000001';
-    const j = (over: Partial<Parameters<typeof resumeCommand>[0]>) => ({
+    const j = (over: Partial<Parameters<typeof resumeOf>[0]>) => ({
       id,
       status: 'pending' as const,
       stage: 'build' as const,
@@ -558,17 +571,28 @@ describe('blocker and resume derivation', () => {
       ownerSession: null,
       ...over,
     });
-    const cmd = `/factory resume ${id}`;
-    expect(resumeCommand(j({}), 'idle')).toBe(cmd);
-    expect(resumeCommand(j({ ownerSession: 'c1', leaseExpiresAt: future }), 'idle')).toBeNull();
-    expect(resumeCommand(j({ ownerSession: 'c1', leaseExpiresAt: past }), 'idle')).toBe(cmd);
-    expect(resumeCommand(j({ status: 'running', ownerSession: 'c1' }), 'running')).toBeNull();
-    expect(resumeCommand(j({ status: 'running', ownerSession: 'c1' }), 'stale')).toBe(cmd);
+    const open = { command: `/factory resume ${id}`, heldBy: null };
+    const held = { command: null, heldBy: { session: 'c1', leaseExpiresAt: future } };
+    expect(resumeOf(j({}), 'idle')).toEqual(open);
+    // Active ownership withholds the command; a lapsed lease is the normal resume case.
+    expect(resumeOf(j({ ownerSession: 'c1', leaseExpiresAt: future }), 'idle')).toEqual(held);
+    expect(resumeOf(j({ ownerSession: 'c1', leaseExpiresAt: past }), 'idle')).toEqual(open);
+    const live = { ownerSession: 'c1', leaseExpiresAt: future } as const;
+    expect(resumeOf(j({ status: 'running', ...live }), 'running')).toEqual(held);
+    expect(
+      resumeOf(j({ status: 'running', ownerSession: 'c1', leaseExpiresAt: past }), 'stale'),
+    ).toEqual(open);
     for (const s of ['interrupted', 'failed', 'blocked'] as const) {
-      expect(resumeCommand(j({ status: s }), s)).toBe(cmd);
+      expect(resumeOf(j({ status: s }), s)).toEqual(open);
+      expect(resumeOf(j({ status: s, ...live }), s)).toEqual(held);
     }
-    expect(resumeCommand(j({ status: 'completed' }), 'completed')).toBeNull();
-    expect(resumeCommand(j({ status: 'cancelled' }), 'cancelled')).toBeNull();
+    // Even the dashboard's own one-minute lease is reported, never silently taken over.
+    expect(resumeOf(j({ ownerSession: 'dashboard', leaseExpiresAt: future }), 'idle')).toEqual({
+      command: null,
+      heldBy: { session: 'dashboard', leaseExpiresAt: future },
+    });
+    expect(resumeOf(j({ status: 'completed' }), 'completed')).toBeNull();
+    expect(resumeOf(j({ status: 'cancelled' }), 'cancelled')).toBeNull();
   });
 });
 

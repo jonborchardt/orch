@@ -47,10 +47,10 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   const kind = detail.blocker?.kind;
   // Approve is the primary action only at a genuine approval gate (the approver escalated).
   const approvalGate = kind === 'decision';
-  // When the job stopped for a problem, fixing it (rework) is the primary action.
-  const reworkPrimary =
-    allowed.has('request-rework') &&
-    (kind === 'findings' || kind === 'verification' || kind === 'failed' || kind === 'escalated');
+  // Rework is primary only where the workflow itself would go back to build: reviewers still
+  // requested changes at the last allowed round. Interruptions, verification failures, and
+  // unclassified escalations get neutral controls; the right transition is a human call.
+  const reworkPrimary = allowed.has('request-rework') && kind === 'findings';
   const liveOwner =
     detail.job.ownerSession !== null &&
     detail.job.ownerSession !== 'dashboard' &&
@@ -150,7 +150,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         <Alert severity="warning" variant="outlined" data-testid="approve-caution">
           This job is not waiting for an approval; it stopped because of a problem (
           {detail.blocker?.summary ?? 'see the status above'}). Approve only moves it back to a
-          stage without fixing anything; request rework or resume it instead.
+          stage without fixing anything; use it only once you have decided the job may continue.
         </Alert>
       )}
       {allowed.has('accept-policy') && (

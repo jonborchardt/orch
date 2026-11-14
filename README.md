@@ -142,18 +142,23 @@ findings per round, the approval decision, registered artifacts (size, marker, h
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
 the PR with its CI status. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
 GitHub. A status panel above the controls repeats the board's explanation with the full recorded
-reason and, for jobs a session may resume (unowned, lapsed lease, interrupted, failed, or waiting
-in `needs-human`), a **Resume** block: the `/factory resume <id>` command with a copy button, the
-checkout to run it in (the repository the job was started from, with an "open in VS Code" link),
-and the note that copying changes nothing; only a Claude Code session opened in that checkout
-resumes the job.
+reason and a **Resume** block. When no live lease is held (unowned, lapsed lease, interrupted,
+failed, or released at `needs-human`) it shows the `/factory resume <id>` command with a copy
+button, the checkout to run it in (the repository the job was started from, with an "open in VS
+Code" link), and the note that copying changes nothing; only a Claude Code session opened in that
+checkout resumes the job. While any session holds a live lease the command is withheld and the
+holder is named, because `orch factory resume` would be refused without a deliberate `--force`;
+the dashboard never forces ownership.
 
 **Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
 short-lived `dashboard` session and then releases the job. The detail API lists the actions the
 workflow allows in the current state (`allowedActions`) and the client renders only those; the
 server re-checks every request. Approve is the primary control only when the approver escalated
 (`decision.md` says ESCALATE); for any other blocker it is demoted behind a warning, because
-approving moves the job without fixing anything, and Request rework is primary instead.
+approving moves the job without fixing anything. Request rework is primary only when reviewers
+still requested changes at the last allowed round, which is where the workflow itself would go
+back to `build`; for interruptions, verification failures, and unclassified escalations every
+control stays neutral, since the right transition is a human call.
 
 | Action                     | Allowed when                    | Effect                                              |
 | -------------------------- | ------------------------------- | --------------------------------------------------- |
