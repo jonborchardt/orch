@@ -424,8 +424,11 @@ npm run format         # apply Prettier
 npm run build
 ```
 
-CI runs the same commands on Ubuntu and Windows, fails if `src/storage/schema.ts` has changes
-without a committed migration, and initializes a database from `dist/` outside the repository.
+CI runs every check on Ubuntu (typecheck, lint, format, migrations, the Vitest suite with coverage,
+the build, the Playwright dashboard checks, and a database initialized from `dist/` outside the
+repository) and fails if `src/storage/schema.ts` has changes without a committed migration. The
+whole Vitest suite runs on Windows too, split across four runners grouped by measured duration,
+plus the built CLI smoke checks (`docs/decisions.md` #50).
 
 ## Runtime paths
 

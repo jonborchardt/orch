@@ -5,13 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# Hosted runners for this private repository have 2 cores, so Vitest's default (cores - 1) runs
+# every file on one worker. Linux takes 3 workers profitably; Windows is saturated by one (tests
+# spawn Git and Node constantly), so the Windows suite is split across runners instead, grouped
+# by measured duration. A new test file lands in the "rest" group automatically.
 jobs:
   check:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,7 +24,6 @@ jobs:
       - run: npm run format:check
       - run: npm run db:check
       - name: Schema and committed migrations must agree
-        shell: bash
         run: |
           npx drizzle-kit generate --name ci-drift
           if [ -n "$(git status --porcelain -- drizzle)" ]; then
@@ -32,18 +31,54 @@ jobs:
             git status --porcelain -- drizzle
             exit 1
           fi
-      - run: npm run test:coverage
+      - run: npm run test:coverage -- --maxWorkers=3
       - run: npm run build
       - run: node dist/cli/main.js --version
       - run: node dist/cli/main.js doctor
-      - name: Dashboard browser checks (Playwright, Linux only)
-        if: runner.os == 'Linux'
+      - name: Dashboard browser checks (Playwright)
         run: |
           npx playwright install --with-deps chromium
           npm run test:e2e
       - name: CLI initializes the database from dist outside the repository
+        run: |
+          export ORCH_HOME="$RUNNER_TEMP/orch-home"
+          cd "$RUNNER_TEMP"
+          node "$GITHUB_WORKSPACE/dist/cli/main.js" --json job list
+          test -f "$ORCH_HOME/orch.sqlite"
+
+  windows:
+    name: windows (${{ matrix.group }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: ci
+            files: tests/ci.test.ts
+          - group: factory
+            files: tests/factory.test.ts tests/integration.test.ts
+          - group: verify
+            files: tests/audit.test.ts tests/verify.test.ts tests/sensitive.test.ts
+          - group: rest
+            files: >-
+              --exclude tests/ci.test.ts
+              --exclude tests/factory.test.ts --exclude tests/integration.test.ts
+              --exclude tests/audit.test.ts --exclude tests/verify.test.ts --exclude tests/sensitive.test.ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run ${{ matrix.files }}
+      - name: Built CLI runs on Windows and initializes a database outside the repository
+        if: matrix.group == 'rest'
         shell: bash
         run: |
+          npm run build
+          node dist/cli/main.js --version
+          node dist/cli/main.js doctor
           export ORCH_HOME="$RUNNER_TEMP/orch-home"
           cd "$RUNNER_TEMP"
           node "$GITHUB_WORKSPACE/dist/cli/main.js" --json job list
