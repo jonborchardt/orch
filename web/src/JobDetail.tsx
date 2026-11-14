@@ -20,10 +20,11 @@ import { useEffect, useState } from 'react';
 
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
+import { CiChip, CiPanel, ciSummary } from './Ci.tsx';
 import { Markdown } from './Markdown.tsx';
 import { BlockerText, ResumeBox, StatusChip } from './Status.tsx';
 import { ApiFailure, fetchDetail } from './api.ts';
-import { STATE, ago, ciColor, verdictColor } from './format.ts';
+import { STATE, ago, verdictColor } from './format.ts';
 
 const TABS = [
   'Overview',
@@ -106,6 +107,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
         <Typography color="text.secondary">{job.id}</Typography>
         <Chip label={`stage: ${job.stage}`} variant="outlined" />
         <StatusChip state={detail.liveness} />
+        {detail.ci.completion === 'human' && <CiChip ci={detail.ci} compact />}
         <Chip label={`round ${String(job.round)}/${String(job.maxRounds)}`} />
         {error && <Chip label={`refresh failed: ${error}`} color="warning" />}
       </Stack>
@@ -148,8 +150,16 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
         <Stack spacing={1}>
           {detail.blocker ? (
             <BlockerText blocker={detail.blocker} />
+          ) : detail.liveness === 'completed' ? (
+            // Completed by GitHub's verdict, by a human, or before the ci stage existed: say which.
+            <Typography data-testid="completion">{ciSummary(detail).line}</Typography>
           ) : (
             <Typography>{STATE[detail.liveness].describe}</Typography>
+          )}
+          {detail.blocker?.kind === 'ci' && (
+            <Typography variant="body2" color="text.secondary" data-testid="ci-guidance">
+              {ciSummary(detail).guidance}
+            </Typography>
           )}
           {detail.resume && (
             <ResumeBox
@@ -386,22 +396,16 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
         {tab === 'PR' && (
           <Stack spacing={1}>
             {job.prUrl ? (
-              <>
-                <Typography>
-                  <Link href={job.prUrl} target="_blank" rel="noreferrer noopener">
-                    {job.prUrl}
-                  </Link>{' '}
-                  <Chip label={job.prState ?? '?'} />{' '}
-                  <Chip label={`CI ${job.ciStatus ?? 'unknown'}`} color={ciColor(job.ciStatus)} />
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  CI last checked {ago(job.ciCheckedAt)}. A draft PR is not a passing build; run{' '}
-                  <code>orch gh pr status {job.id}</code> to refresh.
-                </Typography>
-              </>
+              <Typography>
+                <Link href={job.prUrl} target="_blank" rel="noreferrer noopener">
+                  {job.prUrl}
+                </Link>{' '}
+                <Chip label={job.prState ?? '?'} />
+              </Typography>
             ) : (
               <Typography color="text.secondary">No PR recorded.</Typography>
             )}
+            <CiPanel detail={detail} />
             {content('pr.md')}
           </Stack>
         )}

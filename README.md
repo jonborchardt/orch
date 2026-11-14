@@ -140,7 +140,7 @@ active / needs human / finished / cancelled; the page refreshes every few second
 spec, build summary, review history per round (verdict, summary, full review text), consolidated
 findings per round, the approval decision, registered artifacts (size, marker, hash), the event
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
-the PR with its CI status. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
+the PR with its CI state. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
 GitHub. A status panel above the controls repeats the board's explanation with the full recorded
 reason and a **Resume** block. When no live lease is held (unowned, lapsed lease, interrupted,
 failed, or released at `needs-human`) it shows the `/factory resume <id>` command with a copy
@@ -149,6 +149,20 @@ Code" link), and the note that copying changes nothing; only a Claude Code sessi
 checkout resumes the job. While any session holds a live lease the command is withheld and the
 holder is named, because `orch factory resume` would be refused without a deliberate `--force`;
 the dashboard never forces ownership.
+
+**CI state** is shown with the commit it was read for, never on its own: the board's chip reads
+`CI <rollup> @<sha7>` (plus `repairs n/m` once a repair happened) and the detail's PR tab carries
+the full head, when it was observed, whether it is still the worktree HEAD (an old green verdict
+for a commit that is no longer HEAD is marked as not current), the repair budget, GitHub's reason
+from the last `orch gh ci` reconciliation, each failed required check with its GitHub log link and
+the log saved under the artifact directory, and one line of guidance. Everything comes from
+persisted fields (`src/server/status.ts` `ciView`): the rollup columns, the newest `ci.observed`
+event, and the `job.completed` event. A ci-stage escalation gets its own blocker (`CI stopped`)
+naming the cause from the recorded reason code and outcome: repair budget spent, no checks for the
+PR head, checks that never reached a verdict, a PR closed without merging, or a head that moved
+outside the job. A completed job says how it completed: on GitHub's verdict, by a human close-out
+(chip `human close-out`, with the reason in the events), or, for jobs older than the ci stage,
+with no verdict recorded at all.
 
 **Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
 short-lived `dashboard` session and then releases the job. The detail API lists the actions the
@@ -160,13 +174,21 @@ still requested changes at the last allowed round, which is where the workflow i
 back to `build`; for interruptions, verification failures, and unclassified escalations every
 control stays neutral, since the right transition is a human call.
 
-| Action                     | Allowed when                    | Effect                                              |
-| -------------------------- | ------------------------------- | --------------------------------------------------- |
-| Approve                    | stage `needs-human`             | `resume --to <stage>` (default: where it came from) |
-| Request review round       | round ≥ 1, not finished         | `escalate` + `resume --to review`                   |
-| Request rework             | not finished                    | `escalate` + `resume --to build`                    |
-| Accept verification policy | worktree `factory.json` differs | snapshot it as the job's policy (`jobs.policy`)     |
-| Cancel job                 | not finished                    | `cancel`                                            |
+| Action                     | Allowed when                                                                                                                       | Effect                                                 |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Approve                    | stage `needs-human`                                                                                                                | `resume --to <stage>` (default: where it came from)    |
+| Request review round       | round ≥ 1, not finished                                                                                                            | `escalate` + `resume --to review`                      |
+| Request rework             | not finished                                                                                                                       | `escalate` + `resume --to build`                       |
+| Accept verification policy | worktree `factory.json` differs                                                                                                    | snapshot it as the job's policy (`jobs.policy`)        |
+| Accept delivery            | `needs-human` from `ci`, PR head observed, and GitHub reported no checks at all or the PR was merged by hand; a reason is required | `resume --to completed`, recorded as a human close-out |
+| Cancel job                 | not finished                                                                                                                       | `cancel`                                               |
+
+Accept delivery is the only control that completes a job by hand. It is listed by the same rule the
+transition applies (`cannotAcceptDelivery` in `src/core/workflow.ts`), so it never appears while
+checks are pending or failing, it is never the primary control, and it refuses an empty reason; the
+`job.completed` event carries `acceptedByHuman: true` and the reason, and the dashboard shows the
+job as completed by human close-out rather than as a passing build. It does not merge or mark the
+PR ready.
 
 A job whose session holds a live lease (and is not waiting in `needs-human`) is refused unless the
 user confirms a forced takeover, which rotates the token. Every action records a reason in the
@@ -185,7 +207,12 @@ carry a CSP, `nosniff`, and `no-store`.
 **Development.** `npm run web:dev` starts Vite with hot reload on `127.0.0.1:5173`, proxying
 `/api` to a running `orch ui`. `npm run build` compiles both the CLI and `web/dist`.
 `npm run test:e2e` runs the Playwright suite against a seeded scratch database (first time:
-`npx playwright install chromium`).
+`npx playwright install chromium`). Each run seeds its own `mkdtemp` home, starts `orch ui` on a
+free port, and hands the URL and seeded ids to the workers through a state file under that home,
+so two runs on one machine never share a port, a database, or a state file. `ORCH_E2E_PORT` pins
+the port (a busy port is reported, never silently replaced by another server), `ORCH_E2E_URL`
+points the suite at a server you started yourself, and `ORCH_E2E_KEEP=1` leaves the scratch home
+in place for inspection.
 
 ## Using the factory
 
@@ -478,6 +505,13 @@ npm run db:check       # validate committed migrations
 npm run format         # apply Prettier
 npm run build
 ```
+
+Every Vitest file runs behind `tests/setup.ts`: `ORCH_HOME` is pointed at a scratch directory for
+the run (whatever the shell had, so a developer's or another campaign's database is never opened),
+and every directory the file created through `tempDir()` is removed when the file finishes, after
+failures too. Test repositories, stores, shims, and worktrees are all `mkdtemp` directories;
+nothing in the suite uses a fixed path under the temp directory. Two sessions must still not run
+the suite in the _same_ checkout (decision #45): the CLI tests load `src/` from it.
 
 CI runs every check on Ubuntu (typecheck, lint, format, migrations, the Vitest suite with coverage,
 the build, the Playwright dashboard checks, and a database initialized from `dist/` outside the

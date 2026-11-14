@@ -23,6 +23,7 @@ export type BlockerKind =
   | 'findings' // reviewers still requested changes at the last allowed round
   | 'decision' // the approver escalated: a human product or policy decision
   | 'escalated' // escalated for a reason the persisted state does not classify
+  | 'ci' // the ci stage stopped: repairs exhausted, no checks, checks that never ran, PR closed or moved
   | 'waiting' // no live session owns it; a session must resume it
   | 'cancelled';
 
@@ -47,6 +48,34 @@ export interface Resume {
 export interface Verdict {
   reviewer: string;
   verdict: Review['verdict'];
+}
+
+/**
+ * The CI reconciliation state of a job, from persisted fields only: the rollup columns on the job
+ * row, the newest `ci.observed` event (an `orch gh ci` reconciliation carries an outcome, a
+ * `pr status` observation does not), and the `job.completed` event. A verdict is only ever shown
+ * with the commit it was read for.
+ */
+export interface CiView {
+  /** PR head commit the recorded rollup describes; null until something observed the PR. */
+  head: string | null;
+  /** Whether that commit is the worktree HEAD; null when the worktree was not inspected (board). */
+  current: boolean | null;
+  status: Job['ciStatus'];
+  checkedAt: string | null;
+  repairs: number;
+  maxRepairs: number;
+  /** Newest reconciliation outcome for `head` (pending, passing, failing, infrastructure, none, outdated, closed). */
+  outcome: string | null;
+  /** GitHub's reason from that reconciliation, verbatim. */
+  reason: string | null;
+  /** Required checks that failed in that reconciliation, with GitHub's URL and the saved log path. */
+  failures: { name: string; conclusion: string; url: string | null; log: string | null }[];
+  /**
+   * How a completed job finished: GitHub's verdict for `head`, a human close-out (recorded with
+   * its reason), or a job completed before the ci stage existed, which carries no verdict at all.
+   */
+  completion: 'ci' | 'human' | 'legacy' | null;
 }
 
 export interface BoardRow {
@@ -78,6 +107,7 @@ export interface BoardRow {
     ciStatus: string | null;
     ciCheckedAt: string | null;
   };
+  ci: CiView;
 }
 
 /**
@@ -112,6 +142,7 @@ export interface JobDetailView {
   plan: Plan | null;
   planError: string | null;
   blocker: Blocker | null;
+  ci: CiView;
   /** Dashboard actions the workflow allows in this state (the server re-checks on POST). */
   actions: DashboardAction[];
   /** `vscode://file/...` for the worktree (when recorded) and for the initiating checkout. */

@@ -5,7 +5,7 @@
  */
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
-import { now, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
+import { cannotAcceptDelivery, now, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
 import type { Store } from '../storage/client.ts';
 import { policyFingerprint } from '../core/verification.ts';
 import { claimJob, getJob, releaseJob, transitionJob } from '../storage/jobs.ts';
@@ -19,6 +19,7 @@ export const DASHBOARD_ACTIONS = [
   'request-review',
   'request-rework',
   'accept-policy',
+  'accept-delivery',
   'cancel',
 ] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
@@ -45,7 +46,10 @@ export function withoutToken(job: Job): Omit<Job, 'ownerToken'> {
  * these; the server still re-checks every POST, so this is presentation, not authorization.
  */
 export function allowedActions(
-  job: Pick<Job, 'status' | 'stage' | 'round'>,
+  job: Pick<
+    Job,
+    'status' | 'stage' | 'round' | 'returnStage' | 'prUrl' | 'ciHead' | 'ciStatus' | 'prState'
+  >,
   policyDrift: boolean,
 ): DashboardAction[] {
   if (TERMINAL_STATUSES.includes(job.status)) return [];
@@ -54,6 +58,8 @@ export function allowedActions(
   if (job.round > 0) out.push('request-review');
   out.push('request-rework');
   if (policyDrift) out.push('accept-policy');
+  // The same rule the transition applies: never for a pending or failing CI result.
+  if (cannotAcceptDelivery(job) === null) out.push('accept-delivery');
   out.push('cancel');
   return out;
 }
@@ -88,6 +94,14 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   if (input.action === 'approve' && before.stage !== 'needs-human') {
     throw new ValidationError('Only a job waiting in needs-human can be approved from here.');
   }
+  if (input.action === 'accept-delivery') {
+    const refused = cannotAcceptDelivery(before);
+    if (refused) throw new ValidationError(`Cannot accept delivery: ${refused}.`);
+    // A manual close-out is recorded with why the human made it; there is no default reason.
+    if (!input.reason?.trim()) {
+      throw new ValidationError('Accepting delivery needs a reason; it is recorded with the job.');
+    }
+  }
   // A session that escalated to needs-human is waiting, not working: no takeover ceremony.
   const waiting = before.stage === 'needs-human';
   const liveOwner =
@@ -113,6 +127,9 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
     const current = getJob(store.db, id);
     if (input.action === 'cancel') {
       job = transitionJob(store, id, 'cancel', { token, reason });
+    } else if (input.action === 'accept-delivery') {
+      // The pure transition re-checks the rule; this is the only path that completes a job by hand.
+      job = transitionJob(store, id, 'resume', { token, to: 'completed', reason });
     } else if (input.action === 'accept-policy') {
       // A human adopts the worktree's factory.json at HEAD as this job's verification policy.
       const tree = worktreeOf(current);
@@ -138,6 +155,15 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   const resume = `orch factory resume ${id} --session <name>`;
   if (input.action === 'cancel') {
     return { job: safe, message: `Job cancelled (${reason}).` };
+  }
+  if (input.action === 'accept-delivery') {
+    return {
+      job: safe,
+      message:
+        `Delivery accepted by a human (${reason}): the job is completed without a passing CI verdict. ` +
+        `CI was ${job.ciStatus ?? 'not observed'} for ${job.ciHead?.slice(0, 7) ?? '?'}; the PR is ` +
+        `${job.prState ?? 'in an unknown state'}. Nothing was merged or marked ready.`,
+    };
   }
   if (input.action === 'accept-policy') {
     return {
