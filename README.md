@@ -658,6 +658,14 @@ Every accepted change appends events (`job.created`, `job.claimed`, `job.release
 outcome, required-check list, every check's status and conclusion, and saved log paths.
 `orch job events <id>` lists them.
 
+**Usage.** `orch job usage <id>` reports what the records measure about where a job's time went:
+wall-clock per stage visit (from `stage.started` to the event that ended it, with the review round
+in effect), per reviewer run (from the pending record to the verdict), verification runs and their
+check durations, CI repairs, re-runs, and observations, and the model the configuration assigns to
+each role. It does not report tokens or money: Claude Code does not expose a subagent's token usage
+or cost to the coordinating session or to `orch` through a supported interface, so the report says
+`tokens.measured: false` with the reason rather than estimating (see `docs/decisions.md` #61).
+
 ## Worktrees
 
 Each job gets one isolated Git worktree and branch, created from the job's base branch:
@@ -889,6 +897,7 @@ orch job create    --title <t> [--description <d>] [--issue <ref>] [--repo <path
 orch job list      [--repo <path|identity>] [--status <s>] [--stage <s>]
 orch job show      <id>
 orch job events    <id> [--limit <n>]
+orch job usage     <id>                 # measured durations per stage, reviewer, verification, CI; no token counts
 orch job claim     <id> --session <name> [--lease <minutes>] [--force]
 orch job release   <id> --token <t>
 orch job resume    <id> --session <name> [--to <stage>] [--force]
@@ -1040,7 +1049,8 @@ and Playwright browser checks over seeded fixtures).
 
 Not implemented: Claude session spawning or restoration by `orch` itself (dispatch prepares a job
 and the VS Code host's `create_session` tool, called by the skill, starts the session; the dashboard
-records decisions; a session must resume), token accounting, any daemon or scheduler (the dashboard is a plain server you start
+records decisions; a session must resume), token or cost accounting (`orch job usage` reports measured durations and configured
+models only), any daemon or scheduler (the dashboard is a plain server you start
 and stop; nothing runs between commands), automatic crash recovery (a lapsed lease is only noticed
 when someone runs `factory next`, `resume`, or looks at the board), rebase-based integration (only
 merge commits), authentication for the dashboard (it is loopback-only and single-user by design), a

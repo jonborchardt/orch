@@ -20,6 +20,7 @@ import { describeRepo } from '../git/repo.ts';
 import { supersede } from '../ops/actions.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
 import { findJobs } from '../ops/repo.ts';
+import { jobUsage } from '../ops/usage.ts';
 import { repointRepo } from '../ops/worktree.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
@@ -73,6 +74,8 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   list      [--repo <path|identity>] [--status <s>] [--stage <s>]
   show <id>
   events <id> [--limit <n>]
+  usage <id>                                time per stage visit, reviewer run, verification, and CI;
+                                            configured models; token counts are not measured
   claim <id> --session <name> [--lease <minutes>] [--force]
   release <id> --token <t>
   resume <id> --session <name> [--to <stage>] [--force]
@@ -147,6 +150,8 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
       return { ...jobDetail(store, id()), next: describeNext(getJob(store.db, id())) };
     case 'events':
       return listEvents(store.db, id(), int(o.limit, '--limit') ?? 100);
+    case 'usage':
+      return jobUsage(store, id());
     case 'claim': {
       const r = claimJob(store, id(), {
         session: need(session, '--session'),
