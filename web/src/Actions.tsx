@@ -26,7 +26,7 @@ const LABEL: Record<DashboardAction, string> = {
   cancel: 'Cancel job',
 };
 
-const STAGES = ['spec', 'build', 'review', 'approve', 'pr'] as const;
+const STAGES = ['spec', 'build', 'review', 'approve', 'pr', 'ci'] as const;
 
 /**
  * Human controls. Every action goes through the API, which applies the same validated workflow

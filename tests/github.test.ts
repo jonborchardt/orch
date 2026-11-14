@@ -213,10 +213,11 @@ describe('push and draft PR delivery', () => {
     expect(rw.job.ciStatus).toBe('failing');
     expect(rw.job.ciCheckedAt).toBeTruthy();
 
-    // The workflow still finishes only through the normal transition with pr.md registered.
+    // The workflow still advances only through the normal transition with pr.md registered,
+    // and a recorded PR is not the end: CI reconciliation follows.
     addArtifact(store, id, 'pr.md', { token });
-    const done = transitionJob(store, id, 'complete', { token });
-    expect(done.stage).toBe('completed');
+    const handed = transitionJob(store, id, 'complete', { token });
+    expect([handed.stage, handed.status]).toEqual(['ci', 'pending']);
     // A later observation that the PR was marked ready is recorded without changing the stage.
     const st2 = readState();
     st2.prs[0] = { ...st2.prs[0], isDraft: false };

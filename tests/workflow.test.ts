@@ -23,6 +23,10 @@ function job(stage: Stage, status: Status, extra: Partial<JobState> = {}): JobSt
     returnStage: null,
     prUrl: null,
     prState: null,
+    ciStatus: null,
+    ciHead: null,
+    ciRepairs: 0,
+    maxCiRepairs: 2,
     ...extra,
   };
 }
@@ -66,7 +70,7 @@ const step = (j: JobState, action: Action, ctx = none): JobState => ({
 });
 
 describe('transition: happy path', () => {
-  it('walks spec -> build -> review -> approve -> pr -> completed', () => {
+  it('walks spec -> build -> review -> approve -> pr -> ci -> completed', () => {
     let j = job('spec', 'pending');
     j = step(j, 'start');
     expect(j.status).toBe('running');
@@ -96,11 +100,94 @@ describe('transition: happy path', () => {
     expect(() => run(j, 'complete', { artifacts: [art('pr.md')], reviews: [] })).toThrow(
       /no DECISION: APPROVE/,
     );
-    const done = run(j, 'complete', { artifacts: delivered, reviews: [] });
+    j = step(j, 'complete', { artifacts: delivered, reviews: [] });
+    expect([j.stage, j.status]).toEqual(['ci', 'pending']);
+    j = step(j, 'start');
+    // A recorded PR is not a delivery: GitHub's verdict for the PR head is.
+    expect(() => run(j, 'complete')).toThrow(/required checks are not observed/);
+    j = { ...j, ciStatus: 'pending', ciHead: 'abc' };
+    expect(() => run(j, 'complete')).toThrow(/required checks are pending/);
+    j = { ...j, ciStatus: 'failing' };
+    expect(() => run(j, 'complete')).toThrow(/required checks are failing/);
+    j = { ...j, ciStatus: 'none' };
+    expect(() => run(j, 'complete')).toThrow(/required checks are none/);
+    j = { ...j, ciStatus: 'passing', ciHead: null };
+    expect(() => run(j, 'complete')).toThrow(/run orch gh ci/);
+    j = { ...j, ciHead: 'abc' };
+    const done = run(j, 'complete');
     expect(done.patch.stage).toBe('completed');
     expect(done.patch.status).toBe('completed');
     expect(done.patch.completedAt).toBeTruthy();
     expect(done.events.map((e) => e.type)).toEqual(['stage.completed', 'job.completed']);
+    expect(done.events[1]?.payload).toEqual({ prUrl: 'https://x/pr/1', head: 'abc' });
+  });
+});
+
+describe('transition: CI repair cycle', () => {
+  const ci = (extra: Partial<JobState> = {}) =>
+    job('ci', 'running', {
+      prUrl: 'https://x/pr/1',
+      prState: 'draft',
+      ciStatus: 'failing',
+      ciHead: 'abc',
+      ...extra,
+    });
+
+  it('rework from ci counts a repair and returns to build; pr rework does not count', () => {
+    const r = run(ci(), 'rework', { ...none, reason: 'CI failed: test' });
+    expect(r.patch).toEqual({ stage: 'build', status: 'pending', ciRepairs: 1 });
+    expect(r.events).toEqual([
+      { type: 'job.reworked', payload: { from: 'ci', reason: 'CI failed: test', ciRepairs: 1 } },
+    ]);
+    const pr = run(job('pr', 'running', { ciRepairs: 1 }), 'rework');
+    expect(pr.patch).toEqual({ stage: 'build', status: 'pending' });
+    expect(() => run(job('build', 'running'), 'rework')).toThrow(/pr and ci stages/);
+  });
+
+  it('escalates instead of a third repair when the budget is spent; the reason is recorded', () => {
+    const r = run(ci({ ciRepairs: 2, maxCiRepairs: 2 }), 'rework', { ...none, reason: 'again' });
+    expect(r.patch).toEqual({ stage: 'needs-human', status: 'blocked', returnStage: 'build' });
+    expect(r.events).toEqual([
+      {
+        type: 'job.blocked',
+        payload: { from: 'ci', reason: 'max CI repair cycles reached', detail: 'again' },
+      },
+    ]);
+    // maxCiRepairs 0 means the first failure already needs a human.
+    expect(run(ci({ maxCiRepairs: 0 }), 'rework').patch.stage).toBe('needs-human');
+  });
+
+  it('a human may close out only a no-checks or merged delivery escalated from ci', () => {
+    const blocked = (extra: Partial<JobState>) =>
+      job('needs-human', 'blocked', {
+        returnStage: 'ci',
+        prUrl: 'https://x/pr/1',
+        prState: 'draft',
+        ciHead: 'abc',
+        ...extra,
+      });
+    const to = (j: JobState) =>
+      run(j, 'resume', { ...none, to: 'completed', reason: 'no CI here' });
+    expect(() => to(blocked({ ciStatus: 'failing' }))).toThrow(/required checks are failing/);
+    expect(() => to(blocked({ ciStatus: 'pending' }))).toThrow(/required checks are pending/);
+    expect(() => to(blocked({ ciStatus: 'none', ciHead: null }))).toThrow(/no PR head/);
+    expect(() => to(blocked({ ciStatus: 'none', returnStage: 'build' }))).toThrow(
+      /escalated from the ci stage/,
+    );
+    expect(() =>
+      run(blocked({ ciStatus: 'none', returnStage: 'pr' }), 'resume', none),
+    ).not.toThrow();
+    const ok = to(blocked({ ciStatus: 'none' }));
+    expect([ok.patch.stage, ok.patch.status, ok.patch.returnStage]).toEqual([
+      'completed',
+      'completed',
+      null,
+    ]);
+    expect(ok.events.map((e) => e.type)).toEqual(['job.resumed', 'job.completed']);
+    expect(ok.events[1]?.payload).toMatchObject({ acceptedByHuman: true, reason: 'no CI here' });
+    expect(to(blocked({ ciStatus: 'failing', prState: 'merged' })).patch.stage).toBe('completed');
+    // The ordinary resume keeps working and never completes anything.
+    expect(run(blocked({ ciStatus: 'none' }), 'resume', none).patch.stage).toBe('ci');
   });
 });
 
@@ -217,7 +304,10 @@ describe('transition: escalation, resume, cancel', () => {
       returnStage: null,
     });
     expect(run(blocked, 'resume', { ...none, to: 'spec' }).patch.stage).toBe('spec');
-    expect(() => run(blocked, 'resume', { ...none, to: 'completed' })).toThrow(/--to/);
+    // Closing out is reserved for CI escalations with nothing to verify (see the CI tests).
+    expect(() => run(blocked, 'resume', { ...none, to: 'completed' })).toThrow(
+      /escalated from the ci stage/,
+    );
     expect(() => run(job('needs-human', 'blocked'), 'escalate')).toThrow(/already escalated/);
   });
 
