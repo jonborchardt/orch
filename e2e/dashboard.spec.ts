@@ -18,18 +18,24 @@ test('job board shows every repository and job with honest liveness', async ({ p
   await page.goto('/');
   const table = page.getByRole('table', { name: 'Factory jobs' });
   await expect(table).toBeVisible();
-  await expect(table.getByRole('row')).toHaveCount(8); // header + 7 jobs
+  await expect(table.getByRole('row')).toHaveCount(11); // header + 10 jobs
   await expect(table.getByText('github.com/acme/alpha').first()).toBeVisible();
   await expect(table.getByText('github.com/acme/beta').first()).toBeVisible();
   await expect(table.getByText('last reported running')).toBeVisible();
-  await expect(table.getByText('running (lease live)')).toBeVisible();
-  await expect(table.getByText('needs human')).toBeVisible();
-  await expect(page.getByText('1 running')).toBeVisible();
+  await expect(table.getByText('running (lease live)').first()).toBeVisible();
+  await expect(table.getByText('needs human').first()).toBeVisible();
+  await expect(page.getByText('2 running')).toBeVisible();
   await expect(page.getByText('1 stale')).toBeVisible();
-  await expect(page.getByText('1 need human')).toBeVisible();
+  await expect(page.getByText('3 need human')).toBeVisible();
   // Per-reviewer verdicts and blocking counts are visible on the board.
   await expect(table.getByText('correctness: pending')).toBeVisible();
-  await expect(table.getByText('CI failing')).toBeVisible();
+  // CI chips always name the commit the verdict was read for; repairs show their budget.
+  await expect(table.getByText('CI failing @f1e2d3c')).toBeVisible();
+  await expect(table.getByText('CI pending @a1b2c3d')).toBeVisible();
+  await expect(table.getByText('CI none @b2c3d4e')).toBeVisible();
+  await expect(table.getByText('repairs 1/1')).toBeVisible();
+  await expect(table.getByText(/CI still failing after 1 of 1 repair cycles/)).toBeVisible();
+  await expect(table.getByText(/GitHub reports no checks for the PR head/)).toBeVisible();
   // Why a job stopped is on the board, and cancelled is never dressed as a success.
   await expect(table.getByText(/Approver escalated: a human must decide/)).toBeVisible();
   await expect(table.getByText(/decided against it/)).toBeVisible();
@@ -39,7 +45,7 @@ test('job board shows every repository and job with honest liveness', async ({ p
   await expect(table.locator('[data-state="completed"]')).toHaveClass(/colorSuccess/);
   // Resume is offered for the stale (lapsed lease), failed (released), and unowned jobs only; the
   // blocked job's session still holds a live lease, so the board says so instead.
-  await expect(table.getByRole('button', { name: /Copy resume command/ })).toHaveCount(3);
+  await expect(table.getByRole('button', { name: /Copy resume command/ })).toHaveCount(5);
   await expect(
     table.getByText(/Resume unavailable: session claude-20261113-0800-1d2e/),
   ).toBeVisible();
@@ -93,7 +99,12 @@ test('job detail exposes spec, reviews, long findings, decision, events, and lin
   // Seeded jobs have no worktree, so the evidence panel says so instead of inventing a run.
   await expect(page.getByText('No worktree; nothing verified.')).toBeVisible();
   await page.getByRole('tab', { name: 'PR' }).click();
-  await expect(page.getByText('CI failing')).toBeVisible();
+  // Delivered on GitHub's verdict for f1e2d3c; the later failing observation is shown for that
+  // same commit, never dressed up as the completion.
+  await expect(page.getByTestId('ci-panel')).toContainText('CI failing @f1e2d3c');
+  await expect(page.getByTestId('completion')).toHaveText(
+    'Completed: required checks passed for f1e2d3c.',
+  );
   // Finished jobs have no live controls and nothing to resume.
   await expect(page.getByText('No actions: the job is completed.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancel job' })).toHaveCount(0);
@@ -163,7 +174,48 @@ test('controls cannot bypass workflow rules, and never claim to wake a session',
 
   // Board reflects the change on refresh.
   await page.goto('/');
-  await expect(page.getByText('0 need human')).toBeVisible();
+  await expect(page.getByText('2 need human')).toBeVisible();
+});
+
+test('CI escalations: close-out is offered only where the workflow allows it', async ({ page }) => {
+  const { ids } = state();
+  // Repairs exhausted on a failing check: the state and the budget are explained, but completing
+  // the job by hand is not on offer, and rework is not promoted either.
+  await page.goto(`/#/jobs/${ids.ciExhausted}`);
+  await expect(page.getByText('CI stopped.')).toBeVisible();
+  await expect(page.getByText(/CI still failing after 1 of 1 repair cycles/).first()).toBeVisible();
+  await expect(page.getByTestId('ci-guidance')).toContainText('repair budget is spent');
+  await expect(page.getByRole('button', { name: 'Accept delivery' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Request rework' })).toHaveClass(
+    /MuiButton-outlined/,
+  );
+  await page.getByRole('tab', { name: 'PR' }).click();
+  const panel = page.getByTestId('ci-panel');
+  await expect(panel).toContainText('CI failing @d4e5f60');
+  await expect(panel).toContainText('Repairs used: 1 of 1');
+  await expect(panel.getByRole('link', { name: 'GitHub log' })).toHaveAttribute(
+    'href',
+    'https://github.com/acme/alpha/actions/runs/9/job/901',
+  );
+  await expect(panel).toContainText('ci/d4e5f60/test.log');
+
+  // No checks at all: a human may close it out, with a reason, and the result says so.
+  await page.goto(`/#/jobs/${ids.ciNone}`);
+  await expect(page.getByText(/GitHub reports no checks for the PR head/).first()).toBeVisible();
+  await expect(page.getByTestId('close-out-caution')).toContainText('human close-out');
+  await page.getByRole('button', { name: 'Accept delivery' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+  await dialog.getByLabel(/Reason/).fill('Repository has no CI; reviewed the PR by hand');
+  await dialog.getByRole('button', { name: 'Confirm' }).click();
+  const status = page.getByRole('status');
+  await expect(status).toContainText('Delivery accepted by a human');
+  await expect(status).toContainText('Nothing was merged or marked ready');
+  await expect(page.locator('[data-state="completed"]')).toBeVisible();
+  await expect(page.getByTestId('completion')).toContainText('Completed by human close-out');
+  await expect(page.getByText('human close-out').first()).toBeVisible();
+  await page.goto('/');
+  await expect(page.getByText('1 need human')).toBeVisible();
 });
 
 test('keyboard: job links are reachable with Tab and open with Enter', async ({ page }) => {

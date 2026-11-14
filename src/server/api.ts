@@ -21,9 +21,9 @@ import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob, listEvents } from '../storage/events.ts';
 import { getJob, listJobs, listReviews, reviewsByJob } from '../storage/jobs.ts';
-import type { Artifact, Job, Review } from '../storage/schema.ts';
+import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 import { latestRun, latestRunsByJob } from '../storage/verification.ts';
-import { BLOCKER_EVENTS, blockerOf, liveness, resumeOf } from './status.ts';
+import { BLOCKER_EVENTS, blockerOf, ciView, liveness, resumeOf } from './status.ts';
 import type {
   ActionRequest,
   ActionResponse,
@@ -64,7 +64,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
     const artifacts = artifactsOf.get(job.id) ?? [];
     const state = liveness(job);
     const evidence = {
-      events: eventsOf.get(job.id) ?? new Map(),
+      events: eventsOf.get(job.id) ?? new Map<string, Event>(),
       artifacts,
       latestRun: runsOf.get(job.id) ?? null,
     };
@@ -103,6 +103,8 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
         ciStatus: job.ciStatus,
         ciCheckedAt: job.ciCheckedAt,
       },
+      // The board does not inspect worktrees (one Git call per job); the detail view does.
+      ci: ciView(job, evidence.events, undefined),
     };
   });
 }
@@ -173,7 +175,7 @@ export function detail(store: Store, id: string): JobDetailView {
   }
   const state = liveness(job);
   const evidence = {
-    events: latestEventsByJob(store.db, [id], BLOCKER_EVENTS).get(id) ?? new Map(),
+    events: latestEventsByJob(store.db, [id], BLOCKER_EVENTS).get(id) ?? new Map<string, Event>(),
     artifacts,
     latestRun: latestRun(store.db, id)?.run ?? null,
   };
@@ -188,6 +190,8 @@ export function detail(store: Store, id: string): JobDetailView {
     plan,
     planError,
     blocker: blockerOf(job, state, evidence),
+    // Without a readable worktree HEAD there is nothing to compare the verdict against.
+    ci: ciView(job, evidence.events, plan?.worktree?.head ?? undefined),
     actions: allowedActions(job, plan?.verification?.policy.authorization === 'required'),
     links: {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,
