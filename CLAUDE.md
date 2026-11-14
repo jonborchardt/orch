@@ -119,7 +119,7 @@ framework. Upgrade Drizzle deliberately, both packages together.
 - CLI tests load `src/` from the checkout they run in, so editing that checkout while its suite
   runs produces spurious failures (`docs/decisions.md` #45). `.claude/settings.json` enforces this
   cooperatively: an Edit/Write into a checkout another live session holds is refused by
-  `orch checkout hook` (decision #52); work in your own worktree rather than forcing the claim.
+  `orch checkout hook` (decision #60); work in your own worktree rather than forcing the claim.
   One session per checkout: a parallel
   session works in its own worktree, never in the primary checkout alongside another. Read a
   failing CLI test's stderr before blaming load: a `ReferenceError` or `SyntaxError` means a

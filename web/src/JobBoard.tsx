@@ -13,8 +13,9 @@ import {
 } from '@mui/material';
 
 import type { BoardRow } from '../../src/server/types.ts';
-import { BlockerText, CopyResume, StatusChip } from './Status.tsx';
-import { ago, ciColor, elapsed, verdictColor } from './format.ts';
+import { CiChip } from './Ci.tsx';
+import { BlockerText, CopyResume, StatusChip, Supersession } from './Status.tsx';
+import { ago, elapsed, verdictColor } from './format.ts';
 
 export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
   if (rows.length === 0) {
@@ -59,6 +60,7 @@ export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
                 <Typography component="div" variant="caption" color="text.secondary">
                   {r.id}
                 </Typography>
+                <Supersession supersededBy={r.supersededBy} supersedes={r.supersedes} />
               </TableCell>
               <TableCell>
                 <Chip label={r.stage} variant="outlined" />
@@ -146,10 +148,7 @@ export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
                     <Link href={r.pr.url} target="_blank" rel="noreferrer noopener">
                       PR ({r.pr.state})
                     </Link>
-                    <Chip
-                      label={`CI ${r.pr.ciStatus ?? 'unknown'}`}
-                      color={ciColor(r.pr.ciStatus)}
-                    />
+                    <CiChip ci={r.ci} compact />
                   </Stack>
                 ) : (
                   <Typography variant="caption" color="text.secondary">

@@ -23,7 +23,7 @@ const HELP = `Usage: orch [--json] <command>
 Commands:
   doctor                 Check the local environment (Node, Git, Claude Code, paths)
   init                   Write a repository's factory.json verification policy, or --check its readiness (orch init --help)
-  factory <subcommand>   Start, plan, and resume factory jobs for the /factory skill (orch factory --help)
+  factory <subcommand>   Start, plan, resume, dispatch, and list factory jobs for the /factory skill (orch factory --help)
   job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
   worktree <subcommand>  Create, inspect, adopt, remove a job's Git worktree (orch worktree --help)
   checkout <subcommand>  Which session is working in a checkout; the Claude Code hook (orch checkout --help)
@@ -100,6 +100,7 @@ export async function main(argv: string[]): Promise<number> {
         stage: str,
         limit: str,
         replace: bool,
+        by: str,
         // worktree / gh / checkout
         path: str,
         all: bool,
@@ -108,6 +109,11 @@ export async function main(argv: string[]): Promise<number> {
         ui: bool,
         'no-ui': bool,
         fingerprint: str,
+        adopt: str,
+        // job session attach
+        provider: str,
+        ref: str,
+        cwd: str,
         // ui
         port: str,
         open: bool,

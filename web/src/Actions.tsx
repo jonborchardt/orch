@@ -23,6 +23,7 @@ const LABEL: Record<DashboardAction, string> = {
   'request-review': 'Request another review round',
   'request-rework': 'Request rework',
   'accept-policy': 'Accept the verification policy from the worktree',
+  'accept-delivery': 'Accept delivery without a CI verdict (human close-out)',
   cancel: 'Cancel job',
 };
 
@@ -51,6 +52,9 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   // requested changes at the last allowed round. Interruptions, verification failures, and
   // unclassified escalations get neutral controls; the right transition is a human call.
   const reworkPrimary = allowed.has('request-rework') && kind === 'findings';
+  // The server offers accept-delivery only where the workflow allows a human close-out (a ci
+  // escalation with no checks, or a PR merged by hand); it is never primary, and needs a reason.
+  const closeOut = allowed.has('accept-delivery');
   const liveOwner =
     detail.job.ownerSession !== null &&
     detail.job.ownerSession !== 'dashboard' &&
@@ -134,6 +138,17 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             Accept verification policy
           </Button>
         )}
+        {closeOut && (
+          <Button
+            variant="outlined"
+            color="warning"
+            onClick={() => {
+              start('accept-delivery');
+            }}
+          >
+            Accept delivery
+          </Button>
+        )}
         {allowed.has('cancel') && (
           <Button
             variant="outlined"
@@ -146,6 +161,15 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
           </Button>
         )}
       </Stack>
+      {closeOut && (
+        <Alert severity="warning" variant="outlined" data-testid="close-out-caution">
+          Accept delivery completes the job by hand: CI is {detail.ci.status ?? 'not observed'} for{' '}
+          {detail.ci.head?.slice(0, 7) ?? '?'}
+          {detail.job.prState === 'merged' ? ' and the PR was merged outside the factory' : ''}. The
+          job is then recorded as completed by human close-out, not by a passing CI verdict, with
+          your reason. Nothing is merged or marked ready.
+        </Alert>
+      )}
       {allowed.has('approve') && !approvalGate && (
         <Alert severity="warning" variant="outlined" data-testid="approve-caution">
           This job is not waiting for an approval; it stopped because of a problem (
@@ -211,7 +235,12 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
               </TextField>
             )}
             <TextField
-              label="Reason (recorded in the job's events)"
+              label={
+                open === 'accept-delivery'
+                  ? 'Reason (required; recorded as the human close-out)'
+                  : "Reason (recorded in the job's events)"
+              }
+              required={open === 'accept-delivery'}
               value={reason}
               onChange={(e) => {
                 setReason(e.target.value);
@@ -234,10 +263,17 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                 label={`Take the job from session ${detail.job.ownerSession ?? ''} (its token stops working)`}
               />
             )}
-            <Alert severity="warning" variant="outlined">
-              This records the decision and returns the job to a pending stage. It does not start or
-              wake any Claude session; resume the job from a session afterwards.
-            </Alert>
+            {open === 'accept-delivery' ? (
+              <Alert severity="warning" variant="outlined">
+                This completes the job without a passing CI verdict and records your reason as the
+                human close-out. It does not merge or mark the PR ready.
+              </Alert>
+            ) : (
+              <Alert severity="warning" variant="outlined">
+                This records the decision and returns the job to a pending stage. It does not start
+                or wake any Claude session; resume the job from a session afterwards.
+              </Alert>
+            )}
             {error && <Alert severity="error">{error}</Alert>}
           </Stack>
         </DialogContent>
@@ -256,7 +292,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             onClick={() => {
               void submit();
             }}
-            disabled={busy}
+            disabled={busy || (open === 'accept-delivery' && reason.trim() === '')}
           >
             {open === 'cancel' ? 'Cancel job' : 'Confirm'}
           </Button>

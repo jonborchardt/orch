@@ -140,7 +140,7 @@ active / needs human / finished / cancelled; the page refreshes every few second
 spec, build summary, review history per round (verdict, summary, full review text), consolidated
 findings per round, the approval decision, registered artifacts (size, marker, hash), the event
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
-the PR with its CI status. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
+the PR with its CI state. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
 GitHub. A status panel above the controls repeats the board's explanation with the full recorded
 reason and a **Resume** block. When no live lease is held (unowned, lapsed lease, interrupted,
 failed, or released at `needs-human`) it shows the `/factory resume <id>` command with a copy
@@ -149,6 +149,20 @@ Code" link), and the note that copying changes nothing; only a Claude Code sessi
 checkout resumes the job. While any session holds a live lease the command is withheld and the
 holder is named, because `orch factory resume` would be refused without a deliberate `--force`;
 the dashboard never forces ownership.
+
+**CI state** is shown with the commit it was read for, never on its own: the board's chip reads
+`CI <rollup> @<sha7>` (plus `repairs n/m` once a repair happened) and the detail's PR tab carries
+the full head, when it was observed, whether it is still the worktree HEAD (an old green verdict
+for a commit that is no longer HEAD is marked as not current), the repair budget, GitHub's reason
+from the last `orch gh ci` reconciliation, each failed required check with its GitHub log link and
+the log saved under the artifact directory, and one line of guidance. Everything comes from
+persisted fields (`src/server/status.ts` `ciView`): the rollup columns, the newest `ci.observed`
+event, and the `job.completed` event. A ci-stage escalation gets its own blocker (`CI stopped`)
+naming the cause from the recorded reason code and outcome: repair budget spent, no checks for the
+PR head, checks that never reached a verdict, a PR closed without merging, or a head that moved
+outside the job. A completed job says how it completed: on GitHub's verdict, by a human close-out
+(chip `human close-out`, with the reason in the events), or, for jobs older than the ci stage,
+with no verdict recorded at all.
 
 **Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
 short-lived `dashboard` session and then releases the job. The detail API lists the actions the
@@ -160,13 +174,21 @@ still requested changes at the last allowed round, which is where the workflow i
 back to `build`; for interruptions, verification failures, and unclassified escalations every
 control stays neutral, since the right transition is a human call.
 
-| Action                     | Allowed when                    | Effect                                              |
-| -------------------------- | ------------------------------- | --------------------------------------------------- |
-| Approve                    | stage `needs-human`             | `resume --to <stage>` (default: where it came from) |
-| Request review round       | round ≥ 1, not finished         | `escalate` + `resume --to review`                   |
-| Request rework             | not finished                    | `escalate` + `resume --to build`                    |
-| Accept verification policy | worktree `factory.json` differs | snapshot it as the job's policy (`jobs.policy`)     |
-| Cancel job                 | not finished                    | `cancel`                                            |
+| Action                     | Allowed when                                                                                                                       | Effect                                                 |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Approve                    | stage `needs-human`                                                                                                                | `resume --to <stage>` (default: where it came from)    |
+| Request review round       | round ≥ 1, not finished                                                                                                            | `escalate` + `resume --to review`                      |
+| Request rework             | not finished                                                                                                                       | `escalate` + `resume --to build`                       |
+| Accept verification policy | worktree `factory.json` differs                                                                                                    | snapshot it as the job's policy (`jobs.policy`)        |
+| Accept delivery            | `needs-human` from `ci`, PR head observed, and GitHub reported no checks at all or the PR was merged by hand; a reason is required | `resume --to completed`, recorded as a human close-out |
+| Cancel job                 | not finished                                                                                                                       | `cancel`                                               |
+
+Accept delivery is the only control that completes a job by hand. It is listed by the same rule the
+transition applies (`cannotAcceptDelivery` in `src/core/workflow.ts`), so it never appears while
+checks are pending or failing, it is never the primary control, and it refuses an empty reason; the
+`job.completed` event carries `acceptedByHuman: true` and the reason, and the dashboard shows the
+job as completed by human close-out rather than as a passing build. It does not merge or mark the
+PR ready.
 
 A job whose session holds a live lease (and is not waiting in `needs-human`) is refused unless the
 user confirms a forced takeover, which rotates the token. Every action records a reason in the
@@ -185,7 +207,12 @@ carry a CSP, `nosniff`, and `no-store`.
 **Development.** `npm run web:dev` starts Vite with hot reload on `127.0.0.1:5173`, proxying
 `/api` to a running `orch ui`. `npm run build` compiles both the CLI and `web/dist`.
 `npm run test:e2e` runs the Playwright suite against a seeded scratch database (first time:
-`npx playwright install chromium`).
+`npx playwright install chromium`). Each run seeds its own `mkdtemp` home, starts `orch ui` on a
+free port, and hands the URL and seeded ids to the workers through a state file under that home,
+so two runs on one machine never share a port, a database, or a state file. `ORCH_E2E_PORT` pins
+the port (a busy port is reported, never silently replaced by another server), `ORCH_E2E_URL`
+points the suite at a server you started yourself, and `ORCH_E2E_KEEP=1` leaves the scratch home
+in place for inspection.
 
 ## Using the factory
 
@@ -317,19 +344,26 @@ commit, the check runs and commit statuses plus the base branch's required-check
 the observation on the job (`ciStatus`, `ciHead`, a `ci.observed` event listing every check), and
 acts:
 
-| GitHub reports (for required checks)                                                                | `orch gh ci` does                                                                                                                                                          |
-| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| all succeeded (skipped/neutral count only when a human made them required)                          | nothing more; the plan says `complete`, which the gate accepts only while `ciHead` is still HEAD                                                                           |
-| any queued or running, or none reported yet (first 5 observations)                                  | nothing: the coordinator waits about a minute and runs it again, or releases the job and resumes later; the CLI never polls by itself                                      |
-| `failure` or `timed_out`                                                                            | saves each failing Actions job log under `<artifactDir>/ci/<sha7>/`, then `rework`: back to `build` with the reason; `ciRepairs` + 1                                       |
-| `cancelled`, `startup_failure`, `stale`, `action_required`, or a required check that never reported | `escalate`: not a code defect; a human re-runs the workflow and resumes `--to ci`                                                                                          |
-| no checks at all after the grace window, or only skipped ones                                       | `escalate`: the factory does not invent success; a human adds CI (resume `--to ci`) or closes out with resume `--to completed`, which only this case and a merged PR allow |
-| PR head differs from the worktree HEAD or `origin/<branch>`                                         | `escalate`: the branch changed outside the job; no verdict is borrowed from another commit                                                                                 |
-| PR closed                                                                                           | `escalate`                                                                                                                                                                 |
-| `gh` or the API failed                                                                              | exit 1, nothing recorded                                                                                                                                                   |
+| GitHub reports (for required checks)                                                                             | `orch gh ci` does                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| all succeeded (at least one check ran; skipped/neutral alone never count)                                        | completes the job in the same call, once the gate confirms a clean, verified HEAD; `orch job transition complete` is refused in `ci`, so no stored verdict is ever reused                                                                                                                                              |
+| any queued or running, or none reported yet (first 5 observations)                                               | nothing: the result says how long to wait (`waitSeconds`: 60 s for the first five observations of a head, then longer, at most 300 s); the coordinator sleeps and runs it again, or releases the job after 20 pending observations in one session (`plan.ci.release`) and resumes later; the CLI never polls by itself |
+| `failure`, `timed_out`, `cancelled`, `startup_failure`, or `stale` on an Actions check, first time for this head | once every other required check has finished: `gh run rerun <run> --failed` (recorded as `ci.rerun`, bound to the head, at most one per head), then `wait`; no source changes, no repair spent. Until GitHub reports the new attempt the old runs are ignored for 5 observations                                       |
+| `failure` or `timed_out` again for the same head (or the re-run could not be requested)                          | saves each failing Actions job log under `<artifactDir>/ci/<sha7>/`, then `rework`: back to `build` with the reason; `ciRepairs` + 1                                                                                                                                                                                   |
+| `cancelled`, `startup_failure`, `stale`, `action_required` again, or a required check that never reported        | `escalate`: not a code defect; a human re-runs the workflow and resumes `--to ci`                                                                                                                                                                                                                                      |
+| no checks at all after the grace window, or only skipped ones                                                    | `escalate`: the factory does not invent success; a human adds CI (resume `--to ci`) or closes out with resume `--to completed`, which only this case and a merged PR allow                                                                                                                                             |
+| PR head differs from the worktree HEAD or `origin/<branch>`                                                      | `escalate`: the branch changed outside the job; no verdict is borrowed from another commit                                                                                                                                                                                                                             |
+| PR closed without merging                                                                                        | `escalate`; `prState` becomes `closed` (a cancelled job never implies a closed PR)                                                                                                                                                                                                                                     |
+| `gh` or the API failed                                                                                           | exit 1, nothing recorded                                                                                                                                                                                                                                                                                               |
 
-Without a configured required-check list every reported check counts as required, and the PR
-passes only when at least one check actually ran and succeeded; with one, optional checks may fail.
+Without a configured required-check list every reported check counts as required; with one,
+optional checks may fail. Either way the PR passes only when at least one check actually ran and
+succeeded: skipped-only checks escalate even when a human made them required.
+Check runs and statuses are read across every page (`gh api --paginate --slurp`, so `gh` 2.41 or
+newer); a page that fails to load fails the whole observation rather than passing a partial list.
+Runs with one name in one check suite are attempts of the same check (a re-run creates a new one in
+the same suite) and only the newest counts; runs with one name in different suites, or whose suite
+GitHub did not report, are independent checks and the worst one counts.
 Private repositories on GitHub's free plan answer both configuration endpoints with HTTP 403, so
 for them the list is always "unknown" and every reported check must pass.
 A CI repair goes through the normal cycle: the builder gets the saved logs in its plan, commits,
@@ -373,8 +407,11 @@ conversation is not needed. `orch factory resume <id> --session <name>`:
 `needs-human` jobs stay blocked until a person decides; `resume --to <stage>` sends them back. A
 jump cannot skip evidence: `pr` still needs a registered `DECISION: APPROVE`, `approve` still
 refuses while the last round counts blocking findings, and `ci` still needs GitHub's passing verdict
-for HEAD. A session interrupted while CI was pending resumes into `ci` and re-reads GitHub; the
-recorded rollup is never trusted on its own. `resume --to completed` exists for one case only: a
+for HEAD. A session interrupted while CI was pending resumes into `ci` and always re-reads GitHub:
+`orch gh ci` completes the job itself when the fresh read passes for the current head, and a stored
+verdict (even a passing one) cannot complete it, so a PR that moved, was closed, or whose checks
+were rerun since the interruption is seen. The rollup that `orch gh pr create` and `orch gh pr
+status --token` store is informational and carries no head. `resume --to completed` exists for one case only: a
 job escalated from `ci` because GitHub reported no checks at all (or the PR was merged by a human);
 it is refused while checks are pending or failing.
 
@@ -387,6 +424,58 @@ fingerprint (HEAD plus dirty files) after reviewers ran. Workflow artifacts can 
 replaced only in their own stage and round, so an approval cannot be rewritten after the fact.
 `plan.checkoutDirty` lists uncommitted files in the initiating checkout; the factory never writes
 there, so a list that grows during a stage means a subagent used the wrong directory.
+
+### Dispatching jobs to other repositories
+
+One session can start several jobs, each in another repository (or this one), each run by its own
+independent session. The flow is split so that `orch` stays deterministic and never starts a
+process: the CLI prepares and records, the session mechanism belongs to the harness.
+
+```
+/factory dispatch issue 123 in E:\code\repo-b, #45 in ..\repo-c, and this repository: add CSV export
+```
+
+For each target the skill runs `orch factory dispatch --repo <path> --issue <ref> --session <s>`,
+which checks the target the way `orch init --check` does (committed, trusted, runnable
+`factory.json`; an existing base branch) and creates the job, nothing else: no claim, no worktree,
+no session. A target that is not ready is refused with the readiness verdict and nothing is created;
+the other targets proceed. Repeating a dispatch for the same repository and issue returns the
+existing active job (`duplicate: true`) instead of a second one, so a retry after a failed launch is
+safe. The result's `launch` block carries what a launcher needs: `workspace` (the repository root),
+`worktree: true`, a `title`, the `prompt` (`/factory <id>` plus one line of context), and
+`fallback` commands.
+
+The launch itself uses VS Code's documented session tools: in the Agents window the skill calls the
+host's `create_session` tool with `relationship: independent`, the repository as `workspace`, and
+`worktree: true`. VS Code creates a worktree of that repository (`<repo>.worktrees/<slug>`, branch
+`agents/<slug>`) and starts the session in it with the prompt. The child's `/factory <id>` then runs
+`orch factory resume <id> --adopt <its toplevel>`, which records that worktree as the job's (only
+when the job has none yet; a worktree the job already has is kept), and the two sessions proceed
+independently. The experiment that established this, and what the host cannot do (it cannot be
+pointed at an existing worktree: a worktree path or `file://` URI opens the project root instead),
+is recorded in [docs/session-launch.md](docs/session-launch.md). Without the tool the skill prints
+the fallbacks (`claude --worktree <id> "/factory <id>"` from the repository root, or
+`code --agents <repo>` to create the session by hand) and says that nothing was started.
+
+`orch factory list [--repo <path>]` is the initiating session's view: one row per job with stage,
+status, owner and whether its lease is live, `needsHuman` and the recorded `blockedReason`,
+worktree, branch, PR and CI rollup, the attached execution session, and the `orch factory resume`
+command for jobs no live session holds. Nothing in it is inferred from processes; a lapsed lease is
+reported as such.
+
+**Session association.** The job id is the identity of the work; a VS Code or Claude session is
+execution metadata that changes when a job is resumed or adopted. `orch job session attach <id>
+--provider <p> --ref <r>` records the current session as a `session.attached` event (the newest one
+is current, earlier ones stay in the log as history; re-attaching the same ref is a no-op). It
+needs the owner token while the job is claimed and none while it is unowned, which is the state a
+freshly dispatched job is in when the launcher records the session it created. Providers:
+`vscode-agents` (the `agent-host-session://` link the host tools return) and `claude-code` (a
+session UUID). Transcripts and private session files are never stored. The dashboard's detail view
+shows the current session with the navigation its provider documents: a `claude-code` session gets
+`vscode://anthropic.claude-code/open?session=<uuid>` and `claude --resume <uuid>`; an
+`agent-host-session://` link has no operating-system handler, so it is offered for copying with a
+note that it opens only inside VS Code, never as a button that would do nothing. The job detail,
+the worktree (`vscode://file/`), the PR, and the resume command are the other navigation targets.
 
 **Limits.** A skill cannot restart a Claude session that stopped, and there is no daemon: a lapsed
 lease is noticed only when someone runs `orch factory next` or `resume`. Ownership is advisory at
@@ -423,6 +512,13 @@ npm run db:check       # validate committed migrations
 npm run format         # apply Prettier
 npm run build
 ```
+
+Every Vitest file runs behind `tests/setup.ts`: `ORCH_HOME` is pointed at a scratch directory for
+the run (whatever the shell had, so a developer's or another campaign's database is never opened),
+and every directory the file created through `tempDir()` is removed when the file finishes, after
+failures too. Test repositories, stores, shims, and worktrees are all `mkdtemp` directories;
+nothing in the suite uses a fixed path under the temp directory. Two sessions must still not run
+the suite in the _same_ checkout (decision #45): the CLI tests load `src/` from it.
 
 CI runs every check on Ubuntu (typecheck, lint, format, migrations, the Vitest suite with coverage,
 the build, the Playwright dashboard checks, and a database initialized from `dist/` outside the
@@ -534,16 +630,28 @@ runs, then with `--verdict pass|changes`). `complete` is refused while any revie
 If every verdict is `pass` the job moves to `approve`; if any is `changes` it returns to `build`,
 unless the round equals `--max-rounds` (default 3), in which case it escalates to `needs-human`.
 
-**PRs.** `orch job pr <id> --url <u> --state draft|ready|merged` records the PR; the `pr` stage
-cannot complete without one, and completing it enters `ci`, which cannot complete until `orch gh
-ci` has recorded `ciStatus: passing` for `ciHead`, and the gate confirms `ciHead` is still the
-worktree HEAD. The PR state can be updated later (draft → ready → merged) without changing the
-workflow, since the factory's deliverable is a draft PR.
+**PRs.** `orch job pr <id> --url <u> --state draft|ready|merged|closed` records the PR; the `pr` stage
+cannot complete without one, and completing it enters `ci`, which only `orch gh ci` completes, in
+the call that read `ciStatus: passing` for `ciHead` from GitHub, after the gate confirms `ciHead`
+is still the worktree HEAD. The PR state can be updated later (draft → ready → merged) without changing the
+workflow, since the factory's deliverable is a draft PR. `closed` means GitHub reported the PR closed
+without merging; it is recorded from `orch gh pr status` or `orch gh ci`, never inferred from the
+job, and a job whose PR is `closed` can neither complete nor be accepted with `resume --to
+completed`.
+
+**Superseded jobs.** When a job is abandoned and started again, `orch job supersede <old> --by
+<new> --session <name>` records the replacement on the old job (`supersededBy`, event
+`job.superseded`). Both jobs keep their rows, events, and artifacts; nothing is merged or deleted,
+and nothing is inferred from matching titles. The two must belong to the same repository and may
+not form a loop. The command is a short ownership episode like a dashboard action: it claims the
+old job for a minute, records, and releases, refusing (without `--force`) while another session
+holds a live lease on it. `orch job show` lists the jobs a job replaced (`supersedes`), and the
+dashboard links both directions.
 
 Every accepted change appends events (`job.created`, `job.claimed`, `job.released`,
 `stage.started`, `stage.completed`, `stage.failed`, `artifact.registered`, `artifact.replaced`,
 `review.recorded`, `job.blocked`, `job.resumed`, `job.interrupted`, `job.cancelled`,
-`job.completed`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
+`job.completed`, `job.superseded`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
 `integration.started`, `integration.completed`, `verification.started`,
 `verification.completed`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
 `ci.observed`) in the same transaction. A `ci.observed` event from `orch gh ci` carries the head,
@@ -610,7 +718,7 @@ orch gh repo [--repo <path>]            # nameWithOwner, default branch, identit
 orch gh issue <#N|N|url> [--repo <path>]
 orch gh push <id>                       # git push --set-upstream origin <job branch>; never force
 orch gh pr create <id> --body-file <md> [--title <t>]   # draft PR, or the existing open one
-orch gh pr status <id>                  # state, draft/ready/merged, CI rollup; recorded with --token
+orch gh pr status <id>                  # state, draft/ready/merged/closed, CI rollup; recorded with --token
 orch gh ci <id> --token <t>             # ci stage: GitHub's verdict for the exact PR head, acted on (see above)
 ```
 
@@ -622,7 +730,7 @@ identity, that the base branch exists on `origin`, and (for the PR) that `origin
 the worktree HEAD. An open (or merged) PR for the
 branch with the same base is reused instead of creating a duplicate. The PR is recorded on the job
 (`prUrl`, `prState`) together with the CI rollup (`ciStatus`: `none`, `pending`, `passing`,
-`failing`) and the head it describes (`ciHead`). `orch` never merges, force-pushes, or marks a PR
+`failing`) but no head (`ciHead` is written by `orch gh ci` alone). `orch` never merges, force-pushes, or marks a PR
 ready; a recorded draft PR is not a passing CI run, which is what the `ci` stage then establishes.
 `orch gh ci` reads check runs and statuses with `gh api` for the head SHA (not the PR rollup), the
 base branch's protection and rulesets for the required list, and Actions job logs for failures.
@@ -789,8 +897,9 @@ orch job transition <id> start|complete|fail|escalate|resume|rework|cancel --tok
 orch job artifact add <id> <relative-path> --token <t> [--replace] [--revision <n>]
 orch job review record <id> --reviewer <name> [--verdict pass|changes] [--artifact <path>]
                    [--summary <s>] --token <t>
-orch job pr        <id> --url <url> --state draft|ready|merged --token <t>
+orch job pr        <id> --url <url> --state draft|ready|merged|closed --token <t>
 orch job repo      <id> [--repo <path>] --token <t>   # refresh the identity now (mutations do it anyway)
+orch job supersede <id> --by <new-id> --session <name> [--force]   # record that <new-id> replaced <id>
 
 orch worktree create|show|adopt|remove|integrate <id> [--path <dir>] [--repo <clone>] --token <t>
 orch gh repo | issue <ref> | push <id> | pr create <id> --body-file <md> | pr status <id>
@@ -800,10 +909,14 @@ orch verify show <id>                  # latest run and validity for HEAD
 
 orch factory start  --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
                     [--max-rounds <n>] --session <name> [--ui|--no-ui]
+orch factory dispatch --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
+                    [--max-rounds <n>] --session <name>   # job for another repo; an independent session runs it
+orch factory list   [--repo <path|identity>]              # every job: state, owner, attention, session, PR
 orch factory next|status <id> [--ui|--no-ui]
-orch factory resume <id> --session <name> [--to <stage>] [--force]
+orch factory resume <id> --session <name> [--to <stage>] [--force] [--adopt <worktree>]
 orch factory check-readonly <id> --fingerprint <f>
 orch factory config
+orch job session attach <id> --provider vscode-agents|claude-code --ref <link|uuid> [--cwd <dir>] [--token <t>]
 
 orch ui [--port <n>] [--open]          # the only long-running command; loopback only
 ```
@@ -883,6 +996,13 @@ links, which it does for junctions and symlinks; if a skill is not listed, check
   spaces work everywhere because nothing goes through a shell.
 - Shells started by Claude Code do not keep environment variables between calls, so the plan's
   commands carry `--token <token>` explicitly instead of relying on `ORCH_TOKEN`.
+- A verification check that exceeds its `timeoutMs` is killed, and on Windows its descendants are
+  killed too: `spawnSync` only terminates the direct child, which for `npm test` is `cmd.exe`, so
+  `src/core/exec.ts` then reads the process table (PowerShell `Get-CimInstance Win32_Process`),
+  walks the children of the dead root (Windows keeps an orphan's parent id), and terminates every
+  process created since the check started, by pid. The check log records what was killed and
+  anything that could not be; a tree that was not fully stopped is written into the check's
+  `error` column. No process is ever killed by name.
 
 ## Enforced versus cooperative (Phase 5B)
 
@@ -918,15 +1038,16 @@ ui`, the loopback JSON API with Origin/CSRF/Host guards, the job board and job d
 controls through the shared domain layer, light and dark modes, API tests, component tests (jsdom),
 and Playwright browser checks over seeded fixtures).
 
-Not implemented: Claude session spawning or restoration (the dashboard records decisions; a session
-must resume), token accounting, any daemon or scheduler (the dashboard is a plain server you start
+Not implemented: Claude session spawning or restoration by `orch` itself (dispatch prepares a job
+and the VS Code host's `create_session` tool, called by the skill, starts the session; the dashboard
+records decisions; a session must resume), token accounting, any daemon or scheduler (the dashboard is a plain server you start
 and stop; nothing runs between commands), automatic crash recovery (a lapsed lease is only noticed
 when someone runs `factory next`, `resume`, or looks at the board), rebase-based integration (only
 merge commits), authentication for the dashboard (it is loopback-only and single-user by design), a
-workflow definition language, plugin distribution, re-running a failed GitHub workflow (a flaky
-required check consumes a repair cycle or is escalated; a human re-runs it), CI providers other than
-GitHub checks and statuses, and pagination beyond the first 100 check runs of a commit. Ordinary CI
-never calls a model: the skill
+workflow definition language, plugin distribution, more than one automatic re-run of a failed
+GitHub workflow per commit (after it, a failure is a repair or an escalation), classifying a
+`failure` conclusion as flaky or infrastructure from its logs, and CI providers other than GitHub
+checks and statuses. Ordinary CI never calls a model: the skill
 and agents are exercised by their contracts (frontmatter, templates, commands), and a live run
 requires a Claude Code session. The `events` table is an audit log, not an event-sourcing store.
 See `docs/decisions.md` for the reasoning behind what exists.

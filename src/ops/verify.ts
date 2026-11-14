@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'no
 import path from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
-import { spawnCommand } from '../core/exec.ts';
+import { spawnCommand, type ToolResult } from '../core/exec.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { buildReport, classifyPath, scanDiff, type SensitiveReport } from '../core/sensitive.ts';
 import {
@@ -236,6 +236,7 @@ function runCheck(spec: VerificationCheckSpec, wtPath: string, logFile: string):
     `cwd: ${cwd ?? spec.cwd}`,
     `status: ${status}  exit: ${String(r.status)}  signal: ${String(r.signal ?? null)}  duration: ${String(durationMs)}ms`,
     r.error ? `error: ${r.error}` : '',
+    r.cleanup ? `descendants: ${describeCleanup(r.cleanup)}` : '',
     '',
     '--- stdout ---',
     out.text,
@@ -255,8 +256,21 @@ function runCheck(spec: VerificationCheckSpec, wtPath: string, logFile: string):
     outputPath: null, // filled by the caller (relative form)
     outputSha256: createHash('sha256').update(text).digest('hex'),
     truncated: out.truncated || errOut.truncated,
-    error: r.error ?? null,
+    // A tree that could not be fully stopped is recorded with the check, not silently dropped.
+    error:
+      r.error ??
+      (r.cleanup && (r.cleanup.failed.length > 0 || r.cleanup.error)
+        ? `process tree not fully terminated: ${describeCleanup(r.cleanup)}`
+        : null),
   };
+}
+
+function describeCleanup(c: NonNullable<ToolResult['cleanup']>): string {
+  return (
+    `killed ${String(c.killed.length)} (${c.killed.join(', ') || 'none'})` +
+    (c.failed.length ? `; could not terminate ${c.failed.join(', ')}` : '') +
+    (c.error ? `; process table unavailable: ${c.error}` : '')
+  );
 }
 
 /** Run the effective policy in the job's clean worktree and record every step. */
