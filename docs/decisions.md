@@ -617,7 +617,29 @@ in the same place it describes the guard.
 **Found in live use.** The authoring session switched to a branch without `src/cli/checkout.ts`
 while Claude Code still held the hook configuration it had loaded; `node src/cli/main.ts checkout
 hook` then failed with "Unknown command" (a `UsageError`, exit 2), which `PreToolUse` reads as a
-refusal, and every Edit/Write in the session was blocked until hooks were disabled. The shipped
-command therefore exits 0 unless `src/cli/checkout.ts` exists, so the guard fails open on a branch
-that lacks it; the orch side cannot help there, because the code that would decide is exactly what
-is missing. Shell-form hooks run through Git Bash on Windows, which Claude Code needs anyway.
+refusal, and every Edit/Write in the session was blocked until hooks were disabled. The first fix
+exited 0 unless `src/cli/checkout.ts` existed, which silently switched the guard off on such a
+branch. The shipped command now tries the checkout's source, then the installed `orch` (only after
+`orch checkout list` succeeds, since an older install answers `checkout hook` with "Unknown
+command", exit 2, a refusal), and otherwise warns on stderr and exits 1: Claude Code shows a
+non-blocking hook error and the edit proceeds, so the absence of protection is visible without
+locking the session out. Rejected: exit 2 on absence (blocks all work on every older branch) and
+exit 0 (invisible). Shell-form hooks run through Git Bash on Windows, which Claude Code needs
+anyway; `tests/checkout.test.ts` runs the shipped command through `bash` against this checkout,
+a fake pre-checkout `orch`, and a fake capable one.
+
+**Liveness without a daemon (safety review).** A lease renewed only by Edit/Write let an active
+session lose its checkout: thirty minutes of reading, reasoning, or one long `npm run check` with
+no edit, and another session could claim it, after which the first session's next write was
+refused. Renewing on every tool call was rejected: the hook costs about a second per invocation on
+a loaded Windows machine, and hooking Bash to renew would also claim for read-only sessions
+unless a further mode were added. Instead the hook stores the payload's `transcript_path`; Claude
+Code appends to that file on every turn and tool call, so its mtime is the session's last
+activity, and a claim is live until `leaseMinutes` after the later of its lease and that mtime
+(`claimExpiresAt` in `storage/checkouts.ts`). A missing or unreadable transcript extends nothing,
+and CLI claims have none, so they behave as before. The residual gap is a single tool call longer
+than the lease with no edit in between. The claim store itself is unchanged: hooks inherit Claude
+Code's environment, so `ORCH_HOME` set only inside a Bash command does not reach them, which is
+why a development session's hook wrote into the real data directory; that is the operational
+location all sessions on the machine share, and tests isolate through the `ORCH_HOME` they pass
+to the spawned CLI.

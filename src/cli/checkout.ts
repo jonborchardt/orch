@@ -38,7 +38,8 @@ export const CHECKOUT_HELP = `Usage: orch checkout <command> [options]
                                             holder; SessionEnd releases the session's claims
 
 A checkout is identified by its Git directory, so the primary checkout and each linked worktree
-are separate checkouts and two spellings of one path are the same checkout. This is cooperative:
+are separate checkouts and two spellings of one path are the same checkout. A hook claim stays
+live while the session's transcript is being written, not only while it edits. This is cooperative:
 it detects two sessions sharing a checkout; it does not stop a process that writes without asking.
 --session defaults to $ORCH_SESSION. State lives under <data>/checkouts/, never in a repository.
 `;

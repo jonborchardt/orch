@@ -3,8 +3,12 @@
  * `<data>/checkouts/`, keyed by the checkout's canonical Git directory, holding a lease like a
  * job's: the owning session, when it lapses, and how long each renewal lasts. There is no daemon,
  * so a lease is renewed only when the owner claims again (the Edit/Write hook does that on every
- * write); a session that dies simply lets it lapse. Files, not the database: the guard runs from
- * whatever checkout a session is in, and must never migrate the shared database as a side effect.
+ * write). A claim made through the hook also records the session's transcript file; Claude Code
+ * appends to it on every turn and tool call, so its mtime says when the holder was last active,
+ * and a holder that reads, reasons, or runs a long command without editing stays live for
+ * `leaseMinutes` after its last activity instead of its last write. A session that dies lets
+ * both lapse. Files, not the database: the guard runs from whatever checkout a session is in,
+ * and must never migrate the shared database as a side effect.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -14,11 +18,12 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 
-import { type ClaimKind, decideClaim, leaseUntil } from '../core/ownership.ts';
+import { type ClaimKind, decideClaim, leaseExpired, leaseUntil } from '../core/ownership.ts';
 import type { RuntimePaths } from '../core/paths.ts';
 import { now } from '../core/workflow.ts';
 import type { CheckoutIdentity } from '../git/repo.ts';
@@ -29,6 +34,26 @@ export interface CheckoutClaim extends CheckoutIdentity {
   claimedAt: string;
   renewedAt: string;
   leaseExpiresAt: string;
+  /** The holder's Claude Code transcript, when claimed through the hook; absent for CLI claims. */
+  transcript?: string;
+}
+
+/**
+ * When the claim lapses: the lease, or `leaseMinutes` after the holder's transcript was last
+ * written, whichever is later. A transcript that is gone or unreadable extends nothing.
+ */
+export function claimExpiresAt(claim: CheckoutClaim): string {
+  if (!claim.transcript) return claim.leaseExpiresAt;
+  try {
+    const active = leaseUntil(statSync(claim.transcript).mtime.toISOString(), claim.leaseMinutes);
+    return active > claim.leaseExpiresAt ? active : claim.leaseExpiresAt;
+  } catch {
+    return claim.leaseExpiresAt;
+  }
+}
+
+export function claimLive(claim: CheckoutClaim, nowIso: string): boolean {
+  return !leaseExpired({ leaseExpiresAt: claimExpiresAt(claim) }, nowIso);
 }
 
 function dir(paths: RuntimePaths): string {
@@ -63,13 +88,16 @@ export interface ClaimCheckoutOptions {
   leaseMinutes?: number | undefined;
   /** Take the checkout from a session whose lease is still live. */
   force?: boolean | undefined;
+  /** The claiming session's transcript file (from the hook payload); keeps the claim live while active. */
+  transcript?: string | undefined;
 }
 
 /**
  * Take, renew, or reclaim a checkout for `session`. Throws OwnershipError while another session's
  * lease is live (unless forced). A first claim is created exclusively (`wx`), so two sessions
  * racing for an unclaimed checkout cannot both win; a renewal or reclaim replaces the file
- * atomically.
+ * atomically. Two sessions reclaiming one lapsed claim in the same instant is last-writer-wins;
+ * the loser learns it on its next claim, which is refused.
  */
 export function claimCheckout(
   paths: RuntimePaths,
@@ -83,11 +111,15 @@ export function claimCheckout(
   for (let attempt = 0; ; attempt++) {
     const current = parse(file);
     const kind = decideClaim(
-      { ownerSession: current?.session ?? null, leaseExpiresAt: current?.leaseExpiresAt ?? null },
+      {
+        ownerSession: current?.session ?? null,
+        leaseExpiresAt: current ? claimExpiresAt(current) : null,
+      },
       session,
       ts,
       opts.force,
     );
+    const transcript = opts.transcript ?? (kind === 'renew' ? current?.transcript : undefined);
     const claim: CheckoutClaim = {
       ...identity,
       session,
@@ -95,6 +127,7 @@ export function claimCheckout(
       claimedAt: kind === 'renew' && current ? current.claimedAt : ts,
       renewedAt: ts,
       leaseExpiresAt: leaseUntil(ts, minutes),
+      ...(transcript ? { transcript } : {}),
     };
     const body = JSON.stringify(claim, null, 2);
     mkdirSync(dir(paths), { recursive: true });

@@ -7,7 +7,6 @@
  * not stopped by it.
  */
 import { OwnershipError, ValidationError } from '../core/errors.ts';
-import { leaseExpired } from '../core/ownership.ts';
 import type { RuntimePaths } from '../core/paths.ts';
 import { now } from '../core/workflow.ts';
 import { type CheckoutIdentity, checkoutIdentity } from '../git/repo.ts';
@@ -15,6 +14,8 @@ import {
   type CheckoutClaim,
   claimCheckout,
   type ClaimCheckoutOptions,
+  claimExpiresAt,
+  claimLive,
   listClaims,
   readClaim,
   releaseAll,
@@ -24,12 +25,15 @@ import {
 export interface CheckoutStatus {
   path: string;
   checkout: CheckoutIdentity | null;
-  owner: (CheckoutClaim & { live: boolean }) | null;
+  owner: LiveClaim | null;
 }
 
-function withLiveness(claim: CheckoutClaim | undefined): CheckoutStatus['owner'] {
+/** A claim with its effective expiry: the lease, extended by the holder's last recorded activity. */
+export type LiveClaim = CheckoutClaim & { live: boolean; expiresAt: string };
+
+function withLiveness(claim: CheckoutClaim | undefined): LiveClaim | null {
   if (!claim) return null;
-  return { ...claim, live: !leaseExpired(claim, now()) };
+  return { ...claim, live: claimLive(claim, now()), expiresAt: claimExpiresAt(claim) };
 }
 
 /** Who holds the checkout containing `path`. Read-only; never claims. */
@@ -43,8 +47,8 @@ export function checkoutStatus(paths: RuntimePaths, path: string): CheckoutStatu
 }
 
 /** Every recorded claim, with liveness, for `orch checkout list`. Read-only. */
-export function listCheckouts(paths: RuntimePaths): NonNullable<CheckoutStatus['owner']>[] {
-  return listClaims(paths).map((c) => ({ ...c, live: !leaseExpired(c, now()) }));
+export function listCheckouts(paths: RuntimePaths): LiveClaim[] {
+  return listClaims(paths).flatMap((c) => withLiveness(c) ?? []);
 }
 
 export interface ClaimResult {
@@ -85,6 +89,7 @@ export function releaseAllCheckouts(paths: RuntimePaths, session: string): { rel
 export interface HookInput {
   hook_event_name?: string;
   session_id?: string;
+  transcript_path?: string;
   cwd?: string;
   tool_name?: string;
   tool_input?: { file_path?: string; notebook_path?: string } | undefined;
@@ -113,15 +118,17 @@ export function parseHookInput(text: string): HookInput {
   return raw;
 }
 
-function describe(owner: NonNullable<CheckoutStatus['owner']>): string {
-  return `session ${owner.session} (${owner.kind} checkout ${owner.root}, lease until ${owner.leaseExpiresAt})`;
+function describe(owner: LiveClaim): string {
+  return `session ${owner.session} (${owner.kind} checkout ${owner.root}, live until ${owner.expiresAt})`;
 }
 
 /**
  * Claude Code hook: PreToolUse on Edit/Write claims the checkout that contains the file and
  * blocks (exit 2) while another live session holds it; SessionStart only reports an existing
  * holder as context, so a read-only session never claims anything; SessionEnd releases whatever
- * this session held. Any other event, or a tool call without a file path, is ignored.
+ * this session held. Any other event, or a tool call without a file path, is ignored. The claim
+ * records `transcript_path`, so the holder stays live while its session is active at all, not
+ * only while it edits.
  */
 export function hookCheckout(paths: RuntimePaths, input: HookInput): HookOutcome {
   const session = input.session_id;
@@ -157,7 +164,7 @@ export function hookCheckout(paths: RuntimePaths, input: HookInput): HookOutcome
   const checkout = checkoutIdentity(file);
   if (!checkout) return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
   try {
-    claimCheckout(paths, checkout, session);
+    claimCheckout(paths, checkout, session, { transcript: input.transcript_path });
     return { exitCode: 0, stdout: '', stderr: '', action: 'claimed' };
   } catch (err) {
     if (!(err instanceof OwnershipError)) throw err;

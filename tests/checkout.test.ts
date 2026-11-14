@@ -3,13 +3,24 @@
  * linked worktrees; the hook protocol is exercised both in-process and through the CLI with the
  * JSON Claude Code sends. Nothing here touches a real ORCH_HOME.
  */
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, delimiter, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { OwnershipError, ValidationError } from '../src/core/errors.ts';
+import { installRoot } from '../src/core/paths.ts';
 import { checkoutIdentity } from '../src/git/repo.ts';
 import {
   checkoutStatus,
@@ -41,13 +52,25 @@ afterEach(() => {
 });
 
 const paths = () => homePaths(home);
-const pre = (session: string, file: string) => ({
+const pre = (session: string, file: string, transcript?: string) => ({
   hook_event_name: 'PreToolUse',
   session_id: session,
   cwd: repo,
   tool_name: 'Edit',
   tool_input: { file_path: file },
+  ...(transcript ? { transcript_path: transcript } : {}),
 });
+const claimFile = (key: string) =>
+  join(home, 'checkouts', `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`);
+/** A fake Claude Code transcript last written `minutesAgo`. */
+function transcriptFile(minutesAgo: number): string {
+  const file = join(tempDir('orch-co-transcript-'), 'session.jsonl');
+  dirs.push(join(file, '..'));
+  writeFileSync(file, '{}\n');
+  const t = new Date(Date.now() - minutesAgo * 60_000);
+  utimesSync(file, t, t);
+  return file;
+}
 
 describe('checkout identity', () => {
   it('distinguishes the primary checkout from each linked worktree of the same repository', () => {
@@ -308,5 +331,132 @@ describe('the Claude Code hook', () => {
     ).toHaveLength(1);
     expect(json<unknown[]>(orch(home, cwd, ['--json', 'checkout', 'list']))).toHaveLength(1);
     expect(orch(home, cwd, ['checkout', 'claim', '--path', repo, '--session', 's2']).code).toBe(0);
+  });
+});
+
+describe('liveness while the holder is active but not editing', () => {
+  it('a lapsed lease stays live while the holder\u2019s transcript is being written', () => {
+    const identity = checkoutIdentity(repo);
+    if (!identity) throw new Error('no identity');
+    const active = transcriptFile(1);
+    claimCheckout(paths(), identity, 'A', { leaseMinutes: 10, transcript: active });
+    // Age the lease past expiry while the session keeps writing its transcript.
+    const claim = readClaim(paths(), identity.key);
+    if (!claim) throw new Error('no claim');
+    writeFileSync(
+      claimFile(identity.key),
+      JSON.stringify({ ...claim, leaseExpiresAt: '2000-01-01T00:00:00.000Z' }),
+    );
+    const owner = checkoutStatus(paths(), repo).owner;
+    expect(owner).toMatchObject({ session: 'A', live: true });
+    expect(owner?.expiresAt).not.toBe('2000-01-01T00:00:00.000Z');
+    expect(() => claimCheckoutAt(paths(), repo, 'B')).toThrow(OwnershipError);
+    const refused = hookCheckout(paths(), pre('B', join(repo, 'b.ts')));
+    expect(refused.exitCode).toBe(2);
+    expect(refused.stderr).toContain('live until');
+    // The same transcript idle for longer than the lease: the holder is gone, B takes over.
+    const idle = new Date(Date.now() - 11 * 60_000);
+    utimesSync(active, idle, idle);
+    expect(checkoutStatus(paths(), repo).owner?.live).toBe(false);
+    expect(hookCheckout(paths(), pre('B', join(repo, 'b.ts'))).action).toBe('claimed');
+    // A's next write is refused: it learns it was superseded instead of racing.
+    expect(hookCheckout(paths(), pre('A', join(repo, 'a.ts'), active)).exitCode).toBe(2);
+  });
+
+  it('a claim without a transcript, or whose transcript is gone, lapses on the lease alone', () => {
+    const identity = checkoutIdentity(repo);
+    if (!identity) throw new Error('no identity');
+    const gone = transcriptFile(0);
+    claimCheckout(paths(), identity, 'A', { leaseMinutes: 0, transcript: gone });
+    rmSync(gone);
+    expect(checkoutStatus(paths(), repo).owner?.live).toBe(false);
+    expect(claimCheckoutAt(paths(), repo, 'B').kind).toBe('reclaim');
+    expect(readClaim(paths(), identity.key)?.transcript).toBeUndefined();
+  });
+
+  it('the hook records the transcript and a renewal keeps it', () => {
+    const transcript = transcriptFile(0);
+    hookCheckout(paths(), pre('A', join(repo, 'a.ts'), transcript));
+    expect(checkoutStatus(paths(), repo).owner?.transcript).toBe(transcript);
+    // A CLI renewal by the same session (no transcript in hand) does not drop it.
+    expect(claimCheckoutAt(paths(), repo, 'A').claim.transcript).toBe(transcript);
+    // A different session taking over by force does not inherit it.
+    expect(claimCheckoutAt(paths(), repo, 'B', { force: true }).claim.transcript).toBeUndefined();
+  });
+});
+
+describe('the shipped hook command (.claude/settings.json)', () => {
+  const settings = JSON.parse(
+    readFileSync(join(installRoot(), '.claude', 'settings.json'), 'utf8'),
+  ) as { hooks: Record<string, { hooks: { command: string }[] }[]> };
+  const commands = ['PreToolUse', 'SessionStart', 'SessionEnd'].map(
+    (e) => settings.hooks[e]?.[0]?.hooks[0]?.command,
+  );
+  const command = commands[0] ?? '';
+  const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  const sh = spawnSync('bash', ['-c', 'exit 0']);
+  const run = (projectDir: string, bin: string | undefined, payload: unknown) => {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ORCH_HOME: home,
+      CLAUDE_PROJECT_DIR: projectDir,
+    };
+    if (bin) env[pathKey] = `${bin}${delimiter}${process.env[pathKey] ?? ''}`;
+    const r = spawnSync('bash', ['-c', command], {
+      cwd: projectDir,
+      encoding: 'utf8',
+      env,
+      input: JSON.stringify(payload),
+    });
+    return { code: r.status, out: r.stdout, err: r.stderr };
+  };
+  /** A directory holding a fake `orch` on PATH. */
+  const fakeOrch = (script: string) => {
+    const bin = tempDir('orch-co-bin-');
+    dirs.push(bin);
+    writeFileSync(join(bin, 'orch'), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    return bin;
+  };
+
+  it('is one command for all three events and runs the checkout source when present', () => {
+    expect(new Set(commands).size).toBe(1);
+    expect(command).toContain('src/cli/checkout.ts');
+    if (sh.error) return; // no bash on this machine: Claude Code could not run the hook either
+    const r = run(installRoot(), undefined, pre('A', join(repo, 'a.ts')));
+    expect(r.code, r.err).toBe(0);
+    expect(checkoutStatus(paths(), repo).owner?.session).toBe('A');
+    const refused = run(installRoot(), undefined, pre('B', join(repo, 'b.ts')));
+    expect(refused.code).toBe(2);
+    expect(refused.err).toContain('held by session A');
+  });
+
+  it('on a branch without the command it warns and continues instead of blocking or staying silent', () => {
+    if (sh.error) return;
+    const old = tempDir('orch-co-oldbranch-');
+    dirs.push(old);
+    expect(existsSync(join(old, 'src', 'cli', 'checkout.ts'))).toBe(false);
+    // An installed orch from before the checkout command: "Unknown command", exit 2, which a
+    // PreToolUse hook would otherwise read as a refusal of every write.
+    const oldOrch = fakeOrch('echo "UsageError: Unknown command: checkout" >&2; exit 2');
+    const r = run(old, oldOrch, pre('A', join(repo, 'a.ts')));
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('INACTIVE');
+    expect(listCheckouts(paths())).toEqual([]);
+    // No orch at all: the same visible, non-blocking outcome.
+    const none = run(old, fakeOrch('exit 127'), pre('A', join(repo, 'a.ts')));
+    expect(none.code).toBe(1);
+    expect(none.err).toContain('INACTIVE');
+  });
+
+  it('falls back to an installed orch that has the checkout command', () => {
+    if (sh.error) return;
+    const old = tempDir('orch-co-oldbranch-');
+    dirs.push(old);
+    const newOrch = fakeOrch(
+      'case "$2" in list) exit 0;; hook) cat >/dev/null; echo "installed orch handled $1 $2"; exit 0;; esac; exit 2',
+    );
+    const r = run(old, newOrch, pre('A', join(repo, 'a.ts')));
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('installed orch handled checkout hook');
   });
 });

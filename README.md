@@ -741,18 +741,28 @@ the database, so the guard can run from any checkout without touching the shared
   `PreToolUse` on `Edit|Write|MultiEdit|NotebookEdit` claims the checkout that contains the file
   and exits 2 (the tool call is refused, with the holder and the recovery command as the reason)
   while another live session holds it; `SessionStart` only reports a live holder as context, so a
-  read-only session never claims anything; `SessionEnd` releases the session's claims. A session
-  that died without `SessionEnd` simply lets its lease lapse (30 minutes without a write), after
+  read-only session never claims anything; `SessionEnd` releases the session's claims. The claim
+  records the session's transcript file (`transcript_path` in the hook payload), which Claude Code
+  appends to on every turn and tool call, so the holder stays live for 30 minutes after its last
+  activity, not its last write: a session that reads, reasons, or runs a long test suite without
+  editing keeps its checkout. A session that died without `SessionEnd` lets both lapse, after
   which the next session reclaims; the old session's next write is then refused instead of racing.
-  The command first checks that `src/cli/checkout.ts` exists and otherwise exits 0, so a session
-  that switches to a branch without the command is not locked out of editing (Claude Code keeps
-  the hook configuration it loaded; a failing hook command would refuse every write). To protect
-  every repository, add the same three entries to `~/.claude/settings.json` with the installed
-  `orch` (`orch checkout hook`) instead of the source path.
+  The shipped command runs this checkout's own source when `src/cli/checkout.ts` exists, otherwise
+  the installed `orch` if it has the `checkout` command, and otherwise prints a warning and exits
+  1: Claude Code shows the warning and lets the edit through, so a session on a branch without the
+  guard sees that it is unprotected rather than being locked out or silently exposed (Claude Code
+  keeps the hook configuration it loaded at startup across branch switches, and an exit 2 from any
+  cause would refuse every write). To protect every repository, add the same three entries to
+  `~/.claude/settings.json` with the installed `orch` (`orch checkout hook`) instead of the
+  source path.
 
 This detects accidental sharing of one checkout between sessions. It is not filesystem isolation:
 Bash commands are not hooked, a process that writes without asking is not stopped, and the hook
-session id is Claude Code's, unrelated to the `--session` names used for job leases.
+session id is Claude Code's, unrelated to the `--session` names used for job leases. Hooks run
+with Claude Code's own environment, so claims go to the `ORCH_HOME` Claude Code was started with
+(by default the user's data directory), not one set inside a Bash command; sessions see each
+other's claims only when they share that location. Two sessions reclaiming one lapsed claim in the
+same instant is last-writer-wins, and the loser's next write is refused.
 
 ## CLI reference
 
