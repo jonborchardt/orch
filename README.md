@@ -344,19 +344,26 @@ commit, the check runs and commit statuses plus the base branch's required-check
 the observation on the job (`ciStatus`, `ciHead`, a `ci.observed` event listing every check), and
 acts:
 
-| GitHub reports (for required checks)                                                                | `orch gh ci` does                                                                                                                                                          |
-| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| all succeeded (at least one check ran; skipped/neutral alone never count)                           | completes the job in the same call, once the gate confirms a clean, verified HEAD; `orch job transition complete` is refused in `ci`, so no stored verdict is ever reused  |
-| any queued or running, or none reported yet (first 5 observations)                                  | nothing: the coordinator waits about a minute and runs it again, or releases the job and resumes later; the CLI never polls by itself                                      |
-| `failure` or `timed_out`                                                                            | saves each failing Actions job log under `<artifactDir>/ci/<sha7>/`, then `rework`: back to `build` with the reason; `ciRepairs` + 1                                       |
-| `cancelled`, `startup_failure`, `stale`, `action_required`, or a required check that never reported | `escalate`: not a code defect; a human re-runs the workflow and resumes `--to ci`                                                                                          |
-| no checks at all after the grace window, or only skipped ones                                       | `escalate`: the factory does not invent success; a human adds CI (resume `--to ci`) or closes out with resume `--to completed`, which only this case and a merged PR allow |
-| PR head differs from the worktree HEAD or `origin/<branch>`                                         | `escalate`: the branch changed outside the job; no verdict is borrowed from another commit                                                                                 |
-| PR closed without merging                                                                           | `escalate`; `prState` becomes `closed` (a cancelled job never implies a closed PR)                                                                                         |
-| `gh` or the API failed                                                                              | exit 1, nothing recorded                                                                                                                                                   |
+| GitHub reports (for required checks)                                                                             | `orch gh ci` does                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| all succeeded (at least one check ran; skipped/neutral alone never count)                                        | completes the job in the same call, once the gate confirms a clean, verified HEAD; `orch job transition complete` is refused in `ci`, so no stored verdict is ever reused                                                                                                                                              |
+| any queued or running, or none reported yet (first 5 observations)                                               | nothing: the result says how long to wait (`waitSeconds`: 60 s for the first five observations of a head, then longer, at most 300 s); the coordinator sleeps and runs it again, or releases the job after 20 pending observations in one session (`plan.ci.release`) and resumes later; the CLI never polls by itself |
+| `failure`, `timed_out`, `cancelled`, `startup_failure`, or `stale` on an Actions check, first time for this head | once every other required check has finished: `gh run rerun <run> --failed` (recorded as `ci.rerun`, bound to the head, at most one per head), then `wait`; no source changes, no repair spent. Until GitHub reports the new attempt the old runs are ignored for 5 observations                                       |
+| `failure` or `timed_out` again for the same head (or the re-run could not be requested)                          | saves each failing Actions job log under `<artifactDir>/ci/<sha7>/`, then `rework`: back to `build` with the reason; `ciRepairs` + 1                                                                                                                                                                                   |
+| `cancelled`, `startup_failure`, `stale`, `action_required` again, or a required check that never reported        | `escalate`: not a code defect; a human re-runs the workflow and resumes `--to ci`                                                                                                                                                                                                                                      |
+| no checks at all after the grace window, or only skipped ones                                                    | `escalate`: the factory does not invent success; a human adds CI (resume `--to ci`) or closes out with resume `--to completed`, which only this case and a merged PR allow                                                                                                                                             |
+| PR head differs from the worktree HEAD or `origin/<branch>`                                                      | `escalate`: the branch changed outside the job; no verdict is borrowed from another commit                                                                                                                                                                                                                             |
+| PR closed without merging                                                                                        | `escalate`; `prState` becomes `closed` (a cancelled job never implies a closed PR)                                                                                                                                                                                                                                     |
+| `gh` or the API failed                                                                                           | exit 1, nothing recorded                                                                                                                                                                                                                                                                                               |
 
-Without a configured required-check list every reported check counts as required, and the PR
-passes only when at least one check actually ran and succeeded; with one, optional checks may fail.
+Without a configured required-check list every reported check counts as required; with one,
+optional checks may fail. Either way the PR passes only when at least one check actually ran and
+succeeded: skipped-only checks escalate even when a human made them required.
+Check runs and statuses are read across every page (`gh api --paginate --slurp`, so `gh` 2.41 or
+newer); a page that fails to load fails the whole observation rather than passing a partial list.
+Runs with one name in one check suite are attempts of the same check (a re-run creates a new one in
+the same suite) and only the newest counts; runs with one name in different suites, or whose suite
+GitHub did not report, are independent checks and the worst one counts.
 Private repositories on GitHub's free plan answer both configuration endpoints with HTTP 403, so
 for them the list is always "unknown" and every reported check must pass.
 A CI repair goes through the normal cycle: the builder gets the saved logs in its plan, commits,
@@ -990,10 +997,10 @@ records decisions; a session must resume), token accounting, any daemon or sched
 and stop; nothing runs between commands), automatic crash recovery (a lapsed lease is only noticed
 when someone runs `factory next`, `resume`, or looks at the board), rebase-based integration (only
 merge commits), authentication for the dashboard (it is loopback-only and single-user by design), a
-workflow definition language, plugin distribution, re-running a failed GitHub workflow (a flaky
-required check consumes a repair cycle or is escalated; a human re-runs it), CI providers other than
-GitHub checks and statuses, and pagination beyond the first 100 check runs of a commit. Ordinary CI
-never calls a model: the skill
+workflow definition language, plugin distribution, more than one automatic re-run of a failed
+GitHub workflow per commit (after it, a failure is a repair or an escalation), classifying a
+`failure` conclusion as flaky or infrastructure from its logs, and CI providers other than GitHub
+checks and statuses. Ordinary CI never calls a model: the skill
 and agents are exercised by their contracts (frontmatter, templates, commands), and a live run
 requires a Claude Code session. The `events` table is an audit log, not an event-sourcing store.
 See `docs/decisions.md` for the reasoning behind what exists.

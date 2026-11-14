@@ -239,17 +239,21 @@ Completing `pr` is not the end: the job enters `ci`, and the plan's commands are
 ci <id> --token <t>`, then `orch factory next`. `orch gh ci` reads GitHub's checks for the exact PR
 head and acts for you; read its `action`:
 
-- `wait`: required checks are queued, running, or not registered yet. Wait about 60 seconds
-  (`sleep 60`) in a Bash call of its own, then run `orch factory next` and the command again in the
-  next call: never chain the wait and the `orch` commands in one script, so that a session killed
-  while waiting leaves no scheduled write behind. Do not call it in a tight loop. After roughly 30
-  pending observations in one session (`plan.ci.polls`), release the job
-  (`orch job release <id> --token <t>`), tell the user CI is still running and give the resume
-  command, and stop; `orch factory resume` later re-reads GitHub and continues here.
+- `wait`: required checks are queued, running, not registered yet, or `orch` just asked GitHub to
+  re-run the ones that failed (its `reason` says so; at most one re-run per head, recorded as
+  `ci.rerun`). Sleep exactly the seconds in `waitSeconds` (`sleep <n>`; a minute at first, longer
+  later, never more than five minutes) in a Bash call of its own, then run `orch factory next` and
+  the command again in the next call: never chain the wait and the `orch` commands in one script,
+  so that a session killed while waiting leaves no scheduled write behind. Do not call it in a
+  tight loop. When `plan.ci.release` is true (`CI_MAX_SESSION_POLLS` pending observations in this
+  session), the plan's only command is `orch job release <id> --token <t>`: run it, tell the user
+  CI is still running and give the resume command, and stop; `orch factory resume` later re-reads
+  GitHub and continues here.
 - `complete`: required checks passed for this head and the job is `completed` in the same call;
   `orch factory next` confirms `done`. There is no separate `complete` step for `ci`: a stored
   verdict, even a passing one, is never reused, so a resumed session always runs `orch gh ci`.
-- `rework`: a required check failed. `orch` saved the failing logs under `<artifactDir>/ci/<sha7>/`
+- `rework`: a required check failed twice for this commit (the re-run did not change the verdict),
+  or could not be re-run. `orch` saved the failing logs under `<artifactDir>/ci/<sha7>/`
   and moved the job to `build` with `plan.ci.repairs` incremented. Run the loop as usual: the build
   plan names the logs; give the builder the log paths and the failing check names, and require a
   real fix (never weakening tests, checks, `factory.json`, or CI workflows to make CI pass). The
@@ -259,8 +263,8 @@ head and acts for you; read its `action`:
   budget is spent; a check was cancelled or never reported; the PR has no checks at all or was
   closed; the branch moved outside the job) and stop, as for any `needs-human`.
 
-Never run `gh run rerun`, `gh pr ready`, or `gh pr merge` yourself, and never push outside
-`orch gh push`. If `orch gh ci` exits 1 because GitHub or the network failed, nothing was recorded:
+Never run `gh run rerun`, `gh pr ready`, or `gh pr merge` yourself (`orch gh ci` requests the one
+bounded re-run), and never push outside `orch gh push`. If `orch gh ci` exits 1 because GitHub or the network failed, nothing was recorded:
 retry once after a minute, then release the job and report.
 
 ## 4. Report

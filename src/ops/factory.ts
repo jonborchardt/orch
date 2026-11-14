@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { CI_MAX_SESSION_POLLS, waitSeconds } from '../core/ci.ts';
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
@@ -38,7 +39,7 @@ import {
   resumeJob,
   transitionJob,
 } from '../storage/jobs.ts';
-import type { Artifact, Integration, Job, Review } from '../storage/schema.ts';
+import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
 import { listIntegrations } from '../storage/verification.ts';
 import { issue as ghIssue } from './github.ts';
 import {
@@ -134,6 +135,14 @@ export interface Plan {
     maxRepairs: number;
     /** Observations of the current head so far (one per `orch gh ci`). */
     polls: number;
+    /** Observations of the current head since this session claimed the job. */
+    sessionPolls: number;
+    /** Re-runs GitHub accepted for the current head. */
+    reruns: number;
+    /** Seconds to sleep before the next `orch gh ci` while checks are pending. */
+    waitSeconds: number;
+    /** True when this session has observed the head pending CI_MAX_SESSION_POLLS times. */
+    release: boolean;
     /** Reason from the newest observation. */
     lastReason: string | null;
   };
@@ -195,7 +204,7 @@ export interface PlanOptions {
 
 /** Build the plan for a job. Read-only. */
 export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan {
-  const detail = jobDetail(store, id, 50);
+  const detail = jobDetail(store, id, 1000);
   const job = detail.job;
   const config = loadConfig(store);
   const roles = resolveRoles(config);
@@ -223,6 +232,11 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const observations = detail.events.filter((e) => e.type === 'ci.observed');
   const lastObserved = observations.at(-1);
   const ciCurrent = job.ciHead !== null && job.ciHead === (worktree?.head ?? null);
+  const ofHead = (e: Event) =>
+    e.payload['head'] === job.ciHead && e.payload['outcome'] !== undefined;
+  const polls = observations.filter(ofHead).length;
+  const claimedAt = detail.events.filter((e) => e.type === 'job.claimed').at(-1)?.id ?? 0;
+  const sessionPolls = observations.filter((e) => e.id > claimedAt && ofHead(e)).length;
   const has = (p: string) => detail.artifacts.some((a) => a.path === p);
   // Every mutating command carries the token explicitly: shells spawned by Claude Code do not
   // keep environment variables between calls, so the skill substitutes <token> each time.
@@ -257,9 +271,14 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       current: ciCurrent,
       repairs: job.ciRepairs,
       maxRepairs: job.maxCiRepairs,
-      polls: observations.filter(
-        (e) => e.payload['head'] === job.ciHead && e.payload['outcome'] !== undefined,
+      polls,
+      sessionPolls,
+      reruns: detail.events.filter(
+        (e) =>
+          e.type === 'ci.rerun' && e.payload['head'] === job.ciHead && e.payload['ok'] === true,
       ).length,
+      waitSeconds: waitSeconds(polls),
+      release: job.ciStatus === 'pending' && sessionPolls >= CI_MAX_SESSION_POLLS,
       lastReason: (lastObserved?.payload['reason'] as string | undefined) ?? null,
     },
   };
@@ -448,19 +467,27 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const budget = `Repairs used: ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}.`;
       // A stored verdict, even a passing one for HEAD, never completes the stage: orch gh ci
       // re-reads GitHub and completes in the same call when the checks still pass for this head.
-      plan.reason =
-        `Reconcile CI for the PR head through orch gh ci; it records GitHub's verdict for the exact commit and ` +
-        `acts on it (passing: completes the job; failing: rework to build with saved logs; cannot run or no checks: escalate). ` +
-        `Pending checks are only an observation: wait about a minute and run it again, or release the job and resume ` +
-        `later; the CLI never polls by itself. ${budget}` +
-        (job.ciHead && !ciCurrent
-          ? ` The last observation was for ${job.ciHead.slice(0, 7)}, not HEAD ${worktree.head?.slice(0, 7) ?? '?'}.`
-          : '') +
-        (ciCurrent && job.ciStatus === 'passing'
-          ? ` A passing verdict is recorded for ${job.ciHead?.slice(0, 7) ?? '?'}; it is confirmed against GitHub, not reused.`
-          : '') +
-        (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
-      plan.commands = [...start, ci, `orch factory next ${id}`];
+      if (plan.ci.release) {
+        plan.reason =
+          `CI is still pending after ${String(sessionPolls)} observations in this session. Release the job, ` +
+          `tell the user CI is running, and stop; orch factory resume re-reads GitHub later. ${budget}` +
+          (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
+        plan.commands = [`orch job release ${id}${tok}`];
+      } else {
+        plan.reason =
+          `Reconcile CI for the PR head through orch gh ci; it records GitHub's verdict for the exact commit and ` +
+          `acts on it (passing: completes the job; failing: re-run once, then rework to build with saved logs; ` +
+          `cannot run or no checks: escalate). Pending checks are only an observation: sleep plan.ci.waitSeconds ` +
+          `(${String(plan.ci.waitSeconds)} s now) and run it again; the CLI never polls by itself. ${budget}` +
+          (job.ciHead && !ciCurrent
+            ? ` The last observation was for ${job.ciHead.slice(0, 7)}, not HEAD ${worktree.head?.slice(0, 7) ?? '?'}.`
+            : '') +
+          (ciCurrent && job.ciStatus === 'passing'
+            ? ` A passing verdict is recorded for ${job.ciHead?.slice(0, 7) ?? '?'}; it is confirmed against GitHub, not reused.`
+            : '') +
+          (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
+        plan.commands = [...start, ci, `orch factory next ${id}`];
+      }
       break;
     }
     default:
