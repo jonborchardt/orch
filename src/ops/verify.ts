@@ -5,7 +5,7 @@
  * human authorized the worktree's own factory.json through the dashboard.
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
@@ -25,7 +25,6 @@ import {
   type VerificationPolicy,
 } from '../core/verification.ts';
 import { now } from '../core/workflow.ts';
-import { describeRepo } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
 import type { Store } from '../storage/client.ts';
 import { type Auth, authorize, getJob } from '../storage/jobs.ts';
@@ -38,6 +37,7 @@ import {
   type RunDetail,
   startRun,
 } from '../storage/verification.ts';
+import { jobCheckout } from './repo.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
 
 export interface EffectivePolicy {
@@ -261,18 +261,21 @@ function runCheck(spec: VerificationCheckSpec, wtPath: string, logFile: string):
 
 /** Run the effective policy in the job's clean worktree and record every step. */
 export function verifyJob(store: Store, id: string, auth: Auth): VerifyResult {
-  const job = authorize(store, id, auth);
-  const wt = worktreeOf(job);
+  const owner = authorize(store, id, auth);
+  const wt = worktreeOf(owner);
   if (!wt) throw new ValidationError(`Job ${id} has no worktree; run orch worktree create first.`);
-  if (wt.branch !== job.branch) {
+  if (wt.branch !== owner.branch) {
     throw new ValidationError(
-      `Worktree is on ${wt.branch ?? '(detached)'} but the job branch is ${job.branch ?? '?'}.`,
+      `Worktree is on ${wt.branch ?? '(detached)'} but the job branch is ${owner.branch ?? '?'}.`,
     );
   }
-  const identity = describeRepo(wt.path).identity;
-  if (identity !== job.repo) {
-    throw new ValidationError(`Worktree belongs to ${identity}; job ${id} belongs to ${job.repo}.`);
-  }
+  // The worktree is bound to the job's repository by its common directory (worktreeOf); a remote
+  // that changed since the job was created is reconciled here, not refused.
+  const checked = existsSync(owner.repoPath)
+    ? jobCheckout(store, owner, auth)
+    : { job: owner, auth };
+  const job = checked.job;
+  auth = checked.auth;
   requireClean(wt, 'verification covers committed snapshots only. Commit first.');
   const eff = effectivePolicy(job, wt);
   const status = verificationStatus(store, job, wt, eff);

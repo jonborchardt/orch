@@ -115,21 +115,19 @@ describe('worktree create', () => {
 
   it('validates repository identity and the checkout location', () => {
     const other = makeRepo('git@github.com:acme/other.git');
-    extra.push(other);
-    const job = createJob(store, {
-      title: 't',
-      repo: 'github.com/acme/alpha',
-      repoPath: other,
-      baseBranch: 'main',
-    });
-    const { token } = claimJob(store, job.id, { session: 's1' });
-    expect(() => createWorktree(store, job.id, { token })).toThrow(
+    const second = tempDir('orch-clone2-');
+    extra.push(other, second);
+    gitIn(second, 'clone', '-q', bare, '.');
+    gitIn(second, 'remote', 'set-url', 'origin', 'git@github.com:acme/alpha.git');
+    const { id, token } = newJob();
+    // --repo must name the job's repository or another clone of the same remote.
+    expect(() => createWorktree(store, id, { token }, { repo: other })).toThrow(
       /belongs to github.com\/acme\/alpha/,
     );
     // --repo can point at a different clone of the right repository, which is then recorded.
-    const r = createWorktree(store, job.id, { token }, { repo: clone });
+    const r = createWorktree(store, id, { token }, { repo: second });
     expect(r.created).toBe(true);
-    expect(getJob(store.db, job.id).repoPath).toBe(describeRepo(clone).root);
+    expect(getJob(store.db, id).repoPath).toBe(describeRepo(second).root);
     // A missing checkout is reported, not silently recreated.
     const gone = createJob(store, {
       title: 't2',

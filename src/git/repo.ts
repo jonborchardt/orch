@@ -8,8 +8,10 @@ import { git, tryGit } from './run.ts';
 
 export interface RepoInfo {
   root: string;
-  /** Stable identity shared by all clones: normalized origin URL, else the directory name. */
+  /** Remote identity shared by all clones: normalized origin URL, else the directory name. */
   identity: string;
+  /** The normalized origin URL, undefined when the checkout has no `origin`. */
+  remote: string | undefined;
   currentBranch: string;
 }
 
@@ -29,10 +31,12 @@ export function describeRepo(cwd: string): RepoInfo {
   if (!root)
     throw new ValidationError(`${cwd} is not inside a Git repository (use --repo <path>).`);
   // The configured URL, not `remote get-url`, which applies url.<base>.insteadOf rewrites.
-  const remote = tryGit(root, 'config', '--get', 'remote.origin.url');
+  const url = tryGit(root, 'config', '--get', 'remote.origin.url');
+  const remote = url ? normalizeRemote(url) : undefined;
   return {
     root,
-    identity: remote ? normalizeRemote(remote) : basename(root).toLowerCase(),
+    identity: remote ?? basename(root).toLowerCase(),
+    remote,
     currentBranch: tryGit(root, 'rev-parse', '--abbrev-ref', 'HEAD') ?? 'HEAD',
   };
 }

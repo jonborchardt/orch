@@ -41,6 +41,7 @@ import {
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
+import { jobCheckout } from './repo.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
 import { cap, effectivePolicy, verificationStatus } from './verify.ts';
 
@@ -189,7 +190,10 @@ export function ensureDraftPr(store: Store, id: string, input: EnsurePrInput): P
   const { path, branch, head } = tree;
   if (!existsSync(input.bodyFile))
     throw new ValidationError(`Body file not found: ${input.bodyFile}`);
-  resolveRepo(job, path);
+  // A remote added or changed since the job was created is reconciled before GitHub is consulted.
+  const checked = existsSync(job.repoPath) ? jobCheckout(store, job, input) : { job, auth: input };
+  input = { ...input, expectRevision: checked.auth.expectRevision };
+  resolveRepo(checked.job, path);
   if (!remoteHead(path, job.baseBranch)) {
     throw new ValidationError(`Base branch ${job.baseBranch} does not exist on origin.`);
   }

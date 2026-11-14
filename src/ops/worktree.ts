@@ -7,7 +7,7 @@ import { resolve, sep } from 'node:path';
 
 import { MergeConflictError, ValidationError } from '../core/errors.ts';
 import { canonicalPath, jobWorktreeDir } from '../core/paths.ts';
-import { baseRef, describeRepo, remoteExists } from '../git/repo.ts';
+import { baseRef, remoteExists } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
 import {
   addWorktree,
@@ -27,12 +27,12 @@ import {
   clearWorktree,
   getJob,
   listJobs,
-  setRepo,
   setWorktree,
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Integration, Job } from '../storage/schema.ts';
 import { finishIntegration, listIntegrations, startIntegration } from '../storage/verification.ts';
+import { jobCheckout } from './repo.ts';
 import { requireClean, worktreeOf } from './tree.ts';
 import { latestValidRun } from './verify.ts';
 
@@ -54,37 +54,14 @@ export function jobBranch(job: Pick<Job, 'id' | 'title'>): string {
   return slug ? `factory/${job.id}-${slug}` : `factory/${job.id}`;
 }
 
-/** The clone to operate on; validated to be the job's repository. */
-function repoRoot(job: Job, override?: string): string {
-  const candidate = override ?? job.repoPath;
-  if (!existsSync(candidate)) {
-    throw new ValidationError(
-      `Repository checkout ${candidate} does not exist. Pass --repo <path> to another clone of ${job.repo}.`,
-    );
-  }
-  const info = describeRepo(candidate);
-  if (info.identity !== job.repo) {
-    throw new ValidationError(
-      `Repository at ${info.root} is ${info.identity}; job ${job.id} belongs to ${job.repo}.`,
-    );
-  }
-  return info.root;
-}
-
 /**
- * Re-point a job at its checkout's current identity after the remote was added or changed. The
- * clone must be the directory the job already records; this never adopts a different repository.
+ * Re-point a job at its checkout's current remote identity. Every mutation does this on its own
+ * through `jobCheckout` when the job's worktree proves the checkout is still its repository; this
+ * command is the operator's explicit confirmation when there is no worktree to prove it. It never
+ * adopts another repository, and never overrides a worktree that contradicts the checkout.
  */
 export function repointRepo(store: Store, id: string, auth: Auth, path?: string): Job {
-  const job = authorize(store, id, auth);
-  const info = describeRepo(path ?? job.repoPath);
-  if (canonicalPath(info.root) !== canonicalPath(job.repoPath)) {
-    throw new ValidationError(
-      `${info.root} is not the checkout job ${id} records (${job.repoPath}); ` +
-        `repoint only follows a remote change of the same clone.`,
-    );
-  }
-  return setRepo(store, id, auth, { repo: info.identity, repoPath: info.root });
+  return jobCheckout(store, authorize(store, id, auth), auth, path, true).job;
 }
 
 /** Read-only view of the job's worktree (or of where it would be created). */
@@ -109,8 +86,10 @@ export function createWorktree(
   auth: Auth,
   opts: { repo?: string | undefined } = {},
 ): WorktreeResult {
-  let job = authorize(store, id, auth);
-  const root = repoRoot(job, opts.repo);
+  const checked = jobCheckout(store, authorize(store, id, auth), auth, opts.repo);
+  let { job } = checked;
+  const { root } = checked;
+  auth = checked.auth;
   const path = job.worktreePath ?? jobWorktreeDir(job.id, job.repo, store.paths);
   const branch = job.branch ?? jobBranch(job);
   const existing = inspectWorktree(root, path, job.baseBranch);
@@ -159,8 +138,9 @@ export function adoptWorktree(
   dir: string,
   opts: { repo?: string | undefined } = {},
 ): WorktreeResult {
-  const job = authorize(store, id, auth);
-  const root = repoRoot(job, opts.repo);
+  const checked = jobCheckout(store, authorize(store, id, auth), auth, opts.repo);
+  const { job, root } = checked;
+  auth = checked.auth;
   const path = resolve(dir);
   const info = inspectWorktree(root, path, job.baseBranch);
   if (!info.exists) throw new ValidationError(`${path} does not exist.`);
@@ -201,9 +181,10 @@ export function adoptWorktree(
  * its commits are always kept. A worktree already gone from disk is simply forgotten.
  */
 export function dropWorktree(store: Store, id: string, auth: Auth): WorktreeResult {
-  const job = authorize(store, id, auth);
+  const checked = jobCheckout(store, authorize(store, id, auth), auth);
+  const { job, root } = checked;
+  auth = checked.auth;
   if (!job.worktreePath) throw new ValidationError(`Job ${id} has no worktree.`);
-  const root = repoRoot(job);
   const info = inspectWorktree(root, job.worktreePath, job.baseBranch);
   if (!info.exists) {
     pruneWorktrees(root);
@@ -281,9 +262,10 @@ function reconcile(store: Store, id: string, auth: Auth, wt: string, open: Integ
  * conflict is raised as an error. A completed merge still needs fresh verification.
  */
 export function integrateBase(store: Store, id: string, auth: Auth): IntegrateResult {
-  const job = authorize(store, id, auth);
+  const checked = jobCheckout(store, authorize(store, id, auth), auth);
+  const { job, root } = checked;
+  auth = checked.auth;
   if (!job.worktreePath) throw new ValidationError(`Job ${id} has no worktree.`);
-  const root = repoRoot(job);
   const wt = job.worktreePath;
   const open = listIntegrations(store.db, id).find((i) => i.status === 'started');
   if (open) reconcile(store, id, auth, wt, open);
