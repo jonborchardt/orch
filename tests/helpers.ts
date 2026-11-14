@@ -16,9 +16,28 @@ import { dirname, join } from 'node:path';
 import { installRoot, type RuntimePaths } from '../src/core/paths.ts';
 import { openStore, type Store } from '../src/storage/client.ts';
 
-/** A fresh temp directory by its real path: on Windows the runner's TEMP is an 8.3 alias. */
+const created: string[] = [];
+
+/**
+ * A fresh temp directory by its real path: on Windows the runner's TEMP is an 8.3 alias. Every
+ * directory is remembered so tests/setup.ts can remove it when the file finishes, whether or not
+ * the test cleaned up itself; a test that wants a directory kept copies it elsewhere.
+ */
 export function tempDir(prefix = 'orch-test-'): string {
-  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  created.push(dir);
+  return dir;
+}
+
+/** Remove every directory this file's tests created through `tempDir`; busy ones are left. */
+export function cleanupTempDirs(): void {
+  for (const dir of created.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* an open handle (a store a test never closed) keeps it; nothing else will touch it */
+    }
+  }
 }
 
 /** Remove a directory link, never its target: Windows junctions need rmdir, POSIX symlinks unlink. */

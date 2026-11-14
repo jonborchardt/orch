@@ -185,7 +185,12 @@ carry a CSP, `nosniff`, and `no-store`.
 **Development.** `npm run web:dev` starts Vite with hot reload on `127.0.0.1:5173`, proxying
 `/api` to a running `orch ui`. `npm run build` compiles both the CLI and `web/dist`.
 `npm run test:e2e` runs the Playwright suite against a seeded scratch database (first time:
-`npx playwright install chromium`).
+`npx playwright install chromium`). Each run seeds its own `mkdtemp` home, starts `orch ui` on a
+free port, and hands the URL and seeded ids to the workers through a state file under that home,
+so two runs on one machine never share a port, a database, or a state file. `ORCH_E2E_PORT` pins
+the port (a busy port is reported, never silently replaced by another server), `ORCH_E2E_URL`
+points the suite at a server you started yourself, and `ORCH_E2E_KEEP=1` leaves the scratch home
+in place for inspection.
 
 ## Using the factory
 
@@ -423,6 +428,13 @@ npm run db:check       # validate committed migrations
 npm run format         # apply Prettier
 npm run build
 ```
+
+Every Vitest file runs behind `tests/setup.ts`: `ORCH_HOME` is pointed at a scratch directory for
+the run (whatever the shell had, so a developer's or another campaign's database is never opened),
+and every directory the file created through `tempDir()` is removed when the file finishes, after
+failures too. Test repositories, stores, shims, and worktrees are all `mkdtemp` directories;
+nothing in the suite uses a fixed path under the temp directory. Two sessions must still not run
+the suite in the _same_ checkout (decision #45): the CLI tests load `src/` from it.
 
 CI runs every check on Ubuntu (typecheck, lint, format, migrations, the Vitest suite with coverage,
 the build, the Playwright dashboard checks, and a database initialized from `dist/` outside the

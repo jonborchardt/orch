@@ -2,10 +2,17 @@ import { readFileSync } from 'node:fs';
 
 import { expect, test } from '@playwright/test';
 
-import type { SeededJobs } from '../tests/fixtures/dashboard.ts';
-import { STATE_FILE } from './global-setup.ts';
+import { type E2eState, STATE_ENV } from './global-setup.ts';
 
-const state = () => JSON.parse(readFileSync(STATE_FILE, 'utf8')) as { ids: SeededJobs };
+/** This run's seeded ids and server URL, written by global-setup under its own scratch home. */
+const state = (): E2eState => {
+  const file = process.env[STATE_ENV];
+  if (!file) throw new Error('global-setup did not run: no ' + STATE_ENV + ' in the environment');
+  return JSON.parse(readFileSync(file, 'utf8')) as E2eState;
+};
+
+// The server picked its port at startup; every page in this file talks to that server only.
+test.use({ baseURL: state().url });
 
 test('job board shows every repository and job with honest liveness', async ({ page }) => {
   await page.goto('/');
