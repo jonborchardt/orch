@@ -38,7 +38,9 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   record through `storage/jobs.ts`. It is the only layer allowed to import both `git/` or
   `integrations/` and `storage/`. Nothing in `ops/` deletes uncommitted work or force-pushes.
   `ops/factory.ts` builds the plan the `/factory` skill follows; `core/roles.ts` is the only place
-  that names agents and models.
+  that names agents and models. `ops/repo.ts` is the only place that decides whether a path is a
+  job's repository: by Git common directory for the job's own checkout and worktrees, by remote
+  identity for another clone. Never compare `describeRepo().identity` to `job.repo` elsewhere.
 - `skills/factory/` and `agents/` are prose for Claude, linked into `~/.claude` by `orch install`.
   They must only call `orch` commands; any rule that matters is enforced in TypeScript first and
   described in prose second. `tests/skill-contract.test.ts` keeps roles, agent frontmatter, and the

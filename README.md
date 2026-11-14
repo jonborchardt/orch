@@ -520,8 +520,10 @@ orch worktree remove <id>            # delete the directory; refused while dirty
   repositories and jobs coexist (`worktrees/github.com-acme-alpha/job-1a2b3c4d`).
 - `create` is idempotent: an existing worktree on the right branch is confirmed, a directory that
   vanished is recreated on the surviving branch, and a foreign directory at the path is an error.
-  The checkout used is the job's recorded `repoPath` (or `--repo <other clone>`), and its identity
-  (normalized `origin` URL) must match the job's repository.
+  The checkout used is the job's recorded `repoPath` (or `--repo <other clone>`). The job's own
+  repository is recognised by its Git common directory (so the checkout and every linked worktree
+  qualify, whatever happened to `origin` since); another clone qualifies only when its `origin` is
+  the job's recorded identity.
 - `adopt` validates that the directory is the top level of a worktree of the same repository, on a
   branch, and not the primary checkout. Two jobs can never share a worktree or a branch; the
   database refuses it.
@@ -699,7 +701,7 @@ orch job artifact add <id> <relative-path> --token <t> [--replace] [--revision <
 orch job review record <id> --reviewer <name> [--verdict pass|changes] [--artifact <path>]
                    [--summary <s>] --token <t>
 orch job pr        <id> --url <url> --state draft|ready|merged --token <t>
-orch job repo      <id> [--repo <path>] --token <t>   # re-point after the checkout's origin changed
+orch job repo      <id> [--repo <path>] --token <t>   # refresh the identity now (mutations do it anyway)
 
 orch worktree create|show|adopt|remove|integrate <id> [--path <dir>] [--repo <clone>] --token <t>
 orch gh repo | issue <ref> | push <id> | pr create <id> --body-file <md> | pr status <id>
@@ -718,7 +720,11 @@ orch ui [--port <n>] [--open]          # the only long-running command; loopback
 
 `job create` detects the repository from the current directory (or `--repo`), records its identity
 (normalized `origin` URL, e.g. `github.com/org/repo`, or the directory name) and current branch,
-and does not need GitHub: `--issue` is an opaque reference.
+and does not need GitHub: `--issue` is an opaque reference. The identity is the remote's: it groups
+jobs and is checked against GitHub at delivery. The job's binding to its local repository is the
+checkout's Git common directory, so adding or re-pointing `origin` later refreshes the identity on
+the next mutation (recorded as `repo.repointed`) instead of orphaning the job; `job list --repo
+<path>` finds a repository's jobs from its checkout or any linked worktree either way.
 
 Mutation commands return the resulting state plus what comes next:
 

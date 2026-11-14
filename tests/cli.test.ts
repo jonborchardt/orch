@@ -211,7 +211,7 @@ describe('orch CLI: jobs across repositories', () => {
     gitIn(local, 'remote', 'add', 'origin', 'https://github.com/acme/local.git');
     const other = orch(home, tmpdir(), ['job', 'repo', c.jobId, '--repo', repoA], env);
     expect(other.code).toBe(1);
-    expect(other.err).toContain('is not the checkout');
+    expect(other.err).toContain('belongs to');
     const moved = json<Summary>(orch(home, tmpdir(), ['--json', 'job', 'repo', c.jobId], env));
     expect(moved.job.repo).toBe('github.com/acme/local');
     const events = json<{ type: string }[]>(

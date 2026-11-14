@@ -1,5 +1,4 @@
 /** `orch job ...` handlers: parse options, call storage, return data for printing. */
-import { existsSync } from 'node:fs';
 
 import { UsageError } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
@@ -18,6 +17,7 @@ import {
 } from '../core/workflow.ts';
 import { describeRepo } from '../git/repo.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
+import { findJobs } from '../ops/repo.ts';
 import { repointRepo } from '../ops/worktree.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
@@ -26,7 +26,6 @@ import {
   createJob,
   getJob,
   jobDetail,
-  listJobs,
   recordPr,
   releaseJob,
   resumeJob,
@@ -117,15 +116,10 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
       return summary(job, store);
     }
     case 'list': {
-      // --repo accepts a local path (resolved to its identity) or an identity such as github.com/o/r.
-      const repo =
-        o.repo === undefined
-          ? undefined
-          : existsSync(o.repo)
-            ? describeRepo(o.repo).identity
-            : o.repo;
-      return listJobs(store.db, {
-        repo,
+      // --repo accepts a local path (that repository and clones of its remote) or an identity
+      // such as github.com/o/r.
+      return findJobs(store, {
+        repo: o.repo,
         status: oneOf<Status>(o.status, STATUSES, '--status'),
         stage: oneOf<Stage>(o.stage, STAGES, '--stage'),
       }).map((j) => ({
