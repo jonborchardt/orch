@@ -68,6 +68,30 @@ export function parsePolicy(raw: unknown): VerificationPolicy {
   return { commands };
 }
 
+/** Parse the text of a factory.json (`where` names the source in the error, e.g. a commit). */
+export function parsePolicyText(text: string, where = POLICY_FILE): VerificationPolicy {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    throw new ValidationError(`${where} is not JSON: ${(err as Error).message}`);
+  }
+  return parsePolicy(raw);
+}
+
+/** The text `orch init` writes: pretty-printed, keys in a fixed order, defaults omitted. */
+export function formatPolicy(policy: VerificationPolicy): string {
+  const commands = policy.commands.map((c) => ({
+    id: c.id,
+    command: c.command,
+    args: c.args,
+    ...(c.cwd === '.' ? {} : { cwd: c.cwd }),
+    ...(c.required ? {} : { required: false }),
+    ...(c.timeoutMs === DEFAULT_TIMEOUT_MS ? {} : { timeoutMs: c.timeoutMs }),
+  }));
+  return JSON.stringify({ verification: { commands } }, null, 2) + '\n';
+}
+
 function parseCheck(item: unknown, i: number): VerificationCheckSpec {
   const where = `verification.commands[${String(i)}]`;
   if (typeof item !== 'object' || item === null || Array.isArray(item)) {

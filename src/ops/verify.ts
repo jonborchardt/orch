@@ -15,7 +15,7 @@ import { buildReport, classifyPath, scanDiff, type SensitiveReport } from '../co
 import {
   diffPolicy,
   OUTPUT_CAP,
-  parsePolicy,
+  parsePolicyText,
   POLICY_FILE,
   type PolicyDiff,
   policyFingerprint,
@@ -53,18 +53,11 @@ export interface EffectivePolicy {
   mergeBase: string | null;
 }
 
-function policyAt(wt: string, sha: string): VerificationPolicy {
+/** The policy committed at `sha` (a commit, not a ref name); empty when the file is absent. */
+export function policyAt(wt: string, sha: string): VerificationPolicy {
   const text = tryGit(wt, 'show', `${sha}:${POLICY_FILE}`);
   if (text === undefined) return { commands: [] };
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch (err) {
-    throw new ValidationError(
-      `${POLICY_FILE} at ${sha.slice(0, 7)} is not JSON: ${(err as Error).message}`,
-    );
-  }
-  return parsePolicy(raw);
+  return parsePolicyText(text, `${POLICY_FILE} at ${sha.slice(0, 7)}`);
 }
 
 /** Which policy governs this job right now, and whether HEAD proposes a different one. */
@@ -295,8 +288,8 @@ export function verifyJob(store: Store, id: string, auth: Auth): VerifyResult {
         eff.diff || eff.candidateError
           ? `No verification policy on the base branch. The worktree's ${POLICY_FILE} proposes one; ` +
             'a human can accept it from the dashboard (accept-policy), or add it to the base branch.'
-          : `No verification policy: add a ${POLICY_FILE} with a "verification" section to the repository ` +
-            'base branch, or propose one in the worktree for a human to accept.',
+          : `No verification policy: add a ${POLICY_FILE} to the repository base branch (orch init, ` +
+            'review, commit, push), or propose one in the worktree for a human to accept.',
     };
   }
   const tree = git(wt.path, 'rev-parse', 'HEAD^{tree}');

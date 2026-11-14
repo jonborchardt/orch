@@ -289,7 +289,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   if (verification && !verification.configured) {
     notes.push(
       `No verification policy (factory.json) on the base branch: the job cannot pass its gates ` +
-        'until one exists or a human accepts a proposed policy (dashboard: accept-policy).',
+        'until one exists (orch init, then commit on the base branch) or a human accepts a proposed ' +
+        'policy (dashboard: accept-policy).',
     );
   }
   if (verification?.policy.authorization === 'required') {
@@ -498,11 +499,17 @@ export function checkReadonly(
   expected: string,
 ): { ok: true; fingerprint: string } {
   const { worktree } = showWorktree(store, id);
-  if (!worktree.exists || !worktree.isWorktree) throw new ValidationError('Worktree is missing.');
+  // An inspection failure is not a reviewer write: fail closed, but say which step failed.
+  if (!worktree.exists || !worktree.isWorktree || worktree.head === null) {
+    const why = worktree.exists
+      ? (worktree.problem ?? 'no detail')
+      : 'the directory does not exist';
+    throw new ValidationError(`Worktree is missing or unreadable at ${worktree.path}: ${why}`);
+  }
   const actual = fingerprint(worktree);
   if (actual !== expected) {
     throw new ValidationError(
-      `Worktree changed during a read-only step (HEAD ${worktree.head?.slice(0, 7) ?? '?'}, ` +
+      `Worktree changed during a read-only step (HEAD ${worktree.head.slice(0, 7)}, ` +
         `dirty: ${worktree.dirty.join(', ') || 'none'}). Reviewers must not modify code; ` +
         'inspect the changes, revert or commit them deliberately, then rerun the round.',
     );

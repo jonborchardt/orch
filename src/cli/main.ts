@@ -7,6 +7,7 @@ import { openStore, type Store } from '../storage/client.ts';
 import { formatChecks, runDoctor } from './doctor.ts';
 import { FACTORY_HELP, runFactory } from './factory.ts';
 import { GH_HELP, runGh } from './gh.ts';
+import { formatInit, INIT_HELP, runInit } from './init.ts';
 import { formatInstall, runInstall } from './install.ts';
 import { JOB_HELP, runJob } from './job.ts';
 import { print, printError } from './output.ts';
@@ -18,6 +19,7 @@ const HELP = `Usage: orch [--json] <command>
 
 Commands:
   doctor                 Check the local environment (Node, Git, Claude Code, paths)
+  init                   Write a repository's factory.json verification policy, or --check its readiness (orch init --help)
   factory <subcommand>   Start, plan, and resume factory jobs for the /factory skill (orch factory --help)
   job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
   worktree <subcommand>  Create, inspect, adopt, remove a job's Git worktree (orch worktree --help)
@@ -42,6 +44,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   gh: GH_HELP,
   factory: FACTORY_HELP,
   verify: VERIFY_HELP,
+  init: INIT_HELP,
   ui: UI_HELP,
 };
 
@@ -102,6 +105,10 @@ export async function main(argv: string[]): Promise<number> {
         // ui
         port: str,
         open: bool,
+        // init
+        command: { type: 'string', multiple: true },
+        'from-package-json': bool,
+        check: bool,
         // install
         'dry-run': bool,
         'claude-dir': str,
@@ -159,6 +166,11 @@ export async function main(argv: string[]): Promise<number> {
         const { result, exitCode } = withStore((store) => runVerify(store, rest, o));
         print(result, json);
         return exitCode;
+      }
+      case 'init': {
+        const result = runInit(rest, o);
+        print(json ? result : formatInit(result), json);
+        return 'ready' in result && !result.ready ? 1 : 0;
       }
       case 'ui':
         return await runUi(o);

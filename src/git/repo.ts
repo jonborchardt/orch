@@ -42,15 +42,6 @@ export function commonGitDir(cwd: string): string {
   return canonicalPath(resolve(cwd, git(cwd, 'rev-parse', '--git-common-dir')));
 }
 
-/** True when `dir` is a working tree (main checkout or linked worktree) of the same repository. */
-export function sameRepository(repoRoot: string, dir: string): boolean {
-  try {
-    return commonGitDir(repoRoot) === commonGitDir(dir);
-  } catch {
-    return false;
-  }
-}
-
 /** Paths with uncommitted changes (staged, unstaged, untracked). Empty when clean. */
 export function dirtyFiles(cwd: string): string[] {
   // Raw stdout, not `git()`: that trims, so a first line like " M path" would lose its leading

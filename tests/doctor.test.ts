@@ -31,6 +31,7 @@ describe('runDoctor', () => {
       'Claude Code',
       'GitHub CLI',
       'Project repository',
+      'Verification policy',
       'Install root',
       'Config dir',
       'Data dir',
