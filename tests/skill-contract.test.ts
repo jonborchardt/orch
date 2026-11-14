@@ -74,9 +74,13 @@ describe('skill', () => {
     const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
     for (const cmd of [
       'orch factory start',
+      'orch factory dispatch',
+      'orch factory list',
       'orch factory next',
       'orch factory resume',
       'orch factory check-readonly',
+      'orch job session attach',
+      '--adopt',
       'orch job transition',
       'orch job review record',
       'orch job artifact add',

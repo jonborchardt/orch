@@ -162,6 +162,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
               worktree={job.worktreePath}
             />
           )}
+          <SessionLine session={detail.session} />
         </Stack>
       </Paper>
 
@@ -406,6 +407,65 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
         )}
       </Box>
     </Box>
+  );
+}
+
+/**
+ * The execution session last attached to the job, with only the navigation its provider documents:
+ * an OS-handled link becomes a button, a link that resolves only inside VS Code is copied, never
+ * rendered as a control that would do nothing in a browser.
+ */
+function SessionLine({ session }: { session: JobDetailView['session'] }) {
+  if (!session) {
+    return (
+      <Typography variant="body2" color="text.secondary" data-testid="session-none">
+        No execution session is recorded for this job; a session that resumes it records itself with{' '}
+        <code>orch job session attach</code>.
+      </Typography>
+    );
+  }
+  const open = session.links.open;
+  const earlier = session.previous;
+  return (
+    <Stack spacing={0.5} data-testid="session">
+      <Typography variant="subtitle2">Execution session</Typography>
+      <Typography variant="body2">
+        {session.provider} <code>{session.ref}</code>
+        {session.cwd ? (
+          <>
+            {' '}
+            in <code>{session.cwd}</code>
+          </>
+        ) : null}
+        , attached {ago(session.attachedAt)}
+        {session.by ? ` by ${session.by}` : ''}
+        {earlier > 0
+          ? ` (${String(earlier)} earlier attachment${earlier === 1 ? '' : 's'} in the events)`
+          : ''}
+        .
+      </Typography>
+      <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+        {open?.scope === 'os' && (
+          <Button variant="outlined" href={open.url} component="a">
+            Open session in VS Code
+          </Button>
+        )}
+        {open?.scope === 'vscode-chat' && (
+          <Button
+            variant="outlined"
+            onClick={() => {
+              void navigator.clipboard.writeText(open.url);
+            }}
+          >
+            Copy session link
+          </Button>
+        )}
+        {session.links.resume && <code>{session.links.resume}</code>}
+      </Stack>
+      <Typography variant="caption" color="text.secondary">
+        {session.links.note}
+      </Typography>
+    </Stack>
   );
 }
 
