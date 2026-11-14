@@ -4,8 +4,9 @@ import { ThemeProvider } from '@mui/material';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { BoardRow, JobDetailView } from '../../src/server/types.ts';
+import type { BoardRow, CiView, JobDetailView } from '../../src/server/types.ts';
 import { App } from './App.tsx';
+import { ciSummary } from './Ci.tsx';
 import { Markdown } from './Markdown.tsx';
 import { theme } from './main.tsx';
 
@@ -34,6 +35,23 @@ function row(over: Partial<BoardRow>): BoardRow {
     pr: { url: null, state: null, ciStatus: null, ciCheckedAt: null },
     supersededBy: null,
     supersedes: [],
+    ci: noCi(),
+    ...over,
+  };
+}
+
+function noCi(over: Partial<CiView> = {}): CiView {
+  return {
+    head: null,
+    current: null,
+    status: null,
+    checkedAt: null,
+    repairs: 0,
+    maxRepairs: 2,
+    outcome: null,
+    reason: null,
+    failures: [],
+    completion: null,
     ...over,
   };
 }
@@ -78,6 +96,7 @@ const rows: BoardRow[] = [
       ciStatus: 'failing',
       ciCheckedAt: null,
     },
+    ci: noCi({ status: 'failing', head: 'abcdef0123456789', outcome: 'failing', repairs: 1 }),
   }),
   row({
     id: 'job-00000004',
@@ -151,8 +170,10 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       summary: 'Approver escalated: a human must decide',
       detail: 'AC2 needs deployment verification',
     },
+    ci: noCi(),
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null },
+    session: null,
     resume: { command: '/factory resume job-00000003', heldBy: null },
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
     supersedes: [],
@@ -240,7 +261,8 @@ describe('App board', () => {
     expect(within(table).getByText(/last reported running/)).toBeInTheDocument();
     expect(within(table).getByText(/needs human/)).toBeInTheDocument();
     expect(within(table).getByText('correctness: pending')).toBeInTheDocument();
-    expect(within(table).getByText('CI failing')).toBeInTheDocument();
+    expect(within(table).getByText('CI failing @abcdef0')).toBeInTheDocument();
+    expect(within(table).getByText('repairs 1/2')).toBeInTheDocument();
     expect(within(table).getByText('github.com/acme/beta')).toBeInTheDocument();
     expect(screen.getByText('1 stale')).toBeInTheDocument();
   });
@@ -566,6 +588,188 @@ describe('Job detail', () => {
     expect(screen.getByText(/Recorded reason: dup/)).toBeInTheDocument();
   });
 
+  it('offers Accept delivery only when the server lists it, requires a reason, and labels the result', async () => {
+    const f = mockFetch();
+    const base = detail();
+    const ciNone = noCi({
+      head: 'b2c3d4e5f6071829',
+      status: 'none',
+      outcome: 'none',
+      checkedAt: base.job.updatedAt,
+    });
+    data.detail = detail({
+      job: {
+        ...base.job,
+        returnStage: 'ci',
+        prUrl: 'https://github.com/x/y/pull/9',
+        prState: 'draft',
+        ciStatus: 'none',
+        ciHead: 'b2c3d4e5f6071829',
+      },
+      ci: ciNone,
+      blocker: {
+        kind: 'ci',
+        summary: 'GitHub reports no checks for the PR head',
+        detail: 'no required checks',
+      },
+      actions: ['approve', 'request-review', 'request-rework', 'accept-delivery', 'cancel'],
+    });
+    data.actionBody = {
+      job: { ...data.detail.job, stage: 'completed', status: 'completed' },
+      message:
+        'Delivery accepted by a human (dashboard: reviewed by hand): the job is completed without a passing CI verdict. CI was none for b2c3d4e; the PR is draft. Nothing was merged or marked ready.',
+    };
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByText('CI stopped.')).toBeInTheDocument();
+    expect(screen.getByTestId('ci-guidance')).toHaveTextContent('accept the delivery by hand');
+    expect(screen.getByTestId('close-out-caution')).toHaveTextContent('CI is none for b2c3d4e');
+    // Neutral, never primary: a close-out is a human override, not the workflow's own next step.
+    const accept = screen.getByRole('button', { name: 'Accept delivery' });
+    expect(accept.className).toContain('MuiButton-outlined');
+    expect(screen.getByRole('button', { name: 'Request rework' }).className).toContain(
+      'MuiButton-outlined',
+    );
+    fireEvent.click(accept);
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(/completes the job without a passing CI verdict/),
+    ).toBeInTheDocument();
+    const confirm = within(dialog).getByRole('button', { name: 'Confirm' });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(/Reason/), {
+      target: { value: 'reviewed by hand' },
+    });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Delivery accepted by a human');
+    });
+    const calls = f.mock.calls as [RequestInfo | URL, RequestInit | undefined][];
+    const posted = calls.find(([, init]) => init?.method === 'POST');
+    expect(JSON.parse(posted?.[1]?.body as string)).toEqual({
+      action: 'accept-delivery',
+      reason: 'reviewed by hand',
+    });
+    cleanup();
+
+    // Without the server's permission there is no button, whatever the CI state says.
+    data.detail = detail({
+      ci: noCi({
+        head: 'd4e5f60718293041',
+        status: 'failing',
+        outcome: 'failing',
+        repairs: 1,
+        maxRepairs: 1,
+      }),
+      job: {
+        ...base.job,
+        returnStage: 'ci',
+        prUrl: 'https://github.com/x/y/pull/9',
+        prState: 'draft',
+        ciStatus: 'failing',
+        ciHead: 'd4e5f60718293041',
+        ciRepairs: 1,
+        maxCiRepairs: 1,
+      },
+      blocker: {
+        kind: 'ci',
+        summary: 'CI still failing after 1 of 1 repair cycles',
+        detail: 'CI failed: test',
+      },
+      actions: ['approve', 'request-review', 'request-rework', 'cancel'],
+    });
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByRole('button', { name: 'Accept delivery' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('ci-guidance')).toHaveTextContent('repair budget is spent');
+    fireEvent.click(screen.getByRole('tab', { name: 'PR' }));
+    expect(screen.getByTestId('ci-panel')).toHaveTextContent('Repairs used: 1 of 1');
+    expect(screen.getByTestId('ci-panel')).toHaveTextContent('CI failing @d4e5f60');
+  });
+
+  it('describes every CI state from structured fields, never from a stale verdict', () => {
+    const base = detail();
+    const withPr = (over: Partial<typeof base.job>) => ({
+      ...base.job,
+      prUrl: 'https://github.com/x/y/pull/9',
+      prState: 'draft' as const,
+      stage: 'ci' as const,
+      status: 'running' as const,
+      ...over,
+    });
+    const line = (job: typeof base.job, ci: Partial<CiView>) =>
+      ciSummary({ job, ci: noCi(ci) }).line;
+    expect(line(base.job, {})).toBe('No PR yet.');
+    expect(line(withPr({}), {})).toBe('PR created; CI not yet observed.');
+    expect(line(withPr({}), { head: 'a1b2c3d4', status: 'pending', current: true })).toBe(
+      'CI pending for a1b2c3d.',
+    );
+    expect(line(withPr({}), { head: 'a1b2c3d4', status: 'passing', current: true })).toBe(
+      'CI passing for a1b2c3d.',
+    );
+    // A green verdict for a commit that is no longer HEAD is said to be stale, in so many words.
+    expect(line(withPr({}), { head: 'a1b2c3d4', status: 'passing', current: false })).toContain(
+      'not the current HEAD',
+    );
+    expect(
+      line(withPr({ stage: 'build', status: 'pending' }), {
+        head: 'a1b2c3d4',
+        status: 'failing',
+        repairs: 1,
+      }),
+    ).toBe('CI failed for a1b2c3d; repair in progress (1 of 2 repairs used, stage build).');
+    expect(
+      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
+        head: 'a1b2c3d4',
+        status: 'failing',
+        repairs: 2,
+      }),
+    ).toBe('CI still failing for a1b2c3d; 2 of 2 repairs used.');
+    expect(
+      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
+        head: 'a1b2c3d4',
+        status: 'none',
+      }),
+    ).toBe('GitHub reports no checks for a1b2c3d.');
+    expect(
+      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
+        head: 'a1b2c3d4',
+        status: 'failing',
+        outcome: 'infrastructure',
+      }),
+    ).toContain('did not reach a verdict');
+    expect(
+      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
+        head: 'a1b2c3d4',
+        status: 'pending',
+        outcome: 'closed',
+      }),
+    ).toContain('closed without merging');
+    expect(
+      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
+        head: 'a1b2c3d4',
+        status: 'passing',
+        outcome: 'outdated',
+      }),
+    ).toContain('moved outside the job');
+    expect(
+      line(withPr({ stage: 'needs-human', status: 'blocked', prState: 'merged' }), {
+        head: 'a1b2c3d4',
+        status: 'failing',
+      }),
+    ).toContain('merged outside the factory');
+    const finished = withPr({ stage: 'completed', status: 'completed' });
+    expect(line(finished, { head: 'a1b2c3d4', status: 'passing', completion: 'ci' })).toBe(
+      'Completed: required checks passed for a1b2c3d.',
+    );
+    expect(line(finished, { head: 'a1b2c3d4', status: 'none', completion: 'human' })).toBe(
+      'Completed by human close-out; CI was none for a1b2c3d.',
+    );
+    expect(line(finished, { completion: 'legacy' })).toContain('before the ci stage existed');
+  });
+
   it('Markdown renders headings, lists, code, markers, and never HTML', () => {
     render(
       <Markdown
@@ -583,5 +787,82 @@ describe('Job detail', () => {
     expect(screen.getByText('<script>alert(1)</script>')).toBeInTheDocument();
     expect(document.querySelector('script')).toBeNull();
     expect(screen.getByText('VERDICT: CHANGES')).toHaveAttribute('data-marker', 'VERDICT');
+  });
+});
+
+describe('Job detail: execution session', () => {
+  const link = 'agent-host-session://ahp-session/17b6e18f-4046-422b-8336-cb43a130967f';
+  const uuid = '565e2b23-152d-4533-b6b3-e1d4981c7297';
+
+  it('says so when no session was recorded', async () => {
+    window.location.hash = '#/jobs/job-00000003';
+    mockFetch();
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId('session-none')).toHaveTextContent('No execution session');
+    });
+  });
+
+  it('offers an in-VS-Code link for copying, never as a dead browser control', async () => {
+    data.detail = detail({
+      session: {
+        provider: 'vscode-agents',
+        ref: link,
+        cwd: '/wt/g',
+        attachedAt: '2026-11-13T08:20:00.000Z',
+        by: 'claude-parent',
+        links: {
+          open: { url: link, scope: 'vscode-chat' },
+          resume: null,
+          note: 'Opens from inside VS Code only.',
+        },
+        previous: 1,
+      },
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mockFetch();
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId('session')).toBeInTheDocument();
+    });
+    const s = screen.getByTestId('session');
+    expect(s).toHaveTextContent('vscode-agents');
+    expect(s).toHaveTextContent(link);
+    expect(s).toHaveTextContent('by claude-parent');
+    expect(s).toHaveTextContent('1 earlier attachment');
+    expect(s).toHaveTextContent('Opens from inside VS Code only.');
+    expect(within(s).queryByRole('link')).toBeNull();
+    expect(within(s).getByRole('button', { name: 'Copy session link' })).toBeInTheDocument();
+  });
+
+  it('gives a claude-code session its VS Code link and resume command', async () => {
+    data.detail = detail({
+      session: {
+        provider: 'claude-code',
+        ref: uuid,
+        cwd: null,
+        attachedAt: '2026-11-13T08:20:00.000Z',
+        by: null,
+        links: {
+          open: { url: `vscode://anthropic.claude-code/open?session=${uuid}`, scope: 'os' },
+          resume: `claude --resume ${uuid}`,
+          note: 'The VS Code link resumes the session.',
+        },
+        previous: 0,
+      },
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mockFetch();
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId('session')).toBeInTheDocument();
+    });
+    const s = screen.getByTestId('session');
+    expect(within(s).getByRole('link', { name: 'Open session in VS Code' })).toHaveAttribute(
+      'href',
+      `vscode://anthropic.claude-code/open?session=${uuid}`,
+    );
+    expect(s).toHaveTextContent(`claude --resume ${uuid}`);
+    expect(s).not.toHaveTextContent('earlier attachment');
   });
 });

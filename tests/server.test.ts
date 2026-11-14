@@ -4,10 +4,10 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
+import { MAX_CI_REPAIRS_REASON, MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { board, detail, liveness } from '../src/server/api.ts';
-import { blockerOf, type Evidence, resumeOf } from '../src/server/status.ts';
+import { blockerOf, ciView, type Evidence, resumeOf } from '../src/server/status.ts';
 import type { Artifact, Event, VerificationRun } from '../src/storage/schema.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
 import type { ActionResponse, BoardRow, JobDetailView, SessionInfo } from '../src/server/types.ts';
@@ -67,7 +67,7 @@ describe('seeded board and detail', () => {
 
   it('lists every job across repositories with honest liveness and review state', async () => {
     const rows = (await (await api('/api/jobs')).json()) as BoardRow[];
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(10);
     const by = (id: string) => rows.find((r) => r.id === id) ?? ({} as BoardRow);
     expect(by(ids.reviewing).liveness).toBe('running');
     expect(by(ids.reviewing).blocker).toBeNull();
@@ -144,6 +144,71 @@ describe('seeded board and detail', () => {
       await api('/api/jobs?repo=github.com%2Facme%2Fbeta')
     ).json()) as BoardRow[];
     expect(beta.map((r) => r.id).sort()).toEqual([ids.blocked, ids.stale].sort());
+  });
+
+  it('shows CI with the commit it was read for, the repair budget, and close-out only where allowed', async () => {
+    const rows = (await (await api('/api/jobs')).json()) as BoardRow[];
+    const by = (id: string) => rows.find((r) => r.id === id) ?? ({} as BoardRow);
+    // Delivered on GitHub's verdict for f1e2d3c; the later failing observation is for the same head.
+    expect(by(ids.completed).ci).toMatchObject({
+      head: 'f1e2d3c4b5a69788',
+      status: 'failing',
+      current: null, // the board never inspects worktrees
+      completion: 'ci',
+      repairs: 0,
+      maxRepairs: 2,
+      outcome: null, // pr-status style observations carry no reconciliation outcome
+    });
+    expect(by(ids.ciPending).ci).toMatchObject({
+      head: 'a1b2c3d4e5f60718',
+      status: 'pending',
+      outcome: 'pending',
+      reason: 'waiting for: test',
+      completion: null,
+    });
+    expect(by(ids.ciPending).blocker).toBeNull();
+    expect(by(ids.ciNone).ci).toMatchObject({ status: 'none', outcome: 'none' });
+    expect(by(ids.ciNone).blocker).toMatchObject({
+      kind: 'ci',
+      summary: 'GitHub reports no checks for the PR head',
+    });
+    expect(by(ids.ciNone).blocker?.detail).toContain('no required checks are configured');
+    expect(by(ids.ciExhausted).ci).toMatchObject({
+      head: 'd4e5f60718293041',
+      status: 'failing',
+      outcome: 'failing',
+      repairs: 1,
+      maxRepairs: 1,
+    });
+    expect(by(ids.ciExhausted).ci.failures).toEqual([
+      {
+        name: 'test',
+        conclusion: 'failure',
+        url: 'https://github.com/acme/alpha/actions/runs/9/job/901',
+        log: 'ci/d4e5f60/test.log',
+      },
+    ]);
+    expect(by(ids.ciExhausted).blocker).toEqual({
+      kind: 'ci',
+      summary: 'CI still failing after 1 of 1 repair cycles',
+      detail: 'CI failed for d4e5f60: test',
+    });
+    // Both escalated jobs were released: a session may resume either.
+    expect(by(ids.ciNone).resume?.command).toBe(`/factory resume ${ids.ciNone}`);
+    // Close-out is listed by the same rule the transition applies: no checks yes, failing no.
+    const none = (await (await api(`/api/jobs/${ids.ciNone}`)).json()) as JobDetailView;
+    expect(none.actions).toEqual([
+      'approve',
+      'request-review',
+      'request-rework',
+      'accept-delivery',
+      'cancel',
+    ]);
+    expect(none.ci.current).toBe(null); // no worktree on disk for the fixture
+    const exhausted = (await (await api(`/api/jobs/${ids.ciExhausted}`)).json()) as JobDetailView;
+    expect(exhausted.actions).toEqual(['approve', 'request-review', 'request-rework', 'cancel']);
+    const pending = (await (await api(`/api/jobs/${ids.ciPending}`)).json()) as JobDetailView;
+    expect(pending.actions).not.toContain('accept-delivery');
   });
 
   it('reading the board or a detail never mutates a job', async () => {
@@ -249,6 +314,7 @@ describe('mutations', () => {
       'request-review',
       'request-rework',
       'accept-policy',
+      'accept-delivery',
       'cancel',
     ]);
   });
@@ -379,6 +445,60 @@ describe('mutations', () => {
     expect(events.at(-1)).toBe('job.released:dashboard');
   });
 
+  it('accept-delivery closes out a no-checks escalation with a reason, never a failing one', async () => {
+    const h = { ...same(), 'X-Orch-Csrf': csrf };
+    // Repairs exhausted on a failing check: refused by the rule, nothing changes.
+    const refused = await post(
+      ids.ciExhausted,
+      { action: 'accept-delivery', reason: 'ship it' },
+      h,
+    );
+    expect(refused.status).toBe(422);
+    // The budget-spent escalation returns to build, so it is not a ci close-out candidate at all.
+    expect(((await refused.json()) as { error: { message: string } }).error.message).toMatch(
+      /only a job escalated from the ci stage/,
+    );
+    expect(getJob(store.db, ids.ciExhausted)).toMatchObject({
+      stage: 'needs-human',
+      status: 'blocked',
+    });
+    // No checks at all: allowed, but only with a recorded reason.
+    const noReason = await post(ids.ciNone, { action: 'accept-delivery' }, h);
+    expect(noReason.status).toBe(422);
+    expect(((await noReason.json()) as { error: { message: string } }).error.message).toMatch(
+      /needs a reason/,
+    );
+    expect(getJob(store.db, ids.ciNone).stage).toBe('needs-human');
+    const done = (await (
+      await post(ids.ciNone, { action: 'accept-delivery', reason: 'no CI in this repo' }, h)
+    ).json()) as ActionResponse;
+    expect([done.job.stage, done.job.status]).toEqual(['completed', 'completed']);
+    expect(done.message).toContain('Delivery accepted by a human (dashboard: no CI in this repo)');
+    expect(done.message).toContain('CI was none for b2c3d4e');
+    expect(done.message).toContain('Nothing was merged or marked ready');
+    expect(done.resumeCommand).toBeUndefined();
+    const d = detail(store, ids.ciNone);
+    expect(d.ci.completion).toBe('human');
+    expect(d.actions).toEqual([]);
+    expect(d.plan?.reason).toContain('manual close-out, not a CI verdict');
+    const completed = d.events.find((e) => e.type === 'job.completed');
+    expect(completed?.payload).toMatchObject({
+      acceptedByHuman: true,
+      ciStatus: 'none',
+      head: 'b2c3d4e5f6071829',
+      reason: 'dashboard: no CI in this repo',
+    });
+    expect(completed?.actor).toBe('dashboard');
+    expect(board(store).find((r) => r.id === ids.ciNone)?.ci.completion).toBe('human');
+    // Accepting twice, or on a job that was never escalated from ci, is refused.
+    expect((await post(ids.ciNone, { action: 'accept-delivery', reason: 'again' }, h)).status).toBe(
+      422,
+    );
+    expect((await post(ids.blocked, { action: 'accept-delivery', reason: 'x' }, h)).status).toBe(
+      422,
+    );
+  });
+
   it('dashboardAction enforces the same rules in-process', () => {
     expect(() => dashboardAction(store, ids.cancelled, { action: 'cancel' })).toThrow(
       /already cancelled/,
@@ -416,6 +536,8 @@ describe('blocker and resume derivation', () => {
     round: 2,
     leaseExpiresAt: null,
     ownerSession: null,
+    ciRepairs: 0,
+    maxCiRepairs: 2,
     ...over,
   });
   const event = (type: string, payload: Record<string, unknown>, actor = 's'): Event => ({
@@ -522,6 +644,94 @@ describe('blocker and resume derivation', () => {
     expect(blockerOf(failedJob, 'failed', evidence({ latestRun: failedRun }))?.kind).toBe(
       'verification',
     );
+  });
+
+  it('classifies ci escalations from the reason code and the last observation', () => {
+    const blocked = (payload: Record<string, unknown>) =>
+      event('job.blocked', { from: 'ci', ...payload });
+    const observed = (outcome: string) => event('ci.observed', { head: 'h', outcome });
+    const ev = (b: Event, o?: Event) =>
+      evidence({
+        events: new Map([['job.blocked', b], ...(o ? [['ci.observed', o] as const] : [])]),
+      });
+    const budget = job({ ciRepairs: 2, maxCiRepairs: 2 });
+    expect(
+      blockerOf(
+        budget,
+        'blocked',
+        ev(blocked({ reason: MAX_CI_REPAIRS_REASON, detail: 'CI failed: test' })),
+      ),
+    ).toEqual({
+      kind: 'ci',
+      summary: 'CI still failing after 2 of 2 repair cycles',
+      detail: 'CI failed: test',
+    });
+    for (const [outcome, summary] of [
+      ['closed', 'PR was closed without merging'],
+      ['outdated', 'PR head moved outside the job'],
+      ['none', 'GitHub reports no checks for the PR head'],
+      ['infrastructure', 'Required checks did not reach a verdict'],
+    ] as const) {
+      expect(
+        blockerOf(job(), 'blocked', ev(blocked({ reason: 'why' }), observed(outcome))),
+      ).toEqual({
+        kind: 'ci',
+        summary,
+        detail: 'why',
+      });
+    }
+    // An unknown outcome, or no reconciliation at all, is labelled as exactly that.
+    expect(blockerOf(job(), 'blocked', ev(blocked({ reason: 'why' })))).toEqual({
+      kind: 'ci',
+      summary: 'Escalated from ci',
+      detail: 'why',
+    });
+  });
+
+  it('ciView binds the verdict to its commit and names how a job completed', () => {
+    const row = {
+      stage: 'ci' as const,
+      ciHead: 'aaaa111',
+      ciStatus: 'passing' as const,
+      ciCheckedAt: past,
+      ciRepairs: 1,
+      maxCiRepairs: 2,
+    };
+    const obs = (head: string, extra: Record<string, unknown> = {}) =>
+      new Map([
+        ['ci.observed', event('ci.observed', { head, outcome: 'passing', reason: 'ok', ...extra })],
+      ]);
+    // Current when the worktree HEAD is the observed commit; stale when HEAD moved; unknown on the board.
+    expect(ciView(row, obs('aaaa111'), 'aaaa111')).toMatchObject({
+      current: true,
+      outcome: 'passing',
+      reason: 'ok',
+    });
+    expect(ciView(row, obs('aaaa111'), 'bbbb222').current).toBe(false);
+    expect(ciView(row, obs('aaaa111'), undefined).current).toBeNull();
+    expect(ciView(row, obs('aaaa111'), null).current).toBeNull(); // unreadable HEAD: unknown
+    // An observation of another commit says nothing about this head.
+    expect(ciView(row, obs('old0000'), 'aaaa111')).toMatchObject({
+      outcome: null,
+      reason: null,
+      failures: [],
+    });
+    expect(ciView({ ...row, ciHead: null, ciStatus: null }, new Map(), 'aaaa111')).toMatchObject({
+      head: null,
+      current: false,
+      status: null,
+      completion: null,
+    });
+    const done = (payload: Record<string, unknown>) =>
+      new Map([['job.completed', event('job.completed', payload)]]);
+    const finished = { ...row, stage: 'completed' as const };
+    expect(ciView(finished, done({ head: 'aaaa111' }), undefined).completion).toBe('ci');
+    expect(
+      ciView(finished, done({ head: 'aaaa111', acceptedByHuman: true }), undefined).completion,
+    ).toBe('human');
+    // A job completed before the ci stage existed recorded no head with its completion.
+    expect(ciView(finished, done({ prUrl: 'u' }), undefined).completion).toBe('legacy');
+    expect(ciView(finished, new Map(), undefined).completion).toBe('legacy');
   });
 
   it('explains interruptions, waiting, and cancellation; nothing for running or completed', () => {

@@ -41,6 +41,7 @@ import {
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
+import { completeCi } from './gates.ts';
 import { jobCheckout } from './repo.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
 import { cap, effectivePolicy, verificationStatus } from './verify.ts';
@@ -221,8 +222,10 @@ export function ensureDraftPr(store: Store, id: string, input: EnsurePrInput): P
     );
   const state: PrState = prWorkflowState(pr) ?? 'draft';
   recordPr(store, id, { token: input.token, url: pr.url, state });
+  // The rollup from `gh pr view` is informational: only `orch gh ci` records a per-commit
+  // verdict (ciHead), so the ci stage cannot complete on this observation alone.
   const ciStatus = summarizeChecks(pr.checks);
-  const updated = recordCi(store, id, { token: input.token, ciStatus, head: pr.headSha });
+  const updated = recordCi(store, id, { token: input.token, ciStatus, head: null });
   return { job: updated, pr, created: existing === undefined, ciStatus };
 }
 
@@ -249,7 +252,7 @@ export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): Pr
       expectRevision: auth.expectRevision,
       ciStatus,
       prState: state,
-      head: pr.headSha,
+      head: null, // a rollup, not a per-commit verdict; `orch gh ci` must read the head again
     });
     return { job: updated, pr, ciStatus, prState: state, recorded: true };
   }
@@ -414,6 +417,9 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     updated = transitionJob(store, id, 'rework', { ...tok, reason });
   } else if (action === 'escalate') {
     updated = transitionJob(store, id, 'escalate', { ...tok, reason });
+  } else if (action === 'complete') {
+    // The read and the completion are one operation: no stored verdict is ever reused.
+    updated = completeCi(store, id, tok);
   } else {
     updated = getJob(store.db, id);
   }

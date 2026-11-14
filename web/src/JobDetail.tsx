@@ -20,10 +20,11 @@ import { useEffect, useState } from 'react';
 
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
+import { CiChip, CiPanel, ciSummary } from './Ci.tsx';
 import { Markdown } from './Markdown.tsx';
 import { BlockerText, ResumeBox, StatusChip, Supersession } from './Status.tsx';
 import { ApiFailure, fetchDetail } from './api.ts';
-import { STATE, ago, ciColor, verdictColor } from './format.ts';
+import { STATE, ago, verdictColor } from './format.ts';
 
 const TABS = [
   'Overview',
@@ -106,6 +107,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
         <Typography color="text.secondary">{job.id}</Typography>
         <Chip label={`stage: ${job.stage}`} variant="outlined" />
         <StatusChip state={detail.liveness} />
+        {detail.ci.completion === 'human' && <CiChip ci={detail.ci} compact />}
         <Chip label={`round ${String(job.round)}/${String(job.maxRounds)}`} />
         {error && <Chip label={`refresh failed: ${error}`} color="warning" />}
       </Stack>
@@ -149,8 +151,16 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
         <Stack spacing={1}>
           {detail.blocker ? (
             <BlockerText blocker={detail.blocker} />
+          ) : detail.liveness === 'completed' ? (
+            // Completed by GitHub's verdict, by a human, or before the ci stage existed: say which.
+            <Typography data-testid="completion">{ciSummary(detail).line}</Typography>
           ) : (
             <Typography>{STATE[detail.liveness].describe}</Typography>
+          )}
+          {detail.blocker?.kind === 'ci' && (
+            <Typography variant="body2" color="text.secondary" data-testid="ci-guidance">
+              {ciSummary(detail).guidance}
+            </Typography>
           )}
           {detail.resume && (
             <ResumeBox
@@ -163,6 +173,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
               worktree={job.worktreePath}
             />
           )}
+          <SessionLine session={detail.session} />
         </Stack>
       </Paper>
 
@@ -386,27 +397,80 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
         {tab === 'PR' && (
           <Stack spacing={1}>
             {job.prUrl ? (
-              <>
-                <Typography>
-                  <Link href={job.prUrl} target="_blank" rel="noreferrer noopener">
-                    {job.prUrl}
-                  </Link>{' '}
-                  <Chip label={job.prState ?? '?'} />{' '}
-                  <Chip label={`CI ${job.ciStatus ?? 'unknown'}`} color={ciColor(job.ciStatus)} />
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  CI last checked {ago(job.ciCheckedAt)}. A draft PR is not a passing build; run{' '}
-                  <code>orch gh pr status {job.id}</code> to refresh.
-                </Typography>
-              </>
+              <Typography>
+                <Link href={job.prUrl} target="_blank" rel="noreferrer noopener">
+                  {job.prUrl}
+                </Link>{' '}
+                <Chip label={job.prState ?? '?'} />
+              </Typography>
             ) : (
               <Typography color="text.secondary">No PR recorded.</Typography>
             )}
+            <CiPanel detail={detail} />
             {content('pr.md')}
           </Stack>
         )}
       </Box>
     </Box>
+  );
+}
+
+/**
+ * The execution session last attached to the job, with only the navigation its provider documents:
+ * an OS-handled link becomes a button, a link that resolves only inside VS Code is copied, never
+ * rendered as a control that would do nothing in a browser.
+ */
+function SessionLine({ session }: { session: JobDetailView['session'] }) {
+  if (!session) {
+    return (
+      <Typography variant="body2" color="text.secondary" data-testid="session-none">
+        No execution session is recorded for this job; a session that resumes it records itself with{' '}
+        <code>orch job session attach</code>.
+      </Typography>
+    );
+  }
+  const open = session.links.open;
+  const earlier = session.previous;
+  return (
+    <Stack spacing={0.5} data-testid="session">
+      <Typography variant="subtitle2">Execution session</Typography>
+      <Typography variant="body2">
+        {session.provider} <code>{session.ref}</code>
+        {session.cwd ? (
+          <>
+            {' '}
+            in <code>{session.cwd}</code>
+          </>
+        ) : null}
+        , attached {ago(session.attachedAt)}
+        {session.by ? ` by ${session.by}` : ''}
+        {earlier > 0
+          ? ` (${String(earlier)} earlier attachment${earlier === 1 ? '' : 's'} in the events)`
+          : ''}
+        .
+      </Typography>
+      <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+        {open?.scope === 'os' && (
+          <Button variant="outlined" href={open.url} component="a">
+            Open session in VS Code
+          </Button>
+        )}
+        {open?.scope === 'vscode-chat' && (
+          <Button
+            variant="outlined"
+            onClick={() => {
+              void navigator.clipboard.writeText(open.url);
+            }}
+          >
+            Copy session link
+          </Button>
+        )}
+        {session.links.resume && <code>{session.links.resume}</code>}
+      </Stack>
+      <Typography variant="caption" color="text.secondary">
+        {session.links.note}
+      </Typography>
+    </Stack>
   );
 }
 

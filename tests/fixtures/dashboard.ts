@@ -1,8 +1,9 @@
 /**
  * Representative factory state for dashboard tests and manual runs: several repositories,
  * a live running job, a stale one, a needs-human escalation, multiple review rounds with long
- * findings, a completed job whose PR's CI failed after delivery, a cancelled job, a fresh unowned job, and a job
- * whose build stage failed.
+ * findings, a completed job whose PR's CI failed after delivery, a cancelled job, a fresh unowned job, a job
+ * whose build stage failed, and three jobs in the ci stage: checks pending under a live session,
+ * no checks at all (a human may close it out), and the repair budget spent on a failing check.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -182,6 +183,9 @@ export interface SeededJobs {
   cancelled: string;
   fresh: string;
   failed: string;
+  ciPending: string;
+  ciNone: string;
+  ciExhausted: string;
 }
 
 /**
@@ -377,6 +381,146 @@ export function seedDashboard(
     releaseJob(store, failed.id, { token });
   }
 
+  /** spec, build, one passing round, approval, draft PR recorded: the job is in ci, pending. */
+  const toCi = (id: string, token: string, title: string, pr: number): void => {
+    run(id, token, 'start');
+    art(id, token, 'spec.md', SPEC.replace('Export reports as CSV', title));
+    run(id, token, 'complete');
+    run(id, token, 'start');
+    art(id, token, 'build.md', BUILD);
+    run(id, token, 'complete');
+    run(id, token, 'start');
+    for (const r of ['security', 'correctness', 'code-quality'] as const) {
+      art(id, token, `round-1/review-${r}.md`, review(r, 'PASS', 1));
+      recordReview(store, id, { token, reviewer: r, verdict: 'pass' });
+    }
+    art(
+      id,
+      token,
+      'round-1/consolidated.md',
+      longFindings(1).replace('BLOCKING: 2', 'BLOCKING: 0'),
+    );
+    run(id, token, 'complete');
+    run(id, token, 'start');
+    art(
+      id,
+      token,
+      'decision.md',
+      DECISION_ESCALATE.replace('DECISION: ESCALATE', 'DECISION: APPROVE'),
+    );
+    run(id, token, 'complete');
+    run(id, token, 'start');
+    art(id, token, 'pr.md', PR);
+    recordPr(store, id, {
+      token,
+      url: `https://github.com/acme/alpha/pull/${String(pr)}`,
+      state: 'draft',
+    });
+    run(id, token, 'complete');
+  };
+  const observed = (
+    id: string,
+    token: string,
+    sha: string,
+    outcome: string,
+    ciStatus: 'pending' | 'passing' | 'failing' | 'none',
+    reason: string,
+    extra: Record<string, unknown> = {},
+  ) =>
+    recordCi(store, id, {
+      token,
+      ciStatus,
+      head: sha,
+      detail: {
+        current: true,
+        outcome,
+        polls: 1,
+        required: ['test'],
+        configured: false,
+        reason,
+        ...extra,
+      },
+    });
+
+  // 8. In ci with checks still running; its session is alive and will poll again.
+  const ciPending = mk('Paginate the audit log', 'github.com/acme/alpha', repos.alpha);
+  {
+    const { token } = claimJob(store, ciPending.id, { session: 'claude-20261114-0900-c1c1' });
+    toCi(ciPending.id, token, 'Paginate the audit log', 51);
+    run(ciPending.id, token, 'start');
+    observed(ciPending.id, token, 'a1b2c3d4e5f60718', 'pending', 'pending', 'waiting for: test');
+  }
+
+  // 9. In ci, GitHub reported no checks at all: escalated; a human may accept delivery.
+  const ciNone = mk('Add retry to the webhook sender', 'github.com/acme/alpha', repos.alpha);
+  {
+    const { token } = claimJob(store, ciNone.id, { session: 'claude-20261114-0930-0c0c' });
+    toCi(ciNone.id, token, 'Add retry to the webhook sender', 52);
+    run(ciNone.id, token, 'start');
+    const reason =
+      'GitHub reports no checks for this commit after 5 observations; no required checks are ' +
+      'configured for main. A human adds CI and resumes --to ci, or accepts delivery without CI ' +
+      'with resume --to completed.';
+    observed(ciNone.id, token, 'b2c3d4e5f6071829', 'none', 'none', reason, { polls: 5 });
+    run(ciNone.id, token, 'escalate', { reason });
+    releaseJob(store, ciNone.id, { token });
+  }
+
+  // 10. In ci, the one allowed repair did not fix the failing check: budget spent, escalated.
+  const ciExhausted = mk('Cache report thumbnails', 'github.com/acme/alpha', repos.alpha, {
+    maxCiRepairs: 1,
+  });
+  {
+    const { token } = claimJob(store, ciExhausted.id, { session: 'claude-20261114-1000-e1e1' });
+    const id = ciExhausted.id;
+    toCi(id, token, 'Cache report thumbnails', 53);
+    run(id, token, 'start');
+    const failing = (sha: string) =>
+      observed(id, token, sha, 'failing', 'failing', `CI failed for ${sha.slice(0, 7)}: test`, {
+        failures: [
+          {
+            name: 'test',
+            conclusion: 'failure',
+            url: 'https://github.com/acme/alpha/actions/runs/9/job/901',
+            log: `ci/${sha.slice(0, 7)}/test.log`,
+          },
+        ],
+      });
+    failing('c3d4e5f607182930');
+    run(id, token, 'rework', { reason: 'CI failed for c3d4e5f: test' }); // repair 1 of 1
+    run(id, token, 'start');
+    art(id, token, 'build.md', BUILD.replace('round 1', 'CI repair 1'), true);
+    run(id, token, 'complete');
+    run(id, token, 'start');
+    for (const r of ['security', 'correctness', 'code-quality'] as const) {
+      art(id, token, `round-2/review-${r}.md`, review(r, 'PASS', 2));
+      recordReview(store, id, { token, reviewer: r, verdict: 'pass' });
+    }
+    art(
+      id,
+      token,
+      'round-2/consolidated.md',
+      longFindings(2).replace('BLOCKING: 2', 'BLOCKING: 0'),
+    );
+    run(id, token, 'complete');
+    run(id, token, 'start');
+    art(
+      id,
+      token,
+      'decision.md',
+      DECISION_ESCALATE.replace('DECISION: ESCALATE', 'DECISION: APPROVE'),
+      true,
+    );
+    run(id, token, 'complete');
+    run(id, token, 'start');
+    art(id, token, 'pr.md', PR.replace('Export reports as CSV', 'Cache report thumbnails'), true);
+    run(id, token, 'complete');
+    run(id, token, 'start');
+    failing('d4e5f60718293041');
+    run(id, token, 'rework', { reason: 'CI failed for d4e5f60: test' }); // budget spent: blocked
+    releaseJob(store, id, { token });
+  }
+
   return {
     completed: completed.id,
     reviewing: reviewing.id,
@@ -385,5 +529,8 @@ export function seedDashboard(
     cancelled: cancelled.id,
     fresh: fresh.id,
     failed: failed.id,
+    ciPending: ciPending.id,
+    ciNone: ciNone.id,
+    ciExhausted: ciExhausted.id,
   };
 }

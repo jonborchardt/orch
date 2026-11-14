@@ -20,6 +20,7 @@ import {
 } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { DEFAULT_CONFIG } from '../core/roles.ts';
+import { SESSION_EVENT, type SessionRef } from '../core/session.ts';
 import {
   type Action,
   type CiStatus,
@@ -35,7 +36,7 @@ import {
 } from '../core/workflow.ts';
 import { findArtifact, listArtifacts, upsertArtifact, validateArtifact } from './artifacts.ts';
 import type { Db, Store } from './client.ts';
-import { appendEvent, listEvents } from './events.ts';
+import { appendEvent, latestEventsByJob, listEvents } from './events.ts';
 import { type Artifact, type Event, type Job, jobs, type Review, reviews } from './schema.ts';
 
 export interface CreateJobInput {
@@ -447,8 +448,8 @@ export function clearWorktree(store: Store, id: string, auth: Auth, reason: stri
 export interface CiInput extends Auth {
   ciStatus: CiStatus;
   prState?: PrState | undefined;
-  /** PR head commit the rollup describes; `orch gh ci` always supplies it. */
-  head?: string | null | undefined;
+  /** Commit the verdict was read for. Only `orch gh ci` supplies one; `pr create` and `pr status` pass null. */
+  head: string | null;
   /** Further detail for the `ci.observed` event (outcome, checks, diagnostics). */
   detail?: Record<string, unknown> | undefined;
 }
@@ -459,7 +460,7 @@ export function recordCi(store: Store, id: string, input: CiInput): Job {
     if (!job.prUrl) throw new ValidationError('No PR recorded for this job.');
     const patch: Partial<Job> = { ciStatus: input.ciStatus, ciCheckedAt: ts };
     if (input.prState) patch.prState = input.prState;
-    if (input.head !== undefined) patch.ciHead = input.head;
+    patch.ciHead = input.head;
     return {
       patch,
       events: [
@@ -468,7 +469,7 @@ export function recordCi(store: Store, id: string, input: CiInput): Job {
           payload: {
             ciStatus: input.ciStatus,
             prState: input.prState,
-            head: input.head ?? null,
+            head: input.head,
             ...input.detail,
           },
         },
@@ -575,6 +576,76 @@ export function recordPr(
       events: [{ type: 'pr.recorded', payload: { url: input.url, state: input.state } }],
     };
   });
+}
+
+/** The session recorded by a `session.attached` event, or null when the payload is unusable. */
+export function sessionOf(e: Event | undefined): SessionRef | null {
+  const p = e?.payload;
+  if (!p || typeof p['provider'] !== 'string' || typeof p['ref'] !== 'string') return null;
+  return {
+    provider: p['provider'] as SessionRef['provider'],
+    ref: p['ref'],
+    cwd: typeof p['cwd'] === 'string' ? p['cwd'] : null,
+  };
+}
+
+/** Current execution session per job (the newest attachment), null where none was recorded. */
+export function sessionsByJob(db: Db, jobIds: readonly string[]): Map<string, SessionRef | null> {
+  const latest = latestEventsByJob(db, jobIds, [SESSION_EVENT]);
+  return new Map(jobIds.map((id) => [id, sessionOf(latest.get(id)?.get(SESSION_EVENT))]));
+}
+
+export interface AttachSessionInput {
+  session: SessionRef;
+  /** Required while the job is owned; an unowned (just dispatched) job accepts the launcher's record. */
+  token?: string | undefined;
+  actor?: string | undefined;
+}
+
+/**
+ * Record which execution session drives the job now. Metadata, never workflow state: the owner
+ * records it with its token; a job nobody owns yet (dispatched, not claimed) accepts it from the
+ * session that launched it. Re-attaching the current ref changes nothing; a different one is
+ * appended and the earlier attachments stay in the event log as history.
+ */
+export function attachSession(
+  store: Store,
+  id: string,
+  input: AttachSessionInput,
+): { job: Job; changed: boolean } {
+  return store.db.transaction(
+    (tx) => {
+      const ts = now();
+      const job = getJob(tx, id);
+      if (job.ownerToken !== null) checkAuth(job, { token: input.token });
+      const current = sessionsByJob(tx, [id]).get(id) ?? null;
+      const s = input.session;
+      if (current?.provider === s.provider && current.ref === s.ref) {
+        return { job, changed: false };
+      }
+      const renew = job.ownerToken !== null && job.leaseExpiresAt !== null;
+      const updated = apply(
+        tx,
+        job,
+        renew ? { leaseExpiresAt: leaseUntil(ts, job.leaseMinutes) } : {},
+        ts,
+        [
+          {
+            type: SESSION_EVENT,
+            payload: {
+              provider: s.provider,
+              ref: s.ref,
+              cwd: s.cwd,
+              previous: current ? { provider: current.provider, ref: current.ref } : null,
+            },
+          },
+        ],
+        input.actor ?? job.ownerSession,
+      );
+      return { job: updated, changed: true };
+    },
+    { behavior: 'immediate' },
+  );
 }
 
 function checkAuth(job: Job, auth: Auth): void {

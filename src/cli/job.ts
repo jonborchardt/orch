@@ -15,6 +15,7 @@ import {
   type Verdict,
   VERDICTS,
 } from '../core/workflow.ts';
+import { SESSION_PROVIDERS, type SessionProvider, validateSessionRef } from '../core/session.ts';
 import { describeRepo } from '../git/repo.ts';
 import { supersede } from '../ops/actions.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
@@ -23,6 +24,7 @@ import { repointRepo } from '../ops/worktree.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
 import {
+  attachSession,
   claimJob,
   createJob,
   getJob,
@@ -59,6 +61,9 @@ export interface JobOptions {
   limit?: string;
   replace?: boolean;
   by?: string;
+  provider?: string;
+  ref?: string;
+  cwd?: string;
 }
 
 export const JOB_HELP = `Usage: orch job <command> [options]
@@ -80,6 +85,9 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   repo <id> [--repo <path>] --token <t>     confirm the checkout's current remote identity
   supersede <id> --by <new-id> --session <name> [--force]
             record that <new-id> replaced <id> (same repository; both histories are kept)
+  session attach <id> --provider <${SESSION_PROVIDERS.join('|')}> --ref <link|uuid> [--cwd <dir>] [--token <t>]
+            record the execution session driving the job (metadata; the owner's token is
+            required while the job is claimed, none while it is unowned)
 
 --token defaults to $ORCH_TOKEN, --session to $ORCH_SESSION. Add --json for machine output.
 `;
@@ -198,6 +206,20 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
         }),
         store,
       );
+    case 'session': {
+      if (rest[0] !== 'attach') throw new UsageError('Usage: orch job session attach <id> ...');
+      const jobId = need(rest[1], '<id>');
+      const provider = need(
+        oneOf<SessionProvider>(o.provider, SESSION_PROVIDERS, '--provider'),
+        '--provider',
+      );
+      const r = attachSession(store, jobId, {
+        session: validateSessionRef(provider, need(o.ref, '--ref'), o.cwd),
+        token: auth.token,
+        actor: session,
+      });
+      return summary(r.job, store, { changed: r.changed });
+    }
     case 'pr': {
       const job = recordPr(store, id(), {
         ...auth,

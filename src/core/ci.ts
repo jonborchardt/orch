@@ -139,9 +139,9 @@ export function evaluateChecks(
     ].filter(Boolean);
     return { ...base, outcome: 'infrastructure', reason: `required check(s) ${parts.join('; ')}` };
   }
-  // Without a configured list, skipped-only runs verified nothing; GitHub counts them as passing
-  // only when a human made them required.
-  if (!isConfigured && !checks.some((c) => RAN.has(c.conclusion.toLowerCase()))) {
+  // Skipped-only runs verified nothing, even when a human made the checks required (GitHub's merge
+  // button would count them): the factory escalates and a human may close out explicitly.
+  if (!checks.some((c) => RAN.has(c.conclusion.toLowerCase()))) {
     return grace
       ? { ...base, outcome: 'pending', reason: 'every reported check was skipped so far' }
       : { ...base, outcome: 'none', reason: 'every check reported for this commit was skipped' };

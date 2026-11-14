@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
+import { SESSION_EVENT, sessionLinks } from '../core/session.ts';
 import { now, STAGES, type Stage } from '../core/workflow.ts';
 import {
   allowedActions,
@@ -20,10 +21,17 @@ import { planJob } from '../ops/factory.ts';
 import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob, listEvents } from '../storage/events.ts';
-import { getJob, listJobs, listReviews, predecessorsOf, reviewsByJob } from '../storage/jobs.ts';
-import type { Artifact, Job, Review } from '../storage/schema.ts';
+import {
+  getJob,
+  listJobs,
+  listReviews,
+  predecessorsOf,
+  reviewsByJob,
+  sessionOf,
+} from '../storage/jobs.ts';
+import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 import { latestRun, latestRunsByJob } from '../storage/verification.ts';
-import { BLOCKER_EVENTS, blockerOf, liveness, resumeOf } from './status.ts';
+import { BLOCKER_EVENTS, blockerOf, ciView, liveness, resumeOf } from './status.ts';
 import type {
   ActionRequest,
   ActionResponse,
@@ -31,6 +39,7 @@ import type {
   JobDetailView,
   RoundView,
   SafeJob,
+  SessionView,
 } from './types.ts';
 
 export { liveness } from './status.ts';
@@ -71,7 +80,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
     const artifacts = artifactsOf.get(job.id) ?? [];
     const state = liveness(job);
     const evidence = {
-      events: eventsOf.get(job.id) ?? new Map(),
+      events: eventsOf.get(job.id) ?? new Map<string, Event>(),
       artifacts,
       latestRun: runsOf.get(job.id) ?? null,
     };
@@ -112,6 +121,8 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       },
       supersededBy: job.supersededBy,
       supersedes: predecessors.get(job.id) ?? [],
+      // The board does not inspect worktrees (one Git call per job); the detail view does.
+      ci: ciView(job, evidence.events, undefined),
     };
   });
 }
@@ -160,10 +171,26 @@ export function artifactContent(store: Store, id: string, relPath: string): stri
   }
 }
 
+/** The newest attachment with documented links; earlier ones are counted, not shown. */
+function sessionView(events: Event[]): SessionView | null {
+  const attachments = events.filter((e) => e.type === SESSION_EVENT);
+  const last = attachments.at(-1);
+  const ref = sessionOf(last);
+  if (!last || !ref) return null;
+  return {
+    ...ref,
+    attachedAt: last.createdAt,
+    by: last.actor,
+    links: sessionLinks(ref),
+    previous: attachments.length - 1,
+  };
+}
+
 export function detail(store: Store, id: string): JobDetailView {
   const job = getJob(store.db, id);
   const artifacts = listArtifacts(store.db, id);
   const reviews = listReviews(store.db, id);
+  const events = listEvents(store.db, id, 500);
   const contents: Record<string, string> = {};
   for (const a of artifacts) {
     if (a.bytes > INLINE_LIMIT) continue;
@@ -182,7 +209,7 @@ export function detail(store: Store, id: string): JobDetailView {
   }
   const state = liveness(job);
   const evidence = {
-    events: latestEventsByJob(store.db, [id], BLOCKER_EVENTS).get(id) ?? new Map(),
+    events: latestEventsByJob(store.db, [id], BLOCKER_EVENTS).get(id) ?? new Map<string, Event>(),
     artifacts,
     latestRun: latestRun(store.db, id)?.run ?? null,
   };
@@ -192,17 +219,20 @@ export function detail(store: Store, id: string): JobDetailView {
     artifacts,
     contents,
     rounds: rounds(reviews, artifacts),
-    events: listEvents(store.db, id, 500),
+    events,
     worktree: plan?.worktree ?? null,
     plan,
     planError,
     blocker: blockerOf(job, state, evidence),
+    // Without a readable worktree HEAD there is nothing to compare the verdict against.
+    ci: ciView(job, evidence.events, plan?.worktree?.head ?? undefined),
     actions: allowedActions(job, plan?.verification?.policy.authorization === 'required'),
     links: {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,
       checkout: vscodeLink(job.repoPath),
       pr: job.prUrl,
     },
+    session: sessionView(events),
     resume: resumeOf(job, state),
     resumeCommand: `orch factory resume ${id} --session <name>`,
     supersedes: predecessorsOf(store.db, id).map((j) => j.id),
