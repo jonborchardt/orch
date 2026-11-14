@@ -279,13 +279,37 @@ describe('worktree show, adopt, remove', () => {
         encoding: 'utf8',
         windowsVerbatimArguments: true,
       }).stdout.trim();
-      if (short.toLowerCase() === long.toLowerCase()) ctx.skip(); // 8.3 names disabled here
+      // Empty: the probe failed; equal: 8.3 names are disabled here. Neither proves anything.
+      if (!short || short.toLowerCase() === long.toLowerCase()) ctx.skip();
       expect(() => adoptWorktree(store, id, { token }, short)).toThrow(/primary checkout/);
       expect(() => adoptWorktree(store, id, { token }, join(short, 'nested-wt'))).toThrow(
         /inside it/,
       );
     },
   );
+
+  it('refuses an alias spelling of a worktree another job already holds', () => {
+    const a = newJob();
+    const b = newJob(store, clone, 'Second job');
+    const wt = createWorktree(store, a.id, { token: a.token }).job.worktreePath ?? '';
+    // On a branch no job records, so only the path can reveal the clash.
+    gitIn(wt, 'switch', '-q', '-c', 'feature/moved');
+    const alias = join(tempDir('orch-alias-'), 'wt');
+    extra.push(join(alias, '..'));
+    try {
+      symlinkSync(wt, alias, 'junction');
+    } catch {
+      return; // no link support here; nothing to prove
+    }
+    try {
+      expect(() => adoptWorktree(store, b.id, { token: b.token }, alias)).toThrow(
+        /already assigned to job/,
+      );
+      expect(getJob(store.db, b.id).worktreePath).toBeNull();
+    } finally {
+      removeLink(alias);
+    }
+  });
 
   it('a job cannot take a branch another job in the same repository owns', () => {
     const a = newJob();
