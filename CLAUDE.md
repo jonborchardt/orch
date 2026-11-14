@@ -119,6 +119,9 @@ framework. Upgrade Drizzle deliberately, both packages together.
   session works in its own worktree, never in the primary checkout alongside another. Read a
   failing CLI test's stderr before blaming load: a `ReferenceError` or `SyntaxError` means a
   mid-edit tree.
+- Never run `/factory` against this repository. The installed `orch` is this checkout's `dist/`, so a
+  factory job editing `src/` would be gated by the code it is changing. Change `orch` from a session
+  in its own worktree and open a draft PR.
 
 ## Documentation
 

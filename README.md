@@ -800,7 +800,10 @@ diffs; builders not disabling tests in ways the scan does not recognise; the pol
 branch being meaningful (an empty or weak `factory.json` merged by humans is trusted as policy);
 subagents staying inside the worktree; checks not being influenced by ignored files
 (`node_modules`, build caches) that `git status` cannot see; child processes of a timed-out check
-being cleaned up on Windows (the direct child is killed; grandchildren may linger).
+being cleaned up on Windows (the direct child is killed; grandchildren may linger); one
+implementation session per checkout (a parallel session takes its own Git worktree, `docs/decisions.md`
+#45); and the factory never being run against `orch` itself, since the installed CLI is the checkout
+under change.
 
 ## Limits
 
