@@ -26,6 +26,7 @@ import {
   authorize,
   clearWorktree,
   getJob,
+  listJobs,
   setRepo,
   setWorktree,
   transitionJob,
@@ -173,6 +174,13 @@ export function adoptWorktree(
     throw new ValidationError(
       `${path} is on the base branch ${job.baseBranch}; jobs never work on it.`,
     );
+  }
+  // The storage index compares spellings; an alias of another job's worktree must not slip past.
+  const holder = listJobs(store.db).find(
+    (j) => j.id !== id && j.worktreePath !== null && canonicalPath(j.worktreePath) === target,
+  );
+  if (holder) {
+    throw new ValidationError(`Worktree ${path} is already assigned to job ${holder.id}.`);
   }
   const updated = setWorktree(store, id, {
     ...auth,
