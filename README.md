@@ -843,6 +843,13 @@ links, which it does for junctions and symlinks; if a skill is not listed, check
   spaces work everywhere because nothing goes through a shell.
 - Shells started by Claude Code do not keep environment variables between calls, so the plan's
   commands carry `--token <token>` explicitly instead of relying on `ORCH_TOKEN`.
+- A verification check that exceeds its `timeoutMs` is killed, and on Windows its descendants are
+  killed too: `spawnSync` only terminates the direct child, which for `npm test` is `cmd.exe`, so
+  `src/core/exec.ts` then reads the process table (PowerShell `Get-CimInstance Win32_Process`),
+  walks the children of the dead root (Windows keeps an orphan's parent id), and terminates every
+  process created since the check started, by pid. The check log records what was killed and
+  anything that could not be; a tree that was not fully stopped is written into the check's
+  `error` column. No process is ever killed by name.
 
 ## Enforced versus cooperative (Phase 5B)
 
