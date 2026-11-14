@@ -330,6 +330,8 @@ acts:
 
 Without a configured required-check list every reported check counts as required, and the PR
 passes only when at least one check actually ran and succeeded; with one, optional checks may fail.
+Private repositories on GitHub's free plan answer both configuration endpoints with HTTP 403, so
+for them the list is always "unknown" and every reported check must pass.
 A CI repair goes through the normal cycle: the builder gets the saved logs in its plan, commits,
 `orch verify`, a new review round, a new approval, `orch gh push` to the same branch, and `orch gh
 pr create` reuses the open PR. Repairs are bounded by `maxCiRepairs` (default 2, from the
