@@ -5,6 +5,8 @@
 import type { CiStatus } from './workflow.ts';
 
 export interface CiCheck {
+  /** GitHub check-run id; null for a commit status. A re-run creates a new id for the same name. */
+  id: number | null;
   name: string;
   /** `queued`, `in_progress`, `completed`, or the commit-status `pending`. */
   status: string;
@@ -41,17 +43,49 @@ export interface CiEvaluation {
  */
 export const CI_GRACE_POLLS = 5;
 
+/**
+ * Re-runs `orch gh ci` may request per PR head before a failure is treated as a defect (rework)
+ * or escalated. One: a required check must fail twice for the same commit before the builder is
+ * engaged, so a flaky or infrastructure failure costs a CI cycle, not a repair cycle.
+ */
+export const CI_MAX_RERUNS = 1;
+
+/** Conclusions a re-run of the failed jobs can change. `action_required` and `neutral` cannot. */
+export const RERUNNABLE = new Set([
+  'failure',
+  'timed_out',
+  'cancelled',
+  'startup_failure',
+  'stale',
+]);
+
+/** Pending observations of one head in one session before the coordinator releases the job. */
+export const CI_MAX_SESSION_POLLS = 20;
+
+/**
+ * Seconds to wait before observing a pending head again: a minute for the first five
+ * observations (checks register and start quickly), then longer, never more than five minutes.
+ */
+export function waitSeconds(polls: number): number {
+  return Math.min(60 * Math.ceil(Math.max(polls, 1) / 5), 300);
+}
+
 const OK = new Set(['success', 'neutral', 'skipped']);
 const DEFECT = new Set(['failure', 'timed_out']);
 const RAN = new Set(['success', 'failure']);
 
-function conclusionOf(c: CiCheck): 'ok' | 'defect' | 'infrastructure' | 'pending' {
+type Conclusion = 'ok' | 'defect' | 'infrastructure' | 'pending';
+
+function conclusionOf(c: CiCheck): Conclusion {
   if (c.status.toLowerCase() !== 'completed') return 'pending';
   const k = c.conclusion.toLowerCase();
   if (OK.has(k)) return 'ok';
   if (DEFECT.has(k)) return 'defect';
   return 'infrastructure';
 }
+
+/** When several runs share a name (two workflows, or a stale duplicate), the worst one counts. */
+const SEVERITY: Record<Conclusion, number> = { defect: 3, pending: 2, infrastructure: 1, ok: 0 };
 
 /**
  * Decide the CI outcome for one commit. `configured` is the base branch's required-check list
@@ -70,7 +104,10 @@ export function evaluateChecks(
     : [...new Set(checks.map((c) => c.name))];
   const requiredSet = new Set(required);
   const byName = new Map<string, CiCheck>();
-  for (const c of checks) if (!byName.has(c.name)) byName.set(c.name, c);
+  for (const c of checks) {
+    const seen = byName.get(c.name);
+    if (!seen || SEVERITY[conclusionOf(c)] > SEVERITY[conclusionOf(seen)]) byName.set(c.name, c);
+  }
   const failed: CiCheck[] = [];
   const infrastructure: CiCheck[] = [];
   const pending: string[] = [];

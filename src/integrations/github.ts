@@ -216,25 +216,34 @@ interface RawStatus {
   target_url?: string | null;
 }
 
-/** Check runs plus commit statuses reported for `sha`, as one list. */
+/**
+ * Every page of a paginated endpoint, flattened with `pick`. `gh api --paginate --slurp` follows
+ * the Link header and returns the pages as one JSON array (gh 2.41 or newer); a failed page fails
+ * the whole call, so a partial list is never mistaken for the complete one.
+ */
+function allPages<T>(path: string, key: string, cwd: string): T[] {
+  const pages = ghJson<Record<string, T[] | undefined>[]>(
+    ['api', `${path}?per_page=100`, '--paginate', '--slurp'],
+    cwd,
+  );
+  return pages.flatMap((page) => page[key] ?? []);
+}
+
+/** Check runs plus commit statuses reported for `sha`, as one list, across every page. */
 export function listChecksFor(nameWithOwner: string, sha: string, cwd: string): CiCheck[] {
-  // ponytail: first 100 check runs; paginate when a repository really has more
-  const runs = ghJson<{ check_runs?: RawCheckRun[] }>(
-    ['api', `repos/${nameWithOwner}/commits/${sha}/check-runs?per_page=100`],
-    cwd,
-  );
-  const status = ghJson<{ statuses?: RawStatus[] }>(
-    ['api', `repos/${nameWithOwner}/commits/${sha}/status`],
-    cwd,
-  );
-  const fromRuns: CiCheck[] = (runs.check_runs ?? []).map((r) => ({
+  const commit = `repos/${nameWithOwner}/commits/${sha}`;
+  const runs = allPages<RawCheckRun>(`${commit}/check-runs`, 'check_runs', cwd);
+  const statuses = allPages<RawStatus>(`${commit}/status`, 'statuses', cwd);
+  const fromRuns: CiCheck[] = runs.map((r) => ({
+    id: r.id,
     name: r.name,
     status: r.status,
     conclusion: r.conclusion ?? '',
     url: r.html_url ?? r.details_url ?? null,
     jobId: r.app?.slug === 'github-actions' ? r.id : null,
   }));
-  const fromStatuses: CiCheck[] = (status.statuses ?? []).map((s) => ({
+  const fromStatuses: CiCheck[] = statuses.map((s) => ({
+    id: null,
     name: s.context,
     status: s.state === 'pending' ? 'pending' : 'completed',
     conclusion: s.state === 'pending' ? '' : s.state,
@@ -242,6 +251,26 @@ export function listChecksFor(nameWithOwner: string, sha: string, cwd: string): 
     jobId: null,
   }));
   return [...fromRuns, ...fromStatuses];
+}
+
+/** Workflow run an Actions job belongs to, or null when GitHub could not tell us. */
+export function actionsJobRunId(nameWithOwner: string, jobId: number, cwd: string): number | null {
+  const r = optionalJson<{ run_id?: number } | null>(
+    ['api', `repos/${nameWithOwner}/actions/jobs/${String(jobId)}`],
+    cwd,
+    null,
+  );
+  return typeof r?.run_id === 'number' ? r.run_id : null;
+}
+
+/**
+ * `gh run rerun <id> --failed`: GitHub re-runs the failed jobs of that workflow run (and their
+ * dependents) against the same commit. Returns null on success, else gh's message. The only
+ * GitHub mutation besides creating a draft PR; it never touches source, the branch, or the PR.
+ */
+export function rerunFailedJobs(nameWithOwner: string, runId: number, cwd: string): string | null {
+  const r = ghResult(['run', 'rerun', String(runId), '--failed', '--repo', nameWithOwner], cwd);
+  return r.status === 0 ? null : (r.stderr || r.stdout).trim() || `exit ${String(r.status)}`;
 }
 
 /** 404 means "no such configuration", which is an answer; anything else is "could not tell". */

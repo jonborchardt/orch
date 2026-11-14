@@ -9,7 +9,12 @@ import { join } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { CI_GRACE_POLLS, evaluateChecks } from '../src/core/ci.ts';
+import {
+  CI_GRACE_POLLS,
+  CI_MAX_SESSION_POLLS,
+  evaluateChecks,
+  waitSeconds,
+} from '../src/core/ci.ts';
 import { ToolError, ValidationError, WorkflowError } from '../src/core/errors.ts';
 import { MAX_CI_REPAIRS_REASON } from '../src/core/workflow.ts';
 import { configPath, planJob, resumeFactoryJob } from '../src/ops/factory.ts';
@@ -17,7 +22,7 @@ import { ensureDraftPr, pushBranch, reconcileCi } from '../src/ops/github.ts';
 import { verificationStatus } from '../src/ops/verify.ts';
 import { worktreeOf } from '../src/ops/tree.ts';
 import { listEvents } from '../src/storage/events.ts';
-import { getJob } from '../src/storage/jobs.ts';
+import { getJob, recordCi } from '../src/storage/jobs.ts';
 import {
   add,
   approve,
@@ -119,7 +124,14 @@ function repair(c: Ctx, file: string): string {
 }
 
 describe('evaluateChecks (pure)', () => {
-  const ok = { name: 'test', status: 'completed', conclusion: 'success', url: null, jobId: 1 };
+  const ok = {
+    id: 1,
+    name: 'test',
+    status: 'completed',
+    conclusion: 'success',
+    url: null,
+    jobId: 1,
+  };
   const bad = { ...ok, name: 'lint', conclusion: 'failure', jobId: 2 };
   const running = { ...ok, name: 'build', status: 'in_progress', conclusion: '' };
 
@@ -581,6 +593,312 @@ describe('ci stage: GitHub answers that are not verdicts', () => {
     expect(reconcile(c)).toMatchObject({ outcome: 'closed', action: 'escalate' });
     expect(job(c).stage).toBe('needs-human');
     expect(gitIn(bare, 'rev-parse', `refs/heads/${job(c).branch ?? ''}`)).toBe(head(c.wt));
+  });
+});
+
+describe('evaluateChecks: duplicate names and the polling schedule', () => {
+  const ok = {
+    id: 1,
+    name: 'test',
+    status: 'completed',
+    conclusion: 'success',
+    url: null,
+    jobId: 1,
+  };
+
+  it('when several runs share a name the worst one counts, whatever the order', () => {
+    const failed = { ...ok, id: 2, conclusion: 'failure' };
+    const running = { ...ok, id: 3, status: 'in_progress', conclusion: '' };
+    const cancelled = { ...ok, id: 4, conclusion: 'cancelled' };
+    expect(evaluateChecks([ok, failed], null, 1).outcome).toBe('failing');
+    expect(evaluateChecks([failed, ok], null, 1).outcome).toBe('failing');
+    expect(evaluateChecks([ok, running], null, 1).outcome).toBe('pending');
+    expect(evaluateChecks([cancelled, running], null, 1).outcome).toBe('pending');
+    expect(evaluateChecks([ok, cancelled], ['test'], 1).outcome).toBe('infrastructure');
+    expect(evaluateChecks([running, failed], null, 1).outcome).toBe('failing');
+  });
+
+  it('the wait grows with the observations of a head and is capped at five minutes', () => {
+    expect([0, 1, 5, 6, 10, 11, 16, 21, 40].map(waitSeconds)).toEqual([
+      60, 60, 60, 120, 120, 180, 240, 300, 300,
+    ]);
+  });
+});
+
+describe('ci stage: every page of checks is read', () => {
+  it('detects a failed required check beyond the first 100 check runs, in one paginated call', () => {
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    const many = Array.from({ length: 149 }, (_, i) => run(`matrix-${String(i)}`, 'success'));
+    const failed = run('test', 'failure');
+    checks(sha, [...many.slice(0, 120), failed, ...many.slice(120)]);
+    const r = reconcile(c);
+    expect(r.evaluation.required).toHaveLength(150);
+    expect(r.evaluation.failed.map((x) => x.name)).toEqual(['test']);
+    expect(r.outcome).not.toBe('passing');
+    const api = shim.read().calls.filter((x) => x[0] === 'api');
+    const runs = api.filter((x) => x[1]?.includes('check-runs?'));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toEqual(expect.arrayContaining(['--paginate', '--slurp']));
+    expect(api.find((x) => x[1]?.includes('/status?'))).toEqual(
+      expect.arrayContaining(['--paginate', '--slurp']),
+    );
+  });
+});
+
+describe('ci stage: one bounded re-run before a repair', () => {
+  /** GitHub knows which workflow run an Actions job belongs to. */
+  function workflowRun(check: ShimCheckRun, runId: number): void {
+    shim.write({
+      api: {
+        ...shim.read().api,
+        [`repos/acme/alpha/actions/jobs/${String(check.id)}`]: { run_id: runId },
+      },
+    });
+  }
+  const rerunCalls = () => shim.read().calls.filter((x) => x[0] === 'run' && x[1] === 'rerun');
+  const rerunEvents = (c: Ctx) =>
+    listEvents(store.db, c.id, 1000).filter((e) => e.type === 'ci.rerun');
+
+  it('a first failure is re-run once per head; the new attempt decides, and no repair is spent', () => {
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    const lint = run('lint', 'success');
+    const failed = run('test', 'failure');
+    workflowRun(failed, 7);
+    checks(sha, [lint, failed]);
+    const r1 = reconcile(c);
+    expect(r1).toMatchObject({
+      outcome: 'pending',
+      action: 'wait',
+      ciStatus: 'pending',
+      reruns: 1,
+      waitSeconds: 60,
+    });
+    expect(r1.reason).toContain('re-run 1 of 1 requested for workflow run(s) 7');
+    expect(rerunCalls()).toEqual([['run', 'rerun', '7', '--failed', '--repo', 'acme/alpha']]);
+    expect(job(c)).toMatchObject({
+      stage: 'ci',
+      status: 'running',
+      ciRepairs: 0,
+      ciStatus: 'pending',
+    });
+    expect(rerunEvents(c).map((e) => e.payload)).toEqual([
+      {
+        head: sha,
+        attempt: 1,
+        runs: [7],
+        checks: ['test'],
+        checkRunIds: [failed.id],
+        ok: true,
+        error: null,
+      },
+    ]);
+    // No logs are collected for a verdict that may still change.
+    expect(existsSync(join(c.dir, 'ci'))).toBe(false);
+    // GitHub has not created the new attempt yet: the replaced run is still reported, and ignored.
+    const r2 = reconcile(c);
+    expect(r2).toMatchObject({ outcome: 'pending', action: 'wait', reruns: 1 });
+    expect(r2.reason).toContain('has not reported the new attempt yet');
+    // The new attempt appears under a new check-run id, queued, then passes.
+    const again = run('test', null, 'queued');
+    checks(sha, [lint, again]);
+    expect(reconcile(c)).toMatchObject({ outcome: 'pending', action: 'wait', waitSeconds: 60 });
+    checks(sha, [lint, { ...again, status: 'completed', conclusion: 'success' }]);
+    expect(reconcile(c)).toMatchObject({ outcome: 'passing', action: 'complete', reruns: 1 });
+    expect(go(store, c, 'complete').stage).toBe('completed');
+    expect(job(c).ciRepairs).toBe(0);
+    expect(rerunCalls()).toHaveLength(1);
+    // Nothing merged, nothing marked ready, nothing pushed by the re-run.
+    expect(shim.read().calls.some((x) => x[1] === 'merge' || x[1] === 'ready')).toBe(false);
+  });
+
+  it('a second failure of the same commit is a defect: logs, rework, no further re-run', () => {
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    const failed = run('test', 'failure');
+    workflowRun(failed, 7);
+    checks(sha, [failed]);
+    expect(reconcile(c).action).toBe('wait');
+    const again = run('test', 'failure');
+    shim.write({ logs: { [String(again.id)]: 'npm test\nFAIL again\n' } });
+    checks(sha, [again]);
+    const r = reconcile(c);
+    expect(r).toMatchObject({
+      outcome: 'failing',
+      action: 'rework',
+      ciStatus: 'failing',
+      reruns: 1,
+    });
+    expect(r.reason).toContain('(after 1 re-run)');
+    expect(r.failures[0]?.log).toBe(`ci/${sha.slice(0, 7)}/test.log`);
+    expect(job(c)).toMatchObject({ stage: 'build', ciRepairs: 1 });
+    expect(rerunCalls()).toHaveLength(1);
+    // The repaired commit is another head with its own single re-run; the first head's does not carry over.
+    const sha2 = repair(c, 'src/fix.ts');
+    const f2 = run('test', 'failure');
+    workflowRun(f2, 8);
+    checks(sha2, [f2]);
+    expect(reconcile(c)).toMatchObject({ head: sha2, action: 'wait', reruns: 1 });
+    expect(rerunCalls().map((x) => x[2])).toEqual(['7', '8']);
+    checks(sha2, [run('test', 'failure')]);
+    expect(reconcile(c)).toMatchObject({ head: sha2, action: 'rework', reruns: 1 });
+    expect(job(c).ciRepairs).toBe(2);
+  });
+
+  it('waits for the other required checks to finish first: a running workflow cannot be re-run', () => {
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    const failed = run('test', 'failure');
+    workflowRun(failed, 7);
+    const building = run('build', null, 'in_progress');
+    checks(sha, [failed, building]);
+    const r = reconcile(c);
+    expect(r).toMatchObject({ outcome: 'pending', action: 'wait', reruns: 0 });
+    expect(r.reason).toContain('waiting for build to finish before re-running');
+    expect(rerunCalls()).toHaveLength(0);
+    checks(sha, [failed, { ...building, status: 'completed', conclusion: 'success' }]);
+    expect(reconcile(c)).toMatchObject({ action: 'wait', reruns: 1 });
+    expect(rerunCalls()).toHaveLength(1);
+  });
+
+  it('cancelled and timed-out checks are re-run too; a repeat still escalates or reworks as before', () => {
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    const cancelled = run('test', 'cancelled');
+    workflowRun(cancelled, 7);
+    checks(sha, [cancelled]);
+    expect(reconcile(c)).toMatchObject({ outcome: 'pending', action: 'wait', reruns: 1 });
+    checks(sha, [run('test', 'cancelled')]);
+    const r = reconcile(c);
+    expect(r).toMatchObject({ outcome: 'infrastructure', action: 'escalate', reruns: 1 });
+    expect(r.reason).toContain('(after 1 re-run)');
+    expect(job(c)).toMatchObject({ stage: 'needs-human', ciRepairs: 0 });
+
+    const d = start(store, clone);
+    toCi(store, d);
+    const shaD = head(d.wt);
+    const slow = run('test', 'timed_out');
+    workflowRun(slow, 9);
+    checks(shaD, [slow]);
+    expect(reconcile(d)).toMatchObject({ action: 'wait', reruns: 1 });
+    checks(shaD, [run('test', 'timed_out')]);
+    expect(reconcile(d)).toMatchObject({ action: 'rework', reruns: 1 });
+    expect(job(d).ciRepairs).toBe(1);
+  });
+
+  it('when GitHub refuses the re-run or cannot name the run, the verdict stands and the attempt is recorded', () => {
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    const failed = run('test', 'failure');
+    workflowRun(failed, 7);
+    checks(sha, [failed]);
+    shim.write({ fail: 'run rerun' });
+    const r = reconcile(c);
+    expect(r).toMatchObject({ outcome: 'failing', action: 'rework', reruns: 0 });
+    expect(r.reason).toContain('Re-run could not be requested: gh run rerun 7 failed');
+    expect(rerunEvents(c).map((e) => [e.payload['ok'], e.payload['head']])).toEqual([[false, sha]]);
+    expect(job(c).ciRepairs).toBe(1);
+    shim.write({ fail: undefined });
+
+    // GitHub does not know the job's workflow run (HTTP 404): nothing to re-run.
+    const d = start(store, clone);
+    toCi(store, d);
+    checks(head(d.wt), [run('test', 'failure')]);
+    const rd = reconcile(d);
+    expect(rd).toMatchObject({ action: 'rework', reruns: 0 });
+    expect(rd.reason).toContain('did not report the workflow run of check test');
+
+    // A commit status from another CI system is never re-run, and a required check that never
+    // reported has nothing to re-run.
+    const e = start(store, clone);
+    toCi(store, e);
+    shim.write({ statuses: { [head(e.wt)]: [{ context: 'jenkins', state: 'failure' }] } });
+    expect(reconcile(e)).toMatchObject({ outcome: 'failing', action: 'rework', reruns: 0 });
+    expect(rerunCalls()).toHaveLength(1); // only the refused attempt above
+  });
+
+  it('the replaced verdict is ignored for the grace window only, and a resumed session keeps the budget', () => {
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    const failed = run('test', 'failure');
+    workflowRun(failed, 7);
+    checks(sha, [failed]);
+    expect(reconcile(c)).toMatchObject({ action: 'wait', reruns: 1 });
+    // The session dies; another resumes and keeps polling while GitHub still shows the old run.
+    const h = resumeFactoryJob(store, c.id, { session: 'claude-later-0002', force: true });
+    expect(h.plan.ci).toMatchObject({ reruns: 1, polls: 1, sessionPolls: 0 });
+    const c2 = { ...c, token: h.token };
+    go(store, c2, 'start');
+    // The replaced run is ignored for CI_GRACE_POLLS observations after the re-run (one happened
+    // in the first session already).
+    for (let i = 1; i < CI_GRACE_POLLS; i++) {
+      expect(reconcile(c2)).toMatchObject({ outcome: 'pending', action: 'wait', reruns: 1 });
+    }
+    expect(reconcile(c2)).toMatchObject({ outcome: 'pending', action: 'wait', reruns: 1 });
+    // Past the grace window the old verdict counts and the budget is spent: rework, no new re-run.
+    expect(reconcile(c2)).toMatchObject({ outcome: 'failing', action: 'rework', reruns: 1 });
+    expect(rerunCalls()).toHaveLength(1);
+  });
+});
+
+describe('ci stage: polling cadence in the plan', () => {
+  it('reports the wait, counts observations per session, and asks for a release after the cap', () => {
+    const c = start(store, clone);
+    toCi(store, c);
+    const sha = head(c.wt);
+    checks(sha, [run('test', null, 'queued')]);
+    expect(reconcile(c).waitSeconds).toBe(60);
+    let plan = planJob(store, c.id);
+    expect(plan.ci).toMatchObject({
+      polls: 1,
+      sessionPolls: 1,
+      waitSeconds: 60,
+      release: false,
+      reruns: 0,
+    });
+    expect(plan.reason).toContain('sleep plan.ci.waitSeconds (60 s now)');
+    // Further pending observations, recorded directly: the schedule is about counts, not clocks.
+    for (let i = 2; i <= CI_MAX_SESSION_POLLS; i++) {
+      recordCi(store, c.id, {
+        token: c.token,
+        ciStatus: 'pending',
+        head: sha,
+        detail: { outcome: 'pending', polls: i, reason: 'waiting for: test' },
+      });
+    }
+    plan = planJob(store, c.id);
+    expect(plan.ci).toMatchObject({
+      polls: CI_MAX_SESSION_POLLS,
+      sessionPolls: CI_MAX_SESSION_POLLS,
+      waitSeconds: 240,
+      release: true,
+    });
+    expect(plan.commands).toEqual([`orch job release ${c.id} --token <token>`]);
+    expect(plan.reason).toContain('Release the job');
+    // Another session starts its own count; the head's total keeps growing and so does the wait.
+    const h = resumeFactoryJob(store, c.id, { session: 'claude-later-0003', force: true });
+    expect(h.plan.ci).toMatchObject({
+      polls: CI_MAX_SESSION_POLLS,
+      sessionPolls: 0,
+      release: false,
+    });
+    expect(h.plan.commands[1]).toBe(`orch gh ci ${c.id} --token <token>`);
+    const c2 = { ...c, token: h.token };
+    go(store, c2, 'start');
+    expect(reconcile(c2)).toMatchObject({
+      polls: CI_MAX_SESSION_POLLS + 1,
+      waitSeconds: 300,
+      action: 'wait',
+    });
+    expect(planJob(store, c.id).ci).toMatchObject({ sessionPolls: 1, release: false });
   });
 });
 

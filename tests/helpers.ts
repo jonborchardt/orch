@@ -213,8 +213,9 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * A stand-in for `gh`, run as `node gh-shim.cjs <args>` via ORCH_GH_SHIM. State (repo, issue,
  * PRs, checks, a command to fail, and the call log) lives in a JSON file tests read and change.
  * With `bare` set to the local origin repository, PR heads are read from it like GitHub would;
- * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default), `protection`,
- * `rules`, `logs` (keyed by job id), or `api` (keyed by path), else HTTP 404.
+ * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default; paginated in
+ * pages of 100 under `--paginate --slurp`), `protection`, `rules`, `logs` (keyed by job id), or
+ * `api` (keyed by path), else HTTP 404. `gh run rerun` succeeds and is only logged.
  */
 const GH_SHIM_SOURCE = String.raw`
 const fs = require('node:fs');
@@ -242,15 +243,24 @@ else if (a === 'pr' && b === 'list') out(state.prs.filter((p) => p.headRefName =
 else if (a === 'pr' && b === 'view') {
   const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
   if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else out(withHead(pr));
+} else if (a === 'run' && b === 'rerun') {
+  out('');
 } else if (a === 'api') {
   const path = b.replace(/^\//, '').split('?')[0];
+  // --paginate --slurp: pages of 100, returned as one array, like gh does.
+  const slurp = args.includes('--slurp');
+  const paged = (items, wrap) => {
+    const pages = [];
+    for (let i = 0; i < Math.max(items.length, 1); i += 100) pages.push(wrap(items.slice(i, i + 100)));
+    out(slurp ? pages : pages[0]);
+  };
   let m;
   if ((m = /\/commits\/([0-9a-f]+)\/check-runs$/.exec(path))) {
     const runs = (state.checkRuns || {})[m[1]] || (state.checkRuns || {})['*'] || [];
-    out({ total_count: runs.length, check_runs: runs });
+    paged(runs, (page) => ({ total_count: runs.length, check_runs: page }));
   } else if ((m = /\/commits\/([0-9a-f]+)\/status$/.exec(path))) {
     const statuses = (state.statuses || {})[m[1]] || (state.statuses || {})['*'] || [];
-    out({ state: statuses.some((s) => s.state !== 'success') ? 'pending' : 'success', statuses });
+    paged(statuses, (page) => ({ state: statuses.some((s) => s.state !== 'success') ? 'pending' : 'success', statuses: page }));
   } else if (/\/protection\/required_status_checks$/.test(path)) {
     if (state.protection) out(state.protection); else notFound();
   } else if (/\/rules\/branches\//.test(path)) out(state.rules || []);

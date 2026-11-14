@@ -6,7 +6,16 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { type CiCheck, type CiEvaluation, ciStatusOf, evaluateChecks } from '../core/ci.ts';
+import {
+  CI_GRACE_POLLS,
+  CI_MAX_RERUNS,
+  type CiCheck,
+  type CiEvaluation,
+  ciStatusOf,
+  evaluateChecks,
+  RERUNNABLE,
+  waitSeconds,
+} from '../core/ci.ts';
 import { ValidationError } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import type { CiStatus, PrState } from '../core/workflow.ts';
@@ -15,6 +24,7 @@ import { git, tryGit } from '../git/run.ts';
 import { editedMerges } from '../git/worktree.ts';
 import {
   actionsJobLog,
+  actionsJobRunId,
   createDraftPr,
   type GhIssue,
   type GhPr,
@@ -23,6 +33,7 @@ import {
   listPrsForBranch,
   prWorkflowState,
   requiredChecksFor,
+  rerunFailedJobs,
   summarizeChecks,
   viewIssue,
   viewPr,
@@ -280,17 +291,71 @@ export interface CiReconcileResult {
   failures: CiFailure[];
   /** Observations of this head so far, including this one. */
   polls: number;
+  /** Re-runs requested for this head so far (bounded by CI_MAX_RERUNS), including this call's. */
+  reruns: number;
+  /** For `wait`: seconds the coordinator should sleep before the next `orch gh ci`. */
+  waitSeconds: number | null;
   /** What this call did to the workflow. */
   action: 'wait' | 'complete' | 'rework' | 'escalate' | 'exhausted';
   reason: string;
 }
 
 /** Reconciliations already recorded for `head` (`pr status` observations carry no outcome). */
+function isObservation(
+  e: { type: string; payload: Record<string, unknown> },
+  head: string,
+): boolean {
+  return (
+    e.type === 'ci.observed' && e.payload['head'] === head && e.payload['outcome'] !== undefined
+  );
+}
+
 function pollsFor(store: Store, id: string, head: string): number {
-  return listEvents(store.db, id, 1000).filter(
-    (e) =>
-      e.type === 'ci.observed' && e.payload['head'] === head && e.payload['outcome'] !== undefined,
-  ).length;
+  return listEvents(store.db, id, 1000).filter((e) => isObservation(e, head)).length;
+}
+
+interface Reruns {
+  /** Re-runs GitHub accepted for this head. */
+  requested: number;
+  /** Check-run ids those re-runs replaced; seeing them again means GitHub has not caught up. */
+  replaced: Set<number>;
+  /** Observations recorded since the latest accepted re-run. */
+  observedSince: number;
+}
+
+function rerunsFor(store: Store, id: string, head: string): Reruns {
+  const events = listEvents(store.db, id, 1000);
+  const accepted = events.filter(
+    (e) => e.type === 'ci.rerun' && e.payload['head'] === head && e.payload['ok'] === true,
+  );
+  const last = accepted.at(-1);
+  return {
+    requested: accepted.length,
+    replaced: new Set(accepted.flatMap((e) => e.payload['checkRunIds'] as number[])),
+    observedSince: last ? events.filter((e) => e.id > last.id && isObservation(e, head)).length : 0,
+  };
+}
+
+/** Ask GitHub to re-run the failed jobs of every workflow run behind `checks`. */
+function requestRerun(
+  nameWithOwner: string,
+  checks: CiCheck[],
+  cwd: string,
+): { runs: number[]; error: string | null } {
+  const runs: number[] = [];
+  for (const c of checks) {
+    if (c.jobId === null) continue;
+    const run = actionsJobRunId(nameWithOwner, c.jobId, cwd);
+    if (run === null) {
+      return { runs, error: `GitHub did not report the workflow run of check ${c.name}` };
+    }
+    if (!runs.includes(run)) runs.push(run);
+  }
+  for (const run of runs) {
+    const error = rerunFailedJobs(nameWithOwner, run, cwd);
+    if (error !== null) return { runs, error: `gh run rerun ${String(run)} failed: ${error}` };
+  }
+  return { runs, error: null };
 }
 
 /** Save each failed required check's log under <artifactDir>/ci/<sha7>/; never throws. */
@@ -323,11 +388,14 @@ function collectDiagnostics(
  * Read GitHub's verdict for the PR head and act on it. Runs only while the ci stage is running
  * and needs the owner token. The result is recorded with the head SHA it describes; a verdict
  * for any other commit (an outdated PR head, a branch pushed outside the job) never completes
- * the job. Failing required checks collect diagnostics and send the job back to build through
- * `rework`, which is bounded by `maxCiRepairs` and escalates when exhausted. Checks that did not
- * run (cancelled, startup failure, never reported) and a PR with no checks at all are escalated,
- * not retried blindly and not counted as repairs. Pending checks record only the observation:
- * the caller waits or resumes later.
+ * the job. A required check that failed, timed out, was cancelled, or never started is first
+ * re-run once per head (`gh run rerun --failed`, recorded as `ci.rerun`), once every other
+ * required check has finished; the re-run touches no source and spends no repair. Only a second
+ * verdict for the same commit acts: failing required checks collect diagnostics and send the job
+ * back to build through `rework`, which is bounded by `maxCiRepairs` and escalates when
+ * exhausted; checks that still did not run (cancelled, startup failure, never reported) and a PR
+ * with no checks at all are escalated, not counted as repairs. Pending checks record only the
+ * observation with the seconds to wait: the caller sleeps and calls again, or resumes later.
  */
 export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileResult {
   const job = authorize(store, id, auth);
@@ -349,13 +417,15 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
   const configured = requiredChecksFor(repo.nameWithOwner, job.baseBranch, tree.path);
   const checks = listChecksFor(repo.nameWithOwner, head, tree.path);
   const evaluation = evaluateChecks(checks, configured, polls);
-  const ciStatus = ciStatusOf(evaluation.outcome);
 
   let outcome: CiReconcileResult['outcome'] = evaluation.outcome;
   let action: CiReconcileResult['action'] = 'wait';
   let reason = evaluation.reason;
   let failures: CiFailure[] = [];
   const tok = { token: auth.token };
+  const reruns = rerunsFor(store, id, head);
+  let rerun: { runs: number[]; checks: CiCheck[]; error: string | null } | null = null;
+  const after = reruns.requested > 0 ? ` (after ${String(reruns.requested)} re-run)` : '';
 
   if (pr.state === 'CLOSED') {
     outcome = 'closed';
@@ -368,30 +438,66 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
       `PR head is ${head.slice(0, 7)}, origin/${tree.branch} is ${remote?.slice(0, 7) ?? 'absent'}, ` +
       `worktree HEAD is ${tree.head.slice(0, 7)}: the branch changed outside the job. ` +
       'A human reconciles it (resume --to pr re-pushes an approved HEAD; resume --to ci re-reads checks).';
-  } else if (evaluation.outcome === 'failing') {
-    failures = collectDiagnostics(
-      store,
-      job,
-      repo.nameWithOwner,
-      head,
-      evaluation.failed,
-      tree.path,
-    );
-    const logs = failures.flatMap((f) => (f.log ? [f.log] : []));
-    action = job.ciRepairs >= job.maxCiRepairs ? 'exhausted' : 'rework';
-    reason =
-      `CI failed for ${head.slice(0, 7)}: ${evaluation.failed.map((c) => c.name).join(', ')}` +
-      (logs.length ? `; logs under the artifact directory: ${logs.join(', ')}` : '');
-  } else if (evaluation.outcome === 'infrastructure' || evaluation.outcome === 'none') {
-    action = 'escalate';
-    reason =
-      evaluation.outcome === 'none'
-        ? `${evaluation.reason}; no required checks are configured for ${job.baseBranch}. ` +
-          'A human adds CI and resumes --to ci, or accepts delivery without CI with resume --to completed.'
-        : `${evaluation.reason}. Not a code defect: a human re-runs the workflow or fixes CI, then resumes --to ci.`;
-  } else if (evaluation.outcome === 'passing') {
-    action = 'complete';
+  } else {
+    // Required checks that did not pass, and whether re-running their workflow runs could help.
+    const culprits = [...evaluation.failed, ...evaluation.infrastructure];
+    const names = culprits.map((c) => c.name).join(', ');
+    const stale =
+      culprits.length > 0 && culprits.every((c) => c.id !== null && reruns.replaced.has(c.id));
+    const rerunnable =
+      culprits.length > 0 &&
+      evaluation.missing.length === 0 &&
+      culprits.every((c) => c.jobId !== null && RERUNNABLE.has(c.conclusion.toLowerCase()));
+    if (stale && reruns.observedSince < CI_GRACE_POLLS) {
+      // The re-run was accepted but GitHub still reports the runs it replaces: not a new verdict.
+      outcome = 'pending';
+      reason = `re-run requested for ${names}; GitHub has not reported the new attempt yet`;
+    } else if (rerunnable && reruns.requested < CI_MAX_RERUNS) {
+      if (evaluation.pending.length > 0) {
+        // A run can only be re-run once it has finished; other required checks are still going.
+        outcome = 'pending';
+        reason = `${names} did not pass; waiting for ${evaluation.pending.join(', ')} to finish before re-running`;
+      } else {
+        rerun = { ...requestRerun(repo.nameWithOwner, culprits, tree.path), checks: culprits };
+        if (rerun.error === null) {
+          outcome = 'pending';
+          reason =
+            `${names} did not pass (${culprits.map((c) => c.conclusion).join(', ')}); re-run ` +
+            `${String(reruns.requested + 1)} of ${String(CI_MAX_RERUNS)} requested for workflow run(s) ` +
+            `${rerun.runs.join(', ')}. A second failure of this commit is treated as a defect.`;
+        }
+      }
+    }
+    if (outcome === 'failing') {
+      failures = collectDiagnostics(
+        store,
+        job,
+        repo.nameWithOwner,
+        head,
+        evaluation.failed,
+        tree.path,
+      );
+      const logs = failures.flatMap((f) => (f.log ? [f.log] : []));
+      action = job.ciRepairs >= job.maxCiRepairs ? 'exhausted' : 'rework';
+      reason =
+        `CI failed for ${head.slice(0, 7)}: ${evaluation.failed.map((c) => c.name).join(', ')}${after}` +
+        (logs.length ? `; logs under the artifact directory: ${logs.join(', ')}` : '');
+    } else if (outcome === 'infrastructure' || outcome === 'none') {
+      action = 'escalate';
+      reason =
+        outcome === 'none'
+          ? `${evaluation.reason}; no required checks are configured for ${job.baseBranch}. ` +
+            'A human adds CI and resumes --to ci, or accepts delivery without CI with resume --to completed.'
+          : `${evaluation.reason}${after}. Not a code defect: a human re-runs the workflow or fixes CI, then resumes --to ci.`;
+    } else if (outcome === 'passing') {
+      action = 'complete';
+    }
+    if (rerun?.error) reason += ` Re-run could not be requested: ${rerun.error}.`;
   }
+  // The persisted rollup describes the checks; a closed or outdated PR still records what they said.
+  const ciStatus = ciStatusOf(
+    outcome === 'closed' || outcome === 'outdated' ? evaluation.outcome : outcome,
+  );
 
   recordCi(store, id, {
     ...tok,
@@ -409,6 +515,17 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
       reason,
     },
   });
+  if (rerun) {
+    recordEvent(store, id, tok, 'ci.rerun', {
+      head,
+      attempt: reruns.requested + 1,
+      runs: rerun.runs,
+      checks: rerun.checks.map((c) => c.name),
+      checkRunIds: rerun.checks.map((c) => c.id),
+      ok: rerun.error === null,
+      error: rerun.error,
+    });
+  }
   let updated: Job;
   if (action === 'rework' || action === 'exhausted') {
     updated = transitionJob(store, id, 'rework', { ...tok, reason });
@@ -427,6 +544,8 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     evaluation,
     failures,
     polls,
+    reruns: reruns.requested + (rerun?.error === null ? 1 : 0),
+    waitSeconds: action === 'wait' ? waitSeconds(polls) : null,
     action,
     reason,
   };
