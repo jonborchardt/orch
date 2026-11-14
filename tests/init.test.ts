@@ -10,18 +10,22 @@ import { join, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { UsageError, ValidationError } from '../src/core/errors.ts';
+import { canonicalPath } from '../src/core/paths.ts';
 import { parsePolicyText, policyFingerprint } from '../src/core/verification.ts';
+import { startJob } from '../src/ops/factory.ts';
 import { checkReadiness, initRepo, parseCommandFlag } from '../src/ops/init.ts';
-import { effectivePolicy } from '../src/ops/verify.ts';
 import { worktreeOf } from '../src/ops/tree.ts';
+import { effectivePolicy } from '../src/ops/verify.ts';
+import type { Store } from '../src/storage/client.ts';
 import { getJob } from '../src/storage/jobs.ts';
-import { makePolicyRepo, POLICY, start } from './drive.ts';
+import { makePolicyRepo, POLICY, SESSION, start } from './drive.ts';
 import {
   commitFile,
   gitIn,
   json,
   makeRepo,
   makeRepoWithOrigin,
+  NOOP_POLICY,
   orch,
   tempDir,
   tempStore,
@@ -41,13 +45,17 @@ function repo(origin?: string): string {
 const NODE_OK = 'noop=node -e 0';
 const commits = (dir: string) => gitIn(dir, 'rev-list', '--count', 'HEAD');
 const files = (dir: string) => readdirSync(dir).filter((f) => f !== '.git');
+/** Git reports long-form paths while a temp dir may be an 8.3 short name (CI runners): compare real paths. */
+const samePath = (actual: string, expected: string) => {
+  expect(canonicalPath(actual)).toBe(canonicalPath(expected));
+};
 
 describe('orch init: writing factory.json', () => {
   it('writes a valid policy from --command flags, commits nothing, and says what to do next', () => {
     const dir = repo();
     const before = commits(dir);
     const r = initRepo({ cwd: dir, commands: ['test=npm run test', 'build=npm run build'] });
-    expect(r.path).toBe(join(dir, 'factory.json'));
+    samePath(r.path, join(dir, 'factory.json'));
     expect(r.replaced).toBe(false);
     expect(r.checks).toEqual(['test: npm run test', 'build: npm run build']);
     const policy = parsePolicyText(readFileSync(r.path, 'utf8'));
@@ -170,7 +178,7 @@ describe('orch init: writing factory.json', () => {
     dirs.push(home);
     const r = orch(home, tmpdir(), ['--json', 'init', '--repo', dir, '--command', NODE_OK]);
     expect(r.code).toBe(0);
-    expect(json<{ path: string }>(r).path).toBe(join(dir, 'factory.json'));
+    samePath(json<{ path: string }>(r).path, join(dir, 'factory.json'));
     const again = orch(home, dir, ['init', '--command', NODE_OK]);
     expect(again.code).toBe(1);
     expect(again.err).toContain('already exists');
@@ -180,13 +188,13 @@ describe('orch init: writing factory.json', () => {
   it('accepts Windows-style spellings of the repository path', () => {
     const dir = repo();
     const trailing = initRepo({ cwd: tmpdir(), repo: dir + sep, commands: [NODE_OK] });
-    expect(trailing.path).toBe(join(dir, 'factory.json'));
+    samePath(trailing.path, join(dir, 'factory.json'));
     if (process.platform === 'win32') {
       const flipped = dir.split('/').join('\\');
       const lower = flipped.charAt(0).toLowerCase() + flipped.slice(1);
       const r = checkReadiness(tmpdir(), lower);
       expect(r.status).toBe('uncommitted');
-      expect(r.path?.toLowerCase()).toBe(join(dir, 'factory.json').toLowerCase());
+      samePath(r.path ?? '', join(dir, 'factory.json'));
       const forward = checkReadiness(tmpdir(), dir.split('\\').join('/'));
       expect(forward.status).toBe('uncommitted');
     }
@@ -200,7 +208,7 @@ describe('orch init: writing factory.json', () => {
     expect(orch(home, dir, ['init', 'extra']).code).toBe(2);
     const r = orch(home, dir, ['init', '--command', NODE_OK]);
     expect(r.code).toBe(0);
-    expect(r.out).toContain(`Wrote ${join(dir, 'factory.json')}`);
+    expect(r.out).toMatch(/^Wrote .*factory\.json for /);
     expect(r.out).toContain('1. Review factory.json');
   });
 });
@@ -319,6 +327,107 @@ describe('orch init: trust boundary', () => {
       // The primary checkout was never written to or committed.
       expect(gitIn(clone, 'status', '--porcelain')).toBe('');
       expect(checkReadiness(clone).status).toBe('ready');
+    } finally {
+      store.cleanup();
+    }
+  });
+});
+
+describe('orch init --check: same baseline as a real job', () => {
+  /** Start a job from `cwd` as `orch factory start` does and return the policy it trusts. */
+  function trusted(store: Store, cwd: string) {
+    const r = startJob(store, { title: 'Parity', session: SESSION, cwd });
+    const wt = worktreeOf(getJob(store.db, r.job.id));
+    if (!wt) throw new Error('job has no worktree');
+    return effectivePolicy(getJob(store.db, r.job.id), wt);
+  }
+  const fingerprintOf = (dir: string) =>
+    policyFingerprint(parsePolicyText(readFileSync(join(dir, 'factory.json'), 'utf8')));
+
+  it('without an origin, a committed policy is ready and is what the job reads, on any branch', () => {
+    const store = tempStore();
+    dirs.push(store.home);
+    try {
+      const dir = repo();
+      commitFile(dir, 'factory.json', NOOP_POLICY);
+      const main = checkReadiness(dir);
+      expect(main).toMatchObject({ status: 'ready', baseRef: 'main' });
+      const effMain = trusted(store, dir);
+      expect(effMain.head).toBe(gitIn(dir, 'rev-parse', 'main'));
+      expect(effMain.fingerprint).toBe(fingerprintOf(dir));
+
+      gitIn(dir, 'checkout', '-q', '-b', 'feature');
+      commitFile(dir, 'factory.json', JSON.stringify(POLICY) + '\n', 'stricter policy');
+      const feature = checkReadiness(dir);
+      expect(feature).toMatchObject({ status: 'ready', baseRef: 'feature' });
+      const effFeature = trusted(store, dir);
+      expect(effFeature.head).toBe(gitIn(dir, 'rev-parse', 'feature'));
+      expect(effFeature.fingerprint).toBe(fingerprintOf(dir));
+      expect(effFeature.fingerprint).not.toBe(effMain.fingerprint);
+    } finally {
+      store.cleanup();
+    }
+  });
+
+  it('with an origin, the job reads origin/<branch>: a local unpushed policy is reported, not trusted', () => {
+    const store = tempStore();
+    dirs.push(store.home);
+    try {
+      const { clone, bare } = makeRepoWithOrigin(); // origin/main carries NOOP_POLICY
+      dirs.push(clone, bare);
+      const originFingerprint = fingerprintOf(clone);
+      commitFile(clone, 'factory.json', JSON.stringify(POLICY) + '\n', 'local only');
+      expect(checkReadiness(clone)).toMatchObject({ status: 'unpushed', baseRef: 'origin/main' });
+      const eff = trusted(store, clone);
+      expect(eff.head).toBe(gitIn(clone, 'rev-parse', 'origin/main'));
+      expect(eff.fingerprint).toBe(originFingerprint);
+      expect(eff.fingerprint).not.toBe(fingerprintOf(clone));
+
+      gitIn(clone, 'push', '-q', 'origin', 'main');
+      expect(checkReadiness(clone).status).toBe('ready');
+      expect(trusted(store, clone).fingerprint).toBe(fingerprintOf(clone));
+    } finally {
+      store.cleanup();
+    }
+  });
+
+  it('a pushed policy on one branch does not make another branch ready', () => {
+    const store = tempStore();
+    dirs.push(store.home);
+    try {
+      const { clone, bare } = makeRepoWithOrigin();
+      dirs.push(clone, bare);
+      gitIn(clone, 'checkout', '-q', '-b', 'release');
+      gitIn(clone, 'rm', '-q', 'factory.json');
+      gitIn(clone, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'no policy here');
+      gitIn(clone, 'push', '-q', '-u', 'origin', 'release');
+      expect(checkReadiness(clone)).toMatchObject({ status: 'missing', ready: false });
+      expect(trusted(store, clone).policy.commands).toEqual([]);
+      // Re-adding it locally is still not what origin/release has.
+      commitFile(clone, 'factory.json', NOOP_POLICY);
+      expect(checkReadiness(clone)).toMatchObject({
+        status: 'unpushed',
+        baseRef: 'origin/release',
+      });
+      expect(trusted(store, clone).policy.commands).toEqual([]);
+    } finally {
+      store.cleanup();
+    }
+  });
+
+  it('reports a detached HEAD instead of calling it ready, as no job can start there', () => {
+    const store = tempStore();
+    dirs.push(store.home);
+    try {
+      const dir = repo();
+      commitFile(dir, 'factory.json', NOOP_POLICY);
+      gitIn(dir, 'checkout', '-q', '--detach');
+      const r = checkReadiness(dir);
+      expect(r).toMatchObject({ status: 'no-base-branch', ready: false, baseRef: null });
+      expect(r.detail).toContain('HEAD is detached');
+      expect(() => startJob(store, { title: 'x', session: SESSION, cwd: dir })).toThrow(
+        /Base branch HEAD not found/,
+      );
     } finally {
       store.cleanup();
     }

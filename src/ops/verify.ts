@@ -53,7 +53,8 @@ export interface EffectivePolicy {
   mergeBase: string | null;
 }
 
-function policyAt(wt: string, sha: string): VerificationPolicy {
+/** The policy committed at `sha` (a commit, not a ref name); empty when the file is absent. */
+export function policyAt(wt: string, sha: string): VerificationPolicy {
   const text = tryGit(wt, 'show', `${sha}:${POLICY_FILE}`);
   if (text === undefined) return { commands: [] };
   return parsePolicyText(text, `${POLICY_FILE} at ${sha.slice(0, 7)}`);

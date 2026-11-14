@@ -10,15 +10,16 @@ import { UsageError, ValidationError } from '../core/errors.ts';
 import { whichSync } from '../core/exec.ts';
 import { findProjectRoot } from '../core/paths.ts';
 import {
-  canonicalPolicy,
   formatPolicy,
   parsePolicy,
   parsePolicyText,
   POLICY_FILE,
+  policyFingerprint,
   type VerificationPolicy,
 } from '../core/verification.ts';
 import { baseRef, describeRepo } from '../git/repo.ts';
-import { tryGit } from '../git/run.ts';
+import { git, tryGit } from '../git/run.ts';
+import { policyAt } from './verify.ts';
 
 /** package.json scripts worth proposing, in order. `check` stands in for the three it usually runs. */
 const SCRIPTS = ['check', 'test', 'lint', 'typecheck', 'build'];
@@ -143,6 +144,7 @@ export type ReadinessStatus =
   | 'invalid'
   | 'ignored'
   | 'uncommitted'
+  | 'no-base-branch'
   | 'unpushed'
   | 'unconfigured'
   | 'missing-tools'
@@ -205,20 +207,29 @@ export function checkReadiness(cwd: string, repo?: string): Readiness {
   if (tryGit(root, 'status', '--porcelain', '--', POLICY_FILE) !== '') {
     return at('uncommitted', `${POLICY_FILE} has uncommitted changes.`, commit);
   }
+  // Exactly what a job created from this checkout does: its base branch is the current branch,
+  // its worktree starts at baseRef (origin/<branch> as last fetched, else the local branch), and
+  // `effectivePolicy` reads factory.json at the merge base, which for a new job is that commit.
   const { currentBranch } = describeRepo(root);
-  const ref = baseRef(root, currentBranch) ?? 'HEAD';
-  base.baseRef = ref;
-  const committed = tryGit(root, 'show', `${ref}:${POLICY_FILE}`);
-  let same = false;
-  if (committed !== undefined) {
-    try {
-      const trusted = parsePolicyText(committed, `${POLICY_FILE} at ${ref}`);
-      same = canonicalPolicy(trusted) === canonicalPolicy(policy);
-    } catch (err) {
-      return at('invalid', (err as Error).message, `Fix ${POLICY_FILE}, commit, and push.`);
-    }
+  const ref = baseRef(root, currentBranch);
+  if (!ref) {
+    const why =
+      currentBranch === 'HEAD' ? 'HEAD is detached' : `branch ${currentBranch} has no commits`;
+    return at(
+      'no-base-branch',
+      `${why}; a job started here has no base branch to read its policy from.`,
+      'Check out a branch with commits (or push it to origin) and run the check again.',
+    );
   }
-  if (!same) {
+  base.baseRef = ref;
+  const sha = git(root, 'rev-parse', `${ref}^{commit}`);
+  let trusted: VerificationPolicy;
+  try {
+    trusted = policyAt(root, sha);
+  } catch (err) {
+    return at('invalid', (err as Error).message, `Fix ${POLICY_FILE}, commit, and push.`);
+  }
+  if (policyFingerprint(trusted) !== policyFingerprint(policy)) {
     return ref.startsWith('origin/')
       ? at(
           'unpushed',
@@ -248,7 +259,7 @@ export function checkReadiness(cwd: string, repo?: string): Readiness {
     ...base,
     status: 'ready',
     ready: true,
-    detail: `${String(policy.commands.length)} check(s) committed at ${ref}: ${base.checks.join(', ')}.`,
+    detail: `${String(policy.commands.length)} check(s) committed at ${ref} (${sha.slice(0, 7)}): ${base.checks.join(', ')}.`,
     next: null,
   };
 }

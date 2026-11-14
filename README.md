@@ -217,11 +217,14 @@ The policy must be committed before the first job because `orch verify` reads `f
 the merge base of the job branch and its base branch, never from the job's own commits: a builder
 that edits the file changes nothing until a human accepts the change. `orch init --check`
 (also summarized by `orch doctor`) reports the state the factory would see: `no-git-repository`,
-`missing`, `invalid`, `ignored` (by `.gitignore`), `uncommitted`, `unpushed` (committed locally
-but `origin/<branch>`, which jobs start from, has a different policy), `unconfigured` (no
-commands), `missing-tools` (an executable not on `PATH`), or `ready`. It reads files and Git
-only; it never runs a check. A repository with no commits yet is reported `uncommitted`: there is
-no trusted revision until the policy is committed.
+`missing`, `invalid`, `ignored` (by `.gitignore`), `uncommitted`, `no-base-branch` (detached
+HEAD), `unpushed` (committed locally but `origin/<branch>`, as last fetched, has a different
+policy), `unconfigured` (no commands), `missing-tools` (an executable not on `PATH`), or `ready`.
+It resolves the base the same way a job does (`origin/<branch>` when that ref exists, else the
+local branch; a repository without an origin needs only the commit) and reads the committed file
+with the same code `orch verify` uses. It reads files and Git only; it never runs a check. A
+repository with no commits yet is reported `uncommitted`: there is no trusted revision until the
+policy is committed.
 
 Restart Claude Code (skills are read at session start), open any project repository, and:
 
