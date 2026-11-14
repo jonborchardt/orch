@@ -1,7 +1,7 @@
 /**
  * Representative factory state for dashboard tests and manual runs: several repositories,
  * a live running job, a stale one, a needs-human escalation, multiple review rounds with long
- * findings, a completed job with a failing CI PR, a cancelled job, a fresh unowned job, and a job
+ * findings, a completed job whose PR's CI failed after delivery, a cancelled job, a fresh unowned job, and a job
  * whose build stage failed.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -200,7 +200,7 @@ export function seedDashboard(
     registerArtifact(store, id, rel, { token, replace });
   };
 
-  // 1. Completed with a draft PR whose CI is failing.
+  // 1. Completed (required checks passed for the delivered head); CI later observed failing.
   const completed = mk('Export reports as CSV', 'github.com/acme/alpha', repos.alpha, {
     description: 'Add a feature to export reports as CSV',
     issueRef: '#12',
@@ -252,7 +252,10 @@ export function seedDashboard(
     art(id, token, 'pr.md', PR);
     recordPr(store, id, { token, url: 'https://github.com/acme/alpha/pull/41', state: 'draft' });
     run(id, token, 'complete');
-    recordCi(store, id, { token, ciStatus: 'failing' });
+    run(id, token, 'start');
+    recordCi(store, id, { token, ciStatus: 'passing', head: 'f1e2d3c4b5a69788' });
+    run(id, token, 'complete');
+    recordCi(store, id, { token, ciStatus: 'failing', head: 'f1e2d3c4b5a69788' });
   }
 
   // 2. In review round 2 with a live session.

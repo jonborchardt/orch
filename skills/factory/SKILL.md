@@ -45,7 +45,9 @@ Rules that are never relaxed:
 check-readonly`; if it fails, treat the round as failed (`orch job transition <id> fail`).
 - Escalate rather than approve around a blocking finding. Humans mark PRs ready and merge.
 - Never run `git push --force`, `gh pr merge`, `gh pr ready`, or delete branches or worktrees.
-- Report outcomes faithfully: a draft PR is not passing CI; a mocked check is not a real one.
+- Report outcomes faithfully: a draft PR is not passing CI; a mocked check is not a real one. The
+  job is delivered only when `orch gh ci` has recorded passing required checks for the current PR
+  head and `orch` moved it to `completed`.
 
 ## 0. Preflight
 
@@ -102,7 +104,8 @@ Act on `plan.step`:
 - `needs-human`: release the job (`orch job release <id> --token <t>`) so a human or another
   session can act on it, report `plan.blockedReason`, the job id, and the exact resume command;
   stop.
-- `done`: run `orch gh pr status <id> --json`; report the PR URL and CI state; stop.
+- `done`: run `orch gh pr status <id> --json`; report the PR URL and the CI state `orch` recorded
+  for the delivered head; stop.
 - `run-stage`: run `plan.commands` in order. Where the list names an agent step (between `start`
   and `artifact add`), launch the agents in `plan.agents` as described below, then verify their
   artifact exists before registering it. Substitute `<token>`, `<pass|changes>`, and `<one line>`
@@ -172,12 +175,39 @@ reviewed, and approved again before anything is pushed. Never resolve conflicts 
 `--force` anything. On resume, `orch worktree integrate` reconstructs an interrupted attempt from
 Git; do not merge by hand.
 
+### CI reconciliation (the `ci` stage)
+
+Completing `pr` is not the end: the job enters `ci`, and the plan's commands are `start`, `orch gh
+ci <id> --token <t>`, then `orch factory next`. `orch gh ci` reads GitHub's checks for the exact PR
+head and acts for you; read its `action`:
+
+- `wait`: required checks are queued, running, or not registered yet. Wait about 60 seconds
+  (`sleep 60`), then run `orch factory next` and the command again. Do not call it in a tight loop.
+  After roughly 30 pending observations in one session (`plan.ci.polls`), release the job
+  (`orch job release <id> --token <t>`), tell the user CI is still running and give the resume
+  command, and stop; `orch factory resume` later re-reads GitHub and continues here.
+- `complete`: required checks passed for this head; run the plan's `complete`. The job is `done`.
+- `rework`: a required check failed. `orch` saved the failing logs under `<artifactDir>/ci/<sha7>/`
+  and moved the job to `build` with `plan.ci.repairs` incremented. Run the loop as usual: the build
+  plan names the logs; give the builder the log paths and the failing check names, and require a
+  real fix (never weakening tests, checks, `factory.json`, or CI workflows to make CI pass). The
+  repair is verified, reviewed, approved, pushed to the same branch, and `orch gh pr create` reuses
+  the existing PR. Then `ci` runs again.
+- `exhausted` or `escalate`: the job is in `needs-human`. Report `plan.blockedReason` (the repair
+  budget is spent; a check was cancelled or never reported; the PR has no checks at all or was
+  closed; the branch moved outside the job) and stop, as for any `needs-human`.
+
+Never run `gh run rerun`, `gh pr ready`, or `gh pr merge` yourself, and never push outside
+`orch gh push`. If `orch gh ci` exits 1 because GitHub or the network failed, nothing was recorded:
+retry once after a minute, then release the job and report.
+
 ## 4. Report
 
 End with: job id, stage reached, worktree and branch, review rounds and verdicts, blocking
-findings left (should be none unless escalated), PR URL and CI status (`pending`/`passing`/
-`failing`/`none`, never "green" unless `orch gh pr status` said `passing`), and the resume command.
-Distinguish what was verified by commands from what an agent reported.
+findings left (should be none unless escalated), CI repair cycles used, PR URL and CI status
+(`pending`/`passing`/`failing`/`none` as `orch` recorded it for the PR head, never "green" unless
+`orch gh ci` said `passing` for the current head), and the resume command. Say "delivered" only
+when the job is `completed`. Distinguish what was verified by commands from what an agent reported.
 
 ## Limits
 

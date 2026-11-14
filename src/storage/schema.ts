@@ -41,9 +41,14 @@ export const jobs = sqliteTable(
     leaseMinutes: integer().notNull().default(30),
     prUrl: text(),
     prState: text().$type<PrState>(),
-    /** Last observed CI rollup for the PR; null until `orch gh pr status` has run. */
+    /** Last observed CI rollup for the PR; null until `orch gh pr status` or `orch gh ci` has run. */
     ciStatus: text().$type<CiStatus>(),
     ciCheckedAt: text(),
+    /** PR head commit the rollup was read for; a result counts only while HEAD is this commit. */
+    ciHead: text(),
+    /** CI repair cycles taken (`rework` from the ci stage); bounded by `maxCiRepairs`. */
+    ciRepairs: integer().notNull().default(0),
+    maxCiRepairs: integer().notNull().default(2),
     /**
      * Verification policy a human authorized for this job (dashboard `accept-policy`), replacing
      * the baseline read from the merge base. Null means the baseline applies.

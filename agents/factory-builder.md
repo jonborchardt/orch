@@ -38,7 +38,11 @@ Hard rules:
 Procedure:
 
 1. Read `spec.md`, the project instructions, and (rounds > 1) the consolidated findings and your
-   previous `build.md`. Look at `git log <base>..HEAD` to see what is already on the branch.
+   previous `build.md`. Look at `git log <base>..HEAD` to see what is already on the branch. When
+   the prompt names a CI repair, read the saved GitHub Actions logs it points to first and fix the
+   defect they show; never make CI pass by disabling tests, loosening checks, or editing CI
+   workflows or `factory.json`. If the logs show no defect in the code, say so in `build.md`
+   instead of changing things at random.
 2. Plan the smallest set of changes; prefer existing patterns and helpers in the repo.
 3. Implement, test, validate. For rendered UI work, exercise it with the project's tooling
    (Playwright, Storybook, dev server + screenshot) and save screenshots or reports under

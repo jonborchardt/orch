@@ -125,6 +125,18 @@ export interface Plan {
   /** Literal commands, in order. `<token>` is read from $ORCH_TOKEN. */
   commands: string[];
   pr: { url: string | null; state: string | null; ciStatus: string | null };
+  /** CI reconciliation state: which commit the rollup describes and the repair budget. */
+  ci: {
+    head: string | null;
+    /** The recorded rollup is for the worktree HEAD. */
+    current: boolean;
+    repairs: number;
+    maxRepairs: number;
+    /** Observations of the current head so far (one per `orch gh ci`). */
+    polls: number;
+    /** Reason from the newest observation. */
+    lastReason: string | null;
+  };
   /** Last escalation reason, when the job is in needs-human. */
   blockedReason?: string | null;
 }
@@ -208,6 +220,10 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   }
   const integration = listIntegrations(store.db, id)[0] ?? null;
   const required = requiredArtifact(job.stage, job.round);
+  const observations = detail.events.filter((e) => e.type === 'ci.observed');
+  const lastObserved = observations.at(-1);
+  const ciCurrent = job.ciHead !== null && job.ciHead === (worktree?.head ?? null);
+  const has = (p: string) => detail.artifacts.some((a) => a.path === p);
   // Every mutating command carries the token explicitly: shells spawned by Claude Code do not
   // keep environment variables between calls, so the skill substitutes <token> each time.
   const tok = ' --token <token>';
@@ -236,6 +252,16 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     artifacts: checkArtifacts(store, job, detail.artifacts),
     commands: [],
     pr: { url: job.prUrl, state: job.prState, ciStatus: job.ciStatus },
+    ci: {
+      head: job.ciHead,
+      current: ciCurrent,
+      repairs: job.ciRepairs,
+      maxRepairs: job.maxCiRepairs,
+      polls: observations.filter(
+        (e) => e.payload['head'] === job.ciHead && e.payload['outcome'] !== undefined,
+      ).length,
+      lastReason: (lastObserved?.payload['reason'] as string | undefined) ?? null,
+    },
   };
 
   if (job.status === 'cancelled') {
@@ -245,7 +271,9 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   }
   if (job.stage === 'completed') {
     plan.step = 'done';
-    plan.reason = `Draft PR recorded (${job.prUrl ?? 'no URL'}). Humans mark it ready and merge.`;
+    plan.reason =
+      `Draft PR delivered (${job.prUrl ?? 'no URL'}) with required checks ${job.ciStatus ?? 'unobserved'} ` +
+      `for ${job.ciHead?.slice(0, 7) ?? 'no commit'}. Humans mark it ready and merge.`;
     plan.commands = [`orch gh pr status ${id}`];
     return plan;
   }
@@ -321,6 +349,13 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const r = role('build');
       if (r) plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'build.md' }];
       const rework = job.round > 0;
+      const reworked = [...detail.events].reverse().find((e) => e.type === 'job.reworked');
+      const ciReason = reworked?.payload['reason'];
+      const ciRepair =
+        reworked?.payload['from'] === 'ci'
+          ? ` CI repair ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}: ${typeof ciReason === 'string' ? ciReason : 'required checks failed'}. ` +
+            'The builder reads the saved logs, fixes the defect without weakening checks or the policy, commits, and runs orch verify.'
+          : '';
       const conflict =
         integration &&
         (integration.status === 'conflict' || (integration.material?.length ?? 0) > 0)
@@ -333,6 +368,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         (rework
           ? `Rework round ${String(job.round + 1)}: address round-${String(job.round)}/consolidated.md, then rebuild build.md.`
           : 'Implement spec.md in the worktree, commit, run orch verify, and write build.md citing the run id.') +
+        ciRepair +
         conflict;
       plan.commands = [...start, verify, add('build.md', rework), complete];
       break;
@@ -373,7 +409,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       plan.commands = [
         ...start,
         ...verifyIfStale,
-        add('decision.md'),
+        add('decision.md', has('decision.md')),
         `${complete}   # only if DECISION: APPROVE; otherwise: orch job transition ${id} escalate --reason "<why>"${tok}`,
       ];
       break;
@@ -381,8 +417,10 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     case 'pr': {
       const behind = worktree.behind ?? 0;
       plan.reason =
-        'Deliver: integrate base if it advanced, verify the resulting commit, push, create or reuse the draft PR, write pr.md.' +
-        (behind > 0 ? ` Base is ${String(behind)} commit(s) ahead.` : '');
+        'Deliver: integrate base if it advanced, verify the resulting commit, push, create or reuse the draft PR, write pr.md. ' +
+        'Completing hands the job to the ci stage; delivery is not done until required checks pass.' +
+        (behind > 0 ? ` Base is ${String(behind)} commit(s) ahead.` : '') +
+        (job.prUrl ? ` The existing PR ${job.prUrl} is updated, never duplicated.` : '');
       plan.commands = [
         ...start,
         ...(behind > 0
@@ -394,10 +432,30 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         ...(behind > 0 ? [verify] : verifyIfStale),
         `orch gh push ${id}${tok}`,
         `orch gh pr create ${id} --body-file "${join(detail.artifactDir, 'pr.md')}"${tok}`,
-        add('pr.md'),
+        add('pr.md', has('pr.md')),
         complete,
-        `orch gh pr status ${id}`,
+        `orch factory next ${id}`,
       ];
+      break;
+    }
+    case 'ci': {
+      const ci = `orch gh ci ${id}${tok}`;
+      const budget = `Repairs used: ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}.`;
+      if (ciCurrent && job.ciStatus === 'passing') {
+        plan.reason = `Required checks passed for ${job.ciHead?.slice(0, 7) ?? '?'}. Complete the job.`;
+        plan.commands = [...start, complete];
+      } else {
+        plan.reason =
+          `Reconcile CI for the PR head through orch gh ci; it records GitHub's verdict for the exact commit and ` +
+          `acts on it (passing: complete; failing: rework to build with saved logs; cannot run or no checks: escalate). ` +
+          `Pending checks are only an observation: wait about a minute and run it again, or release the job and resume ` +
+          `later; the CLI never polls by itself. ${budget}` +
+          (job.ciHead && !ciCurrent
+            ? ` The last observation was for ${job.ciHead.slice(0, 7)}, not HEAD ${worktree.head?.slice(0, 7) ?? '?'}.`
+            : '') +
+          (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
+        plan.commands = [...start, ci, `orch factory next ${id}`];
+      }
       break;
     }
     default:
@@ -447,6 +505,7 @@ export function startJob(store: Store, input: StartInput): StartResult {
     repoPath: repo.root,
     baseBranch: input.base ?? repo.currentBranch,
     maxRounds: input.maxRounds ?? config.maxRounds,
+    maxCiRepairs: config.maxCiRepairs,
     actor: input.session,
   });
   const { token } = claimJob(store, job.id, { session: input.session });

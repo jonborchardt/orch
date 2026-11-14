@@ -368,7 +368,7 @@ describe('approval, rejection, delivery', () => {
     expect(go(c2, 'complete').stage).toBe('pr');
   });
 
-  it('delivers a draft PR through the mocked GitHub CLI and reports done', () => {
+  it('delivers a draft PR through the mocked GitHub CLI and hands the job to the ci stage', () => {
     const c = start();
     toApprove(c);
     runStage(c, 'decision.md');
@@ -380,7 +380,7 @@ describe('approval, rejection, delivery', () => {
       `orch gh pr create ${c.id} --body-file "${join(c.dir, 'pr.md')}" --token <token>`,
       `orch job artifact add ${c.id} pr.md --token <token>`,
       `orch job transition ${c.id} complete --token <token>`,
-      `orch gh pr status ${c.id}`,
+      `orch factory next ${c.id}`,
     ]);
     go(c, 'start');
     pushBranch(store, c.id, { token: c.token });
@@ -390,16 +390,28 @@ describe('approval, rejection, delivery', () => {
     expect(pr.pr.isDraft).toBe(true);
     expect(pr.pr.headRefName).toBe(`factory/${c.id}-add-csv-export`);
     addArtifact(store, c.id, 'pr.md', { token: c.token });
-    const done = go(c, 'complete');
-    expect(done.stage).toBe('completed');
-    const final = next(c.id);
-    expect(final.step).toBe('done');
-    expect(final.pr).toEqual({
+    const handed = go(c, 'complete');
+    expect([handed.stage, handed.status]).toEqual(['ci', 'pending']);
+    const ci = next(c.id);
+    expect(ci.step).toBe('run-stage');
+    expect(ci.commands).toEqual([
+      `orch job transition ${c.id} start --token <token>`,
+      `orch gh ci ${c.id} --token <token>`,
+      `orch factory next ${c.id}`,
+    ]);
+    expect(ci.pr).toEqual({
       url: 'https://github.com/acme/alpha/pull/1',
       state: 'draft',
       ciStatus: 'none',
     });
-    expect(final.reason).toContain('Humans mark it ready');
+    expect(ci.ci).toMatchObject({ head: null, current: false, repairs: 0, maxRepairs: 2 });
+    // Completing ci without GitHub's verdict for this head is refused: the gate sees no observed
+    // commit, and the pure rules would refuse the `none` rollup anyway.
+    go(c, 'start');
+    expect(() => go(c, 'complete')).toThrow(/CI was last observed for no commit/);
+    expect(() => transitionJob(store, c.id, 'complete', { token: c.token })).toThrow(
+      /required checks are none/,
+    );
     // The shim saw exactly one create, with a draft flag and the pr.md body.
     const creates = shim.read().calls.filter((x) => x[1] === 'create');
     expect(creates).toHaveLength(1);

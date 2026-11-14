@@ -62,12 +62,15 @@ export interface FactoryConfig {
   uiPatterns: string[];
   /** Default review rounds for new jobs. */
   maxRounds: number;
+  /** Default CI repair cycles (failed required checks -> builder -> re-review -> push) per job. */
+  maxCiRepairs: number;
 }
 
 export const DEFAULT_CONFIG: FactoryConfig = {
   models: {},
   uiPatterns: DEFAULT_UI_PATTERNS,
   maxRounds: 3,
+  maxCiRepairs: 2,
 };
 
 /** Validate a parsed factory.json. Unknown keys are rejected so typos do not pass silently. */
@@ -118,6 +121,13 @@ export function parseConfig(raw: unknown): FactoryConfig {
           throw new ValidationError('factory.json: "maxRounds" must be an integer from 1 to 10');
         }
         config.maxRounds = value;
+        break;
+      }
+      case 'maxCiRepairs': {
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 10) {
+          throw new ValidationError('factory.json: "maxCiRepairs" must be an integer from 0 to 10');
+        }
+        config.maxCiRepairs = value;
         break;
       }
       default:

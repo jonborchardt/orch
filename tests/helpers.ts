@@ -210,9 +210,13 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
 /**
  * A stand-in for `gh`, run as `node gh-shim.cjs <args>` via ORCH_GH_SHIM. State (repo, issue,
  * PRs, checks, a command to fail, and the call log) lives in a JSON file tests read and change.
+ * With `bare` set to the local origin repository, PR heads are read from it like GitHub would;
+ * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default), `protection`,
+ * `rules`, `logs` (keyed by job id), or `api` (keyed by path), else HTTP 404.
  */
 const GH_SHIM_SOURCE = String.raw`
 const fs = require('node:fs');
+const { execFileSync } = require('node:child_process');
 const file = process.env.ORCH_GH_SHIM_STATE;
 const state = JSON.parse(fs.readFileSync(file, 'utf8'));
 const args = process.argv.slice(2);
@@ -221,13 +225,38 @@ const [a, b] = args;
 const flag = (f) => args[args.indexOf(f) + 1];
 let code = 0;
 const out = (o) => process.stdout.write(typeof o === 'string' ? o : JSON.stringify(o));
-if (state.fail === a + ' ' + b) { process.stderr.write('shim: simulated failure'); code = 1; }
+const notFound = () => { process.stderr.write('gh: Not Found (HTTP 404)'); code = 1; };
+const withHead = (p) => {
+  if (!state.bare) return p;
+  try {
+    const sha = execFileSync('git', ['rev-parse', 'refs/heads/' + p.headRefName], { cwd: state.bare, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return { ...p, headRefOid: sha };
+  } catch { return p; }
+};
+if (state.fail && (a + ' ' + b).startsWith(state.fail)) { process.stderr.write('shim: simulated failure'); code = 1; }
 else if (a === 'repo' && b === 'view') out(state.repo);
 else if (a === 'issue' && b === 'view') out(state.issue);
-else if (a === 'pr' && b === 'list') out(state.prs.filter((p) => p.headRefName === flag('--head')));
+else if (a === 'pr' && b === 'list') out(state.prs.filter((p) => p.headRefName === flag('--head')).map(withHead));
 else if (a === 'pr' && b === 'view') {
   const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
-  if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else out(pr);
+  if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else out(withHead(pr));
+} else if (a === 'api') {
+  const path = b.replace(/^\//, '').split('?')[0];
+  let m;
+  if ((m = /\/commits\/([0-9a-f]+)\/check-runs$/.exec(path))) {
+    const runs = (state.checkRuns || {})[m[1]] || (state.checkRuns || {})['*'] || [];
+    out({ total_count: runs.length, check_runs: runs });
+  } else if ((m = /\/commits\/([0-9a-f]+)\/status$/.exec(path))) {
+    const statuses = (state.statuses || {})[m[1]] || (state.statuses || {})['*'] || [];
+    out({ state: statuses.some((s) => s.state !== 'success') ? 'pending' : 'success', statuses });
+  } else if (/\/protection\/required_status_checks$/.test(path)) {
+    if (state.protection) out(state.protection); else notFound();
+  } else if (/\/rules\/branches\//.test(path)) out(state.rules || []);
+  else if ((m = /\/actions\/jobs\/(\d+)\/logs$/.exec(path))) {
+    const log = (state.logs || {})[m[1]];
+    if (log === undefined) notFound(); else out(log);
+  } else if (state.api && state.api[path] !== undefined) out(state.api[path]);
+  else notFound();
 } else if (a === 'pr' && b === 'create') {
   const n = state.prs.length + 1;
   state.prs.push({
@@ -242,13 +271,36 @@ fs.writeFileSync(file, JSON.stringify(state));
 process.exit(code);
 `;
 
+export interface ShimCheckRun {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  html_url?: string;
+  app?: { slug: string };
+}
+
 export interface ShimState {
   calls: string[][];
+  /** Fail every command whose first two words start with this (e.g. "repo view", "api repos/"). */
   fail?: string | undefined;
   repo: { nameWithOwner: string; url: string; defaultBranchRef: { name: string } | null };
   issue: Record<string, unknown>;
   prs: Record<string, unknown>[];
   checks: Record<string, unknown>[];
+  /** Local bare origin; when set, PR heads are resolved from its branches. */
+  bare?: string | undefined;
+  /** Check runs per commit sha (`*` = any sha). */
+  checkRuns?: Record<string, ShimCheckRun[]> | undefined;
+  /** Commit statuses per sha (`*` = any sha). */
+  statuses?: Record<string, { context: string; state: string; target_url?: string }[]> | undefined;
+  /** Classic branch protection required checks; null/absent = HTTP 404. */
+  protection?: { contexts?: string[]; checks?: { context: string }[] } | null | undefined;
+  rules?: Record<string, unknown>[] | undefined;
+  /** Actions job logs by job id. */
+  logs?: Record<string, string> | undefined;
+  /** Any other `gh api <path>` answer by path (query string stripped). */
+  api?: Record<string, unknown> | undefined;
 }
 
 export interface GhShim {
