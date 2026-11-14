@@ -57,7 +57,11 @@ describe('agents', () => {
     for (const r of ROLES.filter((x) => x.kind === 'review')) {
       expect(tools(r.agent)).not.toContain('Edit');
       expect(tools(r.agent)).toContain('Write'); // its own review artifact
-      expect(readFileSync(join(agentsDir, `${r.agent}.md`), 'utf8')).toContain('VERDICT');
+      const text = readFileSync(join(agentsDir, `${r.agent}.md`), 'utf8');
+      expect(text).toContain('VERDICT');
+      // Phase 1 validation (issues I-01): reviewers answered inline instead of writing the file
+      // when the harness discouraged report files; the agent must say the file is the deliverable.
+      expect(text).toContain('The review file is the deliverable');
     }
     expect(tools('factory-approver')).not.toContain('Edit');
     expect(tools('factory-approver')).not.toContain('Write');

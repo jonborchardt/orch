@@ -33,6 +33,8 @@ Rules:
 
 Write the review to the path given, with the headings `Scope checked` and `Findings` (mandatory;
 `orch` refuses the file otherwise), then the `VERDICT:` line.
+The review file is the deliverable: the coordinator and `orch` read the file, not your reply.
+Write it even if your harness discourages report files; answer with a two-line summary only.
 
 ## Ownership: security
 
