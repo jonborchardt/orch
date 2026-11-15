@@ -65,6 +65,8 @@ export const jobs = sqliteTable(
     policyHead: text(),
     /** Job that replaced this one (`orch job supersede`); both histories are kept. */
     supersededBy: text().references((): AnySQLiteColumn => jobs.id),
+    /** When a human archived this finished job (dashboard); null when it is not archived. */
+    archivedAt: text(),
     /** Incremented on every mutation; optimistic concurrency check for callers. */
     revision: integer().notNull().default(1),
     createdAt: text().notNull(),

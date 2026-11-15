@@ -84,6 +84,12 @@ test('job detail exposes spec, reviews, long findings, decision, events, and lin
   // The heading's text content includes its blocking chip ("Round 1blocking 2"): prefix match.
   await expect(page.getByText(/^Round 1/)).toBeVisible();
   await expect(page.getByText(/^Round 2/)).toBeVisible();
+  // Reviewers are collapsed: the header shows the verdict, the body only once expanded.
+  await expect(page.locator('[data-marker="VERDICT"]')).toHaveCount(0);
+  const reviewer = page.getByRole('button', { name: /^security/ }).first();
+  await expect(reviewer).toHaveAttribute('aria-expanded', 'false');
+  await reviewer.click();
+  await expect(reviewer).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('[data-marker="VERDICT"]').first()).toBeVisible();
   await page.getByRole('tab', { name: 'Findings' }).click();
   await expect(page.getByText('finding 24 of round 2')).toBeVisible();
@@ -104,10 +110,44 @@ test('job detail exposes spec, reviews, long findings, decision, events, and lin
   await expect(page.getByTestId('completion')).toHaveText(
     'Completed: required checks passed for f1e2d3c.',
   );
-  // Finished jobs have no live controls and nothing to resume.
-  await expect(page.getByText('No actions: the job is completed.')).toBeVisible();
+  // Finished jobs have no live controls and nothing to resume; they can only be archived.
+  await expect(page.getByRole('button', { name: 'Archive' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancel job' })).toHaveCount(0);
   await expect(page.getByTestId('resume')).toHaveCount(0);
+});
+
+test('a finished job can be archived, found under Show: archived, and unarchived', async ({
+  page,
+}) => {
+  const { ids } = state();
+  const title = 'Export reports as CSV';
+  await page.goto(`/#/jobs/${ids.completed}`);
+  await page.getByRole('button', { name: 'Archive' }).click();
+  // The session that delivered it still holds its lease, so archiving is a confirmed takeover.
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel(/Take the job from session/).check();
+  await dialog.getByRole('button', { name: 'Confirm' }).click();
+  await expect(page.getByRole('status')).toContainText('Job archived');
+  await expect(page.getByRole('button', { name: 'Unarchive' })).toBeVisible();
+
+  await page.goto('/');
+  const table = page.getByRole('table', { name: 'Factory jobs' });
+  await expect(table.getByRole('row')).toHaveCount(10); // header + 9 unarchived jobs
+  await expect(table.getByText(title)).toHaveCount(0);
+  await page.getByLabel('Show').click();
+  await page.getByRole('option', { name: 'archived' }).click();
+  await expect(table.getByRole('row')).toHaveCount(2);
+  await expect(table.getByText(title)).toBeVisible();
+  await expect(table.getByText('archived', { exact: true })).toBeVisible();
+
+  // Unarchive so later tests see the seeded board.
+  await table.getByRole('link', { name: title }).click();
+  await page.getByRole('button', { name: 'Unarchive' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+  await expect(page.getByRole('status')).toContainText('Job unarchived');
+  await page.goto('/');
+  await expect(table.getByRole('row')).toHaveCount(11);
+  await expect(table.getByText(title)).toBeVisible();
 });
 
 test('a stopped job explains itself and offers recovery, not approval', async ({ page }) => {

@@ -106,6 +106,8 @@ export interface BoardRow {
   /** Job that replaced this one, and jobs this one replaced (`orch job supersede`). */
   supersededBy: string | null;
   supersedes: string[];
+  /** When a human archived this finished job; archived rows are hidden from the default views. */
+  archivedAt: string | null;
   ci: CiView;
 }
 

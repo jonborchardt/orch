@@ -111,6 +111,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       elapsedMs: Math.max(0, Date.parse(end) - Date.parse(job.createdAt)),
       pr: { url: job.prUrl, state: job.prState },
       supersededBy: job.supersededBy,
+      archivedAt: job.archivedAt,
       supersedes: predecessors.get(job.id) ?? [],
       // The board does not inspect worktrees (one Git call per job); the detail view does.
       ci: ciView(job, evidence.events, undefined),
