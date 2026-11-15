@@ -2,7 +2,6 @@ import {
   Alert,
   AppBar,
   Box,
-  Button,
   Chip,
   FormControl,
   InputLabel,
@@ -11,7 +10,6 @@ import {
   Stack,
   Toolbar,
   Typography,
-  useColorScheme,
 } from '@mui/material';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -54,7 +52,6 @@ function matches(row: BoardRow, f: StatusFilter): boolean {
 
 export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const hash = useHashRoute();
-  const { mode, setMode } = useColorScheme();
   const [rows, setRows] = useState<BoardRow[] | null>(null);
   const [repos, setRepos] = useState<string[]>([]);
   const [repo, setRepo] = useState<string>('');
@@ -168,15 +165,6 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
               ))}
             </Select>
           </FormControl>
-          <Button
-            variant="outlined"
-            aria-label={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}
-            onClick={() => {
-              setMode(mode === 'dark' ? 'light' : 'dark');
-            }}
-          >
-            {mode === 'dark' ? 'Light' : 'Dark'}
-          </Button>
         </Toolbar>
       </AppBar>
       {error && (

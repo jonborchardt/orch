@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BoardRow, CiView, JobDetailView } from '../../src/server/types.ts';
 import { App } from './App.tsx';
-import { ciSummary } from './Ci.tsx';
 import { Markdown } from './Markdown.tsx';
 import { theme } from './main.tsx';
 
@@ -28,11 +27,9 @@ function row(over: Partial<BoardRow>): BoardRow {
     blocking: null,
     blocker: null,
     resume: null,
-    createdAt: '2026-11-13T08:00:00.000Z',
     updatedAt: '2026-11-13T08:30:00.000Z',
-    completedAt: null,
     elapsedMs: 1_800_000,
-    pr: { url: null, state: null, ciStatus: null, ciCheckedAt: null },
+    pr: { url: null, state: null },
     supersededBy: null,
     supersedes: [],
     ci: noCi(),
@@ -52,6 +49,8 @@ function noCi(over: Partial<CiView> = {}): CiView {
     reason: null,
     failures: [],
     completion: null,
+    line: '',
+    guidance: '',
     ...over,
   };
 }
@@ -90,12 +89,7 @@ const rows: BoardRow[] = [
       detail: 'AC2 needs deployment verification',
     },
     resume: { command: '/factory resume job-00000003', heldBy: null },
-    pr: {
-      url: 'https://github.com/x/y/pull/1',
-      state: 'draft',
-      ciStatus: 'failing',
-      ciCheckedAt: null,
-    },
+    pr: { url: 'https://github.com/x/y/pull/1', state: 'draft' },
     ci: noCi({ status: 'failing', head: 'abcdef0123456789', outcome: 'failing', repairs: 1 }),
   }),
   row({
@@ -106,7 +100,6 @@ const rows: BoardRow[] = [
     status: 'cancelled',
     liveness: 'cancelled',
     owner: null,
-    completedAt: '2026-11-13T08:40:00.000Z',
     blocker: {
       kind: 'cancelled',
       summary: 'Cancelled during build by dashboard',
@@ -162,7 +155,6 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     },
     rounds: [{ round: 1, reviews: [], consolidated: 'round-1/consolidated.md', blocking: 0 }],
     events: [],
-    worktree: null,
     plan: null,
     planError: 'config broken',
     blocker: {
@@ -358,7 +350,7 @@ describe('App board', () => {
     expect(f.mock.calls.length).toBeGreaterThan(2);
   });
 
-  it('shows API errors without crashing and toggles dark mode', async () => {
+  it('shows API errors without crashing', async () => {
     mockFetch();
     data.rows = [];
     vi.stubGlobal(
@@ -375,11 +367,6 @@ describe('App board', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('Boom: db locked');
     });
-    fireEvent.click(screen.getByRole('button', { name: /Switch to dark mode/ }));
-    await waitFor(() => {
-      expect(window.localStorage.getItem('mui-mode')).toBe('dark');
-    });
-    expect(screen.getByRole('button', { name: /Switch to light mode/ })).toBeInTheDocument();
   });
 });
 
@@ -596,6 +583,8 @@ describe('Job detail', () => {
       status: 'none',
       outcome: 'none',
       checkedAt: base.job.updatedAt,
+      guidance:
+        'Add CI and Approve back to ci, or accept the delivery by hand (recorded as a human close-out).',
     });
     data.detail = detail({
       job: {
@@ -657,6 +646,7 @@ describe('Job detail', () => {
     // Without the server's permission there is no button, whatever the CI state says.
     data.detail = detail({
       ci: noCi({
+        guidance: 'The repair budget is spent.',
         head: 'd4e5f60718293041',
         status: 'failing',
         outcome: 'failing',
@@ -687,87 +677,6 @@ describe('Job detail', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'PR' }));
     expect(screen.getByTestId('ci-panel')).toHaveTextContent('Repairs used: 1 of 1');
     expect(screen.getByTestId('ci-panel')).toHaveTextContent('CI failing @d4e5f60');
-  });
-
-  it('describes every CI state from structured fields, never from a stale verdict', () => {
-    const base = detail();
-    const withPr = (over: Partial<typeof base.job>) => ({
-      ...base.job,
-      prUrl: 'https://github.com/x/y/pull/9',
-      prState: 'draft' as const,
-      stage: 'ci' as const,
-      status: 'running' as const,
-      ...over,
-    });
-    const line = (job: typeof base.job, ci: Partial<CiView>) =>
-      ciSummary({ job, ci: noCi(ci) }).line;
-    expect(line(base.job, {})).toBe('No PR yet.');
-    expect(line(withPr({}), {})).toBe('PR created; CI not yet observed.');
-    expect(line(withPr({}), { head: 'a1b2c3d4', status: 'pending', current: true })).toBe(
-      'CI pending for a1b2c3d.',
-    );
-    expect(line(withPr({}), { head: 'a1b2c3d4', status: 'passing', current: true })).toBe(
-      'CI passing for a1b2c3d.',
-    );
-    // A green verdict for a commit that is no longer HEAD is said to be stale, in so many words.
-    expect(line(withPr({}), { head: 'a1b2c3d4', status: 'passing', current: false })).toContain(
-      'not the current HEAD',
-    );
-    expect(
-      line(withPr({ stage: 'build', status: 'pending' }), {
-        head: 'a1b2c3d4',
-        status: 'failing',
-        repairs: 1,
-      }),
-    ).toBe('CI failed for a1b2c3d; repair in progress (1 of 2 repairs used, stage build).');
-    expect(
-      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
-        head: 'a1b2c3d4',
-        status: 'failing',
-        repairs: 2,
-      }),
-    ).toBe('CI still failing for a1b2c3d; 2 of 2 repairs used.');
-    expect(
-      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
-        head: 'a1b2c3d4',
-        status: 'none',
-      }),
-    ).toBe('GitHub reports no checks for a1b2c3d.');
-    expect(
-      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
-        head: 'a1b2c3d4',
-        status: 'failing',
-        outcome: 'infrastructure',
-      }),
-    ).toContain('did not reach a verdict');
-    expect(
-      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
-        head: 'a1b2c3d4',
-        status: 'pending',
-        outcome: 'closed',
-      }),
-    ).toContain('closed without merging');
-    expect(
-      line(withPr({ stage: 'needs-human', status: 'blocked' }), {
-        head: 'a1b2c3d4',
-        status: 'passing',
-        outcome: 'outdated',
-      }),
-    ).toContain('moved outside the job');
-    expect(
-      line(withPr({ stage: 'needs-human', status: 'blocked', prState: 'merged' }), {
-        head: 'a1b2c3d4',
-        status: 'failing',
-      }),
-    ).toContain('merged outside the factory');
-    const finished = withPr({ stage: 'completed', status: 'completed' });
-    expect(line(finished, { head: 'a1b2c3d4', status: 'passing', completion: 'ci' })).toBe(
-      'Completed: required checks passed for a1b2c3d.',
-    );
-    expect(line(finished, { head: 'a1b2c3d4', status: 'none', completion: 'human' })).toBe(
-      'Completed by human close-out; CI was none for a1b2c3d.',
-    );
-    expect(line(finished, { completion: 'legacy' })).toContain('before the ci stage existed');
   });
 
   it('Markdown renders headings, lists, code, markers, and never HTML', () => {

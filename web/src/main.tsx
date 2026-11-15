@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './App.tsx';
 
-/** Compact developer-tool theme with native light and dark schemes (toggle in the app bar). */
+/** Compact developer-tool theme with native light and dark schemes (following the OS). */
 export const theme = createTheme({
   cssVariables: { colorSchemeSelector: 'data' },
   colorSchemes: { light: true, dark: true },

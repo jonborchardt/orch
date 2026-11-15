@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { MAX_CI_REPAIRS_REASON, MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
-import { board, detail, liveness } from '../src/server/api.ts';
+import { board, detail } from '../src/server/api.ts';
+import { liveness } from '../src/server/status.ts';
 import { blockerOf, ciView, type Evidence, resumeOf } from '../src/server/status.ts';
 import type { Artifact, Event, VerificationRun } from '../src/storage/schema.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
@@ -101,11 +102,11 @@ describe('seeded board and detail', () => {
     expect(by(ids.completed).liveness).toBe('completed');
     expect(by(ids.completed).blocker).toBeNull();
     expect(by(ids.completed).resume).toBeNull();
-    expect(by(ids.completed).pr).toMatchObject({
+    expect(by(ids.completed).pr).toEqual({
       url: 'https://github.com/acme/alpha/pull/41',
       state: 'draft',
-      ciStatus: 'failing',
     });
+    expect(by(ids.completed).ci.status).toBe('failing');
     // Cancelled is its own state, never "finished" like a success, and carries its reason.
     expect(by(ids.cancelled).status).toBe('cancelled');
     expect(by(ids.cancelled).liveness).toBe('cancelled');
@@ -309,14 +310,6 @@ describe('mutations', () => {
     const s = (await (await api('/api/session', { headers: same() })).json()) as SessionInfo;
     csrf = s.csrf;
     expect(csrf).toMatch(/^[0-9a-f]{48}$/);
-    expect(s.actions).toEqual([
-      'approve',
-      'request-review',
-      'request-rework',
-      'accept-policy',
-      'accept-delivery',
-      'cancel',
-    ]);
   });
 
   it('requires a same-origin Origin, JSON content type, and the CSRF token', async () => {
@@ -690,7 +683,10 @@ describe('blocker and resume derivation', () => {
 
   it('ciView binds the verdict to its commit and names how a job completed', () => {
     const row = {
+      id: 'job-00000001',
       stage: 'ci' as const,
+      prUrl: 'https://github.com/x/y/pull/1',
+      prState: 'draft' as const,
       ciHead: 'aaaa111',
       ciStatus: 'passing' as const,
       ciCheckedAt: past,

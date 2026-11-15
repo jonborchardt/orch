@@ -175,8 +175,129 @@ export function blockerOf(
 
 type CiRow = Pick<
   Job,
-  'stage' | 'ciHead' | 'ciStatus' | 'ciCheckedAt' | 'ciRepairs' | 'maxCiRepairs'
+  | 'id'
+  | 'stage'
+  | 'prUrl'
+  | 'prState'
+  | 'ciHead'
+  | 'ciStatus'
+  | 'ciCheckedAt'
+  | 'ciRepairs'
+  | 'maxCiRepairs'
 >;
+
+const sha7 = (sha: string | null): string => (sha ? sha.slice(0, 7) : '?');
+
+/**
+ * What the CI state means for the person reading it, from the server's structured fields only:
+ * the rollup and the commit it was read for, whether that commit is still HEAD, the newest
+ * reconciliation outcome, the repair budget, and how a finished job finished. The client renders
+ * these two strings; the controls it offers come from the action list, never from this text.
+ */
+export function ciSummary(
+  ci: Omit<CiView, 'line' | 'guidance'>,
+  job: Pick<Job, 'id' | 'stage' | 'prUrl' | 'prState'>,
+): { line: string; guidance: string } {
+  const at = `for ${sha7(ci.head)}`;
+  const budget = `${String(ci.repairs)} of ${String(ci.maxRepairs)} repairs used`;
+  if (ci.completion === 'human') {
+    return {
+      line: `Completed by human close-out; CI was ${ci.status ?? 'not observed'} ${at}.`,
+      guidance:
+        'A human accepted the delivery without a passing CI verdict (the reason is in the events). ' +
+        'This is not an automated verification result.',
+    };
+  }
+  if (ci.completion === 'legacy') {
+    return {
+      line: 'Completed before the ci stage existed; no CI verdict was recorded for a commit.',
+      guidance: 'Check the PR on GitHub directly; nothing here vouches for its checks.',
+    };
+  }
+  if (ci.completion === 'ci') {
+    return {
+      line: `Completed: required checks passed ${at}.`,
+      guidance: 'Humans mark the PR ready and merge; the factory never does.',
+    };
+  }
+  if (!job.prUrl) return { line: 'No PR yet.', guidance: 'CI is observed once a draft PR exists.' };
+  if (ci.head === null || ci.status === null) {
+    return {
+      line: 'PR created; CI not yet observed.',
+      guidance: `A session runs orch gh ci ${job.id} to read the checks for the PR head.`,
+    };
+  }
+  const stale =
+    ci.current === false ? ` That is not the current HEAD, so it no longer counts.` : '';
+  if (job.prState === 'merged') {
+    return {
+      line: `PR merged outside the factory; CI was ${ci.status} ${at}.`,
+      guidance: 'If the job is escalated from ci, a human may accept the delivery to close it out.',
+    };
+  }
+  if (ci.outcome === 'closed') {
+    return {
+      line: `PR closed without merging; CI was ${ci.status} ${at}.`,
+      guidance: 'Reopen the PR and Approve back to ci, or cancel the job.',
+    };
+  }
+  if (ci.outcome === 'outdated') {
+    return {
+      line: `PR head moved outside the job; last verdict ${ci.status} ${at}.`,
+      guidance: 'Approve back to pr to re-push the approved HEAD, or back to ci to re-read checks.',
+    };
+  }
+  if (ci.status === 'none') {
+    return {
+      line: `GitHub reports no checks ${at}.`,
+      guidance:
+        'Add CI and Approve back to ci, or accept the delivery by hand (recorded as a human close-out).',
+    };
+  }
+  if (ci.outcome === 'infrastructure') {
+    return {
+      line: `Required checks did not reach a verdict ${at}.${stale}`,
+      guidance: 'Not a code defect: re-run the workflow or fix CI, then Approve back to ci.',
+    };
+  }
+  if (ci.status === 'failing') {
+    const exhausted = job.stage === 'needs-human' && ci.repairs >= ci.maxRepairs;
+    if (exhausted) {
+      return {
+        line: `CI still failing ${at}; ${budget}.`,
+        guidance:
+          'The repair budget is spent. Request rework for one more attempt, fix it by hand on the ' +
+          'branch and Approve back to ci, or cancel. Completion is not available while checks fail.',
+      };
+    }
+    if (job.stage !== 'ci') {
+      return {
+        line: `CI failed ${at}; repair in progress (${budget}, stage ${job.stage}).`,
+        guidance:
+          'The builder repairs from the saved logs; the fix is reviewed and approved again.',
+      };
+    }
+    return {
+      line: `CI failing ${at}; ${budget}.${stale}`,
+      guidance: 'orch gh ci acts on it next.',
+    };
+  }
+  if (ci.status === 'pending') {
+    return {
+      line: `CI pending ${at}.${stale}`,
+      guidance:
+        'Waiting on GitHub; the session polls with orch gh ci. Completion is not available.',
+    };
+  }
+  // passing
+  return {
+    line: `CI passing ${at}.${stale}`,
+    guidance:
+      ci.current === false
+        ? `Run orch gh ci ${job.id} again for the current HEAD.`
+        : 'The session completes the job; nothing here merges or marks the PR ready.',
+  };
+}
 
 /**
  * The CI state to show, from the job row and the newest `ci.observed` / `job.completed` events.
@@ -205,7 +326,7 @@ export function ciView(
           ? 'ci'
           : 'legacy';
   }
-  return {
+  const view = {
     head: job.ciHead,
     current: head == null ? null : job.ciHead !== null && job.ciHead === head,
     status: job.ciStatus,
@@ -217,6 +338,7 @@ export function ciView(
     failures,
     completion,
   };
+  return { ...view, ...ciSummary(view, job) };
 }
 
 /**

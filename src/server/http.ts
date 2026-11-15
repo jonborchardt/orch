@@ -17,8 +17,7 @@ import {
   ValidationError,
   WorkflowError,
 } from '../core/errors.ts';
-import { packageInfo, webDistDir } from '../core/paths.ts';
-import { DASHBOARD_ACTIONS } from '../ops/actions.ts';
+import { webDistDir } from '../core/paths.ts';
 import type { Store } from '../storage/client.ts';
 import { act, artifactContent, assertJobId, board, detail, repos } from './api.ts';
 import type { ApiError, SessionInfo } from './types.ts';
@@ -133,7 +132,6 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
   const { store } = opts;
   const webRoot = resolve(opts.webRoot ?? webDistDir());
   const csrf = randomBytes(24).toString('hex');
-  const version = packageInfo().version;
   let allowedOrigins = new Set<string>();
 
   const isSameOrigin = (req: IncomingMessage): boolean => {
@@ -211,12 +209,7 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
         if (req.headers.origin !== undefined && !isSameOrigin(req)) {
           throw new HttpError(403, 'Foreign origin');
         }
-        const info: SessionInfo = {
-          csrf,
-          version,
-          database: store.file,
-          actions: DASHBOARD_ACTIONS,
-        };
+        const info: SessionInfo = { csrf };
         send(res, 200, info);
         return;
       }
