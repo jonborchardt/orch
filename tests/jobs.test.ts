@@ -270,6 +270,14 @@ describe('jobs: full workflow through storage', () => {
     return go(id, token, 'complete');
   }
 
+  /** Record a PASS from each named reviewer for `round`, from its own file. */
+  function pass(id: string, token: string, dir: string, round: number, ...names: string[]): void {
+    for (const r of names) {
+      writeArtifact(dir, `round-${String(round)}/review-${r}.md`);
+      recordReview(store, id, { token, reviewer: r, verdict: 'pass' });
+    }
+  }
+
   it('runs spec -> build -> review (changes) -> build -> review (pass) -> approve -> pr -> done', () => {
     const { id, token, dir } = setup();
     expect(advance(id, token, dir, 'spec.md').stage).toBe('build');
@@ -277,29 +285,44 @@ describe('jobs: full workflow through storage', () => {
     expect(advance(id, token, dir, 'build.md').stage).toBe('review');
 
     // Round 1: reviews can only be recorded while review is running.
-    expect(() => recordReview(store, id, { token, reviewer: 'code' })).toThrow(ValidationError);
+    expect(() => recordReview(store, id, { token, reviewer: 'code-quality' })).toThrow(
+      ValidationError,
+    );
     go(id, token, 'start');
-    recordReview(store, id, { token, reviewer: 'code' });
+    recordReview(store, id, { token, reviewer: 'code-quality' });
     recordReview(store, id, { token, reviewer: 'security' });
     writeArtifact(dir, 'round-1/consolidated.md');
     registerArtifact(store, id, 'round-1/consolidated.md', { token });
-    expect(() => go(id, token, 'complete')).toThrow(/pending: code, security/);
-    writeArtifact(dir, 'round-1/review-code.md', fixture('round-1/review-code.md', 'CHANGES'));
+    expect(() => go(id, token, 'complete')).toThrow(/pending: code-quality, security/);
+    writeArtifact(
+      dir,
+      'round-1/review-code-quality.md',
+      fixture('round-1/review-code-quality.md', 'CHANGES'),
+    );
     writeArtifact(dir, 'round-1/review-security.md');
     // The recorded verdict must agree with the file's VERDICT line.
     expect(() =>
-      recordReview(store, id, { token, reviewer: 'code', verdict: 'pass', summary: 'nit' }),
+      recordReview(store, id, { token, reviewer: 'code-quality', verdict: 'pass', summary: 'nit' }),
     ).toThrow(/does not match/);
-    recordReview(store, id, { token, reviewer: 'code', verdict: 'changes', summary: 'nit' });
+    recordReview(store, id, {
+      token,
+      reviewer: 'code-quality',
+      verdict: 'changes',
+      summary: 'nit',
+    });
     recordReview(store, id, { token, reviewer: 'security', verdict: 'pass' });
+    // Two of the three always-on reviewers are not a review round.
+    expect(() => go(id, token, 'complete')).toThrow(
+      /Required reviewers not recorded this round: correctness/,
+    );
+    pass(id, token, dir, 1, 'correctness');
     const back = go(id, token, 'complete');
     expect([back.stage, back.status, back.round]).toEqual(['build', 'pending', 1]);
 
     // Round 2 passes.
     expect(advance(id, token, dir, 'build.md').round).toBe(2);
     go(id, token, 'start');
-    writeArtifact(dir, 'round-2/review-code.md');
-    recordReview(store, id, { token, reviewer: 'code', verdict: 'pass' });
+    pass(id, token, dir, 2, 'code-quality', 'security', 'correctness');
     writeArtifact(dir, 'round-2/consolidated.md');
     registerArtifact(store, id, 'round-2/consolidated.md', { token });
     expect(go(id, token, 'complete').stage).toBe('approve');
@@ -332,16 +355,19 @@ describe('jobs: full workflow through storage', () => {
     expect(() => go(id, token, 'start')).toThrow(/finished/);
 
     const detail = jobDetail(store, id, 1000);
-    expect(detail.reviews).toHaveLength(3);
+    expect(detail.reviews).toHaveLength(6);
     expect(detail.artifacts.map((a) => a.path).sort()).toEqual([
       'build.md',
       'decision.md',
       'pr.md',
       'round-1/consolidated.md',
-      'round-1/review-code.md',
+      'round-1/review-code-quality.md',
+      'round-1/review-correctness.md',
       'round-1/review-security.md',
       'round-2/consolidated.md',
-      'round-2/review-code.md',
+      'round-2/review-code-quality.md',
+      'round-2/review-correctness.md',
+      'round-2/review-security.md',
       'spec.md',
     ]);
     const types = detail.events.map((e) => e.type);
@@ -356,8 +382,13 @@ describe('jobs: full workflow through storage', () => {
     advance(id, token, dir, 'spec.md');
     advance(id, token, dir, 'build.md');
     go(id, token, 'start');
-    writeArtifact(dir, 'round-1/review-code.md', fixture('round-1/review-code.md', 'CHANGES'));
-    recordReview(store, id, { token, reviewer: 'code', verdict: 'changes' });
+    writeArtifact(
+      dir,
+      'round-1/review-code-quality.md',
+      fixture('round-1/review-code-quality.md', 'CHANGES'),
+    );
+    recordReview(store, id, { token, reviewer: 'code-quality', verdict: 'changes' });
+    pass(id, token, dir, 1, 'security', 'correctness');
     writeArtifact(dir, 'round-1/consolidated.md', fixture('round-1/consolidated.md', '2'));
     registerArtifact(store, id, 'round-1/consolidated.md', { token });
     const blocked = go(id, token, 'complete');
@@ -389,7 +420,7 @@ describe('jobs: full workflow through storage', () => {
     const { id, token } = setup();
     expect(() => recordReview(store, id, { token, reviewer: 'Bad Name' })).toThrow(ValidationError);
     expect(() =>
-      recordReview(store, id, { token, reviewer: 'code', verdict: 'maybe' as never }),
+      recordReview(store, id, { token, reviewer: 'code-quality', verdict: 'maybe' as never }),
     ).toThrow(/Verdict/);
     expect(() => recordPr(store, id, { token, url: 'https://x/1', state: 'draft' })).toThrow(
       /pr stage/,

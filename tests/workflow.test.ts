@@ -63,6 +63,13 @@ function review(round: number, reviewer: string, verdict: Review['verdict']): Re
   };
 }
 
+/** The three always-on reviewers for `round`; the names in `changes` request changes. */
+function trio(round: number, ...changes: string[]): Review[] {
+  return ['security', 'correctness', 'code-quality'].map((r) =>
+    review(round, r, changes.includes(r) ? 'changes' : 'pass'),
+  );
+}
+
 const none: TransitionContext = { artifacts: [], reviews: [] };
 const run = (j: JobState, action: Action, ctx = none) => transition(j, action, ctx);
 const step = (j: JobState, action: Action, ctx = none): JobState => ({
@@ -83,7 +90,7 @@ describe('transition: happy path', () => {
     j = step(j, 'start');
     const r = run(j, 'complete', {
       artifacts: [art('round-1/consolidated.md')],
-      reviews: [review(1, 'code', 'pass'), review(1, 'security', 'pass')],
+      reviews: trio(1),
     });
     expect(r.events[0]?.payload['changesRequestedBy']).toEqual([]);
     j = { ...j, ...r.patch };
@@ -212,7 +219,7 @@ describe('transition: illegal moves', () => {
     expect(() =>
       run(job('review', 'running', { round: 2 }), 'complete', {
         artifacts: [art('round-1/consolidated.md')],
-        reviews: [review(2, 'code', 'pass')],
+        reviews: trio(2),
       }),
     ).toThrow(/round-2\/consolidated.md/);
   });
@@ -260,7 +267,7 @@ describe('transition: review loop', () => {
     expect(() =>
       run(inReview(1), 'complete', {
         artifacts: [consolidated(1)],
-        reviews: [review(1, 'code', 'pass'), review(1, 'security', null)],
+        reviews: [review(1, 'code-quality', 'pass'), review(1, 'security', null)],
       }),
     ).toThrow(/pending: security/);
   });
@@ -269,18 +276,39 @@ describe('transition: review loop', () => {
     expect(() =>
       run(inReview(2), 'complete', {
         artifacts: [consolidated(2)],
-        reviews: [review(1, 'code', 'pass')],
+        reviews: trio(1),
       }),
     ).toThrow(/No reviewers/);
+  });
+
+  it('requires every always-on reviewer: one PASS is not a review', () => {
+    expect(() =>
+      run(inReview(1), 'complete', {
+        artifacts: [consolidated(1)],
+        reviews: [review(1, 'code-quality', 'pass')],
+      }),
+    ).toThrow(/Required reviewers not recorded this round: security, correctness/);
+    // UI reviewers are extra, never a substitute.
+    expect(() =>
+      run(inReview(1), 'complete', {
+        artifacts: [consolidated(1)],
+        reviews: [review(1, 'ux', 'pass'), review(1, 'security', 'pass')],
+      }),
+    ).toThrow(/correctness, code-quality/);
+    const all = run(inReview(1), 'complete', {
+      artifacts: [consolidated(1)],
+      reviews: [...trio(1), review(1, 'ux', 'pass')],
+    });
+    expect(all.patch.stage).toBe('approve');
   });
 
   it('sends the job back to build on CHANGES; the next build bumps the round', () => {
     const r = run(inReview(1), 'complete', {
       artifacts: [consolidated(1)],
-      reviews: [review(1, 'code', 'changes'), review(1, 'security', 'pass')],
+      reviews: trio(1, 'correctness'),
     });
     expect(r.patch).toEqual({ stage: 'build', status: 'pending' });
-    expect(r.events[0]?.payload['changesRequestedBy']).toEqual(['code']);
+    expect(r.events[0]?.payload['changesRequestedBy']).toEqual(['correctness']);
     const next = run(job('build', 'running', { round: 1 }), 'complete', {
       artifacts: [art('build.md')],
       reviews: [],
@@ -288,13 +316,54 @@ describe('transition: review loop', () => {
     expect(next.patch.round).toBe(2);
   });
 
-  it('escalates to needs-human when the last allowed round still requests changes', () => {
+  it('escalates to needs-human when the maxRounds-th review rejects', () => {
     const r = run(inReview(3), 'complete', {
-      artifacts: [consolidated(3)],
-      reviews: [review(3, 'code', 'changes')],
+      artifacts: [consolidated(1), consolidated(2), consolidated(3)],
+      reviews: [...trio(1, 'security'), ...trio(2, 'correctness'), ...trio(3, 'code-quality')],
     });
     expect(r.patch).toEqual({ stage: 'needs-human', status: 'blocked', returnStage: 'build' });
     expect(r.events.map((e) => e.type)).toEqual(['stage.completed', 'job.blocked']);
+    // A consolidation counting blocking findings is a rejection too, even when every verdict passed.
+    const blocked = run(inReview(3), 'complete', {
+      artifacts: [art('round-1/consolidated.md', '2'), consolidated(2), consolidated(3)],
+      reviews: [...trio(1), ...trio(2, 'security'), ...trio(3, 'security')],
+    });
+    expect(blocked.patch.stage).toBe('needs-human');
+  });
+
+  it('rounds that passed (followed by a CI repair or base rework) spend no rejection', () => {
+    // Round 1 CHANGES, round 2 PASS (then CI failed and was repaired), round 3 CHANGES.
+    const r = run(inReview(3), 'complete', {
+      artifacts: [consolidated(1), consolidated(2), consolidated(3)],
+      reviews: [...trio(1, 'correctness'), ...trio(2), ...trio(3, 'security')],
+    });
+    expect(r.patch).toEqual({ stage: 'build', status: 'pending' });
+    // A round-3 rejection after two passing rounds is only the first rejection.
+    const first = run(inReview(3), 'complete', {
+      artifacts: [consolidated(1), consolidated(2), consolidated(3)],
+      reviews: [...trio(1), ...trio(2), ...trio(3, 'security')],
+    });
+    expect(first.patch.stage).toBe('build');
+    // The third rejection still escalates, however many passing rounds came between.
+    const third = run(inReview(5), 'complete', {
+      artifacts: [1, 2, 3, 4, 5].map(consolidated),
+      reviews: [
+        ...trio(1, 'security'),
+        ...trio(2),
+        ...trio(3, 'correctness'),
+        ...trio(4),
+        ...trio(5, 'code-quality'),
+      ],
+    });
+    expect(third.patch.stage).toBe('needs-human');
+  });
+
+  it('maxRounds 1 escalates on the first rejection', () => {
+    const r = run(inReview(1, 1), 'complete', {
+      artifacts: [consolidated(1)],
+      reviews: trio(1, 'security'),
+    });
+    expect(r.patch.stage).toBe('needs-human');
   });
 });
 

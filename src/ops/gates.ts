@@ -9,9 +9,12 @@ import { join } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
+import { baseRef } from '../git/repo.ts';
+import { tryGit } from '../git/run.ts';
+import { containsRef, editedMerges } from '../git/worktree.ts';
 import { sensitiveSummary } from '../core/sensitive.ts';
 import { type Action, requiredArtifact } from '../core/workflow.ts';
-import { listArtifacts } from '../storage/artifacts.ts';
+import { findArtifact, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import {
   authorize,
@@ -154,8 +157,55 @@ function evidenceHead(
 }
 
 /**
- * Delivery (push, PR creation, completing pr or ci) needs a clean, verified HEAD under an
- * authorized policy; `what` names the operation in the refusal.
+ * HEAD is the approved commit or builds on it: decision.md is APPROVE recorded against a commit,
+ * HEAD contains that commit, and every commit since then that is not already on the base is a
+ * merge whose result matches one of its parents (a clean base integration, no edits inside the
+ * merge). A rewind or a divergence has nothing in approved..HEAD, so containment is checked first.
+ */
+function requireApproved(store: Store, job: Job, tree: Tree, what: string): void {
+  const { path, head } = tree;
+  const decision = findArtifact(store.db, job.id, 'decision.md');
+  if (decision?.marker !== 'approve' || !decision.head) {
+    throw new ValidationError(
+      `No DECISION: APPROVE recorded against a commit; ${what} is refused.`,
+    );
+  }
+  if (decision.head === head) return;
+  if (!containsRef(path, decision.head, head)) {
+    throw new ValidationError(
+      `HEAD ${head.slice(0, 7)} does not contain the approved commit ${decision.head.slice(0, 7)}; ` +
+        `${what} is refused. Return the job to review.`,
+    );
+  }
+  const base = baseRef(path, job.baseBranch);
+  const unreviewed = tryGit(
+    path,
+    'rev-list',
+    '--no-merges',
+    `${decision.head}..${head}`,
+    ...(base ? [`^${base}`] : []),
+  );
+  if (unreviewed === undefined || unreviewed !== '') {
+    throw new ValidationError(
+      `HEAD ${head.slice(0, 7)} has commits that were not approved (approved: ${decision.head.slice(0, 7)}); ` +
+        `only base integration merges may follow an approval, so ${what} is refused. Return the job to review.`,
+    );
+  }
+  const edited = editedMerges(path, decision.head, head);
+  if (edited.length > 0) {
+    const list = edited.map((m) => `${m.sha.slice(0, 7)}: ${m.files.join(', ')}`).join('; ');
+    throw new ValidationError(
+      `Merge commit(s) since the approval contain edits that match neither parent (${list}); ` +
+        'conflict resolutions are new code. Rework, re-review, and re-approve first.',
+    );
+  }
+}
+
+/**
+ * Delivery (push, PR creation, completing pr or ci) needs a clean HEAD that is the approved
+ * commit (plus clean base merges), verified under an authorized policy; `what` names the
+ * operation in the refusal. Every delivery path calls this, so the approval binds what is
+ * pushed and what counts as delivered alike.
  */
 export function requireDeliverable(
   store: Store,
@@ -164,6 +214,7 @@ export function requireDeliverable(
   what = `completing ${job.stage}`,
 ): void {
   requireClean(tree, `${what} must describe a committed state.`);
+  requireApproved(store, job, tree, what);
   // GitHub's verdict counts only for the commit it was read for.
   if (job.stage === 'ci' && job.ciHead !== tree.head) {
     throw new ValidationError(
@@ -216,6 +267,18 @@ export function transitionGuarded(
           `HEAD is ${info.head.slice(0, 7)} but ${evidence.what} describe ${evidence.head.slice(0, 7)}; ` +
             'the implementation changed since that evidence was collected. Record it again.',
         );
+      }
+      if (job.stage === 'review') {
+        // Reviewers judge the commit the builder built; a commit made since then was never built
+        // against the spec, even when every verdict was recorded against it.
+        const built = findArtifact(store.db, id, 'build.md')?.head ?? null;
+        if (built !== evidence.head) {
+          throw new ValidationError(
+            `round ${String(job.round)} verdicts describe ${evidence.head.slice(0, 7)} but build.md ` +
+              `describes ${built?.slice(0, 7) ?? 'no commit'}; the code changed after the build. ` +
+              'Return the job to build and review again.',
+          );
+        }
       }
       if (job.stage === 'build' || job.stage === 'approve') {
         requireVerified(store, job, info, `completing ${job.stage}`);

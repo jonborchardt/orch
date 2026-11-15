@@ -174,9 +174,7 @@ orch job resume    <id> --session <name> [--to <stage>] [--force]
 orch job transition <id> start|complete|fail|escalate|resume|rework|cancel --token <t>
                    [--to <stage>] [--reason <r>] [--revision <n>]
 orch job artifact add <id> <relative-path> --token <t> [--replace] [--revision <n>]
-orch job review record <id> --reviewer <name> [--verdict pass|changes] [--artifact <path>]
-                   [--summary <s>] --token <t>
-orch job pr        <id> --url <url> --state draft|ready|merged|closed --token <t>
+orch job review record <id> --reviewer <name> [--verdict pass|changes] [--summary <s>] --token <t>
 orch job repo      <id> [--repo <path>] --token <t>   # refresh the identity now (mutations do it anyway)
 orch job supersede <id> --by <new-id> --session <name> [--force]   # record that <new-id> replaced <id>
 

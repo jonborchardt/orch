@@ -6,8 +6,6 @@ import {
   type Action,
   ACTIONS,
   describeNext,
-  PR_STATES,
-  type PrState,
   type Stage,
   STAGES,
   type Status,
@@ -30,7 +28,6 @@ import {
   createJob,
   getJob,
   jobDetail,
-  recordPr,
   releaseJob,
   resumeJob,
 } from '../storage/jobs.ts';
@@ -53,10 +50,7 @@ export interface JobOptions {
   reason?: string;
   reviewer?: string;
   verdict?: string;
-  artifact?: string;
   summary?: string;
-  url?: string;
-  state?: string;
   status?: string;
   stage?: string;
   limit?: string;
@@ -82,9 +76,8 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   transition <id> <${ACTIONS.join('|')}> --token <t> [--to <stage>] [--reason <r>]
             [--revision <n>]
   artifact add <id> <relative-path> --token <t> [--replace]
-  review record <id> --reviewer <name> [--verdict pass|changes] [--artifact <path>]
-            [--summary <s>] --token <t>
-  pr <id> --url <url> --state <${PR_STATES.join('|')}> --token <t>
+  review record <id> --reviewer <name> [--verdict pass|changes] [--summary <s>] --token <t>
+            the verdict is read from round-<n>/review-<name>.md, which must agree
   repo <id> [--repo <path>] --token <t>     confirm the checkout's current remote identity
   supersede <id> --by <new-id> --session <name> [--force]
             record that <new-id> replaced <id> (same repository; both histories are kept)
@@ -195,7 +188,6 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
         ...auth,
         reviewer: need(o.reviewer, '--reviewer'),
         verdict: oneOf<Verdict>(o.verdict, VERDICTS, '--verdict'),
-        artifact: o.artifact,
         summary: o.summary,
       });
       return summary(getJob(store.db, jobId), store, { review });
@@ -224,14 +216,6 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
         actor: session,
       });
       return summary(r.job, store, { changed: r.changed });
-    }
-    case 'pr': {
-      const job = recordPr(store, id(), {
-        ...auth,
-        url: need(o.url, '--url'),
-        state: need(oneOf<PrState>(o.state, PR_STATES, '--state'), '--state'),
-      });
-      return summary(job, store);
     }
     case undefined:
       throw new UsageError(JOB_HELP);

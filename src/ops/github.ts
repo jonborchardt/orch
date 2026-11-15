@@ -19,9 +19,8 @@ import {
 import { ValidationError } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import type { CiStatus, PrState } from '../core/workflow.ts';
-import { baseRef, describeRepo } from '../git/repo.ts';
-import { git, tryGit } from '../git/run.ts';
-import { containsRef, editedMerges } from '../git/worktree.ts';
+import { describeRepo } from '../git/repo.ts';
+import { git } from '../git/run.ts';
 import {
   actionsJobLog,
   actionsJobRunId,
@@ -39,7 +38,6 @@ import {
   viewPr,
   viewRepo,
 } from '../integrations/github.ts';
-import { findArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
 import {
@@ -97,52 +95,13 @@ export interface PushResult {
 }
 
 /**
- * Only approved, verified code leaves the machine: the job must be in the pr stage, decision.md
- * must be APPROVE recorded against a commit, every commit since then that is not already on the
- * base must be a merge whose result matches one of its parents (a clean base integration, no
- * edits inside the merge), the verification policy must not have drifted without a human, and the
- * latest verification run must be valid for this exact HEAD.
+ * Only approved, verified code leaves the machine: pushing and PR creation happen in the pr stage,
+ * and the delivery gate (approval, clean base merges only, verified HEAD, authorized policy)
+ * holds for this exact HEAD.
  */
 function requireApprovedHead(store: Store, job: Job, tree: Tree): void {
-  const { path, head } = tree;
   if (job.stage !== 'pr') {
     throw new ValidationError(`Pushing is allowed in the pr stage only (job is in ${job.stage}).`);
-  }
-  const decision = findArtifact(store.db, job.id, 'decision.md');
-  if (decision?.marker !== 'approve' || !decision.head) {
-    throw new ValidationError('No DECISION: APPROVE recorded against a commit; refusing to push.');
-  }
-  if (decision.head !== head) {
-    // HEAD must build on the approved commit: a rewind to an earlier commit has nothing in
-    // approved..HEAD, yet the approver never saw it as the final state.
-    if (!containsRef(path, decision.head, head)) {
-      throw new ValidationError(
-        `HEAD ${head.slice(0, 7)} does not contain the approved commit ${decision.head.slice(0, 7)}; ` +
-          'refusing to push. Return the job to review.',
-      );
-    }
-    const base = baseRef(path, job.baseBranch);
-    const unreviewed = tryGit(
-      path,
-      'rev-list',
-      '--no-merges',
-      `${decision.head}..${head}`,
-      ...(base ? [`^${base}`] : []),
-    );
-    if (unreviewed === undefined || unreviewed !== '') {
-      throw new ValidationError(
-        `HEAD ${head.slice(0, 7)} has commits that were not approved (approved: ${decision.head.slice(0, 7)}); ` +
-          'only base integration merges may follow an approval. Return the job to review.',
-      );
-    }
-    const edited = editedMerges(path, decision.head, head);
-    if (edited.length > 0) {
-      const list = edited.map((m) => `${m.sha.slice(0, 7)}: ${m.files.join(', ')}`).join('; ');
-      throw new ValidationError(
-        `Merge commit(s) since the approval contain edits that match neither parent (${list}); ` +
-          'conflict resolutions are new code. Rework, re-review, and re-approve first.',
-      );
-    }
   }
   requireDeliverable(store, job, tree, 'delivering');
 }
@@ -402,7 +361,12 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
   if (!head) throw new ValidationError(`GitHub did not report a head commit for ${job.prUrl}.`);
   const prState = prWorkflowState(pr);
   const remote = remoteHead(tree.path, tree.branch);
-  const current = head === tree.head && remote === tree.head;
+  // The PR must be the job's own: from the job branch into the job's base.
+  const foreign =
+    pr.headRefName !== tree.branch || pr.baseRefName !== job.baseBranch
+      ? `${pr.url} is ${pr.headRefName} -> ${pr.baseRefName}, not the job's ${tree.branch} -> ${job.baseBranch}`
+      : null;
+  const current = foreign === null && head === tree.head && remote === tree.head;
   const polls = pollsFor(store, id, head) + 1;
   const configured = requiredChecksFor(repo.nameWithOwner, job.baseBranch, tree.path);
   const checks = listChecksFor(repo.nameWithOwner, head, tree.path);
@@ -421,6 +385,10 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     outcome = 'closed';
     action = 'escalate';
     reason = `${pr.url} was closed without merging; a human reopens it (then resume --to ci) or cancels the job`;
+  } else if (foreign !== null) {
+    outcome = 'outdated';
+    action = 'escalate';
+    reason = `${foreign}. A human resumes --to pr so orch gh pr create records the job's own PR, or cancels the job.`;
   } else if (!current) {
     outcome = 'outdated';
     action = 'escalate';

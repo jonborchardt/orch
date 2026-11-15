@@ -6,6 +6,7 @@
  * I/O. `src/storage/jobs.ts` applies the result inside a transaction.
  */
 import { WorkflowError } from './errors.ts';
+import { ROLES } from './roles.ts';
 import type { Artifact, Job, Review } from '../storage/schema.ts';
 
 export const STAGES = [
@@ -57,7 +58,7 @@ export const TERMINAL_STATUSES: readonly Status[] = ['completed', 'cancelled'];
 /** Statuses a session resumes from (`blocked` always comes with stage needs-human). */
 export const RESUMABLE_STATUSES: readonly Status[] = ['interrupted', 'failed'];
 
-/** Reason recorded on `job.blocked` when a review round still requests changes at `maxRounds`. */
+/** Reason recorded on `job.blocked` when the `maxRounds`-th review round requests changes. */
 export const MAX_ROUNDS_REASON = 'max review rounds reached';
 /** Reason recorded on `job.blocked` when CI still fails after `maxCiRepairs` repair cycles. */
 export const MAX_CI_REPAIRS_REASON = 'max CI repair cycles reached';
@@ -172,7 +173,7 @@ export function transition(
             events: [completed],
           };
         case 'review':
-          return completeReview(job, ctx.reviews, blocking, completed);
+          return completeReview(job, ctx, blocking, completed);
         case 'approve': {
           // decision.md carries DECISION: APPROVE | ESCALATE; only an approval advances.
           if (artifact?.marker !== 'approve') {
@@ -340,11 +341,20 @@ function currentReviews(job: Pick<JobState, 'round'>, reviews: Review[]): Review
   return reviews.filter((r) => r.round === job.round);
 }
 
+/** Reviewers every round needs, whatever else runs (UI reviewers join only for UI changes). */
+export const REQUIRED_REVIEWERS: readonly string[] = ROLES.filter(
+  (r) => r.kind === 'review' && !r.ui,
+).map((r) => r.name);
+
 function verifyReviewers(current: Review[]): void {
   if (current.length === 0) throw new WorkflowError('No reviewers recorded for this round');
   const pending = current.filter((r) => r.verdict === null).map((r) => r.reviewer);
   if (pending.length > 0) {
     throw new WorkflowError(`Reviewers still pending: ${pending.join(', ')}`);
+  }
+  const missing = REQUIRED_REVIEWERS.filter((name) => !current.some((r) => r.reviewer === name));
+  if (missing.length > 0) {
+    throw new WorkflowError(`Required reviewers not recorded this round: ${missing.join(', ')}`);
   }
   // Every verdict in a round must have been given against the same commit.
   const heads = new Set(current.map((r) => r.head));
@@ -361,20 +371,35 @@ export function blockingCount(artifacts: Artifact[], round: number): number {
   return Number.isInteger(n) && n > 0 ? n : 0;
 }
 
+/**
+ * Review rounds before this one that sent the job back: a CHANGES verdict or a consolidation
+ * counting blocking findings. Rounds that passed (a CI repair or a base-integration rework
+ * follows them) spend nothing, so `maxRounds` limits rejections, as documented.
+ */
+export function rejectedBefore(round: number, reviews: Review[], artifacts: Artifact[]): number {
+  let n = 0;
+  for (let r = 1; r < round; r++) {
+    const changes = reviews.some((x) => x.round === r && x.verdict === 'changes');
+    if (changes || blockingCount(artifacts, r) > 0) n++;
+  }
+  return n;
+}
+
 function completeReview(
   job: JobState,
-  reviews: Review[],
+  ctx: TransitionContext,
   blocking: number,
   completed: TransitionResult['events'][number],
 ): TransitionResult {
-  const current = currentReviews(job, reviews);
+  const current = currentReviews(job, ctx.reviews);
   const changes = current.filter((r) => r.verdict === 'changes').map((r) => r.reviewer);
   const payload = { ...completed.payload, changesRequestedBy: changes, blocking };
   // Blocking findings in the consolidation send the job back even when every verdict passed.
   if (changes.length === 0 && blocking === 0) {
     return { patch: { stage: 'approve', status: 'pending' }, events: [{ ...completed, payload }] };
   }
-  if (job.round >= job.maxRounds) {
+  // This rejection is the maxRounds-th one: escalate instead of building again.
+  if (rejectedBefore(job.round, ctx.reviews, ctx.artifacts) + 1 >= job.maxRounds) {
     return {
       patch: { stage: 'needs-human', status: 'blocked', returnStage: 'build' },
       events: [

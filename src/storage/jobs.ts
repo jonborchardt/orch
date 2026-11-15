@@ -487,14 +487,15 @@ export function recordCi(store: Store, id: string, input: CiInput): Job {
 export interface ReviewInput extends Auth {
   reviewer: string;
   verdict?: Verdict | undefined;
-  /** Relative artifact path; defaults to round-N/review-<reviewer>.md when a verdict is given. */
-  artifact?: string | undefined;
   summary?: string | undefined;
   /** Worktree HEAD the verdict was given against (ops/gates.ts supplies it). */
   head?: string | null | undefined;
 }
 
-/** Upsert a reviewer's row for the current round. Without a verdict the reviewer is pending. */
+/**
+ * Upsert a reviewer's row for the current round. Without a verdict the reviewer is pending; with
+ * one it is read from that reviewer's own file, round-N/review-<reviewer>.md, and must agree.
+ */
 export function recordReview(store: Store, id: string, input: ReviewInput): Review {
   if (!/^[a-z0-9-]+$/.test(input.reviewer)) {
     throw new ValidationError('Reviewer name must be lowercase letters, digits, or hyphens.');
@@ -508,7 +509,7 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
     }
     let artifactId: number | null = null;
     if (input.verdict) {
-      const rel = input.artifact ?? reviewArtifact(job.round, input.reviewer);
+      const rel = reviewArtifact(job.round, input.reviewer);
       const checked = validateArtifact(jobArtifactDir(id, store.paths), rel);
       assertStageOwns(checked.path, job.stage, job.round);
       if (checked.marker !== null && checked.marker !== input.verdict) {

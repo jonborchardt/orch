@@ -43,14 +43,14 @@ A job moves `spec → build → review → approve → pr → ci → completed`.
 `needs-human`; review rounds and CI repair cycles are bounded; `rework` sends a failed CI run or a
 conflicting base integration back to `build`, where the fix is reviewed and approved again.
 
-| Stage     | Who                            | Produces                                  | `orch` requires before the next stage                                                                      |
-| --------- | ------------------------------ | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `spec`    | `factory-spec-writer`          | `spec.md`                                 | Goal, Scope, Acceptance criteria                                                                           |
-| `build`   | `factory-builder`              | commits, an `orch verify` run, `build.md` | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD               |
-| `review`  | 3 reviewers (7 for UI changes) | `round-N/review-*.md`, `consolidated.md`  | every verdict recorded against the same clean HEAD; reviewers did not write code; `BLOCKING: 0` to advance |
-| `approve` | `factory-approver`             | `decision.md`                             | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid                   |
-| `pr`      | the coordinator                | base integrated, pushed branch, draft PR  | only clean base-integration merges since the approval; verified HEAD; policy unchanged                     |
-| `ci`      | the coordinator + `orch gh ci` | GitHub's verdict for the PR head          | required checks passed for exactly that commit, read by `orch gh ci` in the call that completes the job    |
+| Stage     | Who                            | Produces                                  | `orch` requires before the next stage                                                                 |
+| --------- | ------------------------------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `spec`    | `factory-spec-writer`          | `spec.md`                                 | Goal, Scope, Acceptance criteria                                                                      |
+| `build`   | `factory-builder`              | commits, an `orch verify` run, `build.md` | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD          |
+| `review`  | 3 reviewers (7 for UI changes) | `round-N/review-*.md`, `consolidated.md`  | all three always-on verdicts recorded against the HEAD `build.md` describes; `BLOCKING: 0` to advance |
+| `approve` | `factory-approver`             | `decision.md`                             | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid              |
+| `pr`      | the coordinator                | base integrated, pushed branch, draft PR  | only clean base-integration merges since the approval; verified HEAD; policy unchanged                |
+| `ci`      | the coordinator + `orch gh ci` | GitHub's verdict for the PR head          | the job's own PR; checks passed for that commit, still the approved one (plus clean base merges)      |
 
 Reviewers are security (Opus), correctness, and code quality (Sonnet); ui-design, ux,
 accessibility, and web-platform join when the diff touches rendered UI. Models per role are
@@ -160,12 +160,14 @@ never pretends to wake a session. Details: [docs/dashboard.md](docs/dashboard.md
   HEAD; replacing registered evidence needs `--replace` and is logged.
 - Verification: the committed policy, run in the clean worktree, logs saved per check; its validity
   recomputed from HEAD, tree, and policy fingerprint at every gate.
-- Review rounds: all reviewers must report against the same commit; reviewers are read-only
-  (fingerprint-checked); blocking findings or `CHANGES` return the job to build, up to `maxRounds`.
-- Delivery: only an approved commit (plus clean base merges) is pushed; the draft PR is created or
-  reused, never duplicated; the job completes only inside `orch gh ci` after GitHub reports
-  passing required checks for that exact head; failed checks get one re-run, then one bounded
-  repair cycle through build, review, and approval.
+- Review rounds: security, correctness, and code-quality must all report, against the commit
+  `build.md` describes; reviewers are read-only (fingerprint-checked); blocking findings or
+  `CHANGES` return the job to build, until the `maxRounds`-th such rejection escalates.
+- Delivery: only an approved commit (plus clean base merges) is pushed or counts as delivered; the
+  draft PR is created or reused, never duplicated; the job completes only inside `orch gh ci` after
+  GitHub reports passing required checks for that exact head on the job's own PR; failed checks
+  get one re-run, then a repair cycle through build, review, and approval (bounded by
+  `maxCiRepairs`).
 - Sensitive changes (tests, CI, dependencies, the policy) are labelled and must be named in the
   consolidated review and the PR body.
 - Isolation: worktrees under the data directory, never inside a checkout; two jobs never share a
