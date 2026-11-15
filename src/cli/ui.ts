@@ -49,7 +49,11 @@ export async function runUi(o: UiOptions): Promise<number> {
   console.log('Press Ctrl+C to stop.');
   if (o.open) openBrowser(running.url);
   await new Promise<void>((done) => {
+    let stopping = false;
     const stop = () => {
+      // Ctrl+C after stdin closed (or both signals) must not close the store twice.
+      if (stopping) return;
+      stopping = true;
       running
         .close()
         .catch(() => undefined)

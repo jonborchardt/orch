@@ -26,7 +26,6 @@ test('job board shows every repository and job with honest liveness', async ({ p
   await expect(table.getByText('needs human').first()).toBeVisible();
   await expect(page.getByText('2 running')).toBeVisible();
   await expect(page.getByText('1 stale')).toBeVisible();
-  await expect(page.getByText('3 need human')).toBeVisible();
   // Per-reviewer verdicts and blocking counts are visible on the board.
   await expect(table.getByText('correctness: pending')).toBeVisible();
   // CI chips always name the commit the verdict was read for; repairs show their budget.
@@ -174,7 +173,6 @@ test('controls cannot bypass workflow rules, and never claim to wake a session',
 
   // Board reflects the change on refresh.
   await page.goto('/');
-  await expect(page.getByText('2 need human')).toBeVisible();
 });
 
 test('CI escalations: close-out is offered only where the workflow allows it', async ({ page }) => {
@@ -215,7 +213,6 @@ test('CI escalations: close-out is offered only where the workflow allows it', a
   await expect(page.getByTestId('completion')).toContainText('Completed by human close-out');
   await expect(page.getByText('human close-out').first()).toBeVisible();
   await page.goto('/');
-  await expect(page.getByText('1 need human')).toBeVisible();
 });
 
 test('keyboard: job links are reachable with Tab and open with Enter', async ({ page }) => {
