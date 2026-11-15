@@ -10,6 +10,7 @@ import {
   buildReport,
   classifyChanges,
   classifyPath,
+  policyScriptPaths,
   scanDiff,
   sensitiveSummary,
 } from '../src/core/sensitive.ts';
@@ -57,6 +58,52 @@ describe('classification (pure)', () => {
     expect(kinds('factory.json')).toBe('policy');
     expect(kinds('docs/factory.json')).toBeUndefined();
     expect(classifyChanges([{ path: 'a.test.ts', status: 'added' }])[0]?.why).toContain('evidence');
+  });
+
+  it('names the files policy commands run, relative to their cwd', () => {
+    const paths = policyScriptPaths([
+      { command: 'node', args: ['check.js'], cwd: '.' },
+      { command: 'bash', args: ['scripts/verify.sh', '--fast'], cwd: '.' },
+      { command: 'npx', args: ['vitest', 'run', '--config=vitest.ci.ts'], cwd: 'web' },
+      { command: 'node', args: ['..\\..\\outside.js', '.\\tools\\lint.mjs'], cwd: 'pkg' },
+    ]);
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'check.js',
+        'scripts/verify.sh',
+        'web/vitest.ci.ts',
+        'pkg/tools/lint.mjs',
+      ]),
+    );
+    expect(paths.some((p) => p.includes('outside.js'))).toBe(false);
+    expect(paths).not.toContain('--fast');
+    // Only changed paths are labelled; a policy script wins over its ordinary kind.
+    const labelled = classifyChanges(
+      [
+        { path: 'scripts/verify.sh', status: 'modified' },
+        { path: 'web/vitest.ci.ts', status: 'modified' },
+        { path: 'src/app.ts', status: 'modified' },
+      ],
+      paths,
+    );
+    expect(labelled.map((x) => [x.path, x.kind])).toEqual([
+      ['scripts/verify.sh', 'policy'],
+      ['web/vitest.ci.ts', 'policy'],
+    ]);
+    const report = buildReport(
+      [{ path: 'scripts/verify.sh', status: 'modified' }],
+      scanDiff(''),
+      null,
+      false,
+      paths,
+    );
+    expect(report.changes.map((x) => x.kind)).toEqual(['policy']);
+    expect(report.needsReview).toBe(true);
+    // Without the policy's paths the same edit is an ordinary source change.
+    expect(
+      buildReport([{ path: 'scripts/verify.sh', status: 'modified' }], scanDiff(''), null, false)
+        .needsReview,
+    ).toBe(false);
   });
 
   it('finds disabled, focused, commented-out, and removed tests in a diff', () => {
@@ -202,6 +249,8 @@ describe('sensitive changes in a real job', () => {
     expect(s?.needsReview).toBe(true);
     expect(s?.changes.map((x) => [x.path, x.status, x.kind])).toEqual([
       ['.github/workflows/ci.yml', 'modified', 'ci'],
+      // The policy runs `node check.js`: deleting the script it runs is a policy change too.
+      ['check.js', 'deleted', 'policy'],
       ['package.json', 'modified', 'deps'],
       ['src/new.test.ts', 'added', 'tests'],
       ['src/old.test.ts', 'modified', 'tests'],
@@ -319,6 +368,32 @@ describe('sensitive changes in a real job', () => {
     // Editing the policy again after acceptance reopens the question.
     commitFile(c.wt, 'factory.json', JSON.stringify({ verification: { commands: [] } }));
     expect(planJob(store, c.id).verification?.policy.authorization).toBe('required');
+  });
+
+  it('rewriting a script the policy runs is labelled: a no-op check.js cannot pass unnoticed', () => {
+    const c = start(store, clone);
+    toReview(store, c);
+    go(store, c, 'start');
+    // The product breaks (the real check would fail) and the check is neutralised in one job.
+    commitFile(c.wt, 'marker.txt', 'BREAK\n', 'break the product');
+    commitFile(c.wt, 'check.js', "console.log('OK');\n", 'neutralise the check');
+    // Verification still passes: the command is the baseline's, the file it runs is the job's.
+    expect(verify(store, c).status).toBe('passed');
+    const s = planJob(store, c.id).sensitive;
+    expect(s?.changes).toEqual([
+      expect.objectContaining({ path: 'check.js', kind: 'policy', status: 'modified' }),
+    ]);
+    expect(s?.needsReview).toBe(true);
+    // The existing acknowledgement rule applies: the consolidation must name it.
+    for (const r of ['security', 'correctness', 'code-quality']) verdict(store, c, r);
+    const silent = fixture('round-1/consolidated.md').replace(
+      '\nBLOCKING:',
+      '\n## Sensitive changes\n\nNone\n\nBLOCKING:',
+    );
+    expect(() => add(store, c, 'round-1/consolidated.md', silent)).toThrow(
+      /does not mention check.js/,
+    );
+    expect(add(store, c, 'round-1/consolidated.md', consolidated(store, c)).marker).toBe('0');
   });
 
   it('consolidated.md and pr.md must name every sensitive path', () => {

@@ -17,7 +17,9 @@ daemon, no scheduler, no service.
 - **Deterministic core, agentic edges.** Workflow rules live in TypeScript and are tested; prose
   for Claude describes them second. A stage completes only when its required artifact exists,
   validates, and describes the commit that is still HEAD.
-- **Evidence, not claims.** Verification is executed by `orch` from a policy the job did not write;
+- **Evidence, not claims.** Verification is executed by `orch`, running commands from a policy the
+  job did not write (the scripts and tests those commands run are the job's branch, so changes to
+  them are labelled for review, not trusted);
   reviews are recorded against a clean commit; delivery ends with GitHub's verdict for the exact PR
   head. A draft PR is not "done" until its required checks pass.
 - **Humans keep merge authority.** The factory never merges, never marks a PR ready, never
@@ -168,10 +170,12 @@ never pretends to wake a session. Details: [docs/dashboard.md](docs/dashboard.md
   GitHub reports passing required checks for that exact head on the job's own PR; failed checks
   get one re-run, then a repair cycle through build, review, and approval (bounded by
   `maxCiRepairs`).
-- Sensitive changes (tests, CI, dependencies, the policy) are labelled and must be named in the
-  consolidated review and the PR body.
-- Isolation: worktrees under the data directory, never inside a checkout; two jobs never share a
-  worktree or branch; the primary checkout is never written to.
+- Sensitive changes (tests, CI, dependencies, the policy, and files the policy's commands run
+  directly) are labelled and must be named in the consolidated review and the PR body. Labelling is
+  not prevention: the policy fixes which commands run, not what the job's scripts do.
+- Isolation: worktrees outside every checkout (under the data directory for jobs `orch` starts;
+  VS Code's `<repo>.worktrees/<slug>` beside the repository for dispatched jobs); two jobs never
+  share a worktree or branch; the primary checkout is never written to.
 
 ## What still needs a human
 

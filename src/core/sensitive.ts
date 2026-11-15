@@ -3,6 +3,8 @@
  * of a name-status list plus a scan of diff text for disabled tests; the Git calls that produce
  * both live in src/ops/. Nothing here blocks: it labels, and the gates decide.
  */
+import { posix } from 'node:path';
+
 import type { PolicyDiff } from './verification.ts';
 
 export type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
@@ -47,10 +49,42 @@ export function classifyPath(path: string): { kind: SensitiveKind; why: string }
   return RULES.find((r) => r.test.test(p));
 }
 
-export function classifyChanges(changes: readonly ChangedPath[]): SensitiveChange[] {
+const POLICY_SCRIPT = "a file the verification policy's commands run directly";
+
+/**
+ * Repository paths a policy command names directly (`node check.js`, `bash scripts/verify.sh`,
+ * `--config=vitest.ci.ts`), resolved against the command's cwd. The command stays fixed by the
+ * base-branch policy, but the job can rewrite the file it runs, so a change to one is labelled.
+ * Indirect execution (a script that calls another file) is the reviewers' to judge.
+ */
+export function policyScriptPaths(
+  commands: readonly { command: string; args: readonly string[]; cwd: string }[],
+): string[] {
+  const out = new Set<string>();
+  for (const c of commands) {
+    const cwd = c.cwd.split('\\').join('/');
+    for (const word of [c.command, ...c.args]) {
+      const value = (word.startsWith('-') ? (word.split('=')[1] ?? '') : word)
+        .split('\\')
+        .join('/');
+      if (!value) continue;
+      const p = posix.normalize(posix.join(cwd, value));
+      if (!p.startsWith('../') && p !== '.') out.add(p);
+    }
+  }
+  return [...out];
+}
+
+export function classifyChanges(
+  changes: readonly ChangedPath[],
+  policyScripts: readonly string[] = [],
+): SensitiveChange[] {
   const out: SensitiveChange[] = [];
   for (const c of changes) {
-    const hit = classifyPath(c.path);
+    const p = c.path.split('\\').join('/');
+    const hit = policyScripts.includes(p)
+      ? { kind: 'policy' as const, why: POLICY_SCRIPT }
+      : classifyPath(p);
     if (hit) out.push({ ...c, kind: hit.kind, why: hit.why });
   }
   return out;
@@ -136,8 +170,9 @@ export function buildReport(
   scan: DiffScan,
   policy: PolicyDiff | null,
   authorized: boolean,
+  policyScripts: readonly string[] = [],
 ): SensitiveReport {
-  const classified = classifyChanges(changes);
+  const classified = classifyChanges(changes, policyScripts);
   const authorization: Authorization = policy?.changed
     ? 'required'
     : authorized

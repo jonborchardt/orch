@@ -10,8 +10,14 @@ import path from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { spawnCommand, type ToolResult } from '../core/exec.ts';
-import { jobArtifactDir } from '../core/paths.ts';
-import { buildReport, classifyPath, scanDiff, type SensitiveReport } from '../core/sensitive.ts';
+import { canonicalPath, jobArtifactDir } from '../core/paths.ts';
+import {
+  buildReport,
+  classifyPath,
+  policyScriptPaths,
+  scanDiff,
+  type SensitiveReport,
+} from '../core/sensitive.ts';
 import {
   diffPolicy,
   OUTPUT_CAP,
@@ -52,9 +58,23 @@ export interface EffectivePolicy {
   mergeBase: string | null;
 }
 
+/**
+ * factory.json text by worktree and full commit id, for this process only (the CLI exits after one
+ * command; the dashboard keeps it while it runs). A commit id names its content, so the file at
+ * <worktree, sha> cannot change; every gate asks for the merge-base and HEAD policies, and this
+ * spares the repeated `git show`. Only files that were found are kept: "absent" and "git failed"
+ * look the same here, so neither is remembered.
+ */
+const policyText = new Map<string, string>();
+
 /** The policy committed at `sha` (a commit, not a ref name); empty when the file is absent. */
 export function policyAt(wt: string, sha: string): VerificationPolicy {
-  const text = tryGit(wt, 'show', `${sha}:${POLICY_FILE}`);
+  const key = /^[0-9a-f]{40}$/.test(sha) ? `${canonicalPath(wt)}\0${sha}` : null;
+  let text = key ? policyText.get(key) : undefined;
+  if (text === undefined) {
+    text = tryGit(wt, 'show', `${sha}:${POLICY_FILE}`);
+    if (text !== undefined && key) policyText.set(key, text);
+  }
   if (text === undefined) return { commands: [] };
   return parsePolicyText(text, `${POLICY_FILE} at ${sha.slice(0, 7)}`);
 }
@@ -163,7 +183,13 @@ export function sensitiveReport(wt: Tree, eff: EffectivePolicy): SensitiveReport
     wt.baseRef && testFiles.length > 0
       ? (tryGit(wt.path, 'diff', `${wt.baseRef}...HEAD`, '--', ...testFiles) ?? '')
       : '';
-  return buildReport(wt.changes, scanDiff(diff), eff.diff, eff.source === 'authorized');
+  return buildReport(
+    wt.changes,
+    scanDiff(diff),
+    eff.diff,
+    eff.source === 'authorized',
+    policyScriptPaths(eff.policy.commands),
+  );
 }
 
 export interface VerifyResult {
