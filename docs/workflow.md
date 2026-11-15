@@ -57,14 +57,22 @@ per round (`round-N/`) and are never overwritten by later rounds.
 
 **Review rounds.** Completing `build` increments the round and enters `review`. While `review` is
 `running`, each reviewer is recorded with `orch job review record` (without a verdict while it
-runs, then with `--verdict pass|changes`). `complete` is refused while any reviewer is pending.
-If every verdict is `pass` the job moves to `approve`; if any is `changes` it returns to `build`,
-unless the round equals `--max-rounds` (default 3), in which case it escalates to `needs-human`.
+runs, then with `--verdict pass|changes`); the verdict is read from that reviewer's own
+`round-N/review-<name>.md`. `complete` is refused while any reviewer is pending, until all three
+always-on reviewers (`security`, `correctness`, `code-quality`) have a verdict (UI reviewers join for
+UI changes), and when the verdicts describe a commit other than the one `build.md` was registered
+for. If every verdict is `pass` and `BLOCKING: 0`, the job moves to `approve`; otherwise the round is
+a rejection and the job returns to `build`, unless it is the `--max-rounds`-th rejection (default 3),
+in which case it escalates to `needs-human`. Rounds that passed and were followed by a CI repair or a
+base-integration rework spend nothing; `maxCiRepairs` bounds CI repairs separately.
 
-**PRs.** `orch job pr <id> --url <u> --state draft|ready|merged|closed` records the PR; the `pr` stage
-cannot complete without one, and completing it enters `ci`, which only `orch gh ci` completes, in
-the call that read `ciStatus: passing` for `ciHead` from GitHub, after the gate confirms `ciHead`
-is still the worktree HEAD. The PR state can be updated later (draft → ready → merged) without changing the
+**PRs.** `orch gh pr create` records the job's draft PR (created or reused); the `pr` stage cannot
+complete without one, and completing it enters `ci`, which only `orch gh ci` completes, in the call
+that read `ciStatus: passing` for `ciHead` from GitHub, after the gate confirms `ciHead` is still
+the worktree HEAD. Pushing, PR creation, and completing `pr` or `ci` share one gate: HEAD is the
+approved commit or adds only clean base-integration merges to it, is verified, and runs under an
+authorized policy. A PR whose head branch or base branch is not the job's is escalated by `orch gh
+ci`, never completed. The PR state can be updated later (draft → ready → merged, `orch gh pr status`) without changing the
 workflow, since the factory's deliverable is a draft PR. `closed` means GitHub reported the PR closed
 without merging; it is recorded from `orch gh pr status` or `orch gh ci`, never inferred from the
 job, and a job whose PR is `closed` can neither complete nor be accepted with `resume --to

@@ -457,3 +457,33 @@ describe('invariant 15: the code never force-pushes, merges, or marks ready', ()
     );
   });
 });
+
+describe('a review round is the required reviewers judging the built commit', () => {
+  it('verdicts all given against a commit made after build.md cannot complete the round', () => {
+    const c = start();
+    toReview(c);
+    go(c, 'start');
+    const built = head(c.wt);
+    // A reviewer (or anyone) commits before the verdicts; every verdict then agrees on the new HEAD.
+    commitFile(c.wt, 'src/reviewer-edit.ts', '// written during review\n');
+    for (const r of ['security', 'correctness', 'code-quality']) verdict(c, r);
+    add(c, 'round-1/consolidated.md', drive.consolidated(store, c));
+    expect(head(c.wt)).not.toBe(built);
+    expect(() => go(c, 'complete')).toThrow(
+      /build.md describes .* the code changed after the build/,
+    );
+    expect(getJob(store.db, c.id).stage).toBe('review');
+  });
+
+  it("a verdict is read from the reviewer's own file only", () => {
+    const c = start();
+    toReview(c);
+    go(c, 'start');
+    // Only correctness wrote a file; security's verdict cannot borrow it.
+    writeArtifact(c.dir, 'round-1/review-correctness.md', fixture('round-1/review-correctness.md'));
+    recordVerdict(store, c.id, { token: c.token, reviewer: 'correctness', verdict: 'pass' });
+    expect(() =>
+      recordVerdict(store, c.id, { token: c.token, reviewer: 'security', verdict: 'pass' }),
+    ).toThrow(/review-security\.md/);
+  });
+});
