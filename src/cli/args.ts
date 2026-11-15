@@ -14,11 +14,13 @@ export function oneOf<T extends string>(
   return value as T;
 }
 
-/** A non-negative integer option (`--lease 30`, `--revision 7`). */
-export function int(value: string | undefined, flag: string): number | undefined {
+/** An integer option no smaller than `min` (`--lease 30`, `--revision 7`, `--max-rounds 1`). */
+export function int(value: string | undefined, flag: string, min = 0): number | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
-  if (!Number.isInteger(n) || n < 0) throw new UsageError(`${flag} must be a non-negative integer`);
+  if (!Number.isInteger(n) || n < min) {
+    throw new UsageError(`${flag} must be an integer of at least ${String(min)}`);
+  }
   return n;
 }
 

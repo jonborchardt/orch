@@ -51,6 +51,14 @@ describe('orch CLI: basics', () => {
     expect(orch(home, tmpdir(), ['job', 'bogus']).code).toBe(2);
     expect(orch(home, tmpdir(), ['job', 'create']).err).toContain('Missing required --title');
     expect(orch(home, tmpdir(), ['--nope']).code).toBe(2);
+    // A parse failure under --json is still a JSON error, like every other failure.
+    const unknown = orch(home, tmpdir(), ['--json', '--nope']);
+    expect(unknown.code).toBe(2);
+    expect((JSON.parse(unknown.err) as { error: { type: string } }).error.type).toBe('UsageError');
+    // --max-rounds 0 would escalate on the first review round; both entry points refuse it.
+    expect(orch(home, repoA, ['job', 'create', '--title', 't', '--max-rounds', '0']).err).toContain(
+      '--max-rounds must be an integer of at least 1',
+    );
   });
 
   it('doctor runs outside a repository and reports the override home', () => {

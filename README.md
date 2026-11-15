@@ -210,9 +210,8 @@ carry a CSP, `nosniff`, and `no-store`.
 `npx playwright install chromium`). Each run seeds its own `mkdtemp` home, starts `orch ui` on a
 free port, and hands the URL and seeded ids to the workers through a state file under that home,
 so two runs on one machine never share a port, a database, or a state file. `ORCH_E2E_PORT` pins
-the port (a busy port is reported, never silently replaced by another server), `ORCH_E2E_URL`
-points the suite at a server you started yourself, and `ORCH_E2E_KEEP=1` leaves the scratch home
-in place for inspection.
+the port (a busy port is reported, never silently replaced by another server) and
+`ORCH_E2E_KEEP=1` leaves the scratch home in place for inspection.
 
 ## Using the factory
 
