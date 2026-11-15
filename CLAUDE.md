@@ -125,10 +125,11 @@ framework. Upgrade Drizzle deliberately, both packages together.
   `orch checkout hook` in `.claude/settings.json` refuses an Edit/Write into a checkout another
   live session holds (decisions 45, 60). Read a failing CLI test's stderr before blaming load: a
   `ReferenceError` or `SyntaxError` means a mid-edit tree.
-- Never run `/factory` against this repository. The installed `orch` is this checkout's `dist/`, so a
-  factory job editing `src/` would be gated by the code it is changing. Change `orch` from a session
-  in its own worktree and open a draft PR. Running the full suite on this Windows machine takes about ten
-  minutes idle and longer under load; give every run an explicit timeout.
+- `/factory` may run against this repository. A job's gates are the installed `orch` (the primary
+  checkout's built `dist/`), not the job's branch; the job's own `src/` is exercised only by its
+  verification run in its worktree. Rebuild `dist/` only from `main`. Running the full suite on this
+  Windows machine takes about ten minutes idle and longer under load; give every run an explicit
+  timeout.
 
 ## Documentation
 

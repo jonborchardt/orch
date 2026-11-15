@@ -50,6 +50,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabName>('Overview');
   const [tick, setTick] = useState(0);
+  const [openReviews, setOpenReviews] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     let alive = true;
@@ -278,12 +279,17 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
                     variant="outlined"
                     disableGutters
                     sx={{ my: 1 }}
+                    expanded={openReviews[rv.id] === true}
+                    onChange={(_e, open) => {
+                      setOpenReviews((s) => ({ ...s, [rv.id]: open }));
+                    }}
                     slotProps={{ transition: { unmountOnExit: true } }}
                   >
+                    {/* MUI gives the region this id; it is unmounted while collapsed. */}
                     <AccordionSummary
                       expandIcon={<span aria-hidden>▾</span>}
                       id={`review-${String(rv.id)}-header`}
-                      aria-controls={`review-${String(rv.id)}-body`}
+                      aria-controls={openReviews[rv.id] ? `review-${String(rv.id)}-body` : undefined}
                     >
                       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                         <Typography sx={{ fontWeight: 600 }}>{rv.reviewer}</Typography>
@@ -291,7 +297,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
                         {rv.summary && <Typography variant="body2">{rv.summary}</Typography>}
                       </Stack>
                     </AccordionSummary>
-                    <AccordionDetails id={`review-${String(rv.id)}-body`}>
+                    <AccordionDetails>
                       {rv.path ? (
                         content(rv.path)
                       ) : (
