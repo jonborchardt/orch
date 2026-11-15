@@ -20,7 +20,7 @@ import { useEffect, useState } from 'react';
 
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
-import { CiChip, CiPanel, ciSummary } from './Ci.tsx';
+import { CiChip, CiPanel } from './Ci.tsx';
 import { Markdown } from './Markdown.tsx';
 import { BlockerText, ResumeBox, StatusChip, Supersession } from './Status.tsx';
 import { ApiFailure, fetchDetail } from './api.ts';
@@ -82,6 +82,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
   }
   if (!detail) return <Typography sx={{ p: 2 }}>Loading {id}…</Typography>;
   const { job } = detail;
+  const worktree = detail.plan?.worktree ?? null;
   const consolidatedRounds = detail.rounds.filter((r) => r.consolidated !== null).reverse();
   const content = (path: string | null | undefined) =>
     path && detail.contents[path] !== undefined ? (
@@ -153,13 +154,13 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
             <BlockerText blocker={detail.blocker} />
           ) : detail.liveness === 'completed' ? (
             // Completed by GitHub's verdict, by a human, or before the ci stage existed: say which.
-            <Typography data-testid="completion">{ciSummary(detail).line}</Typography>
+            <Typography data-testid="completion">{detail.ci.line}</Typography>
           ) : (
             <Typography>{STATE[detail.liveness].describe}</Typography>
           )}
           {detail.blocker?.kind === 'ci' && (
             <Typography variant="body2" color="text.secondary" data-testid="ci-guidance">
-              {ciSummary(detail).guidance}
+              {detail.ci.guidance}
             </Typography>
           )}
           {detail.resume && (
@@ -356,34 +357,33 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
           </Table>
         )}
         {tab === 'Git' &&
-          (detail.worktree ? (
+          (worktree ? (
             <Stack spacing={1}>
               <Typography variant="body2">
-                Worktree <code>{detail.worktree.path}</code> on{' '}
-                <code>{detail.worktree.branch ?? '(detached)'}</code>, HEAD{' '}
-                <code>{detail.worktree.head?.slice(0, 10) ?? '?'}</code>
-                {detail.worktree.baseRef && (
+                Worktree <code>{worktree.path}</code> on{' '}
+                <code>{worktree.branch ?? '(detached)'}</code>, HEAD{' '}
+                <code>{worktree.head?.slice(0, 10) ?? '?'}</code>
+                {worktree.baseRef && (
                   <>
-                    , {String(detail.worktree.ahead ?? 0)} ahead /{' '}
-                    {String(detail.worktree.behind ?? 0)} behind{' '}
-                    <code>{detail.worktree.baseRef}</code>
+                    , {String(worktree.ahead ?? 0)} ahead / {String(worktree.behind ?? 0)} behind{' '}
+                    <code>{worktree.baseRef}</code>
                   </>
                 )}
               </Typography>
-              {detail.worktree.dirty.length > 0 && (
-                <Alert severity="warning">Uncommitted: {detail.worktree.dirty.join(', ')}</Alert>
+              {worktree.dirty.length > 0 && (
+                <Alert severity="warning">Uncommitted: {worktree.dirty.join(', ')}</Alert>
               )}
               <Typography variant="subtitle2">Commits on the branch</Typography>
-              {detail.worktree.commits.length === 0 && (
+              {worktree.commits.length === 0 && (
                 <Typography color="text.secondary">None yet.</Typography>
               )}
-              {detail.worktree.commits.map((c) => (
+              {worktree.commits.map((c) => (
                 <Typography key={c.sha} variant="body2">
                   <code>{c.sha.slice(0, 8)}</code> {c.subject}
                 </Typography>
               ))}
               <Typography variant="subtitle2">Changed files vs base</Typography>
-              {detail.worktree.changedFiles.map((f) => (
+              {worktree.changedFiles.map((f) => (
                 <Typography key={f} variant="body2">
                   <code>{f}</code>
                 </Typography>

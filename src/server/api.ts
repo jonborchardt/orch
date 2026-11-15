@@ -42,8 +42,6 @@ import type {
   SessionView,
 } from './types.ts';
 
-export { liveness } from './status.ts';
-
 export const JOB_ID = /^job-[0-9a-f]{8}$/;
 /** Artifact contents above this size are omitted from the detail view (fetch them individually). */
 const INLINE_LIMIT = 512 * 1024;
@@ -109,16 +107,9 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       blocking: blockingOf(artifacts, job.round) ?? blockingOf(artifacts, job.round - 1),
       blocker: blockerOf(job, state, evidence),
       resume: resumeOf(job, state),
-      createdAt: job.createdAt,
       updatedAt: job.updatedAt,
-      completedAt: job.completedAt,
       elapsedMs: Math.max(0, Date.parse(end) - Date.parse(job.createdAt)),
-      pr: {
-        url: job.prUrl,
-        state: job.prState,
-        ciStatus: job.ciStatus,
-        ciCheckedAt: job.ciCheckedAt,
-      },
+      pr: { url: job.prUrl, state: job.prState },
       supersededBy: job.supersededBy,
       supersedes: predecessors.get(job.id) ?? [],
       // The board does not inspect worktrees (one Git call per job); the detail view does.
@@ -220,7 +211,6 @@ export function detail(store: Store, id: string): JobDetailView {
     contents,
     rounds: rounds(reviews, artifacts),
     events,
-    worktree: plan?.worktree ?? null,
     plan,
     planError,
     blocker: blockerOf(job, state, evidence),

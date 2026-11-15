@@ -76,6 +76,9 @@ export interface CiView {
    * its reason), or a job completed before the ci stage existed, which carries no verdict at all.
    */
   completion: 'ci' | 'human' | 'legacy' | null;
+  /** What the CI state means for the reader, and what happens or may be done next. */
+  line: string;
+  guidance: string;
 }
 
 export interface BoardRow {
@@ -97,16 +100,9 @@ export interface BoardRow {
   blocker: Blocker | null;
   /** Null for finished jobs; otherwise whether and how a session may resume it. */
   resume: Resume | null;
-  createdAt: string;
   updatedAt: string;
-  completedAt: string | null;
   elapsedMs: number;
-  pr: {
-    url: string | null;
-    state: string | null;
-    ciStatus: string | null;
-    ciCheckedAt: string | null;
-  };
+  pr: { url: string | null; state: string | null };
   /** Job that replaced this one, and jobs this one replaced (`orch job supersede`). */
   supersededBy: string | null;
   supersedes: string[];
@@ -141,7 +137,6 @@ export interface JobDetailView {
   contents: Record<string, string>;
   rounds: RoundView[];
   events: Event[];
-  worktree: Plan['worktree'] | null;
   plan: Plan | null;
   planError: string | null;
   blocker: Blocker | null;
@@ -174,9 +169,6 @@ export interface ActionResponse {
 
 export interface SessionInfo {
   csrf: string;
-  version: string;
-  database: string;
-  actions: readonly DashboardAction[];
 }
 
 export interface ApiError {

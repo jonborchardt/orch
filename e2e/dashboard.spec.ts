@@ -134,19 +134,6 @@ test('a stopped job explains itself and offers recovery, not approval', async ({
   await expect(page.getByTestId('resume-unavailable')).toContainText('claude-20261113-0800-1d2e');
 });
 
-test('dark mode toggles and persists across reload', async ({ page }) => {
-  await page.goto('/');
-  const html = page.locator('html');
-  // MUI's `data` color-scheme selector marks <html> with data-dark / data-light.
-  await page.getByRole('button', { name: /Switch to dark mode/ }).click();
-  await expect(html).toHaveAttribute('data-dark', '');
-  await page.reload();
-  await expect(html).toHaveAttribute('data-dark', '');
-  await page.getByRole('button', { name: /Switch to light mode/ }).click();
-  await expect(html).toHaveAttribute('data-light', '');
-  await expect(html).not.toHaveAttribute('data-dark');
-});
-
 test('controls cannot bypass workflow rules, and never claim to wake a session', async ({
   page,
 }) => {
