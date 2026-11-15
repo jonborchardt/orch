@@ -289,7 +289,9 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
                     <AccordionSummary
                       expandIcon={<span aria-hidden>▾</span>}
                       id={`review-${String(rv.id)}-header`}
-                      aria-controls={openReviews[rv.id] ? `review-${String(rv.id)}-body` : undefined}
+                      aria-controls={
+                        openReviews[rv.id] ? `review-${String(rv.id)}-body` : undefined
+                      }
                     >
                       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                         <Typography sx={{ fontWeight: 600 }}>{rv.reviewer}</Typography>
