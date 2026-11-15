@@ -116,6 +116,10 @@ framework. Upgrade Drizzle deliberately, both packages together.
 - The suite spawns many Git and Node processes and runs its files in parallel; on a loaded
   Windows machine a CLI-heavy file can take minutes. A single failure in `tests/factory.test.ts`
   or `tests/cli.test.ts` that passes alone is load, not a defect; rerun it in isolation first.
+  A file's tests run serially, so keep driven-job files short: the ci, audit, factory,
+  integration, and verify scenarios are split across files that share a `*-fixture.ts` module
+  (its state is per file, since Vitest loads it once per test file). Add a slow scenario to the
+  shortest matching file, or a new one, rather than growing a long one.
 - One session per checkout. CLI tests load `src/` from the checkout they run in, so a parallel
   session works in its own worktree, never in the primary checkout alongside another; the
   `orch checkout hook` in `.claude/settings.json` refuses an Edit/Write into a checkout another
@@ -123,8 +127,8 @@ framework. Upgrade Drizzle deliberately, both packages together.
   `ReferenceError` or `SyntaxError` means a mid-edit tree.
 - Never run `/factory` against this repository. The installed `orch` is this checkout's `dist/`, so a
   factory job editing `src/` would be gated by the code it is changing. Change `orch` from a session
-  in its own worktree and open a draft PR. Running the full suite on this Windows machine takes 15 to
-  20 minutes idle and much longer under load; give every run an explicit timeout.
+  in its own worktree and open a draft PR. Running the full suite on this Windows machine takes about ten
+  minutes idle and longer under load; give every run an explicit timeout.
 
 ## Documentation
 

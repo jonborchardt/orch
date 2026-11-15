@@ -54,16 +54,25 @@ jobs:
       matrix:
         include:
           - group: ci
-            files: tests/ci.test.ts
+            files: tests/ci.test.ts tests/ci-repair.test.ts tests/review-budget.test.ts
+          - group: ci-github
+            files: tests/ci-github.test.ts tests/ci-rerun.test.ts tests/delivery.test.ts
           - group: factory
-            files: tests/factory.test.ts tests/integration.test.ts
+            files: >-
+              tests/factory.test.ts tests/factory-delivery.test.ts
+              tests/integration.test.ts tests/integration-resume.test.ts
           - group: verify
-            files: tests/audit.test.ts tests/verify.test.ts tests/sensitive.test.ts
+            files: >-
+              tests/audit.test.ts tests/audit-delivery.test.ts
+              tests/verify.test.ts tests/verify-identity.test.ts tests/sensitive.test.ts
           - group: rest
             files: >-
-              --exclude tests/ci.test.ts
-              --exclude tests/factory.test.ts --exclude tests/integration.test.ts
-              --exclude tests/audit.test.ts --exclude tests/verify.test.ts --exclude tests/sensitive.test.ts
+              --exclude tests/ci.test.ts --exclude tests/ci-repair.test.ts --exclude tests/review-budget.test.ts
+              --exclude tests/ci-github.test.ts --exclude tests/ci-rerun.test.ts --exclude tests/delivery.test.ts
+              --exclude tests/factory.test.ts --exclude tests/factory-delivery.test.ts
+              --exclude tests/integration.test.ts --exclude tests/integration-resume.test.ts
+              --exclude tests/audit.test.ts --exclude tests/audit-delivery.test.ts
+              --exclude tests/verify.test.ts --exclude tests/verify-identity.test.ts --exclude tests/sensitive.test.ts
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

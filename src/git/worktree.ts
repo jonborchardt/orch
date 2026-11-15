@@ -89,17 +89,42 @@ export function inspectWorktree(repoRoot: string, path: string, baseBranch: stri
     }
   };
   // One rev-parse answers several questions, one line per argument in order: every gate inspects
-  // the worktree, and on Windows each Git process costs tens of milliseconds.
-  const ids = step('rev-parse --show-toplevel', () =>
-    git(path, 'rev-parse', '--show-toplevel', '--git-common-dir').split(/\r?\n/),
-  );
+  // the worktree, and on Windows each Git process costs tens of milliseconds. HEAD and its branch
+  // come along when HEAD exists; an unborn branch fails that call, so the steps run one by one.
+  const all = tryGit(
+    path,
+    'rev-parse',
+    '--show-toplevel',
+    '--git-common-dir',
+    'HEAD',
+    '--abbrev-ref',
+    'HEAD',
+  )?.split(/\r?\n/);
+  const ids =
+    all?.length === 4
+      ? all
+      : step('rev-parse --show-toplevel', () =>
+          git(path, 'rev-parse', '--show-toplevel', '--git-common-dir').split(/\r?\n/),
+        );
   const top = ids?.[0];
   if (!top) return info;
   if (canonicalPath(top) !== canonicalPath(path)) {
     info.problem = `rev-parse --show-toplevel: git reports ${canonicalPath(top)}, expected ${canonicalPath(path)}`;
     return info;
   }
-  const ours = step('rev-parse --git-common-dir in the repository', () => commonGitDir(repoRoot));
+  // The repository's common dir and its origin/<base> commit in one call when origin has the
+  // base (the usual case); otherwise each is looked up on its own as before.
+  const root = tryGit(
+    repoRoot,
+    'rev-parse',
+    '--git-common-dir',
+    `refs/remotes/origin/${baseBranch}^{commit}`,
+  )?.split(/\r?\n/);
+  const rootShared = root?.length === 2 && root[0] ? root[0] : undefined;
+  const ours =
+    rootShared !== undefined
+      ? canonicalPath(resolve(repoRoot, rootShared))
+      : step('rev-parse --git-common-dir in the repository', () => commonGitDir(repoRoot));
   const theirs = canonicalPath(resolve(path, ids[1] ?? ''));
   if (ours === undefined) return info;
   if (ours !== theirs) {
@@ -109,28 +134,30 @@ export function inspectWorktree(repoRoot: string, path: string, baseBranch: stri
   info.isWorktree = true;
   // HEAD and its branch name together; both fail together on an unborn branch (head stays null).
   const [head, branch] =
-    step('rev-parse HEAD', () => git(path, 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'))?.split(
-      /\r?\n/,
-    ) ?? [];
+    all?.length === 4
+      ? all.slice(2)
+      : (step('rev-parse HEAD', () =>
+          git(path, 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'),
+        )?.split(/\r?\n/) ?? []);
   info.head = head ?? null;
   info.branch = branch && branch !== 'HEAD' ? branch : null;
   info.dirty = dirtyFiles(path);
-  const base = baseRef(repoRoot, baseBranch);
+  const base = rootShared !== undefined ? `origin/${baseBranch}` : baseRef(repoRoot, baseBranch);
   if (base && info.head) {
     info.baseRef = base;
-    const counts = tryGit(path, 'rev-list', '--left-right', '--count', `${base}...HEAD`);
-    if (counts) {
-      const [behind, ahead] = counts.split(/\s+/).map(Number);
-      info.behind = behind ?? null;
-      info.ahead = ahead ?? null;
+    // One walk of the symmetric difference: `<` marks base-only commits (behind), `>` the job's
+    // own (ahead, listed newest first exactly as `git log base..HEAD` lists them).
+    const log = tryGit(path, 'log', '--left-right', '--format=%m%H%x09%s', `${base}...HEAD`);
+    if (log !== undefined) {
+      const lines = log ? log.split(/\r?\n/) : [];
+      const own = lines.filter((l) => l.startsWith('>'));
+      info.behind = lines.length - own.length;
+      info.ahead = own.length;
+      info.commits = own.map((l) => {
+        const [sha = '', ...rest] = l.slice(1).split('\t');
+        return { sha, subject: rest.join('\t') };
+      });
     }
-    const log = tryGit(path, 'log', '--format=%H%x09%s', `${base}..HEAD`);
-    info.commits = log
-      ? log.split(/\r?\n/).map((l) => {
-          const [sha = '', ...rest] = l.split('\t');
-          return { sha, subject: rest.join('\t') };
-        })
-      : [];
     info.changes = parseNameStatus(tryGit(path, 'diff', '--name-status', `${base}...HEAD`) ?? '');
     info.changedFiles = info.changes.map((c) => c.path);
   }

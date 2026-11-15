@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OwnershipError, ToolError, ValidationError } from '../src/core/errors.ts';
 import { jobWorktreeDir } from '../src/core/paths.ts';
 import { describeRepo } from '../src/git/repo.ts';
+import { inspectWorktree } from '../src/git/worktree.ts';
 import {
   adoptWorktree,
   createWorktree,
@@ -418,5 +419,89 @@ describe('orch worktree CLI', () => {
     );
     expect(jobBranch({ id: 'job-2', title: '!!!' })).toBe('factory/job-2');
     expect(jobBranch({ id: 'job-3', title: 'x'.repeat(100) }).length).toBeLessThanOrEqual(60);
+  });
+});
+
+describe('inspectWorktree: one rev-parse and one log walk give what the separate calls gave', () => {
+  /** What the earlier one-question-per-call inspection reported, straight from Git. */
+  function separately(wt: string, base: string) {
+    const [behind, ahead] = gitIn(wt, 'rev-list', '--left-right', '--count', `${base}...HEAD`)
+      .split(/\s+/)
+      .map(Number);
+    const log = gitIn(wt, 'log', '--format=%H%x09%s', `${base}..HEAD`);
+    return {
+      head: gitIn(wt, 'rev-parse', 'HEAD'),
+      behind,
+      ahead,
+      commits: log ? log.split(/\r?\n/).map((l) => l.split('\t')[0]) : [],
+    };
+  }
+
+  it('a branch both ahead of and behind origin/main', () => {
+    const wt = join(tempDir('orch-wt-parent-'), 'wt');
+    gitIn(clone, 'worktree', 'add', '-q', '-b', 'feature', wt, 'origin/main');
+    commitFile(wt, 'a.txt', 'a', 'first\twith a tab');
+    commitFile(wt, 'b.txt', 'b', 'second');
+    commitFile(clone, 'base.txt', 'base', 'base moves');
+    gitIn(clone, 'push', '-q', 'origin', 'main');
+    gitIn(wt, 'fetch', '-q', 'origin');
+    const info = inspectWorktree(clone, wt, 'main');
+    const expected = separately(wt, 'origin/main');
+    expect(info).toMatchObject({
+      isWorktree: true,
+      branch: 'feature',
+      head: expected.head,
+      baseRef: 'origin/main',
+      ahead: 2,
+      behind: 1,
+    });
+    expect([info.ahead, info.behind]).toEqual([expected.ahead, expected.behind]);
+    expect(info.commits.map((c) => c.sha)).toEqual(expected.commits);
+    expect(info.commits.map((c) => c.subject)).toEqual(['second', 'first\twith a tab']);
+    expect(info.changedFiles.sort()).toEqual(['a.txt', 'b.txt']);
+  });
+
+  it('no origin: the local base branch is the base, as before', () => {
+    const repo = makeRepo();
+    extra.push(repo);
+    gitIn(repo, 'checkout', '-q', '-b', 'feature');
+    commitFile(repo, 'a.txt', 'a');
+    const info = inspectWorktree(repo, repo, 'main');
+    expect(info).toMatchObject({
+      isWorktree: true,
+      branch: 'feature',
+      baseRef: 'main',
+      ahead: 1,
+      behind: 0,
+    });
+    expect(info.commits).toHaveLength(1);
+  });
+
+  it('an unborn branch, a detached HEAD, and a directory that is not a worktree', () => {
+    const unborn = tempDir('orch-unborn-');
+    gitIn(unborn, 'init', '-q', '-b', 'main');
+    expect(inspectWorktree(unborn, unborn, 'main')).toMatchObject({
+      isWorktree: true,
+      head: null,
+      branch: null,
+      baseRef: null,
+    });
+    gitIn(clone, 'checkout', '-q', '--detach');
+    const detached = inspectWorktree(clone, clone, 'main');
+    expect(detached).toMatchObject({
+      isWorktree: true,
+      branch: null,
+      head: gitIn(clone, 'rev-parse', 'HEAD'),
+    });
+    const plain = tempDir('orch-plain-');
+    const none = inspectWorktree(clone, plain, 'main');
+    expect(none.isWorktree).toBe(false);
+    expect(none.problem).toMatch(/rev-parse --show-toplevel/);
+    // A worktree of another repository is still told apart.
+    const other = makeRepo();
+    extra.push(other);
+    const foreign = inspectWorktree(clone, other, 'main');
+    expect(foreign.isWorktree).toBe(false);
+    expect(foreign.problem).toMatch(/belongs to another repository/);
   });
 });
