@@ -16,7 +16,15 @@ import { planJob } from '../src/ops/factory.ts';
 import { showVerification } from '../src/ops/verify.ts';
 import { openStore, type Store } from '../src/storage/client.ts';
 import { claimJob, getJob } from '../src/storage/jobs.ts';
-import { latestRun, listRuns, startRun } from '../src/storage/verification.ts';
+import {
+  type CheckResult,
+  finishRun,
+  latestRun,
+  listRuns,
+  recordCheck,
+  runDetail,
+  startRun,
+} from '../src/storage/verification.ts';
 import {
   add,
   CHECK_JS,
@@ -435,6 +443,56 @@ describe('orch verify: identity, ownership, concurrency', () => {
     const next = verify(store, c);
     expect(next.status).toBe('passed');
     expect(listRuns(store.db, c.id).map((r) => r.status)).toEqual(['passed', 'interrupted']);
+  });
+
+  it('a superseded run that finishes late keeps its interrupted record; the newer run decides', () => {
+    const c = start(store, clone);
+    inBuild(c);
+    // Run A starts (its process is still going, e.g. moved to the background by the Bash tool)...
+    const a = startRun(store, c.id, {
+      token: c.token,
+      head: head(c.wt),
+      tree: gitIn(c.wt, 'rev-parse', 'HEAD^{tree}'),
+      dirty: [],
+      configFingerprint: showVerification(store, c.id)?.policy.fingerprint ?? '',
+      policySource: 'baseline',
+      policyHead: null,
+      checks: [
+        {
+          id: 'check',
+          command: 'node',
+          args: ['check.js'],
+          cwd: '.',
+          required: true,
+          timeoutMs: 1000,
+        },
+      ],
+    });
+    // ...and run B starts and finishes meanwhile, marking A interrupted.
+    expect(verify(store, c).status).toBe('passed');
+    const late: CheckResult = {
+      status: 'failed',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      durationMs: 1,
+      exitCode: 1,
+      signal: null,
+      outputPath: null,
+      outputSha256: null,
+      truncated: false,
+      error: null,
+    };
+    const checkRow = a.checks[0]?.id ?? -1;
+    expect(() => recordCheck(store, c.id, { token: c.token }, checkRow, late)).toThrow(
+      /is interrupted, not running/,
+    );
+    expect(() => finishRun(store, c.id, { token: c.token }, a.run.id, 'failed')).toThrow(
+      /is interrupted, not running/,
+    );
+    const runs = listRuns(store.db, c.id);
+    expect(runs.map((r) => r.status)).toEqual(['passed', 'interrupted']);
+    expect(runDetail(store.db, a.run.id)?.checks[0]?.status).toBe('pending');
+    expect(showVerification(store, c.id)?.valid).toBe(true);
   });
 
   it('a check that steals ownership leaves the run incomplete: the result is never recorded', () => {

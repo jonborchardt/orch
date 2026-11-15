@@ -31,6 +31,10 @@ Rules that are never relaxed:
   and logs under `<artifactDir>/verification/<run>/`. `build`, `approve`, and `pr` cannot complete
   and nothing is pushed without a passing run for the exact HEAD. Agents cannot invent one; a
   `Validation` section in `build.md` cites the run id, and reviewers read the logs, not the prose.
+  A verification can outlast the Bash tool's time limit; Claude Code then keeps it running in the
+  background. Wait for that invocation's completion notice and read its result. Never start a
+  second `orch verify` for the job while one is running, and never treat an unfinished one as a
+  pass: only a finished run with status `passed` (`orch verify show <id>`) counts.
 - `plan.verification.configured === false` means the base branch has no verification policy. Do
   not invent checks or skip the gate: ask the builder to propose a `factory.json` in the worktree
   (never run it), then escalate with reason "verification policy needs human acceptance". The

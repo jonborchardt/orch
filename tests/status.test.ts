@@ -89,4 +89,15 @@ describe('ciSummary', () => {
     );
     expect(line(finished, { completion: 'legacy' })).toContain('before the ci stage existed');
   });
+
+  it('a released job is not being polled: the guidance says to resume it', () => {
+    const pending = ci({ head: 'a1b2c3d4', status: 'pending', current: true });
+    expect(ciSummary(pending, withPr({ ownerSession: 'claude-1' })).guidance).toContain(
+      'the session polls with orch gh ci',
+    );
+    const released = ciSummary(pending, withPr({ ownerSession: null })).guidance;
+    expect(released).toContain('No session is polling');
+    expect(released).toContain('/factory job-00000001');
+    expect(released).not.toContain('the session polls');
+  });
 });

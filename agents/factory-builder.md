@@ -51,7 +51,9 @@ Procedure:
 4. Verify each acceptance criterion and record how.
 5. Commit. Confirm `git status --porcelain` is empty.
 6. Run `orch verify <jobId> --token <token>`. If a required check fails, fix it, commit, and run
-   it again; every run is recorded, including the failed ones.
+   it again; every run is recorded, including the failed ones. If the command is moved to the
+   background because it outlasted the Bash time limit, wait for its completion notice; never start
+   a second `orch verify` while one is running, and never report an unfinished run as passing.
 7. Write `build.md` to the path the coordinator gave you, with these mandatory headings: `Summary`
    and `Validation`; also `Changes`, `Acceptance criteria`, `Findings addressed` (rounds > 1), and
    `Known gaps`. `Validation` names the passing verification run id and HEAD; `Acceptance

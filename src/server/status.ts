@@ -184,7 +184,8 @@ type CiRow = Pick<
   | 'ciCheckedAt'
   | 'ciRepairs'
   | 'maxCiRepairs'
->;
+> &
+  Partial<Pick<Job, 'ownerSession'>>;
 
 const sha7 = (sha: string | null): string => (sha ? sha.slice(0, 7) : '?');
 
@@ -196,7 +197,7 @@ const sha7 = (sha: string | null): string => (sha ? sha.slice(0, 7) : '?');
  */
 export function ciSummary(
   ci: Omit<CiView, 'line' | 'guidance'>,
-  job: Pick<Job, 'id' | 'stage' | 'prUrl' | 'prState'>,
+  job: Pick<Job, 'id' | 'stage' | 'prUrl' | 'prState'> & Partial<Pick<Job, 'ownerSession'>>,
 ): { line: string; guidance: string } {
   const at = `for ${sha7(ci.head)}`;
   const budget = `${String(ci.repairs)} of ${String(ci.maxRepairs)} repairs used`;
@@ -286,7 +287,9 @@ export function ciSummary(
     return {
       line: `CI pending ${at}.${stale}`,
       guidance:
-        'Waiting on GitHub; the session polls with orch gh ci. Completion is not available.',
+        job.ownerSession === null
+          ? `No session is polling: the job was released while CI ran. Resume it (/factory ${job.id}) to read CI again. Completion is not available.`
+          : 'Waiting on GitHub; the session polls with orch gh ci. Completion is not available.',
     };
   }
   // passing

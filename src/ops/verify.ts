@@ -11,7 +11,13 @@ import path from 'node:path';
 import { ValidationError } from '../core/errors.ts';
 import { spawnCommand, type ToolResult } from '../core/exec.ts';
 import { jobArtifactDir } from '../core/paths.ts';
-import { buildReport, classifyPath, scanDiff, type SensitiveReport } from '../core/sensitive.ts';
+import {
+  buildReport,
+  classifyPath,
+  policyScriptPaths,
+  scanDiff,
+  type SensitiveReport,
+} from '../core/sensitive.ts';
 import {
   diffPolicy,
   OUTPUT_CAP,
@@ -163,7 +169,13 @@ export function sensitiveReport(wt: Tree, eff: EffectivePolicy): SensitiveReport
     wt.baseRef && testFiles.length > 0
       ? (tryGit(wt.path, 'diff', `${wt.baseRef}...HEAD`, '--', ...testFiles) ?? '')
       : '';
-  return buildReport(wt.changes, scanDiff(diff), eff.diff, eff.source === 'authorized');
+  return buildReport(
+    wt.changes,
+    scanDiff(diff),
+    eff.diff,
+    eff.source === 'authorized',
+    policyScriptPaths(eff.policy.commands),
+  );
 }
 
 export interface VerifyResult {

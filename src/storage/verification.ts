@@ -5,7 +5,7 @@
  */
 import { and, desc, eq, inArray } from 'drizzle-orm';
 
-import { NotFoundError } from '../core/errors.ts';
+import { NotFoundError, ValidationError } from '../core/errors.ts';
 
 import type {
   CheckStatus,
@@ -125,19 +125,39 @@ export function recordCheck(
   checkRowId: number,
   result: CheckResult,
 ): VerificationCheck {
-  return mutateReturning(store, id, auth, (_job, tx) => ({
-    patch: {},
-    events: [],
-    value: must(
-      tx
-        .update(verificationChecks)
-        .set(result)
-        .where(eq(verificationChecks.id, checkRowId))
-        .returning()
-        .get(),
-      `verification check ${String(checkRowId)}`,
-    ),
-  }));
+  return mutateReturning(store, id, auth, (_job, tx) => {
+    const run = tx
+      .select({ id: verificationRuns.id, status: verificationRuns.status })
+      .from(verificationChecks)
+      .innerJoin(verificationRuns, eq(verificationRuns.id, verificationChecks.runId))
+      .where(eq(verificationChecks.id, checkRowId))
+      .get();
+    if (run && run.status !== 'running') throw superseded(run.id, run.status);
+    return {
+      patch: {},
+      events: [],
+      value: must(
+        tx
+          .update(verificationChecks)
+          .set(result)
+          .where(eq(verificationChecks.id, checkRowId))
+          .returning()
+          .get(),
+        `verification check ${String(checkRowId)}`,
+      ),
+    };
+  });
+}
+
+/**
+ * A run that is no longer `running` keeps its record: a newer `orch verify` marked it
+ * interrupted, and the late process must not rewrite that history (its log is already saved).
+ */
+function superseded(runId: number, status: RunStatus): ValidationError {
+  return new ValidationError(
+    `Verification run ${String(runId)} is ${status}, not running (a newer orch verify superseded it); ` +
+      'its result is not recorded. The newest run is the one that counts.',
+  );
 }
 
 export function finishRun(
@@ -147,19 +167,26 @@ export function finishRun(
   runId: number,
   status: Exclude<RunStatus, 'running'>,
 ): VerificationRun {
-  return mutateReturning(store, id, auth, (_job, tx, ts) => ({
-    patch: {},
-    events: [{ type: 'verification.completed', payload: { runId, status } }],
-    value: must(
-      tx
-        .update(verificationRuns)
-        .set({ status, completedAt: ts })
-        .where(eq(verificationRuns.id, runId))
-        .returning()
-        .get(),
+  return mutateReturning(store, id, auth, (_job, tx, ts) => {
+    const run = must(
+      tx.select().from(verificationRuns).where(eq(verificationRuns.id, runId)).get(),
       `verification run ${String(runId)}`,
-    ),
-  }));
+    );
+    if (run.status !== 'running') throw superseded(runId, run.status);
+    return {
+      patch: {},
+      events: [{ type: 'verification.completed', payload: { runId, status } }],
+      value: must(
+        tx
+          .update(verificationRuns)
+          .set({ status, completedAt: ts })
+          .where(and(eq(verificationRuns.id, runId), eq(verificationRuns.status, 'running')))
+          .returning()
+          .get(),
+        `verification run ${String(runId)}`,
+      ),
+    };
+  });
 }
 
 export function listRuns(db: Db, jobId: string): VerificationRun[] {
