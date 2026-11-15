@@ -52,7 +52,7 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
                               Exit 1 if the worktree changed since the plan was taken
   config                      Effective role -> model configuration and its file location
 
---session defaults to $ORCH_SESSION. The plan's commands expect the token in $ORCH_TOKEN.
+--session defaults to $ORCH_SESSION. The plan's commands carry --token <token> explicitly.
 `;
 
 export function runFactory(
