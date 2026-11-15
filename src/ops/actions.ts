@@ -8,7 +8,14 @@ import { leaseExpired } from '../core/ownership.ts';
 import { cannotAcceptDelivery, now, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
 import type { Store } from '../storage/client.ts';
 import { policyFingerprint } from '../core/verification.ts';
-import { claimJob, getJob, releaseJob, supersedeJob, transitionJob } from '../storage/jobs.ts';
+import {
+  claimJob,
+  getJob,
+  releaseJob,
+  setArchived,
+  supersedeJob,
+  transitionJob,
+} from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { authorizePolicy } from '../storage/verification.ts';
 import { worktreeOf } from './tree.ts';
@@ -21,6 +28,8 @@ export const DASHBOARD_ACTIONS = [
   'accept-policy',
   'accept-delivery',
   'cancel',
+  'archive',
+  'unarchive',
 ] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 export const DASHBOARD_SESSION = 'dashboard';
@@ -48,11 +57,22 @@ export function withoutToken(job: Job): Omit<Job, 'ownerToken'> {
 export function allowedActions(
   job: Pick<
     Job,
-    'status' | 'stage' | 'round' | 'returnStage' | 'prUrl' | 'ciHead' | 'ciStatus' | 'prState'
+    | 'status'
+    | 'stage'
+    | 'round'
+    | 'returnStage'
+    | 'prUrl'
+    | 'ciHead'
+    | 'ciStatus'
+    | 'prState'
+    | 'archivedAt'
   >,
   policyDrift: boolean,
 ): DashboardAction[] {
-  if (TERMINAL_STATUSES.includes(job.status)) return [];
+  // A finished job can only be hidden from (or brought back to) the board's default views.
+  if (TERMINAL_STATUSES.includes(job.status)) {
+    return [job.archivedAt === null ? 'archive' : 'unarchive'];
+  }
   const out: DashboardAction[] = [];
   if (job.stage === 'needs-human') out.push('approve');
   if (job.round > 0) out.push('request-review');
@@ -139,6 +159,29 @@ export function supersede(store: Store, id: string, input: SupersedeInput): Job 
 
 export function dashboardAction(store: Store, id: string, input: ActionInput): ActionResult {
   const before = getJob(store.db, id);
+  if (input.action === 'archive' || input.action === 'unarchive') {
+    const archive = input.action === 'archive';
+    // Refuse before claiming so a refused request leaves the row untouched; setArchived
+    // re-checks both rules inside its transaction.
+    if (!TERMINAL_STATUSES.includes(before.status)) {
+      throw new ValidationError(
+        `Only a finished job can be archived; this one is ${before.status}.`,
+      );
+    }
+    if (archive !== (before.archivedAt === null)) {
+      throw new ValidationError(archive ? 'Job is already archived.' : 'Job is not archived.');
+    }
+    const note = input.reason?.trim();
+    withLease(store, before, DASHBOARD_SESSION, input.force, (token) =>
+      setArchived(store, id, { token }, archive, note === '' ? undefined : note),
+    );
+    return {
+      job: withoutToken(getJob(store.db, id)),
+      message: archive
+        ? 'Job archived: hidden from the board unless Show is set to archived.'
+        : 'Job unarchived: it is back in the board views.',
+    };
+  }
   if (TERMINAL_STATUSES.includes(before.status)) {
     throw new ValidationError(`Job is already ${before.status}.`);
   }

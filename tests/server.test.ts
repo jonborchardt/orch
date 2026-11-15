@@ -249,7 +249,7 @@ describe('seeded board and detail', () => {
     expect(d.links.checkout).toMatch(/^vscode:\/\/file\/.*alpha/);
     expect(d.resumeCommand).toContain(ids.completed);
     expect(d.liveness).toBe('completed');
-    expect(d.actions).toEqual([]);
+    expect(d.actions).toEqual(['archive']); // a finished job can only be archived
     expect(d.resume).toBeNull();
     const blocked = (await (await api(`/api/jobs/${ids.blocked}`)).json()) as JobDetailView;
     expect(blocked.plan?.step).toBe('needs-human');
@@ -261,7 +261,7 @@ describe('seeded board and detail', () => {
     const failed = (await (await api(`/api/jobs/${ids.failed}`)).json()) as JobDetailView;
     expect(failed.actions).toEqual(['request-rework', 'cancel']); // no approve: not a gate
     const cancelled = (await (await api(`/api/jobs/${ids.cancelled}`)).json()) as JobDetailView;
-    expect(cancelled.actions).toEqual([]);
+    expect(cancelled.actions).toEqual(['archive']);
     expect(cancelled.resume).toBeNull();
   });
 
@@ -472,7 +472,7 @@ describe('mutations', () => {
     expect(done.resumeCommand).toBeUndefined();
     const d = detail(store, ids.ciNone);
     expect(d.ci.completion).toBe('human');
-    expect(d.actions).toEqual([]);
+    expect(d.actions).toEqual(['archive']);
     expect(d.plan?.reason).toContain('manual close-out, not a CI verdict');
     const completed = d.events.find((e) => e.type === 'job.completed');
     expect(completed?.payload).toMatchObject({
@@ -490,6 +490,48 @@ describe('mutations', () => {
     expect((await post(ids.blocked, { action: 'accept-delivery', reason: 'x' }, h)).status).toBe(
       422,
     );
+  });
+
+  it('archives a finished job through the API and refuses an active one', async () => {
+    const h = { ...same(), 'X-Orch-Csrf': csrf };
+    const row = async (id: string) =>
+      ((await (await api('/api/jobs')).json()) as BoardRow[]).find((r) => r.id === id);
+    // The same guards apply to the new actions.
+    expect((await post(ids.completed, { action: 'archive' })).status).toBe(403);
+    expect(
+      (await post(ids.completed, { action: 'archive' }, { ...h, Origin: 'http://evil.example' }))
+        .status,
+    ).toBe(403);
+    expect((await row(ids.completed))?.archivedAt).toBeNull();
+
+    // The session that delivered it still holds a live lease: refused unless forced.
+    const held = await post(ids.completed, { action: 'archive' }, h);
+    expect(held.status).toBe(422);
+    expect(((await held.json()) as { error: { message: string } }).error.message).toContain(
+      'live lease',
+    );
+    expect((await row(ids.completed))?.archivedAt).toBeNull();
+    const ok = await post(ids.completed, { action: 'archive', reason: 'old', force: true }, h);
+    expect(ok.status).toBe(200);
+    const r = (await ok.json()) as ActionResponse;
+    expect(r.resumeCommand).toBeUndefined();
+    expect(r.job.archivedAt).not.toBeNull();
+    expect(JSON.stringify(r)).not.toContain('ownerToken');
+    const archived = await row(ids.completed);
+    expect(archived?.archivedAt).toBe(r.job.archivedAt);
+    expect([archived?.stage, archived?.status]).toEqual(['completed', 'completed']);
+    expect(detail(store, ids.completed).actions).toEqual(['unarchive']);
+    expect((await post(ids.completed, { action: 'archive' }, h)).status).toBe(422);
+
+    // An active job: refused with the validation status, and nothing about the row changes.
+    const before = getJob(store.db, ids.stale);
+    expect((await post(ids.stale, { action: 'archive' }, h)).status).toBe(422);
+    expect((await post(ids.stale, { action: 'unarchive' }, h)).status).toBe(422);
+    expect(getJob(store.db, ids.stale)).toEqual(before);
+
+    const back = await post(ids.completed, { action: 'unarchive' }, h);
+    expect(back.status).toBe(200);
+    expect((await row(ids.completed))?.archivedAt).toBeNull();
   });
 
   it('dashboardAction enforces the same rules in-process', () => {

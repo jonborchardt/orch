@@ -25,6 +25,8 @@ const LABEL: Record<DashboardAction, string> = {
   'accept-policy': 'Accept the verification policy from the worktree',
   'accept-delivery': 'Accept delivery without a CI verdict (human close-out)',
   cancel: 'Cancel job',
+  archive: 'Archive job (hide it from the default board views)',
+  unarchive: 'Unarchive job',
 };
 
 const STAGES = ['spec', 'build', 'review', 'approve', 'pr', 'ci'] as const;
@@ -160,7 +162,28 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             Cancel job
           </Button>
         )}
+        {allowed.has('archive') && (
+          <Button
+            variant="outlined"
+            onClick={() => {
+              start('archive');
+            }}
+          >
+            Archive
+          </Button>
+        )}
+        {allowed.has('unarchive') && (
+          <Button
+            variant="outlined"
+            onClick={() => {
+              start('unarchive');
+            }}
+          >
+            Unarchive
+          </Button>
+        )}
       </Stack>
+
       {closeOut && (
         <Alert severity="warning" variant="outlined" data-testid="close-out-caution">
           Accept delivery completes the job by hand: CI is {detail.ci.status ?? 'not observed'} for{' '}
@@ -263,7 +286,12 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                 label={`Take the job from session ${detail.job.ownerSession ?? ''} (its token stops working)`}
               />
             )}
-            {open === 'accept-delivery' ? (
+            {open === 'archive' || open === 'unarchive' ? (
+              <Alert severity="info" variant="outlined">
+                Archiving only hides a finished job from the board&apos;s default views; its state,
+                worktree, branch, and artifacts are unchanged. Show: archived lists archived jobs.
+              </Alert>
+            ) : open === 'accept-delivery' ? (
               <Alert severity="warning" variant="outlined">
                 This completes the job without a passing CI verdict and records your reason as the
                 human close-out. It does not merge or mark the PR ready.

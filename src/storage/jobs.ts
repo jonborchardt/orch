@@ -31,6 +31,7 @@ import {
   reviewArtifact,
   type Stage,
   type Status,
+  TERMINAL_STATUSES,
   transition,
   type Verdict,
   VERDICTS,
@@ -190,6 +191,34 @@ export function supersedeJob(store: Store, id: string, auth: Auth, by: string): 
       patch: { supersededBy: by },
       events: [{ type: 'job.superseded', payload: { by, previous: job.supersededBy } }],
     };
+  });
+}
+
+/**
+ * Archive (or unarchive) a finished job: it only hides the job from the dashboard's default views.
+ * Workflow state is untouched; only completed or cancelled jobs qualify.
+ */
+export function setArchived(
+  store: Store,
+  id: string,
+  auth: Auth,
+  archived: boolean,
+  reason?: string,
+): Job {
+  return mutate(store, id, auth, (job, _tx, ts) => {
+    if (!TERMINAL_STATUSES.includes(job.status)) {
+      throw new ValidationError(`Only a finished job can be archived; ${id} is ${job.status}.`);
+    }
+    if (archived && job.archivedAt !== null) {
+      throw new ValidationError(`${id} is already archived.`);
+    }
+    if (!archived && job.archivedAt === null) throw new ValidationError(`${id} is not archived.`);
+    return archived
+      ? { patch: { archivedAt: ts }, events: [{ type: 'job.archived', payload: { reason } }] }
+      : {
+          patch: { archivedAt: null },
+          events: [{ type: 'job.unarchived', payload: { reason, archivedAt: job.archivedAt } }],
+        };
   });
 }
 

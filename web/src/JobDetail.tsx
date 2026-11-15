@@ -1,4 +1,7 @@
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Box,
   Button,
@@ -14,6 +17,7 @@ import {
   TableHead,
   TableRow,
   Tabs,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import { useEffect, useState } from 'react';
@@ -108,6 +112,11 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
         <Typography color="text.secondary">{job.id}</Typography>
         <Chip label={`stage: ${job.stage}`} variant="outlined" />
         <StatusChip state={detail.liveness} />
+        {job.archivedAt !== null && (
+          <Tooltip title={`Archived ${job.archivedAt}; shown on the board under Show: archived`}>
+            <Chip label="archived" />
+          </Tooltip>
+        )}
         {detail.ci.completion === 'human' && <CiChip ci={detail.ci} compact />}
         <Chip label={`round ${String(job.round)}/${String(job.maxRounds)}`} />
         {error && <Chip label={`refresh failed: ${error}`} color="warning" />}
@@ -262,14 +271,34 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
                   <Typography color="text.secondary">No reviewers recorded.</Typography>
                 )}
                 {r.reviews.map((rv) => (
-                  <Paper key={rv.id} variant="outlined" sx={{ p: 1.5, my: 1 }}>
-                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                      <Typography sx={{ fontWeight: 600 }}>{rv.reviewer}</Typography>
-                      <Chip label={rv.verdict ?? 'pending'} color={verdictColor(rv.verdict)} />
-                      {rv.summary && <Typography variant="body2">{rv.summary}</Typography>}
-                    </Stack>
-                    {rv.path && <Box sx={{ mt: 1 }}>{content(rv.path)}</Box>}
-                  </Paper>
+                  // Collapsed by default so a round reads as a list of verdicts; the body mounts
+                  // only when expanded.
+                  <Accordion
+                    key={rv.id}
+                    variant="outlined"
+                    disableGutters
+                    sx={{ my: 1 }}
+                    slotProps={{ transition: { unmountOnExit: true } }}
+                  >
+                    <AccordionSummary
+                      expandIcon={<span aria-hidden>▾</span>}
+                      id={`review-${String(rv.id)}-header`}
+                      aria-controls={`review-${String(rv.id)}-body`}
+                    >
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                        <Typography sx={{ fontWeight: 600 }}>{rv.reviewer}</Typography>
+                        <Chip label={rv.verdict ?? 'pending'} color={verdictColor(rv.verdict)} />
+                        {rv.summary && <Typography variant="body2">{rv.summary}</Typography>}
+                      </Stack>
+                    </AccordionSummary>
+                    <AccordionDetails id={`review-${String(rv.id)}-body`}>
+                      {rv.path ? (
+                        content(rv.path)
+                      ) : (
+                        <Typography color="text.secondary">No review text registered.</Typography>
+                      )}
+                    </AccordionDetails>
+                  </Accordion>
                 ))}
               </Box>
             ))

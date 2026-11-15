@@ -68,6 +68,7 @@ export function JobBoard({ rows, now }: { rows: BoardRow[]; now: number }) {
               <TableCell sx={{ whiteSpace: 'nowrap' }}>
                 <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
                   <StatusChip state={r.liveness} />
+                  {r.archivedAt !== null && <Chip label="archived" size="small" />}
                   {r.resume?.command && (
                     <CopyResume
                       id={r.id}

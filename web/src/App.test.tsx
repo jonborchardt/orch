@@ -32,6 +32,7 @@ function row(over: Partial<BoardRow>): BoardRow {
     pr: { url: null, state: null },
     supersededBy: null,
     supersedes: [],
+    archivedAt: null,
     ci: noCi(),
     ...over,
   };
@@ -147,6 +148,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       policy: null,
       policyHead: null,
       supersededBy: null,
+      archivedAt: null,
     },
     liveness: 'blocked',
     artifacts: [],
@@ -773,5 +775,174 @@ describe('Job detail: execution session', () => {
     );
     expect(s).toHaveTextContent(`claude --resume ${uuid}`);
     expect(s).not.toHaveTextContent('earlier attachment');
+  });
+});
+
+describe('Archive', () => {
+  const archivedRow = row({
+    id: 'job-00000009',
+    title: 'Omega archived',
+    status: 'completed',
+    liveness: 'completed',
+    stage: 'completed',
+    owner: null,
+    archivedAt: '2026-11-14T00:00:00.000Z',
+  });
+
+  async function show(filter: string) {
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
+    fireEvent.click(await screen.findByRole('option', { name: filter }));
+  }
+
+  it('hides archived jobs from every view except Show: archived', async () => {
+    data.rows = [...rows, archivedRow];
+    mockFetch();
+    mount();
+    const table = await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(within(table).getAllByRole('row')).toHaveLength(5);
+    expect(screen.queryByText('Omega archived')).not.toBeInTheDocument();
+    for (const f of ['finished', 'cancelled']) {
+      await show(f);
+      await waitFor(() => {
+        expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent(f);
+      });
+      expect(screen.queryByText('Omega archived')).not.toBeInTheDocument();
+    }
+    await show('archived');
+    await waitFor(() => {
+      expect(screen.getAllByRole('row')).toHaveLength(2);
+    });
+    const shown = must(document.querySelector<HTMLElement>('[data-job-id="job-00000009"]'));
+    expect(within(shown).getByText('Omega archived')).toBeInTheDocument();
+    expect(within(shown).getByText('archived')).toBeInTheDocument();
+  });
+
+  it('offers Archive and Unarchive only when the server lists them, and posts the action', async () => {
+    const f = mockFetch();
+    const base = detail();
+    const finished = {
+      ...base.job,
+      stage: 'completed' as const,
+      status: 'completed' as const,
+      completedAt: base.job.updatedAt,
+    };
+    data.detail = detail({
+      job: finished,
+      liveness: 'completed',
+      blocker: null,
+      actions: ['archive'],
+      resume: null,
+    });
+    data.actionBody = {
+      job: { ...finished, archivedAt: '2026-11-15T00:00:00.000Z' },
+      message: 'Job archived: hidden from the board unless Show is set to archived.',
+    };
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByRole('button', { name: 'Unarchive' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/only hides a finished job/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Job archived');
+    });
+    const posts = () =>
+      (f.mock.calls as [RequestInfo | URL, RequestInit | undefined][])
+        .filter(([, i]) => i?.method === 'POST')
+        .map(([, i]) => JSON.parse(i?.body as string) as unknown);
+    expect(posts()).toEqual([{ action: 'archive' }]);
+    cleanup();
+
+    f.mockClear();
+    data.detail = detail({
+      job: { ...finished, archivedAt: '2026-11-15T00:00:00.000Z' },
+      liveness: 'completed',
+      blocker: null,
+      actions: ['unarchive'],
+      resume: null,
+    });
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByText('archived')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Unarchive' }));
+    const again = await screen.findByRole('dialog');
+    fireEvent.click(within(again).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(posts()).toEqual([{ action: 'unarchive' }]);
+    });
+    cleanup();
+
+    // An active job never gets either button.
+    data.detail = detail();
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByRole('button', { name: 'Cancel job' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unarchive' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Job detail: reviews', () => {
+  it('collapses each reviewer by default, keeping name, verdict, and summary visible', async () => {
+    const review = {
+      jobId: 'job-00000003',
+      round: 1,
+      artifactId: 1,
+      head: 'abc',
+      createdAt: '2026-11-13T08:10:00.000Z',
+      completedAt: '2026-11-13T08:20:00.000Z',
+    };
+    data.detail = detail({
+      contents: {
+        'round-1/security.md': '# Security\n\nSecurity body text\n\nVERDICT: PASS\n',
+        'round-1/correctness.md': '# Correctness\n\nCorrectness body text\n\nVERDICT: CHANGES\n',
+      },
+      rounds: [
+        {
+          round: 1,
+          reviews: [
+            {
+              ...review,
+              id: 1,
+              reviewer: 'security',
+              verdict: 'pass',
+              summary: 'No issues',
+              path: 'round-1/security.md',
+            },
+            {
+              ...review,
+              id: 2,
+              reviewer: 'correctness',
+              verdict: 'changes',
+              summary: 'One bug',
+              path: 'round-1/correctness.md',
+            },
+          ],
+          consolidated: null,
+          blocking: 1,
+        },
+      ],
+    });
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Reviews' }));
+    expect(screen.getByText('blocking 1')).toBeInTheDocument();
+    const header = screen.getByRole('button', { name: /security.*pass.*No issues/ });
+    const other = screen.getByRole('button', { name: /correctness.*changes.*One bug/ });
+    expect(header).toHaveAttribute('aria-expanded', 'false');
+    expect(other).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Security body text')).not.toBeInTheDocument();
+    expect(screen.queryByText('Correctness body text')).not.toBeInTheDocument();
+    fireEvent.click(header);
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.findByText('Security body text')).toBeVisible();
+    // Expanding one reviewer leaves the others collapsed.
+    expect(other).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Correctness body text')).not.toBeInTheDocument();
   });
 });

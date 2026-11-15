@@ -32,10 +32,20 @@ function useHashRoute(): string {
   return hash;
 }
 
-const STATUS_FILTERS = ['all', 'active', 'needs human', 'finished', 'cancelled'] as const;
+const STATUS_FILTERS = [
+  'all',
+  'active',
+  'needs human',
+  'finished',
+  'cancelled',
+  'archived',
+] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 function matches(row: BoardRow, f: StatusFilter): boolean {
+  // Archived jobs appear only under `archived`; every other view hides them.
+  if (f === 'archived') return row.archivedAt !== null;
+  if (row.archivedAt !== null) return false;
   switch (f) {
     case 'all':
       return true;

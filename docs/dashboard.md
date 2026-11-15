@@ -28,10 +28,13 @@ derived from persisted fields only (`src/server/status.ts`): the latest `job.blo
 `decision.md` marker, the consolidation's BLOCKING count, and the newest verification run. When
 the state does not classify an escalation the line says so (`Escalated from build`) rather than
 guessing. Jobs a session may resume get a **Copy resume** control. Filter by repository and by
-active / needs human / finished / cancelled; the page refreshes every few seconds while visible.
+active / needs human / finished / cancelled / archived; the page refreshes every few seconds while
+visible. Archived jobs (see **Archive** below) are left out of every filter except `archived`,
+which shows only them, each marked with an `archived` chip.
 
 **Job detail** (`#/jobs/<id>`): next step and agents from the plan, the request, and tabs for the
-spec, build summary, review history per round (verdict, summary, full review text), consolidated
+spec, build summary, review history per round (one collapsed panel per reviewer whose header
+shows the reviewer, verdict, and summary; expand it for the full review text), consolidated
 findings per round, the approval decision, registered artifacts (size, marker, hash), the event
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
 the PR with its CI state. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
@@ -76,6 +79,8 @@ control stays neutral, since the right transition is a human call.
 | Accept verification policy | worktree `factory.json` differs                                                                                                    | snapshot it as the job's policy (`jobs.policy`)        |
 | Accept delivery            | `needs-human` from `ci`, PR head observed, and GitHub reported no checks at all or the PR was merged by hand; a reason is required | `resume --to completed`, recorded as a human close-out |
 | Cancel job                 | not finished                                                                                                                       | `cancel`                                               |
+| Archive                    | status `completed` or `cancelled`, not archived                                                                                    | sets `jobs.archivedAt`; event `job.archived`           |
+| Unarchive                  | status `completed` or `cancelled`, archived                                                                                        | clears `jobs.archivedAt`; event `job.unarchived`       |
 
 Accept delivery is the only control that completes a job by hand. It is listed by the same rule the
 transition applies (`cannotAcceptDelivery` in `src/core/workflow.ts`), so it never appears while
@@ -83,6 +88,13 @@ checks are pending or failing, it is never the primary control, and it refuses a
 `job.completed` event carries `acceptedByHuman: true` and the reason, and the dashboard shows the
 job as completed by human close-out rather than as a passing build. It does not merge or mark the
 PR ready.
+
+**Archive** hides a finished job from the board's default views and nothing else: stage, status,
+`completedAt`, the PR and CI columns, the worktree, the branch, and the artifacts stay as they are,
+and `/api/jobs` still returns the row (with `archivedAt`). It is a column, so it is the same in
+every browser and survives a reload. Only completed or cancelled jobs qualify, so a live, blocked,
+interrupted, or failed job can never be hidden; the detail page of an archived job shows an
+`archived` chip and offers **Unarchive**. Neither action returns a resume command.
 
 A job whose session holds a live lease (and is not waiting in `needs-human`) is refused unless the
 user confirms a forced takeover, which rotates the token. Every action records a reason in the
