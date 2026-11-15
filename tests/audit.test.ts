@@ -17,7 +17,7 @@ import { planJob, resumeFactoryJob } from '../src/ops/factory.ts';
 import { recordVerdict } from '../src/ops/gates.ts';
 import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
 import { verifyJob } from '../src/ops/verify.ts';
-import { adoptWorktree, integrateBase } from '../src/ops/worktree.ts';
+import { adoptWorktree, dropWorktree, integrateBase } from '../src/ops/worktree.ts';
 import { listArtifacts } from '../src/storage/artifacts.ts';
 import {
   getJob,
@@ -329,6 +329,39 @@ describe('invariants 10, 11, and 15: approval, blocking findings, and what gets 
     expect(pushBranch(store, c.id, { token: c.token }).pushed).toBe(true);
     commitFile(c.wt, 'extra.ts', 'not reviewed');
     expect(() => pushBranch(store, c.id, { token: c.token })).toThrow(/not approved/);
+  });
+
+  it('a HEAD behind the approved commit is not pushable either', () => {
+    const c = start();
+    toPr(c);
+    // Rewinding to the parent leaves approved..HEAD empty, but the approver never saw this state.
+    gitIn(c.wt, 'reset', '-q', '--hard', 'HEAD~1');
+    expect(() => pushBranch(store, c.id, { token: c.token })).toThrow(
+      /does not contain the approved commit/,
+    );
+    expect(gitIn(bare, 'branch', '--list', 'factory/*')).toBe('');
+  });
+
+  it('pushing is refused once the job left the pr stage', () => {
+    const c = start();
+    drive.toCi(store, c);
+    expect(() => pushBranch(store, c.id, { token: c.token })).toThrow(/pr stage only/);
+  });
+
+  it('code evidence and its stage cannot be completed without the job worktree', () => {
+    const c = start();
+    go(c, 'start');
+    add(c, 'spec.md');
+    go(c, 'complete');
+    go(c, 'start');
+    commitFile(c.wt, 'src/export.ts', '// export\n');
+    add(c, 'build.md');
+    dropWorktree(store, c.id, { token: c.token });
+    expect(getJob(store.db, c.id).worktreePath).toBeNull();
+    expect(() => go(c, 'complete')).toThrow(/needs the job worktree/);
+    expect(() => drive.add(store, c, 'build.md', fixture('build.md'), true)).toThrow(
+      /needs the job worktree/,
+    );
   });
 
   it('an interrupted PR creation is reused on retry, never duplicated', () => {

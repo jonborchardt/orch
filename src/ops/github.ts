@@ -21,7 +21,7 @@ import { jobArtifactDir } from '../core/paths.ts';
 import type { CiStatus, PrState } from '../core/workflow.ts';
 import { baseRef, describeRepo } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
-import { editedMerges } from '../git/worktree.ts';
+import { containsRef, editedMerges } from '../git/worktree.ts';
 import {
   actionsJobLog,
   actionsJobRunId,
@@ -111,7 +111,7 @@ export interface PushResult {
  */
 function requireApprovedHead(store: Store, job: Job, tree: Tree): void {
   const { path, head } = tree;
-  if (job.stage !== 'pr' && job.stage !== 'completed') {
+  if (job.stage !== 'pr') {
     throw new ValidationError(`Pushing is allowed in the pr stage only (job is in ${job.stage}).`);
   }
   const decision = findArtifact(store.db, job.id, 'decision.md');
@@ -119,6 +119,14 @@ function requireApprovedHead(store: Store, job: Job, tree: Tree): void {
     throw new ValidationError('No DECISION: APPROVE recorded against a commit; refusing to push.');
   }
   if (decision.head !== head) {
+    // HEAD must build on the approved commit: a rewind to an earlier commit has nothing in
+    // approved..HEAD, yet the approver never saw it as the final state.
+    if (!containsRef(path, decision.head, head)) {
+      throw new ValidationError(
+        `HEAD ${head.slice(0, 7)} does not contain the approved commit ${decision.head.slice(0, 7)}; ` +
+          'refusing to push. Return the job to review.',
+      );
+    }
     const base = baseRef(path, job.baseBranch);
     const unreviewed = tryGit(
       path,
