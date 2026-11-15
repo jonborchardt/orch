@@ -24,7 +24,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 import type { BoardRow } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
@@ -260,10 +260,13 @@ const finished = (r: BoardRow) => r.status === 'completed' || r.status === 'canc
 
 export function JobBoard({
   rows,
+  total,
   now,
   onChanged,
 }: {
   rows: BoardRow[];
+  /** Jobs before the Show, Repository, and Filter controls; tells "none yet" from "none match". */
+  total: number;
   now: number;
   onChanged: () => void;
 }) {
@@ -271,8 +274,16 @@ export function JobBoard({
   const [sort, setSort] = useState<Sort>(null);
   const [menu, setMenu] = useState<HTMLElement | null>(null);
   const [target, setTarget] = useState<BoardRow | null>(null);
+  // After archive/unarchive the trigger row usually leaves the view; move focus somewhere stable.
+  const [refocus, setRefocus] = useState(false);
+  const columnsButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!refocus) return;
+    columnsButton.current?.focus();
+    setRefocus(false);
+  }, [refocus]);
 
-  if (rows.length === 0) {
+  if (total === 0) {
     return (
       <Typography sx={{ p: 3 }} color="text.secondary" role="status">
         No jobs yet. Start one from a Claude Code session in any repository with
@@ -283,7 +294,11 @@ export function JobBoard({
   const toggle = (id: string) => {
     const next = hidden.includes(id) ? hidden.filter((h) => h !== id) : [...hidden, id];
     setHidden(next);
-    window.localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(next));
+    try {
+      window.localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(next));
+    } catch {
+      // Storage unavailable or full: the choice lasts for this page only.
+    }
   };
   const columns = COLUMNS.filter((c) => !c.hideable || !hidden.includes(c.id));
 
@@ -291,6 +306,7 @@ export function JobBoard({
     <>
       <Stack direction="row" sx={{ px: 1, pt: 0.5, justifyContent: 'flex-end' }}>
         <Button
+          ref={columnsButton}
           size="small"
           aria-haspopup="menu"
           aria-expanded={menu !== null}
@@ -328,78 +344,76 @@ export function JobBoard({
           ))}
         </Menu>
       </Stack>
-      <TableContainer sx={{ overflowX: 'auto' }}>
-        <Table size="small" aria-label="Factory jobs" stickyHeader>
-          <TableHead>
-            <TableRow>
-              {columns.map((c) => {
-                const active = sort?.id === c.id;
-                return (
-                  <TableCell
-                    key={c.id}
-                    align={c.align}
-                    sortDirection={active ? sort.dir : false}
-                    aria-sort={
-                      active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined
-                    }
-                  >
-                    {c.sortValue ? (
-                      <TableSortLabel
-                        active={active}
-                        direction={active ? sort.dir : 'asc'}
-                        onClick={() => {
-                          setSort({ id: c.id, dir: active && sort.dir === 'asc' ? 'desc' : 'asc' });
-                        }}
-                      >
-                        {c.label}
-                      </TableSortLabel>
-                    ) : (
-                      c.label
-                    )}
-                  </TableCell>
-                );
-              })}
-              <TableCell>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {sorted(rows, sort).map((r) => (
-              <TableRow key={r.id} hover data-job-id={r.id}>
-                {columns.map((c) => (
-                  <TableCell key={c.id} align={c.align} sx={c.sx}>
-                    {c.cell(r, now)}
-                  </TableCell>
-                ))}
-                <TableCell>
-                  {r.archivedAt !== null ? (
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => {
-                        setTarget(r);
-                      }}
+      {rows.length === 0 ? (
+        <Typography sx={{ p: 3 }} color="text.secondary" role="status">
+          No jobs match these filters.
+        </Typography>
+      ) : (
+        <TableContainer sx={{ overflowX: 'auto' }}>
+          <Table size="small" aria-label="Factory jobs" stickyHeader>
+            <TableHead>
+              <TableRow>
+                {columns.map((c) => {
+                  const active = sort?.id === c.id;
+                  return (
+                    <TableCell
+                      key={c.id}
+                      align={c.align}
+                      sortDirection={active ? sort.dir : false}
+                      aria-sort={
+                        active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined
+                      }
                     >
-                      Unarchive
-                    </Button>
-                  ) : (
-                    finished(r) && (
+                      {c.sortValue ? (
+                        <TableSortLabel
+                          active={active}
+                          direction={active ? sort.dir : 'asc'}
+                          onClick={() => {
+                            setSort({
+                              id: c.id,
+                              dir: active && sort.dir === 'asc' ? 'desc' : 'asc',
+                            });
+                          }}
+                        >
+                          {c.label}
+                        </TableSortLabel>
+                      ) : (
+                        c.label
+                      )}
+                    </TableCell>
+                  );
+                })}
+                <TableCell>Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {sorted(rows, sort).map((r) => (
+                <TableRow key={r.id} hover data-job-id={r.id}>
+                  {columns.map((c) => (
+                    <TableCell key={c.id} align={c.align} sx={c.sx}>
+                      {c.cell(r, now)}
+                    </TableCell>
+                  ))}
+                  <TableCell>
+                    {(r.archivedAt !== null || finished(r)) && (
                       <Button
                         size="small"
                         variant="outlined"
+                        aria-label={`${r.archivedAt !== null ? 'Unarchive' : 'Archive'} ${r.title} (${r.id})`}
                         onClick={() => {
                           setTarget(r);
                         }}
                       >
-                        Archive
+                        {r.archivedAt !== null ? 'Unarchive' : 'Archive'}
                       </Button>
-                    )
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
       {target && (
         <ArchiveDialog
           row={target}
@@ -408,6 +422,7 @@ export function JobBoard({
           }}
           onDone={() => {
             setTarget(null);
+            setRefocus(true);
             onChanged();
           }}
         />

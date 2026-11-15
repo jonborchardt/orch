@@ -298,7 +298,7 @@ export function ciSummary(
     guidance:
       ci.current === false
         ? `Run orch gh ci ${job.id} again for the current HEAD.`
-        : 'The session completes the job; nothing here merges or marks the PR ready.',
+        : 'The session completes the job with orch gh ci, which marks the draft PR ready; nothing here merges.',
   };
 }
 

@@ -156,6 +156,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             onChange={(e) => {
               setText(e.target.value);
             }}
+            slotProps={{ inputLabel: { shrink: true } }}
             sx={{ minWidth: 200 }}
           />
           <FormControl size="small" sx={{ minWidth: 180 }}>
@@ -212,7 +213,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             Loading…
           </Typography>
         ) : (
-          <JobBoard rows={visible} now={now} onChanged={load} />
+          <JobBoard rows={visible} total={rows.length} now={now} onChanged={load} />
         )}
       </Box>
       <Box component="footer" sx={{ p: 1, borderTop: 1, borderColor: 'divider' }}>

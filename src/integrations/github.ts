@@ -1,7 +1,7 @@
 /**
  * GitHub access through the `gh` CLI, invoked with argument arrays. Never merges or force-pushes;
- * the only PR mutations are creating a draft and marking it ready. Set ORCH_GH_SHIM to a JavaScript file to replace `gh` with
- * `node <shim> <args>` in tests.
+ * the only PR mutations are creating a draft and marking it ready. Set ORCH_GH_SHIM to a
+ * JavaScript file to replace `gh` with `node <shim> <args>` in tests.
  */
 import type { CiCheck } from '../core/ci.ts';
 import { ToolError } from '../core/errors.ts';

@@ -163,9 +163,12 @@ test('archives and unarchives from the board row', async ({ page }) => {
   const table = page.getByRole('table', { name: 'Factory jobs' });
   const rowOf = (t: string) => table.getByRole('row').filter({ hasText: t });
   // Only finished rows offer Archive: the completed and the cancelled job.
-  await expect(table.getByRole('button', { name: 'Archive' })).toHaveCount(2);
+  await expect(table.getByRole('button', { name: /^Archive / })).toHaveCount(2);
   await expect(rowOf('Fix login redirect loop').getByRole('button')).toHaveCount(0);
-  await rowOf(title).getByRole('button', { name: 'Archive' }).click();
+  // The row's button names its job: "Archive <title> (<id>)".
+  await rowOf(title)
+    .getByRole('button', { name: new RegExp(`^Archive ${title} [(]job-[0-9a-f]{8}[)]$`) })
+    .click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel(/Take the job from session/)).toHaveCount(0);
   await dialog.getByLabel(/Reason/).fill('old run');
@@ -177,10 +180,13 @@ test('archives and unarchives from the board row', async ({ page }) => {
   await page.getByRole('combobox', { name: 'Show' }).click();
   await page.getByRole('option', { name: 'archived' }).click();
   await expect(table.getByRole('row')).toHaveCount(2);
-  await rowOf(title).getByRole('button', { name: 'Unarchive' }).click();
+  await rowOf(title)
+    .getByRole('button', { name: new RegExp(`^Unarchive ${title} [(]job-[0-9a-f]{8}[)]$`) })
+    .click();
   await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
   // Nothing is archived any more: the archived view is empty.
   await expect(table).toHaveCount(0);
+  await expect(page.getByText('No jobs match these filters.')).toBeVisible();
   await page.getByRole('combobox', { name: 'Show' }).click();
   await page.getByRole('option', { name: 'all' }).click();
   await expect(table.getByRole('row')).toHaveCount(11);

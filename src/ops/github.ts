@@ -1,7 +1,8 @@
 /**
  * GitHub delivery operations for a job: push the branch, create or reuse a draft PR, observe
- * PR and CI state, and mark the PR ready once CI completes the job. Every mutation checks job ownership first and validates that the GitHub
- * repository and base branch match the job before anything is pushed or created.
+ * PR and CI state, and mark the PR ready once CI completes the job. Every mutation checks job
+ * ownership first and validates that the GitHub repository and base branch match the job before
+ * anything is pushed or created.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

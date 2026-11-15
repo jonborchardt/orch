@@ -1024,13 +1024,17 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     await screen.findByRole('table', { name: 'Factory jobs' });
     const archiveIn = (id: string) => {
       const r = must(document.querySelector<HTMLElement>(`[data-job-id="${id}"]`));
-      return within(r).queryByRole('button', { name: 'Archive' });
+      // Each row's button names its job, so a screen reader can tell them apart.
+      return within(r).queryByRole('button', { name: new RegExp(`^Archive .+ [(]${id}[)]$`) });
     };
     for (const id of ['job-00000001', 'job-00000002', 'job-00000003', 'job-0000000b']) {
       expect(archiveIn(id)).toBeNull();
     }
     expect(archiveIn('job-00000004')).not.toBeNull();
     // A completed job still holding its finishing session's live lease: takeover offered, unchecked.
+    expect(screen.getByRole('button', { name: 'Archive Done job (job-0000000a)' })).toBe(
+      archiveIn('job-0000000a'),
+    );
     fireEvent.click(must(archiveIn('job-0000000a')));
     let dialog = await screen.findByRole('dialog');
     expect(
@@ -1042,6 +1046,10 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    // The row may leave the view, so focus moves to the Columns button, not to the page body.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Columns' })).toHaveFocus();
     });
     fireEvent.click(must(archiveIn('job-0000000a')));
     dialog = await screen.findByRole('dialog');
@@ -1084,12 +1092,14 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     const f = mockFetch();
     mount();
     await screen.findByRole('table', { name: 'Factory jobs' });
-    expect(screen.queryByRole('button', { name: 'Unarchive' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Unarchive / })).not.toBeInTheDocument();
     await show('archived');
     await waitFor(() => {
       expect(ids()).toEqual(['job-00000009']);
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Unarchive' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Unarchive Omega archived (job-00000009)' }),
+    );
     const dialog = await screen.findByRole('dialog');
     data.rows = [...rows, { ...archived, archivedAt: null }];
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
@@ -1099,6 +1109,11 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     await waitFor(() => {
       expect(ids()).toEqual([]);
     });
+    // Jobs exist but none match: say so, and keep the Columns button (and focus on it).
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('No jobs match these filters.');
+    });
+    expect(screen.getByRole('button', { name: 'Columns' })).toHaveFocus();
     await show('all');
     await waitFor(() => {
       expect(ids()).toContain('job-00000009');
