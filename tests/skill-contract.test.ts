@@ -59,12 +59,18 @@ describe('agents', () => {
       expect(tools(r.agent)).toContain('Write'); // its own review artifact
       const text = readFileSync(join(agentsDir, `${r.agent}.md`), 'utf8');
       expect(text).toContain('VERDICT');
-      // Phase 1 validation (issues I-01): reviewers answered inline instead of writing the file
-      // when the harness discouraged report files; the agent must say the file is the deliverable.
+      // Validation runs saw reviewers answer inline instead of writing the file when the harness
+      // discouraged report files; every agent that writes an artifact says the file is the deliverable.
       expect(text).toContain('The review file is the deliverable');
     }
     expect(tools('factory-approver')).not.toContain('Edit');
-    expect(tools('factory-approver')).not.toContain('Write');
+    expect(tools('factory-approver')).toContain('Write'); // decision.md only
+    expect(readFileSync(join(agentsDir, 'factory-approver.md'), 'utf8')).toContain(
+      'The decision file is the deliverable',
+    );
+    expect(readFileSync(join(agentsDir, 'factory-spec-writer.md'), 'utf8')).toContain(
+      'The spec file is the deliverable',
+    );
     expect(tools('factory-builder')).toContain('Edit');
     expect(tools('factory-spec-writer')).not.toContain('Edit');
   });

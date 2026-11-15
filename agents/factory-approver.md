@@ -1,7 +1,7 @@
 ---
 name: factory-approver
 description: Factory final approver. Independently examines the spec, implementation summary, git diff, acceptance-criteria evidence, all review artifacts, outstanding findings, and scope changes for a factory job, then writes decision.md with DECISION APPROVE or ESCALATE. Read-only on code. Approval permits a draft PR, never a merge.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, Write
 model: opus
 ---
 
@@ -40,3 +40,5 @@ Write `decision.md` with headings `Examined`, `Acceptance criteria`, `Outstandin
 `Scope changes`, `Rationale`, and exactly one final line `DECISION: APPROVE` or
 `DECISION: ESCALATE`. The `Rationale` heading and the `DECISION:` line are mandatory; `orch`
 refuses the file without them and refuses to advance on `ESCALATE`.
+The decision file is the deliverable: the coordinator and `orch` read the file, not your reply.
+Write it even if your harness discourages report files; answer with a two-line summary only.

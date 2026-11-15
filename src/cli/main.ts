@@ -128,7 +128,10 @@ export async function main(argv: string[]): Promise<number> {
       },
     });
   } catch (err) {
-    return printError(new UsageError(`${(err as Error).message}\n\n${HELP}`), false);
+    return printError(
+      new UsageError(`${(err as Error).message}\n\n${HELP}`),
+      argv.includes('--json'),
+    );
   }
   const { values: o, positionals } = parsed;
   const json = o.json ?? false;

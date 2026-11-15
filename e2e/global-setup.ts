@@ -57,8 +57,6 @@ export default async function globalSetup(): Promise<void> {
   const file = join(home, 'e2e-state.json');
   writeFileSync(file, JSON.stringify(state));
   process.env[STATE_ENV] = file;
-  // Workers read baseURL from the state file; this is for anything else that reads the env.
-  process.env['ORCH_E2E_URL'] = url;
   child.unref();
 }
 

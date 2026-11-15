@@ -53,5 +53,6 @@ Needs human or deployment: ...
 
 Keep it under two pages. No implementation code in the spec. If the request is ambiguous in a way
 that changes the design, pick the simplest defensible interpretation, state it under `Goal`, and add
-the alternative under `Risks`; do not ask questions, the coordinator cannot answer them. Finish by
-confirming the absolute path you wrote.
+the alternative under `Risks`; do not ask questions, the coordinator cannot answer them.
+The spec file is the deliverable: the coordinator and `orch` read the file, not your reply. Write
+it even if your harness discourages report files; finish by confirming the absolute path you wrote.

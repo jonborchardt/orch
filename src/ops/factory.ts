@@ -123,7 +123,7 @@ export interface Plan {
   requiredArtifacts: string[];
   /** Registered artifacts, re-verified against disk. */
   artifacts: ArtifactCheck[];
-  /** Literal commands, in order. `<token>` is read from $ORCH_TOKEN. */
+  /** Literal commands, in order; the skill substitutes `<token>` in each. */
   commands: string[];
   pr: { url: string | null; state: string | null; ciStatus: string | null };
   /** CI reconciliation state: which commit the rollup describes and the repair budget. */

@@ -1,10 +1,8 @@
 # Phase 3 concurrent-job validation (B05): procedure
 
-**Status: NOT RUN.** This is the prepared procedure for the B05 acceptance campaign. It must not
-run until the Phase 1 validation campaign has finished and the Phase 2 reliability changes
-(concurrent checkout protection, Windows process-tree termination, shared test-resource isolation,
-CI-stage dashboard and recovery) are merged and installed. Nothing below uses the ORCH repository
-itself as a target.
+**Status: RUN 2026-11-14, PASS with one environmental condition** (see the run record at the end).
+This is the procedure for the B05 acceptance campaign. Nothing below uses the ORCH repository itself
+as a target.
 
 ## Prerequisites
 
@@ -87,3 +85,30 @@ Write the outcome of every numbered step (PASS / FAIL with the observed value) i
 under a dated "Run" heading, with job ids, PR URLs, and the `orch factory list --json` output at
 the end. Mark B05 PASS only when every step passed in one run. A step that was skipped stays
 NOT RUN.
+
+## Run 2026-11-14 (ORCH `main` @ b549667, `ORCH_HOME=E:/github2/orch-b05-state`)
+
+Targets: `jonborchardt/orch-validation` (private; issues #9, #10) and `jonborchardt/orch-validation-b`
+(created for the run; issue #1, later #3 and #5). Parent: one VS Code Agents-window session. Full
+ledger, evidence files and report: `orch-validation-campaign/b05/` (local, outside this repository).
+
+| Step                          | Result                                             | Observed                                                                                                                                                                                                                                                |
+| ----------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 Dispatch                    | PASS                                               | job-3ad6a0e9, job-40b5cc8d (val-a), job-d2843820 (val-b); three `create_session` calls; three attaches                                                                                                                                                  |
+| 2 Worktrees                   | PASS                                               | one host-made worktree per job on `agents/...`; primaries clean throughout                                                                                                                                                                              |
+| 3 Concurrent                  | PASS                                               | review / build / build at the same time under three owner sessions; the parent did no stage work                                                                                                                                                        |
+| 4 Leases                      | PASS                                               | one `job.claimed` per job by its own child; parent never an owner                                                                                                                                                                                       |
+| 5 No collisions               | PASS                                               | commits only on job branches; two val-a jobs touched the same files, each PR carries only its own                                                                                                                                                       |
+| 6 Artifacts                   | PASS                                               | separate spec/build/round-N/decision/pr/verification per job                                                                                                                                                                                            |
+| 7 Draft PRs                   | PASS                                               | orch-validation #11, #12; orch-validation-b #2 (later #4, #6); none ready or merged                                                                                                                                                                     |
+| 8 CI per head                 | PASS (mechanism); val-a blocked by the environment | `ci.observed` bound to the exact head everywhere; val-b completed inside `orch gh ci`; val-a: GitHub Actions refused to start jobs on the account's private repositories (billing), ORCH re-ran once, reworked once, children escalated with the reason |
+| 9 Parent view                 | PASS                                               | `orch factory list`, `list_sessions`, dashboard detail with the session link; no owner token in responses                                                                                                                                               |
+| 10 Interrupt and resume       | PASS                                               | job-13b07951 stopped mid-build by a steer message (lease live); a new session took it over with `--force`, kept the worktree, completed as PR #6; no duplicate job                                                                                      |
+| 11 One failure does not block | PASS                                               | both val-a jobs parked in needs-human while val-b jobs completed                                                                                                                                                                                        |
+| 12 Isolation                  | PASS                                               | Phase 1 and default databases unchanged; no file in any primary checkout                                                                                                                                                                                |
+
+Manual interventions: the new disposable repository was made public so Actions would run on it;
+its main-branch workflow was re-run by hand once; the interruption used a steer message (archiving
+the session would have removed the job's worktree); the resume authorised `--force` explicitly.
+Observations fed back into the skill text: the parent's token-less attach races the child's claim;
+the resuming session should attach itself.

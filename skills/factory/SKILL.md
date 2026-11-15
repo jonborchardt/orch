@@ -1,7 +1,7 @@
 ---
 name: factory
 description: Run the AI software factory on the current repository. Use for "/factory <request>" to start a job that specifies, implements, reviews, approves, and opens a draft PR for a feature or fix; "/factory <job-id>" or "/factory resume <job-id>" to continue a job from saved state; "/factory status <job-id>" to report. Coordinates subagents through the `orch` CLI; never edits workflow state directly.
-argument-hint: '<request> | <job-id> | status <job-id> | resume <job-id>'
+argument-hint: '<request> | <job-id> | status <job-id> | resume <job-id> | dispatch <targets> | cancel <job-id>'
 ---
 
 # Factory coordinator
@@ -122,7 +122,10 @@ For each target, in order, continuing with the next target when one fails:
    orch job session attach <id> --provider vscode-agents --ref <agent-host-session://... link> --session <s>
    ```
 
-   No token: the job is unowned until the child claims it. Without the tool, give the user
+   No token: the job is unowned until the child claims it, so run this attach immediately after
+   `create_session`; once the child has claimed the job (often within a minute) the token-less
+   attach is refused with exit 4, which is harmless because the child records its own session
+   (step 3). Without the tool, give the user
    `launch.fallback` verbatim (a terminal `claude --worktree ... "/factory <id>"` from the
    repository root, or `code --agents <repo>` to create the session by hand and paste the prompt)
    and say that the session was not started by you.
@@ -156,8 +159,9 @@ Act on `plan.step`:
 - After `start` or `resume` succeeds, record this session on the job when the harness can name it:
   in VS Code's Agents window call `get_current_session` and run `orch job session attach <id>
 --provider vscode-agents --ref <openLink> --cwd <toplevel> --token <t>`. Re-attaching the same
-  link is a no-op; a different one keeps the earlier ones in the events as history. This is
-  navigation metadata only; ownership stays the lease.
+  link is a no-op; a different one keeps the earlier ones in the events as history. A session that
+  resumes or takes over a job attaches itself too, so `orch factory list` names the session that is
+  actually running the job. This is navigation metadata only; ownership stays the lease.
 - `create-worktree`: run the listed command, then `next` again.
 - `needs-human`: release the job (`orch job release <id> --token <t>`) so a human or another
   session can act on it, report `plan.blockedReason`, the job id, and the exact resume command;
@@ -245,8 +249,8 @@ head and acts for you; read its `action`:
   later, never more than five minutes) in a Bash call of its own, then run `orch factory next` and
   the command again in the next call: never chain the wait and the `orch` commands in one script,
   so that a session killed while waiting leaves no scheduled write behind. Do not call it in a
-  tight loop. When `plan.ci.release` is true (`CI_MAX_SESSION_POLLS` pending observations in this
-  session), the plan's only command is `orch job release <id> --token <t>`: run it, tell the user
+  tight loop. When `plan.ci.release` is true (too many pending observations in this session), the plan's
+  only command is `orch job release <id> --token <t>`: run it, tell the user
   CI is still running and give the resume command, and stop; `orch factory resume` later re-reads
   GitHub and continues here.
 - `complete`: required checks passed for this head and the job is `completed` in the same call;
@@ -283,4 +287,6 @@ Claude process, and a printed fallback command is not a started session. Ownersh
 database lease: it stops two sessions from both recording changes to one job, but any process can
 still write into a worktree directory it is pointed at, which is why prompts always carry the
 worktree path, evidence is accepted only from a clean worktree at a recorded commit, and reviews
-are fingerprint-checked. There is no daemon; nothing happens between your commands.
+are fingerprint-checked. There is no daemon; nothing happens between your commands. Never archive or delete a dispatched
+child's VS Code session while its job is live: VS Code removes that session's worktree, which is the
+job's worktree. Stop a child with a message, or let its lease lapse.

@@ -125,7 +125,7 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
         repo: repo.identity,
         repoPath: repo.root,
         baseBranch: o.base ?? repo.currentBranch,
-        maxRounds: int(o['max-rounds'], '--max-rounds'),
+        maxRounds: int(o['max-rounds'], '--max-rounds', 1),
         actor: session,
       });
       return summary(job, store);

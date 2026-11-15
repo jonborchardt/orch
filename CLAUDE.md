@@ -11,7 +11,6 @@ npm run dev -- <args>    # run the CLI from source (Node strips types natively)
 npm run build            # tsc -> dist/ and vite -> web/dist (the linked `orch` binary runs dist/)
 npm run db:generate      # after editing src/storage/schema.ts: write a migration under drizzle/
 npm run db:check         # validate committed migrations
-npm run dev -- verify <job-id> --token <t>   # run this repository's factory.json checks for a job
 npm run test:coverage
 npm run test:e2e         # Playwright against a seeded `orch ui` (needs `npx playwright install chromium`)
 npm run web:dev          # Vite dev server for web/, proxying /api to a running `orch ui`
@@ -64,7 +63,7 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   installation via `installRoot()`, and migrations via `migrationsDir()`.
 - `src/server/` is the dashboard: `http.ts` (node:http on 127.0.0.1 only, Host/Origin/CSRF
   guards, static files from `web/dist`), `api.ts` (read models; `safeJob` strips `ownerToken`),
-  `types.ts` (shared with `web/src`). Writes go through `ops/actions.ts`, never straight to
+  `status.ts` (liveness, blockers, CI view derived from rows), `types.ts` (shared with `web/src`). Writes go through `ops/actions.ts`, never straight to
   storage. `web/` is the React + MUI client with its own `tsconfig.json`; it imports only
   `src/server/types.ts` and `src/ops/actions.ts` types from `src/`.
 - The CLI is one-shot: open the store, do one operation, print, exit. No daemons, timers, or
@@ -110,26 +109,27 @@ framework. Upgrade Drizzle deliberately, both packages together.
 - Tests must never touch the real user data directories or `~/.claude`.
 - Verification tests use real subprocesses (`node -e ...` as the configured command) and real
   `factory.json` files committed to temporary repositories; `tests/verify.test.ts`,
-  `tests/sensitive.test.ts`, and `tests/integration.test.ts` cover the three Phase 5B gates.
+  `tests/sensitive.test.ts`, and `tests/integration.test.ts` cover the verification, sensitive-path,
+  and base-integration gates.
   `tests/drive.ts` drives a job through its stages the way the CLI does (through `ops/gates.ts`
   and `ops/verify.ts`); reuse it instead of re-implementing stage helpers in a new test file.
 - The suite spawns many Git and Node processes and runs its files in parallel; on a loaded
   Windows machine a CLI-heavy file can take minutes. A single failure in `tests/factory.test.ts`
   or `tests/cli.test.ts` that passes alone is load, not a defect; rerun it in isolation first.
-- CLI tests load `src/` from the checkout they run in, so editing that checkout while its suite
-  runs produces spurious failures (decision 45). `.claude/settings.json` enforces this
-  cooperatively: an Edit/Write into a checkout another live session holds is refused by
-  `orch checkout hook` (decision #60); work in your own worktree rather than forcing the claim.
-  One session per checkout: a parallel
-  session works in its own worktree, never in the primary checkout alongside another. Read a
-  failing CLI test's stderr before blaming load: a `ReferenceError` or `SyntaxError` means a
-  mid-edit tree.
+- One session per checkout. CLI tests load `src/` from the checkout they run in, so a parallel
+  session works in its own worktree, never in the primary checkout alongside another; the
+  `orch checkout hook` in `.claude/settings.json` refuses an Edit/Write into a checkout another
+  live session holds (decisions 45, 60). Read a failing CLI test's stderr before blaming load: a
+  `ReferenceError` or `SyntaxError` means a mid-edit tree.
 - Never run `/factory` against this repository. The installed `orch` is this checkout's `dist/`, so a
   factory job editing `src/` would be gated by the code it is changing. Change `orch` from a session
-  in its own worktree and open a draft PR.
+  in its own worktree and open a draft PR. Running the full suite on this Windows machine takes 15 to
+  20 minutes idle and much longer under load; give every run an explicit timeout.
 
 ## Documentation
 
-Keep `README.md` accurate to what is implemented. Record non-obvious architectural decisions as
+Keep `README.md` accurate to what is implemented and short: it answers what, why, install, configure,
+start, dispatch, inspect, what is automated, what needs a human, limits. Internals go in `docs/`
+(`workflow.md`, `dashboard.md`, `development.md`). Record non-obvious architectural decisions as
 one file each under `docs/decisions/` (`YYYY-MM-DD-<slug>.md`, see `docs/decisions.md`) with a
 short rationale; never renumber or edit a shared list.

@@ -11,7 +11,7 @@ import {
   startJob,
 } from '../ops/factory.ts';
 import type { Store } from '../storage/client.ts';
-import { need, oneOf } from './args.ts';
+import { int, need, oneOf } from './args.ts';
 
 export interface FactoryOptions {
   title?: string;
@@ -52,7 +52,7 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
                               Exit 1 if the worktree changed since the plan was taken
   config                      Effective role -> model configuration and its file location
 
---session defaults to $ORCH_SESSION. The plan's commands expect the token in $ORCH_TOKEN.
+--session defaults to $ORCH_SESSION. The plan's commands carry --token <token> explicitly.
 `;
 
 export function runFactory(
@@ -72,13 +72,7 @@ export function runFactory(
     }
     return session;
   };
-  const maxRounds = (): number | undefined => {
-    if (o['max-rounds'] === undefined) return undefined;
-    const n = Number(o['max-rounds']);
-    if (!Number.isInteger(n) || n < 1)
-      throw new UsageError('--max-rounds must be a positive integer');
-    return n;
-  };
+  const maxRounds = () => int(o['max-rounds'], '--max-rounds', 1);
   switch (cmd) {
     case 'start':
       return startJob(store, {
