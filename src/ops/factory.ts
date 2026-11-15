@@ -197,6 +197,15 @@ export interface PlanOptions {
   ui?: boolean | undefined;
 }
 
+/** What `orch gh ci` did about the draft after completing the job (the newest `pr.ready` event). */
+function readyLine(events: Event[]): string {
+  const e = [...events].reverse().find((x) => x.type === 'pr.ready');
+  if (!e) return 'The PR was already ready (or merged) when CI completed.';
+  return e.payload['ok'] === true
+    ? 'orch marked the PR ready for review.'
+    : `orch could not mark the PR ready (${String(e.payload['error'])}); a human runs gh pr ready.`;
+}
+
 /** Build the plan for a job. Read-only. */
 export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan {
   const detail = jobDetail(store, id, 1000);
@@ -290,9 +299,9 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       done?.payload['acceptedByHuman'] === true
         ? `Delivery accepted by a human (${job.prUrl ?? 'no URL'}): required checks were ` +
           `${job.ciStatus ?? 'unobserved'} for ${job.ciHead?.slice(0, 7) ?? 'no commit'}; this is a ` +
-          'manual close-out, not a CI verdict. Humans mark it ready and merge.'
-        : `Draft PR delivered (${job.prUrl ?? 'no URL'}) with required checks ${job.ciStatus ?? 'unobserved'} ` +
-          `for ${job.ciHead?.slice(0, 7) ?? 'no commit'}. Humans mark it ready and merge.`;
+          'manual close-out, not a CI verdict; the PR was not marked ready. Humans merge.'
+        : `PR delivered (${job.prUrl ?? 'no URL'}) with required checks ${job.ciStatus ?? 'unobserved'} ` +
+          `for ${job.ciHead?.slice(0, 7) ?? 'no commit'}. ${readyLine(detail.events)} Humans merge.`;
     plan.commands = [`orch gh pr status ${id}`];
     return plan;
   }

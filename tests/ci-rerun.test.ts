@@ -75,8 +75,9 @@ describe('ci stage: one bounded re-run before a repair', () => {
     expect(job(c)).toMatchObject({ stage: 'completed', ciStatus: 'passing', ciHead: sha });
     expect(job(c).ciRepairs).toBe(0);
     expect(rerunCalls()).toHaveLength(1);
-    // Nothing merged, nothing marked ready, nothing pushed by the re-run.
-    expect(shim.read().calls.some((x) => x[1] === 'merge' || x[1] === 'ready')).toBe(false);
+    // Nothing merged and nothing pushed by the re-run; only the completion marked the PR ready.
+    expect(shim.read().calls.some((x) => x[1] === 'merge')).toBe(false);
+    expect(shim.read().calls.filter((x) => x[1] === 'ready')).toHaveLength(1);
   });
 
   it('when GitHub still lists the replaced attempt next to the new one, the new one decides', () => {

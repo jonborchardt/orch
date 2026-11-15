@@ -217,7 +217,7 @@ describe('invariants 2 and 14: the initiating checkout, and installed agent drif
   });
 });
 
-describe('invariant 15: the code never force-pushes, merges, or marks ready', () => {
+describe('invariant 15: the code never force-pushes or merges; only the gh wrapper marks ready', () => {
   it('no source file passes a destructive git or gh argument', () => {
     const src = join(installRoot(), 'src');
     const files: string[] = [];
@@ -233,7 +233,7 @@ describe('invariant 15: the code never force-pushes, merges, or marks ready', ()
       /'--force-with-lease'/,
       /'reset',\s*'--hard'/,
       /'branch',\s*'(-D|-d|--delete)'/,
-      /'pr',\s*'(merge|ready|close)'/,
+      /'pr',\s*'(merge|close)'/,
       /'clean',\s*'-f/,
       /'checkout',\s*'--'/,
       /'stash'/,
@@ -241,11 +241,18 @@ describe('invariant 15: the code never force-pushes, merges, or marks ready', ()
     for (const f of files) {
       const text = readFileSync(f, 'utf8');
       for (const re of forbidden) expect(text, `${f} matches ${re.source}`).not.toMatch(re);
+      // `gh pr ready` exists exactly once, in markPrReady, called after `orch gh ci` completes.
+      const ready = /'pr',\s*'ready'/;
+      if (f === join(src, 'integrations', 'github.ts')) {
+        expect(text.match(new RegExp(ready, 'g'))).toHaveLength(1);
+      } else {
+        expect(text, `${f} matches ${ready.source}`).not.toMatch(ready);
+      }
     }
     expect(files.length).toBeGreaterThan(20);
   });
 
-  it('ensureDraftPr makes PRs as drafts only, and nothing is ever marked ready or merged', () => {
+  it('ensureDraftPr makes PRs as drafts only, and nothing is marked ready or merged', () => {
     const c = start();
     toPr(c);
     pushBranch(store, c.id, { token: c.token });

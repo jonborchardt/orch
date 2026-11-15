@@ -72,8 +72,12 @@ that read `ciStatus: passing` for `ciHead` from GitHub, after the gate confirms 
 the worktree HEAD. Pushing, PR creation, and completing `pr` or `ci` share one gate: HEAD is the
 approved commit or adds only clean base-integration merges to it, is verified, and runs under an
 authorized policy. A PR whose head branch or base branch is not the job's is escalated by `orch gh
-ci`, never completed. The PR state can be updated later (draft → ready → merged, `orch gh pr status`) without changing the
-workflow, since the factory's deliverable is a draft PR. `closed` means GitHub reported the PR closed
+ci`, never completed. When `orch gh ci` completes the job on a passing verdict it then runs `gh pr
+ready` for an open draft (event `pr.ready` with the head, `ok`, and gh's error; `prState` becomes
+`ready` on success). That step comes strictly after the completion commits, changes no stage,
+status, or CI field, and is never retried: a failure is reported and a human runs `gh pr ready`.
+The PR state can be updated later (ready → merged, `orch gh pr status`) without changing the
+workflow. `closed` means GitHub reported the PR closed
 without merging; it is recorded from `orch gh pr status` or `orch gh ci`, never inferred from the
 job, and a job whose PR is `closed` can neither complete nor be accepted with `resume --to
 completed`.
@@ -93,7 +97,7 @@ Every accepted change appends events (`job.created`, `job.claimed`, `job.release
 `job.completed`, `job.superseded`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
 `integration.started`, `integration.completed`, `verification.started`,
 `verification.completed`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
-`ci.observed`) in the same transaction. A `ci.observed` event from `orch gh ci` carries the head,
+`ci.observed`, `pr.ready`) in the same transaction. A `ci.observed` event from `orch gh ci` carries the head,
 outcome, required-check list, every check's status and conclusion, and saved log paths.
 `orch job events <id>` lists them.
 
@@ -141,8 +145,9 @@ A CI repair goes through the normal cycle: the builder gets the saved logs in it
 pr create` reuses the open PR. Repairs are bounded by `maxCiRepairs` (default 2, from the
 orchestrator's `factory.json`; stored per job); when spent, the next failure escalates with reason
 `max CI repair cycles reached`, keeping the PR and worktree. A job completes only when GitHub's
-verdict for the current head is passing; `completed` therefore means "draft PR with passing required
-checks", never "PR created".
+verdict for the current head is passing; `completed` therefore means "PR with passing required
+checks, which orch marked ready for review" (or reported why it could not), never "PR created".
+A human close-out (`resume --to completed`, the dashboard's Accept delivery) does not mark it ready.
 
 ## Worktrees
 
@@ -216,8 +221,8 @@ identity, that the base branch exists on `origin`, and (for the PR) that `origin
 the worktree HEAD. An open (or merged) PR for the
 branch with the same base is reused instead of creating a duplicate. The PR is recorded on the job
 (`prUrl`, `prState`) together with the CI rollup (`ciStatus`: `none`, `pending`, `passing`,
-`failing`) but no head (`ciHead` is written by `orch gh ci` alone). `orch` never merges, force-pushes, or marks a PR
-ready; a recorded draft PR is not a passing CI run, which is what the `ci` stage then establishes.
+`failing`) but no head (`ciHead` is written by `orch gh ci` alone). `orch` never merges or force-pushes, and marks the
+PR ready only after `orch gh ci` completes the job; a recorded draft PR is not a passing CI run, which is what the `ci` stage then establishes.
 `orch gh ci` reads check runs and statuses with `gh api` for the head SHA (not the PR rollup), the
 base branch's protection and rulesets for the required list, and Actions job logs for failures.
 

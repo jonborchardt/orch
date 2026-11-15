@@ -28,9 +28,21 @@ derived from persisted fields only (`src/server/status.ts`): the latest `job.blo
 `decision.md` marker, the consolidation's BLOCKING count, and the newest verification run. When
 the state does not classify an escalation the line says so (`Escalated from build`) rather than
 guessing. Jobs a session may resume get a **Copy resume** control. Filter by repository and by
-active / needs human / finished / cancelled / archived; the page refreshes every few seconds while
-visible. Archived jobs (see **Archive** below) are left out of every filter except `archived`,
-which shows only them, each marked with an `archived` chip.
+active / needs human / finished / cancelled / archived, plus a free-text **Filter** box matching
+title, id, repository, stage, status, session, or branch; the page refreshes every few seconds
+while visible. Archived jobs (see **Archive** below) are left out of every filter except
+`archived`, which shows only them, each marked with an `archived` chip.
+
+The board is a plain MUI table (`web/src/JobBoard.tsx`, no data-grid package). Clicking a header
+sorts by that column, ascending then descending (`aria-sort` says which); with no sort chosen the
+server's order stands. The **Columns** menu shows or hides every column except Job, Status, and
+Actions; Repository, Session, and Branch / worktree start hidden. The choice is a per-browser view
+preference in `localStorage` (`orch.board.hiddenColumns`), not job state. The Actions column holds
+**Archive** on each finished, unarchived row and **Unarchive** on each archived row (so under
+Show: archived). Either opens a confirm dialog with an optional reason and, when another live
+session still holds the lease (a freshly completed job usually does), the same takeover checkbox
+as the detail page; the server decides as for any action, and the board reloads afterwards.
+Nothing archives automatically.
 
 **Job detail** (`#/jobs/<id>`): next step and agents from the plan, the request, and tabs for the
 spec, build summary, review history per round (one collapsed panel per reviewer whose header

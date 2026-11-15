@@ -47,7 +47,8 @@ Rules that are never relaxed:
   `consolidated.md` or `pr.md` that lacks a `## Sensitive changes` section naming each path.
 - Reviewers and the approver are read-only on code. After reviews, run `orch factory
 check-readonly`; if it fails, treat the round as failed (`orch job transition <id> fail`).
-- Escalate rather than approve around a blocking finding. Humans mark PRs ready and merge.
+- Escalate rather than approve around a blocking finding. `orch gh ci` marks a passing PR ready;
+  humans merge.
 - Never run `git push --force`, `gh pr merge`, `gh pr ready`, or delete branches or worktrees.
 - Report outcomes faithfully: a draft PR is not passing CI; a mocked check is not a real one. The
   job is delivered only when `orch gh ci` has recorded passing required checks for the current PR
@@ -272,7 +273,7 @@ head and acts for you; read its `action`:
   closed; the branch moved outside the job) and stop, as for any `needs-human`.
 
 Never run `gh run rerun`, `gh pr ready`, or `gh pr merge` yourself (`orch gh ci` requests the one
-bounded re-run), and never push outside `orch gh push`. If `orch gh ci` exits 1 because GitHub or the network failed, nothing was recorded:
+bounded re-run and marks a passing PR ready; report its `ready` field), and never push outside `orch gh push`. If `orch gh ci` exits 1 because GitHub or the network failed, nothing was recorded:
 retry once after a minute, then release the job and report.
 
 ## 4. Report

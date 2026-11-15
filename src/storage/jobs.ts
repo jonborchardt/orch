@@ -614,6 +614,25 @@ export function recordPr(
   });
 }
 
+/**
+ * Record the outcome of `gh pr ready` after `orch gh ci` completed the job: event `pr.ready`, and
+ * `prState` becomes `ready` on success. Never changes stage, status, or the CI verdict.
+ */
+export function recordPrReady(
+  store: Store,
+  id: string,
+  input: Auth & { head: string; error: string | null },
+): Job {
+  return mutate(store, id, input, (job) => {
+    if (!job.prUrl) throw new ValidationError('No PR recorded for this job.');
+    const ok = input.error === null;
+    return {
+      patch: ok ? { prState: 'ready' } : {},
+      events: [{ type: 'pr.ready', payload: { head: input.head, ok, error: input.error } }],
+    };
+  });
+}
+
 /** The session recorded by a `session.attached` event, or null when the payload is unusable. */
 export function sessionOf(e: Event | undefined): SessionRef | null {
   const p = e?.payload;

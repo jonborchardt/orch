@@ -175,9 +175,9 @@ describe('ci stage: pending, then passing', () => {
       required: ['test'],
       checks: [{ name: 'test', status: 'completed', conclusion: 'success' }],
     });
-    // Nothing merged, nothing marked ready.
-    expect(shim.read().calls.some((x) => x[1] === 'merge' || x[1] === 'ready')).toBe(false);
-    expect((shim.read().prs[0] as { isDraft: boolean }).isDraft).toBe(true);
+    // Nothing merged; the passing verdict marked the draft ready (tests/ci-ready.test.ts).
+    expect(shim.read().calls.some((x) => x[1] === 'merge')).toBe(false);
+    expect((shim.read().prs[0] as { isDraft: boolean }).isDraft).toBe(false);
   });
 
   it('is refused outside a running ci stage and needs the owner token', () => {

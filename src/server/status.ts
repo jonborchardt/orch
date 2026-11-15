@@ -218,7 +218,7 @@ export function ciSummary(
   if (ci.completion === 'ci') {
     return {
       line: `Completed: required checks passed ${at}.`,
-      guidance: 'Humans mark the PR ready and merge; the factory never does.',
+      guidance: 'orch marks the draft PR ready; humans merge, the factory never does.',
     };
   }
   if (!job.prUrl) return { line: 'No PR yet.', guidance: 'CI is observed once a draft PR exists.' };
