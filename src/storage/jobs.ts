@@ -333,14 +333,17 @@ export function registerArtifact(
     const checked = validateArtifact(jobArtifactDir(id, store.paths), relPath);
     assertStageOwns(checked.path, job.stage, job.round);
     const existing = findArtifact(tx, id, checked.path);
-    if (existing && existing.sha256 !== null && existing.sha256 !== checked.sha256) {
-      if (!opts.replace) {
-        throw new ValidationError(
-          `${checked.path} is already registered with different content; pass --replace to replace it.`,
-        );
-      }
+    const head = opts.head ?? null;
+    // The commit an artifact describes is part of what was registered: re-binding unchanged text
+    // to a new HEAD is a replacement too, and leaves the same audit trail.
+    const replaced =
+      existing !== undefined && (existing.sha256 !== checked.sha256 || existing.head !== head);
+    if (replaced && !opts.replace) {
+      const what = existing.sha256 !== checked.sha256 ? 'different content' : 'a different commit';
+      throw new ValidationError(
+        `${checked.path} is already registered for ${what}; pass --replace to replace it.`,
+      );
     }
-    const replaced = existing !== undefined && existing.sha256 !== checked.sha256;
     const artifact = upsertArtifact(tx, {
       jobId: id,
       stage: job.stage,
@@ -349,15 +352,18 @@ export function registerArtifact(
       bytes: checked.bytes,
       sha256: checked.sha256,
       marker: checked.marker,
-      head: opts.head ?? null,
+      head,
       createdAt: ts,
     });
-    const payload = { path: checked.path, stage: job.stage, sha256: checked.sha256 };
+    const payload = { path: checked.path, stage: job.stage, sha256: checked.sha256, head };
     return {
       patch: {},
       events: [
         replaced
-          ? { type: 'artifact.replaced', payload: { ...payload, previousSha256: existing.sha256 } }
+          ? {
+              type: 'artifact.replaced',
+              payload: { ...payload, previousSha256: existing.sha256, previousHead: existing.head },
+            }
           : { type: 'artifact.registered', payload },
       ],
       value: artifact,
