@@ -54,6 +54,8 @@ export const ACTIONS = [
 export type Action = (typeof ACTIONS)[number];
 
 export const TERMINAL_STATUSES: readonly Status[] = ['completed', 'cancelled'];
+/** Statuses a session resumes from (`blocked` always comes with stage needs-human). */
+export const RESUMABLE_STATUSES: readonly Status[] = ['interrupted', 'failed'];
 
 /** Reason recorded on `job.blocked` when a review round still requests changes at `maxRounds`. */
 export const MAX_ROUNDS_REASON = 'max review rounds reached';
@@ -246,7 +248,7 @@ export function transition(
           events: [{ type: 'job.resumed', payload: { to } }],
         };
       }
-      if (!['interrupted', 'failed', 'blocked'].includes(status)) reject('nothing to resume');
+      if (!RESUMABLE_STATUSES.includes(status)) reject('nothing to resume');
       return {
         patch: { status: 'pending' },
         events: [{ type: 'job.resumed', payload: { stage } }],

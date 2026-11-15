@@ -12,11 +12,8 @@ import { normalizeRemote } from '../git/repo.ts';
 export const GH_SHIM_ENV = 'ORCH_GH_SHIM';
 
 /** Run gh and return the raw result; callers decide what a non-zero exit means. */
-export function ghResult(
-  args: string[],
-  cwd?: string,
-  env: NodeJS.ProcessEnv = process.env,
-): ToolResult {
+export function ghResult(args: string[], cwd?: string): ToolResult {
+  const env = process.env;
   const shim = env[GH_SHIM_ENV];
   const exe = shim ? process.execPath : whichSync('gh', env);
   if (!exe)
@@ -24,8 +21,8 @@ export function ghResult(
   return spawnTool(exe, shim ? [shim, ...args] : args, { cwd, env });
 }
 
-export function gh(args: string[], cwd?: string, env: NodeJS.ProcessEnv = process.env): string {
-  const r = ghResult(args, cwd, env);
+export function gh(args: string[], cwd?: string): string {
+  const r = ghResult(args, cwd);
   if (r.status !== 0) {
     throw new ToolError(
       `gh ${args.slice(0, 2).join(' ')} failed: ${(r.stderr || r.stdout).trim()}`,
@@ -104,12 +101,11 @@ export interface GhPr {
   title: string;
   /** Commit at the head of the PR branch as GitHub sees it. */
   headSha: string | null;
-  mergeable?: string;
   checks: GhCheck[];
 }
 
 const PR_FIELDS =
-  'number,url,state,isDraft,baseRefName,headRefName,headRefOid,title,mergeable,statusCheckRollup';
+  'number,url,state,isDraft,baseRefName,headRefName,headRefOid,title,statusCheckRollup';
 
 interface RawPr {
   number: number;
@@ -120,7 +116,6 @@ interface RawPr {
   headRefName: string;
   headRefOid?: string | null;
   title: string;
-  mergeable?: string;
   statusCheckRollup?: RawCheck[] | null;
 }
 
@@ -149,7 +144,6 @@ function toPr(raw: RawPr): GhPr {
     title: raw.title,
     checks,
   };
-  if (raw.mergeable !== undefined) pr.mergeable = raw.mergeable;
   return pr;
 }
 

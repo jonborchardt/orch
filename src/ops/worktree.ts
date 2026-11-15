@@ -277,19 +277,18 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
   const wt = job.worktreePath;
   const open = listIntegrations(store.db, id).find((i) => i.status === 'started');
   if (open) reconcile(store, id, auth, wt, open);
-  const before = inspectWorktree(root, wt, job.baseBranch);
-  if (!before.isWorktree) throw new ValidationError(`${wt} is not a valid worktree.`);
-  requireClean(before, 'commit them before integrating.');
+  const tree = worktreeOf(job);
+  if (!tree) throw new ValidationError(`${wt} is not a valid worktree.`);
+  requireClean(tree, 'commit them before integrating.');
   const fetched = remoteExists(root);
   if (fetched) git(wt, 'fetch', 'origin', job.baseBranch);
   const ref = baseRef(root, job.baseBranch);
   if (!ref) throw new ValidationError(`Base branch ${job.baseBranch} not found.`);
-  const fromHead = git(wt, 'rev-parse', 'HEAD');
+  const fromHead = tree.head;
   const baseSha = git(wt, 'rev-parse', `${ref}^{commit}`);
   const mergeBase = tryGit(wt, 'merge-base', ref, 'HEAD') ?? null;
-  const tree = worktreeOf(job);
   const decision = findArtifact(store.db, id, 'decision.md');
-  const valid = tree ? latestValidRun(store, job, tree) : undefined;
+  const valid = latestValidRun(store, job, tree);
   let integration = startIntegration(store, id, {
     ...auth,
     fromHead,
@@ -309,7 +308,7 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
     });
     return {
       job: getJob(store.db, id),
-      worktree: inspectWorktree(root, wt, job.baseBranch),
+      worktree: tree,
       merge: { merged: false, upToDate: true, head: fromHead },
       fetched,
       integration,
@@ -335,7 +334,7 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
     });
     return {
       job: reworked,
-      worktree: inspectWorktree(root, wt, job.baseBranch),
+      worktree: tree,
       merge: { merged: false, upToDate: false, head: fromHead },
       fetched,
       integration,

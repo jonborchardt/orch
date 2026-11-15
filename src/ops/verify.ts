@@ -5,7 +5,7 @@
  * human authorized the worktree's own factory.json through the dashboard.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
@@ -37,7 +37,6 @@ import {
   type RunDetail,
   startRun,
 } from '../storage/verification.ts';
-import { jobCheckout } from './repo.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
 
 export interface EffectivePolicy {
@@ -132,16 +131,12 @@ export function verificationStatus(
   let reason: string | null = 'no verification run recorded';
   if (!configured) reason = `no verification commands configured (${POLICY_FILE})`;
   else if (latest) {
-    reason = runInvalidReason(
-      { ...latest.run, checks: latest.checks },
-      {
-        head: wt.head,
-        tree,
-        dirty: wt.dirty,
-        configFingerprint: eff.fingerprint,
-        requiredIds: eff.policy.commands.filter((c) => c.required).map((c) => c.id),
-      },
-    );
+    reason = runInvalidReason(latest.run, {
+      head: wt.head,
+      tree,
+      dirty: wt.dirty,
+      configFingerprint: eff.fingerprint,
+    });
   }
   return {
     configured,
@@ -278,18 +273,7 @@ export function verifyJob(store: Store, id: string, auth: Auth): VerifyResult {
   const owner = authorize(store, id, auth);
   const wt = worktreeOf(owner);
   if (!wt) throw new ValidationError(`Job ${id} has no worktree; run orch worktree create first.`);
-  if (wt.branch !== owner.branch) {
-    throw new ValidationError(
-      `Worktree is on ${wt.branch ?? '(detached)'} but the job branch is ${owner.branch ?? '?'}.`,
-    );
-  }
-  // The worktree is bound to the job's repository by its common directory (worktreeOf); a remote
-  // that changed since the job was created is reconciled here, not refused.
-  const checked = existsSync(owner.repoPath)
-    ? jobCheckout(store, owner, auth)
-    : { job: owner, auth };
-  const job = checked.job;
-  auth = checked.auth;
+  const job = owner;
   requireClean(wt, 'verification covers committed snapshots only. Commit first.');
   const eff = effectivePolicy(job, wt);
   const status = verificationStatus(store, job, wt, eff);

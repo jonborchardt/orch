@@ -52,21 +52,15 @@ import {
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
-import { completeCi } from './gates.ts';
-import { jobCheckout } from './repo.ts';
-import { requireClean, type Tree, worktreeOf } from './tree.ts';
-import { cap, effectivePolicy, verificationStatus } from './verify.ts';
+import { completeCi, requireDeliverable } from './gates.ts';
+import { type Tree, worktreeOf } from './tree.ts';
+import { cap } from './verify.ts';
 
-/** The job's worktree, inspected once, with the job branch checked out. */
+/** The job's worktree, inspected once (worktreeOf checks that the job branch is checked out). */
 function requireWorktree(job: Job): Tree & { branch: string } {
   const tree = job.branch ? worktreeOf(job) : null;
   if (!tree || !job.branch) {
     throw new ValidationError(`Job ${job.id} has no worktree; run orch worktree create first.`);
-  }
-  if (tree.branch !== job.branch) {
-    throw new ValidationError(
-      `Worktree is on ${tree.branch ?? '(detached)'} but the job branch is ${job.branch}; refusing to push.`,
-    );
   }
   return { ...tree, branch: job.branch };
 }
@@ -150,19 +144,7 @@ function requireApprovedHead(store: Store, job: Job, tree: Tree): void {
       );
     }
   }
-  requireClean(tree, 'refusing to deliver.');
-  const eff = effectivePolicy(job, tree);
-  if (eff.diff) {
-    throw new ValidationError(
-      'The worktree changes the verification policy without a recorded human authorization; refusing to deliver.',
-    );
-  }
-  const status = verificationStatus(store, job, tree, eff);
-  if (!status.valid) {
-    throw new ValidationError(
-      `No valid verification run for HEAD ${head.slice(0, 7)}: ${status.reason ?? 'none'}. Run orch verify ${job.id} first.`,
-    );
-  }
+  requireDeliverable(store, job, tree, 'delivering');
 }
 
 /** `git push --set-upstream origin <branch>`; never force, never the base branch. */
@@ -210,10 +192,7 @@ export function ensureDraftPr(store: Store, id: string, input: EnsurePrInput): P
   const { path, branch, head } = tree;
   if (!existsSync(input.bodyFile))
     throw new ValidationError(`Body file not found: ${input.bodyFile}`);
-  // A remote added or changed since the job was created is reconciled before GitHub is consulted.
-  const checked = existsSync(job.repoPath) ? jobCheckout(store, job, input) : { job, auth: input };
-  input = { ...input, expectRevision: checked.auth.expectRevision };
-  resolveRepo(checked.job, path);
+  resolveRepo(job, path);
   if (!remoteHead(path, job.baseBranch)) {
     throw new ValidationError(`Base branch ${job.baseBranch} does not exist on origin.`);
   }
