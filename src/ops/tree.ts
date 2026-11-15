@@ -18,6 +18,11 @@ export function worktreeOf(job: Job): Tree | null {
   if (!info.isWorktree || !info.head) {
     throw new ValidationError(`${job.worktreePath} is not a usable worktree of ${job.repo}.`);
   }
+  if (job.branch && info.branch !== job.branch) {
+    throw new ValidationError(
+      `Worktree is on ${info.branch ?? '(detached)'} but the job branch is ${job.branch}.`,
+    );
+  }
   return { ...info, head: info.head };
 }
 

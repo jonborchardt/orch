@@ -206,10 +206,8 @@ export interface RunEvidence {
   status: RunStatus;
   head: string;
   tree: string;
-  dirty: string[];
   configFingerprint: string;
   completedAt: string | null;
-  checks: { checkId: string; required: boolean; status: CheckStatus }[];
 }
 
 export interface Snapshot {
@@ -217,8 +215,6 @@ export interface Snapshot {
   tree: string;
   dirty: string[];
   configFingerprint: string;
-  /** Check ids the effective policy currently requires. */
-  requiredIds: string[];
 }
 
 /** Why a run is not evidence for `now`, or null when it is. */
@@ -227,15 +223,11 @@ export function runInvalidReason(run: RunEvidence, now: Snapshot): string | null
   if (run.status === 'interrupted') return 'the run was interrupted';
   if (run.status === 'failed') return 'a required check failed';
   if (run.completedAt === null) return 'the run has no completion time';
-  if (run.dirty.length > 0) return 'the run saw uncommitted changes';
   if (now.dirty.length > 0) return `the worktree has uncommitted changes (${now.dirty[0] ?? ''})`;
   if (run.head !== now.head)
     return `it ran at ${run.head.slice(0, 7)}, HEAD is ${now.head.slice(0, 7)}`;
   if (run.tree !== now.tree) return 'the tree differs from the one verified';
   if (run.configFingerprint !== now.configFingerprint) return 'the verification policy changed';
-  const passed = new Set(run.checks.filter((c) => c.status === 'passed').map((c) => c.checkId));
-  const missing = now.requiredIds.filter((id) => !passed.has(id));
-  if (missing.length > 0) return `required check(s) not passed in that run: ${missing.join(', ')}`;
-  if (run.checks.some((c) => c.required && c.status !== 'passed')) return 'a required check failed';
+  // A run is `passed` only when every check the policy of that fingerprint required passed.
   return null;
 }

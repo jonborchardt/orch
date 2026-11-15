@@ -27,6 +27,7 @@ import {
   now,
   type PrState,
   requiredArtifact,
+  RESUMABLE_STATUSES,
   reviewArtifact,
   type Stage,
   type Status,
@@ -290,7 +291,7 @@ function verifyOnDisk(dir: string, job: Job, artifacts: Artifact[]): void {
     } catch (err) {
       throw new ValidationError(`${a.path} no longer verifies: ${(err as Error).message}`);
     }
-    if (a.sha256 !== null && checked.sha256 !== a.sha256) {
+    if (checked.sha256 !== a.sha256) {
       throw new ValidationError(
         `${a.path} changed on disk since it was registered; register it again (--replace) first.`,
       );
@@ -305,8 +306,7 @@ export function resumeJob(
   opts: ClaimOptions & { to?: Stage | undefined },
 ): { token: string; detail: JobDetail } {
   const { job, token } = claimJob(store, id, opts);
-  const resumable =
-    job.stage === 'needs-human' || ['interrupted', 'failed', 'blocked'].includes(job.status);
+  const resumable = job.stage === 'needs-human' || RESUMABLE_STATUSES.includes(job.status);
   if (resumable) transitionJob(store, id, 'resume', { token, to: opts.to });
   return { token, detail: jobDetail(store, id) };
 }

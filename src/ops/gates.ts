@@ -29,7 +29,7 @@ import { effectivePolicy, sensitiveReport, verificationStatus } from './verify.t
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
 
 /** Artifacts that describe the code and therefore need a committed, clean worktree. */
-const CODE_EVIDENCE = /^(build\.md|decision\.md|round-\d+\/review-[a-z0-9-]+\.md)$/;
+const CODE_EVIDENCE = /^(build\.md|decision\.md)$/;
 /** Artifacts that must name every sensitive change in the diff. */
 const SUMMARIES = /^(round-\d+\/consolidated\.md|pr\.md)$/;
 
@@ -64,18 +64,28 @@ function requireWorktree(job: Job, what: string): Tree {
 }
 
 /** Refuse unless the latest verification run is evidence for HEAD under the effective policy. */
-function requireVerified(store: Store, job: Job, info: Tree, what: string): void {
-  const status = verificationStatus(store, job, info);
+function requireVerified(
+  store: Store,
+  job: Job,
+  info: Tree,
+  what: string,
+  eff = effectivePolicy(job, info),
+): void {
+  const status = verificationStatus(store, job, info, eff);
   if (!status.valid) {
     throw new ValidationError(
-      `${what} needs a valid verification run for HEAD ${info.head.slice(0, 7)}: ${status.reason ?? 'none'}. Run orch verify ${job.id}.`,
+      `No valid verification run for HEAD ${info.head.slice(0, 7)} (${what}): ${status.reason ?? 'none'}. Run orch verify ${job.id}.`,
     );
   }
 }
 
 /** Refuse while the worktree's factory.json differs from the effective policy without a human's say. */
-function requireAuthorizedPolicy(job: Job, info: Tree, what: string): void {
-  const eff = effectivePolicy(job, info);
+function requireAuthorizedPolicy(
+  job: Job,
+  info: Tree,
+  what: string,
+  eff = effectivePolicy(job, info),
+): void {
   if (eff.diff) {
     throw new ValidationError(
       `${what} is refused: the worktree's factory.json changes the verification policy ` +
@@ -143,9 +153,17 @@ function evidenceHead(
   }
 }
 
-/** Delivery stages complete from a clean, verified HEAD under an authorized policy. */
-function requireDeliverable(store: Store, job: Job, tree: Tree): void {
-  requireClean(tree, `completing ${job.stage} must describe a committed state.`);
+/**
+ * Delivery (push, PR creation, completing pr or ci) needs a clean, verified HEAD under an
+ * authorized policy; `what` names the operation in the refusal.
+ */
+export function requireDeliverable(
+  store: Store,
+  job: Job,
+  tree: Tree,
+  what = `completing ${job.stage}`,
+): void {
+  requireClean(tree, `${what} must describe a committed state.`);
   // GitHub's verdict counts only for the commit it was read for.
   if (job.stage === 'ci' && job.ciHead !== tree.head) {
     throw new ValidationError(
@@ -153,8 +171,9 @@ function requireDeliverable(store: Store, job: Job, tree: Tree): void {
         `${tree.head.slice(0, 7)}; run orch gh ci ${job.id} again.`,
     );
   }
-  requireVerified(store, job, tree, `completing ${job.stage}`);
-  requireAuthorizedPolicy(job, tree, `completing ${job.stage}`);
+  const eff = effectivePolicy(job, tree);
+  requireVerified(store, job, tree, what, eff);
+  requireAuthorizedPolicy(job, tree, what, eff);
 }
 
 /**

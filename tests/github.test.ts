@@ -281,7 +281,7 @@ describe('push and draft PR delivery', () => {
     expect(() => pushBranch(store, id, { token: 'bad' })).toThrow(/Stale or invalid token/);
     gitIn(wt, 'checkout', '-q', '-b', 'detour');
     expect(() => pushBranch(store, id, { token })).toThrow(ValidationError);
-    expect(() => pushBranch(store, id, { token })).toThrow(/refusing to push/);
+    expect(() => pushBranch(store, id, { token })).toThrow(/job branch is/);
   });
 
   it('is available on the CLI: orch gh repo / issue / pr status with --json', () => {

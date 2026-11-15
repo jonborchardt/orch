@@ -155,14 +155,13 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   }
   const text = input.reason?.trim();
   const reason = `dashboard: ${text !== undefined && text !== '' ? text : input.action}`;
-  let job: Job;
   withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
     const current = getJob(store.db, id);
     if (input.action === 'cancel') {
-      job = transitionJob(store, id, 'cancel', { token, reason });
+      transitionJob(store, id, 'cancel', { token, reason });
     } else if (input.action === 'accept-delivery') {
       // The pure transition re-checks the rule; this is the only path that completes a job by hand.
-      job = transitionJob(store, id, 'resume', { token, to: 'completed', reason });
+      transitionJob(store, id, 'resume', { token, to: 'completed', reason });
     } else if (input.action === 'accept-policy') {
       // A human adopts the worktree's factory.json at HEAD as this job's verification policy.
       const tree = worktreeOf(current);
@@ -171,16 +170,16 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
       if (policy.commands.length === 0) {
         throw new ValidationError('factory.json at HEAD defines no verification commands.');
       }
-      job = authorizePolicy(store, id, { token }, policy, tree.head, policyFingerprint(policy));
+      authorizePolicy(store, id, { token }, policy, tree.head, policyFingerprint(policy));
     } else {
       const to = target(input.action, current, input.to);
       if (current.stage !== 'needs-human') {
         transitionJob(store, id, 'escalate', { token, reason });
       }
-      job = transitionJob(store, id, 'resume', { token, to, reason });
+      transitionJob(store, id, 'resume', { token, to, reason });
     }
   });
-  job = getJob(store.db, id);
+  const job = getJob(store.db, id);
   const safe = withoutToken(job);
   const resume = `orch factory resume ${id} --session <name>`;
   if (input.action === 'cancel') {

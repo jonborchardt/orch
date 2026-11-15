@@ -24,6 +24,7 @@ import {
   describeNext,
   now,
   requiredArtifact,
+  RESUMABLE_STATUSES,
   reviewArtifact,
   type Stage,
 } from '../core/workflow.ts';
@@ -31,14 +32,7 @@ import { describeRepo, dirtyFiles } from '../git/repo.ts';
 import type { WorktreeInfo } from '../git/worktree.ts';
 import { validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import {
-  claimJob,
-  createJob,
-  getJob,
-  jobDetail,
-  resumeJob,
-  transitionJob,
-} from '../storage/jobs.ts';
+import { claimJob, createJob, getJob, jobDetail, resumeJob } from '../storage/jobs.ts';
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
 import { listIntegrations } from '../storage/verification.ts';
 import { issue as ghIssue } from './github.ts';
@@ -311,11 +305,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     plan.commands = [`orch job show ${id}`];
     return plan;
   }
-  if (
-    job.ownerSession === null ||
-    expired ||
-    ['interrupted', 'failed', 'blocked'].includes(job.status)
-  ) {
+  if (job.ownerSession === null || expired || RESUMABLE_STATUSES.includes(job.status)) {
     plan.step = 'resume';
     plan.reason =
       job.ownerSession === null
@@ -373,27 +363,27 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const r = role('build');
       if (r) plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'build.md' }];
       const rework = job.round > 0;
-      const reworked = [...detail.events].reverse().find((e) => e.type === 'job.reworked');
-      const ciReason = reworked?.payload['reason'];
-      const ciRepair =
-        reworked?.payload['from'] === 'ci'
-          ? ` CI repair ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}: ${typeof ciReason === 'string' ? ciReason : 'required checks failed'}. ` +
+      // A rework (CI failure, base-integration conflict or merge edits) is addressed by the next
+      // build visit only; once that build completed, later visits are ordinary review rounds.
+      const newest = [...detail.events].reverse();
+      const reworked = newest.find((e) => e.type === 'job.reworked');
+      const builtSince = newest.find(
+        (e) => e.type === 'stage.completed' && e.payload['stage'] === 'build',
+      );
+      const pending = reworked && (!builtSince || reworked.id > builtSince.id) ? reworked : null;
+      const why = typeof pending?.payload['reason'] === 'string' ? pending.payload['reason'] : null;
+      const reworkNote = !pending
+        ? ''
+        : pending.payload['from'] === 'ci'
+          ? ` CI repair ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}: ${why ?? 'required checks failed'}. ` +
             'The builder reads the saved logs, fixes the defect without weakening checks or the policy, commits, and runs orch verify.'
-          : '';
-      const conflict =
-        integration &&
-        (integration.status === 'conflict' || (integration.material?.length ?? 0) > 0)
-          ? ` Base integration of ${integration.baseRef} needs the builder: ` +
-            (integration.status === 'conflict'
-              ? `conflicts in ${integration.conflicts?.join(', ') ?? 'unknown files'}; merge ${integration.baseRef}, resolve, commit the merge.`
-              : `merge ${integration.resultHead?.slice(0, 7) ?? '?'} edited ${integration.material?.join(', ') ?? ''}; review those edits as new code.`)
-          : '';
+          : ` Base integration needs the builder: ${why ?? 'the merge did not apply cleanly'}. ` +
+            `Merge ${job.baseBranch}, resolve, commit the merge; the result is reviewed as new code.`;
       plan.reason =
         (rework
           ? `Rework round ${String(job.round + 1)}: address round-${String(job.round)}/consolidated.md, then rebuild build.md.`
           : 'Implement spec.md in the worktree, commit, run orch verify, and write build.md citing the run id.') +
-        ciRepair +
-        conflict;
+        reworkNote;
       plan.commands = [...start, verify, add('build.md', rework), complete];
       break;
     }
@@ -622,14 +612,4 @@ export function checkReadonly(
     );
   }
   return { ok: true, fingerprint: actual };
-}
-
-/** Mark a stage failed with a reason (malformed subagent output, tests red). */
-export function failStage(
-  store: Store,
-  id: string,
-  token: string | undefined,
-  reason: string,
-): Job {
-  return transitionJob(store, id, 'fail', { token, reason });
 }
