@@ -179,7 +179,7 @@ export function requireDeliverable(
 /**
  * Complete the ci stage. Only `orch gh ci` calls this, in the same run that read GitHub for the
  * PR head, so a stored verdict is never reused after the PR moved, was closed, or its checks were
- * rerun (decision 52).
+ * rerun (decision 53).
  */
 export function completeCi(store: Store, id: string, auth: TransitionOptions): Job {
   const job = authorize(store, id, auth);
