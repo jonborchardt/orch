@@ -200,6 +200,32 @@ describe('jobs: artifacts', () => {
     const types = listEvents(store.db, id).map((e) => e.type);
     expect(types.filter((t) => t === 'artifact.replaced')).toHaveLength(1);
     expect(jobDetail(store, id).artifacts).toHaveLength(1);
+    // The commit the artifact describes is registered too: unchanged text for another HEAD is a
+    // replacement as well, never a silent re-binding.
+    const c = registerArtifact(store, id, 'spec.md', {
+      token,
+      replace: true,
+      head: 'a'.repeat(40),
+    });
+    expect(c.head).toBe('a'.repeat(40));
+    expect(() => registerArtifact(store, id, 'spec.md', { token, head: 'b'.repeat(40) })).toThrow(
+      /a different commit; pass --replace/,
+    );
+    expect(registerArtifact(store, id, 'spec.md', { token, head: 'a'.repeat(40) }).head).toBe(
+      'a'.repeat(40),
+    );
+    const d = registerArtifact(store, id, 'spec.md', {
+      token,
+      replace: true,
+      head: 'b'.repeat(40),
+    });
+    expect(d.head).toBe('b'.repeat(40));
+    const replaced = listEvents(store.db, id).filter((e) => e.type === 'artifact.replaced');
+    expect(replaced).toHaveLength(3);
+    expect(replaced.at(-1)?.payload).toMatchObject({
+      head: 'b'.repeat(40),
+      previousHead: 'a'.repeat(40),
+    });
   });
 
   it('rejects absolute paths and traversal from nested directories', () => {

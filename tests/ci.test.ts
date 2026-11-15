@@ -162,6 +162,10 @@ describe('evaluateChecks (pure)', () => {
     // count it): the factory escalates and the human closes out explicitly if that is right.
     expect(evaluateChecks([skipped], ['test'], 1).outcome).toBe('pending');
     expect(evaluateChecks([skipped], ['test'], CI_GRACE_POLLS).outcome).toBe('none');
+    // An optional check that ran does not make a skipped required check count as verified.
+    expect(
+      evaluateChecks([skipped, { ...ok, name: 'lint' }], ['test'], CI_GRACE_POLLS).outcome,
+    ).toBe('none');
     expect(evaluateChecks([ok, { ...skipped, name: 'lint' }], ['test', 'lint'], 1).outcome).toBe(
       'passing',
     );
