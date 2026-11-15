@@ -75,7 +75,7 @@ starts, does one thing, and exits.
 | Browser tests | Playwright (Chromium) against a real `orch ui`                     |
 
 Runtime dependencies: `drizzle-orm` only; the dashboard's React/MUI are build-time inputs whose
-output (`web/dist`) ships prebuilt. See `docs/decisions.md` for why the rc is pinned.
+output (`web/dist`) ships prebuilt. See decision 10 under `docs/decisions/` for why the rc is pinned.
 
 ## Layout
 
@@ -99,7 +99,7 @@ tests/           Vitest suites, mirror src/; helpers.ts (fixtures), drive.ts (st
                  fixtures/dashboard.ts (seeded dashboard state)
 e2e/             Playwright browser checks for the dashboard (playwright.config.ts)
 scripts/         seed-dashboard.ts (demo data into a scratch ORCH_HOME)
-docs/decisions.md
+docs/decisions/      one file per architectural decision (docs/decisions.md explains the layout)
 .github/workflows/ci.yml
 ```
 
@@ -524,7 +524,7 @@ CI runs every check on Ubuntu (typecheck, lint, format, migrations, the Vitest s
 the build, the Playwright dashboard checks, and a database initialized from `dist/` outside the
 repository) and fails if `src/storage/schema.ts` has changes without a committed migration. The
 whole Vitest suite runs on Windows too, split across four runners grouped by measured duration,
-plus the built CLI smoke checks (`docs/decisions.md` #50).
+plus the built CLI smoke checks (decision 50).
 
 ## Runtime paths
 
@@ -664,7 +664,7 @@ in effect), per reviewer run (from the pending record to the verdict), verificat
 check durations, CI repairs, re-runs, and observations, and the model the configuration assigns to
 each role. It does not report tokens or money: Claude Code does not expose a subagent's token usage
 or cost to the coordinating session or to `orch` through a supported interface, so the report says
-`tokens.measured: false` with the reason rather than estimating (see `docs/decisions.md` #61).
+`tokens.measured: false` with the reason rather than estimating (see decision 61).
 
 ## Worktrees
 
@@ -843,7 +843,7 @@ Several VS Code sessions may run at once, so each job has at most one owner.
 ### Checkout ownership (cooperative)
 
 A job lease protects the job record; it does not stop two Claude Code sessions from editing the
-same checkout, which is how the intermittent failures in `docs/decisions.md` #45 happened. `orch
+same checkout, which is how the intermittent failures in decision 45 happened. `orch
 checkout` adds a lease per **checkout**, identified by its Git directory (`.git` for the primary
 checkout, `.git/worktrees/<name>` for each linked worktree, compared canonically so case, 8.3
 aliases, and junctions are one checkout and two repositories that merely share a directory name are
@@ -1032,8 +1032,8 @@ branch being meaningful (an empty or weak `factory.json` merged by humans is tru
 subagents staying inside the worktree; checks not being influenced by ignored files
 (`node_modules`, build caches) that `git status` cannot see; child processes of a timed-out check
 being cleaned up on Windows (the direct child is killed; grandchildren may linger); one
-implementation session per checkout (a parallel session takes its own Git worktree, `docs/decisions.md`
-#45); and the factory never being run against `orch` itself, since the installed CLI is the checkout
+implementation session per checkout (a parallel session takes its own Git worktree, decision
+45); and the factory never being run against `orch` itself, since the installed CLI is the checkout
 under change.
 
 ## Limits
@@ -1060,4 +1060,4 @@ GitHub workflow per commit (after it, a failure is a repair or an escalation), c
 checks and statuses. Ordinary CI never calls a model: the skill
 and agents are exercised by their contracts (frontmatter, templates, commands), and a live run
 requires a Claude Code session. The `events` table is an audit log, not an event-sourcing store.
-See `docs/decisions.md` for the reasoning behind what exists.
+See `docs/decisions/` for the reasoning behind what exists.

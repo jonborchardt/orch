@@ -117,7 +117,7 @@ framework. Upgrade Drizzle deliberately, both packages together.
   Windows machine a CLI-heavy file can take minutes. A single failure in `tests/factory.test.ts`
   or `tests/cli.test.ts` that passes alone is load, not a defect; rerun it in isolation first.
 - CLI tests load `src/` from the checkout they run in, so editing that checkout while its suite
-  runs produces spurious failures (`docs/decisions.md` #45). `.claude/settings.json` enforces this
+  runs produces spurious failures (decision 45). `.claude/settings.json` enforces this
   cooperatively: an Edit/Write into a checkout another live session holds is refused by
   `orch checkout hook` (decision #60); work in your own worktree rather than forcing the claim.
   One session per checkout: a parallel
@@ -130,5 +130,6 @@ framework. Upgrade Drizzle deliberately, both packages together.
 
 ## Documentation
 
-Keep `README.md` accurate to what is implemented. Record non-obvious architectural decisions in
-`docs/decisions.md` with a short rationale.
+Keep `README.md` accurate to what is implemented. Record non-obvious architectural decisions as
+one file each under `docs/decisions/` (`YYYY-MM-DD-<slug>.md`, see `docs/decisions.md`) with a
+short rationale; never renumber or edit a shared list.
