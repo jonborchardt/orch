@@ -52,6 +52,17 @@ function requireSensitiveSection(store: Store, job: Job, info: Tree, rel: string
   }
 }
 
+/** Evidence about code needs the job's worktree; without one there is nothing it can describe. */
+function requireWorktree(job: Job, what: string): Tree {
+  const info = worktreeOf(job);
+  if (!info) {
+    throw new ValidationError(
+      `${what} needs the job worktree; run orch worktree create ${job.id} first.`,
+    );
+  }
+  return info;
+}
+
 /** Refuse unless the latest verification run is evidence for HEAD under the effective policy. */
 function requireVerified(store: Store, job: Job, info: Tree, what: string): void {
   const status = verificationStatus(store, job, info);
@@ -86,8 +97,8 @@ export function addArtifact(
   const rel = relPath.split('\\').join('/');
   let info: Tree | null;
   if (CODE_EVIDENCE.test(rel)) {
-    info = worktreeOf(job);
-    if (info) requireClean(info, `${rel} must describe a committed state.`);
+    info = requireWorktree(job, rel);
+    requireClean(info, `${rel} must describe a committed state.`);
   } else if (SUMMARIES.test(rel)) {
     info = worktreeOf(job);
     if (info?.baseRef) requireSensitiveSection(store, job, info, rel);
@@ -153,8 +164,7 @@ function requireDeliverable(store: Store, job: Job, tree: Tree): void {
  */
 export function completeCi(store: Store, id: string, auth: TransitionOptions): Job {
   const job = authorize(store, id, auth);
-  const tree = job.worktreePath ? worktreeOf(job) : null;
-  if (tree) requireDeliverable(store, job, tree);
+  requireDeliverable(store, job, requireWorktree(job, 'completing ci'));
   return transitionJob(store, id, 'complete', auth);
 }
 
@@ -174,8 +184,8 @@ export function transitionGuarded(
       );
     }
     const evidence = evidenceHead(job, listArtifacts(store.db, id), listReviews(store.db, id));
-    const info = evidence && job.worktreePath ? worktreeOf(job) : null;
-    if (info && evidence) {
+    if (evidence) {
+      const info = requireWorktree(job, `completing ${job.stage}`);
       requireClean(info, `completing ${job.stage} must describe a committed state.`);
       if (!evidence.head) {
         throw new ValidationError(
@@ -193,9 +203,8 @@ export function transitionGuarded(
       }
       if (job.stage === 'approve') requireAuthorizedPolicy(job, info, 'completing approve');
     }
-    if (job.stage === 'pr' && job.worktreePath) {
-      const tree = worktreeOf(job);
-      if (tree) requireDeliverable(store, job, tree);
+    if (job.stage === 'pr') {
+      requireDeliverable(store, job, requireWorktree(job, 'completing pr'));
     }
   }
   return transitionJob(store, id, action, opts);
