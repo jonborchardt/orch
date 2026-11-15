@@ -394,7 +394,20 @@ describe('the shipped hook command (.claude/settings.json)', () => {
   );
   const command = commands[0] ?? '';
   const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
-  const sh = spawnSync('bash', ['-c', 'exit 0']);
+  // Claude Code runs hooks on Windows with Git Bash (CLAUDE_CODE_GIT_BASH_PATH, else the one
+  // installed with git), never whatever `bash` PATH finds first: that can be the WSL launcher,
+  // which sees neither Windows paths nor this environment.
+  const bash = (() => {
+    if (process.platform !== 'win32') return 'bash';
+    const configured = process.env['CLAUDE_CODE_GIT_BASH_PATH'];
+    if (configured) return configured;
+    const git = spawnSync('git', ['--exec-path'], { encoding: 'utf8' });
+    const exec = git.error ? '' : git.stdout.trim();
+    const found = exec ? join(exec, '..', '..', '..', 'bin', 'bash.exe') : '';
+    return found && existsSync(found) ? found : undefined;
+  })();
+  const noBash = !bash || spawnSync(bash, ['-c', 'exit 0']).status !== 0;
+  const skipReason = 'no Git Bash found: Claude Code could not run the hook either';
   const run = (projectDir: string, bin: string | undefined, payload: unknown) => {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -402,7 +415,7 @@ describe('the shipped hook command (.claude/settings.json)', () => {
       CLAUDE_PROJECT_DIR: projectDir,
     };
     if (bin) env[pathKey] = `${bin}${delimiter}${process.env[pathKey] ?? ''}`;
-    const r = spawnSync('bash', ['-c', command], {
+    const r = spawnSync(bash ?? 'bash', ['-c', command], {
       cwd: projectDir,
       encoding: 'utf8',
       env,
@@ -418,10 +431,10 @@ describe('the shipped hook command (.claude/settings.json)', () => {
     return bin;
   };
 
-  it('is one command for all three events and runs the checkout source when present', () => {
+  it('is one command for all three events and runs the checkout source when present', (ctx) => {
     expect(new Set(commands).size).toBe(1);
     expect(command).toContain('src/cli/checkout.ts');
-    if (sh.error) return; // no bash on this machine: Claude Code could not run the hook either
+    if (noBash) return ctx.skip(skipReason);
     const r = run(installRoot(), undefined, pre('A', join(repo, 'a.ts')));
     expect(r.code, r.err).toBe(0);
     expect(checkoutStatus(paths(), repo).owner?.session).toBe('A');
@@ -430,8 +443,8 @@ describe('the shipped hook command (.claude/settings.json)', () => {
     expect(refused.err).toContain('held by session A');
   });
 
-  it('on a branch without the command it warns and continues instead of blocking or staying silent', () => {
-    if (sh.error) return;
+  it('on a branch without the command it warns and continues instead of blocking or staying silent', (ctx) => {
+    if (noBash) return ctx.skip(skipReason);
     const old = tempDir('orch-co-oldbranch-');
     dirs.push(old);
     expect(existsSync(join(old, 'src', 'cli', 'checkout.ts'))).toBe(false);
@@ -448,8 +461,8 @@ describe('the shipped hook command (.claude/settings.json)', () => {
     expect(none.err).toContain('INACTIVE');
   });
 
-  it('falls back to an installed orch that has the checkout command', () => {
-    if (sh.error) return;
+  it('falls back to an installed orch that has the checkout command', (ctx) => {
+    if (noBash) return ctx.skip(skipReason);
     const old = tempDir('orch-co-oldbranch-');
     dirs.push(old);
     const newOrch = fakeOrch(
