@@ -154,7 +154,7 @@ A job whose session stopped keeps its state. `/factory <id>` in any session resu
 over the lapsed lease (a live one needs `--force`, which rotates the token so the old session's
 commands fail), recreates the worktree if it is gone, re-verifies every registered artifact, and
 continues from the plan. A job in `needs-human` waits: the dashboard offers the decisions the
-workflow allows (approve back to a stage, request review or rework, accept a proposed policy,
+workflow allows (resume at a stage, request review or rework, accept a proposed policy,
 accept a delivery that GitHub reported no checks for, cancel), each recorded with a reason, and
 never pretends to wake a session. Details: [docs/dashboard.md](docs/dashboard.md).
 

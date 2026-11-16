@@ -376,8 +376,8 @@ describe('App board', () => {
 });
 
 describe('Job detail', () => {
-  it('renders long findings, the plan error, and a working approve action', async () => {
-    mockFetch();
+  it('renders long findings, the plan error, and a working Resume at <stage> action', async () => {
+    const f = mockFetch();
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
@@ -390,11 +390,16 @@ describe('Job detail', () => {
       'vscode://file//wt/g',
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    const dialog = await screen.findByRole('dialog');
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Resume at approve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resume at approve' });
     expect(
       within(dialog).getByText(/does not start or wake any Claude session/),
     ).toBeInTheDocument();
+    // The title follows the stage select: it names the stage Confirm sends.
+    fireEvent.mouseDown(within(dialog).getByRole('combobox', { name: 'Resume at stage' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'review' }));
+    expect(dialog).toHaveAccessibleName('Resume at review');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('No session is running it');
@@ -404,6 +409,27 @@ describe('Job detail', () => {
         'orch factory resume job-00000003 --session <name>',
       ),
     ).toBeInTheDocument();
+    const calls = f.mock.calls as [RequestInfo | URL, RequestInit | undefined][];
+    const posted = calls.find(([, init]) => init?.method === 'POST');
+    expect(JSON.parse(posted?.[1]?.body as string)).toEqual({ action: 'approve', to: 'review' });
+  });
+
+  it('labels Resume by the current return stage, even when it changes under a mounted view', async () => {
+    const f = mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('button', { name: 'Resume at approve' });
+    // The next poll reports a different return stage; the view is not remounted.
+    data.detail = detail({ job: { ...detail().job, returnStage: 'ci' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume at CI' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resume at CI' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('No session is running it');
+    });
+    const calls = f.mock.calls as [RequestInfo | URL, RequestInit | undefined][];
+    const posted = calls.find(([, init]) => init?.method === 'POST');
+    expect(JSON.parse(posted?.[1]?.body as string)).toEqual({ action: 'approve', to: 'ci' });
   });
 
   it('surfaces an invalid command as an error inside the dialog', async () => {
@@ -428,14 +454,14 @@ describe('Job detail', () => {
     });
   });
 
-  it('makes Approve primary only at a genuine approval gate, with the resume affordance', async () => {
+  it('makes Resume primary only at a genuine approval gate, with the resume affordance', async () => {
     mockFetch();
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     expect(screen.getByText('Decision needed.')).toBeInTheDocument();
     expect(screen.getByText(/Recorded reason: AC2 needs deployment verification/)).toBeVisible();
-    const approve = screen.getByRole('button', { name: 'Approve' }).className;
+    const approve = screen.getByRole('button', { name: 'Resume at approve' }).className;
     expect(approve).toContain('MuiButton-contained');
     expect(approve).toContain('MuiButton-colorSuccess');
     expect(screen.queryByTestId('approve-caution')).not.toBeInTheDocument();
@@ -450,19 +476,22 @@ describe('Job detail', () => {
     expect(screen.getByText(/stage: needs-human/)).toBeInTheDocument();
   });
 
-  it('demotes Approve and admits an unknown reason when the escalation is not a decision', async () => {
+  it('demotes Resume and admits an unknown reason when the escalation is not a decision', async () => {
     mockFetch();
     data.detail = detail({
+      job: { ...detail().job, returnStage: null },
       blocker: { kind: 'escalated', summary: 'Escalated from build', detail: null },
     });
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     expect(screen.getByText(/No reason was recorded/)).toBeInTheDocument();
-    const approve = screen.getByRole('button', { name: 'Approve' });
+    // No recorded return stage: Resume defaults to build.
+    const approve = screen.getByRole('button', { name: 'Resume at build' });
     expect(approve.className).toContain('MuiButton-outlined');
     expect(approve.className).not.toContain('MuiButton-colorSuccess');
     expect(screen.getByTestId('approve-caution')).toHaveTextContent('not waiting for an approval');
+    expect(screen.getByTestId('approve-caution')).not.toHaveTextContent('Approve');
     // Unknown blocker: no control is promoted.
     expect(screen.getByRole('button', { name: 'Request rework' }).className).toContain(
       'MuiButton-outlined',
@@ -484,7 +513,7 @@ describe('Job detail', () => {
     expect(screen.getByRole('button', { name: 'Request rework' }).className).toContain(
       'MuiButton-contained',
     );
-    expect(screen.getByRole('button', { name: 'Approve' }).className).toContain(
+    expect(screen.getByRole('button', { name: 'Resume at approve' }).className).toContain(
       'MuiButton-outlined',
     );
   });
@@ -532,7 +561,7 @@ describe('Job detail', () => {
     expect(unavailable).toHaveTextContent('never forces ownership');
     expect(screen.queryByRole('button', { name: /Copy resume command/ })).not.toBeInTheDocument();
     // The decision gate itself is unaffected by who holds the lease.
-    expect(screen.getByRole('button', { name: 'Approve' }).className).toContain(
+    expect(screen.getByRole('button', { name: 'Resume at approve' }).className).toContain(
       'MuiButton-contained',
     );
   });
@@ -554,7 +583,7 @@ describe('Job detail', () => {
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
-    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Resume at / })).not.toBeInTheDocument();
     // An interruption is not a rework decision: every remaining control stays neutral.
     expect(screen.getByRole('button', { name: 'Request rework' }).className).toContain(
       'MuiButton-outlined',
@@ -619,6 +648,7 @@ describe('Job detail', () => {
     expect(screen.getByText('CI stopped.')).toBeInTheDocument();
     expect(screen.getByTestId('ci-guidance')).toHaveTextContent('accept the delivery by hand');
     expect(screen.getByTestId('close-out-caution')).toHaveTextContent('CI is none for b2c3d4e');
+    expect(screen.getByRole('button', { name: 'Resume at CI' })).toBeInTheDocument();
     // Neutral, never primary: a close-out is a human override, not the workflow's own next step.
     const accept = screen.getByRole('button', { name: 'Accept delivery' });
     expect(accept.className).toContain('MuiButton-outlined');
