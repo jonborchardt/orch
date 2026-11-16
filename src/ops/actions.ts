@@ -2,8 +2,9 @@
  * Human actions on a job from the dashboard (or any non-session tool). Each one is a short
  * ownership episode as session `dashboard`: claim, apply validated workflow transitions, release.
  * Nothing here wakes a Claude session; the result always says the job must be resumed.
+ * `cancelJob` is shared with `orch factory cancel`, where the caller is a session of its own.
  */
-import { ValidationError } from '../core/errors.ts';
+import { OwnershipError, ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import {
   cannotAcceptDelivery,
@@ -121,15 +122,23 @@ function target(action: DashboardAction, job: Job, to: Stage | undefined): Stage
   // approve
   const stage = to ?? job.returnStage ?? undefined;
   if (!stage || stage === 'needs-human' || stage === 'completed') {
-    throw new ValidationError('Approve needs a stage to return to (to: <stage>).');
+    throw new ValidationError('Resume needs a stage to return to (to: <stage>).');
   }
   return stage;
 }
 
 /**
+ * Who is asking for a short episode. `dashboard` is the human UI (and `orch job supersede`): a
+ * live lease is a validation refusal, and a job waiting in needs-human is exempt because its
+ * session is idle. `session` is a CLI caller that is itself a session: any live lease held by
+ * another session is an ownership refusal (exit 4) unless the caller forces the takeover.
+ */
+export type LeaseMode = 'dashboard' | 'session';
+
+/**
  * A short ownership episode: claim the job as `session` for one minute, run `fn` with the token,
- * release. A live lease held by another session is respected unless the job is waiting in
- * needs-human (its session is idle, not working) or the caller forces the takeover.
+ * release. A live lease held by another session is respected unless the caller forces the
+ * takeover or, in `dashboard` mode, the job is waiting in needs-human.
  */
 function withLease<T>(
   store: Store,
@@ -137,15 +146,22 @@ function withLease<T>(
   session: string,
   force: boolean | undefined,
   fn: (token: string) => T,
+  mode: LeaseMode = 'dashboard',
 ): T {
-  const waiting = before.stage === 'needs-human';
+  const waiting = mode === 'dashboard' && before.stage === 'needs-human';
   const liveOwner =
     before.ownerSession !== null && before.ownerSession !== session && !leaseExpired(before, now());
   if (liveOwner && !waiting && !force) {
-    throw new ValidationError(
+    const held =
       `Session ${String(before.ownerSession)} holds a live lease on this job` +
-        (before.status === 'running' ? ' and reports it running' : '') +
-        '. Use that session, wait for the lease to lapse, or confirm a forced takeover.',
+      (before.status === 'running' ? ' and reports it running' : '');
+    if (mode === 'session') {
+      throw new OwnershipError(
+        `${held}. Use that session, wait for the lease to lapse, or pass --force to take it over.`,
+      );
+    }
+    throw new ValidationError(
+      `${held}. Use that session, wait for the lease to lapse, or confirm a forced takeover.`,
     );
   }
   const { token } = claimJob(store, before.id, {
@@ -160,6 +176,40 @@ function withLease<T>(
     // accepted delivery already released it in the write that finished it.
     if (getJob(store.db, before.id).ownerToken === token) releaseJob(store, before.id, { token });
   }
+}
+
+export interface CancelInput {
+  session: string;
+  /** Recorded verbatim on the `job.cancelled` event. */
+  reason: string;
+  /** Take the job from a session whose lease is still live. */
+  force?: boolean | undefined;
+  /** Defaults to `session` (a CLI caller); the dashboard passes `dashboard`. */
+  mode?: LeaseMode | undefined;
+}
+
+/**
+ * Cancel a job in one short episode as `session`: refuse a finished job before claiming, claim,
+ * cancel (which releases the job in the same write). `orch factory cancel` and the dashboard's
+ * Cancel both come here.
+ */
+export function cancelJob(store: Store, id: string, input: CancelInput): ActionResult {
+  const before = getJob(store.db, id);
+  if (TERMINAL_STATUSES.includes(before.status)) {
+    throw new ValidationError(`Job is already ${before.status}.`);
+  }
+  if (input.reason.trim() === '') {
+    throw new ValidationError('Cancelling needs a reason; it is recorded with the job.');
+  }
+  withLease(
+    store,
+    before,
+    input.session,
+    input.force,
+    (token) => transitionJob(store, id, 'cancel', { token, reason: input.reason }),
+    input.mode ?? 'session',
+  );
+  return { job: withoutToken(getJob(store.db, id)), message: `Job cancelled (${input.reason}).` };
 }
 
 export interface SupersedeInput {
@@ -280,11 +330,17 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   }
   const text = input.reason?.trim();
   const reason = `dashboard: ${text !== undefined && text !== '' ? text : input.action}`;
+  if (input.action === 'cancel') {
+    return cancelJob(store, id, {
+      session: DASHBOARD_SESSION,
+      reason,
+      force: input.force,
+      mode: 'dashboard',
+    });
+  }
   withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
     const current = getJob(store.db, id);
-    if (input.action === 'cancel') {
-      transitionJob(store, id, 'cancel', { token, reason });
-    } else if (input.action === 'accept-delivery') {
+    if (input.action === 'accept-delivery') {
       // The pure transition re-checks the rule; this is the only path that completes a job by hand.
       transitionJob(store, id, 'resume', { token, to: 'completed', reason });
     } else if (input.action === 'accept-policy') {
@@ -307,9 +363,6 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   const job = getJob(store.db, id);
   const safe = withoutToken(job);
   const resume = `orch factory resume ${id} --session <name>`;
-  if (input.action === 'cancel') {
-    return { job: safe, message: `Job cancelled (${reason}).` };
-  }
   if (input.action === 'accept-delivery') {
     return {
       job: safe,

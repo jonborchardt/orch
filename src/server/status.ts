@@ -255,26 +255,26 @@ export function ciSummary(
   if (ci.outcome === 'closed') {
     return {
       line: `PR closed without merging; CI was ${ci.status} ${at}.`,
-      guidance: 'Reopen the PR and Approve back to ci, or cancel the job.',
+      guidance: 'Reopen the PR and Resume at CI, or cancel the job.',
     };
   }
   if (ci.outcome === 'outdated') {
     return {
       line: `PR head moved outside the job; last verdict ${ci.status} ${at}.`,
-      guidance: 'Approve back to pr to re-push the approved HEAD, or back to ci to re-read checks.',
+      guidance: 'Resume at PR to re-push the approved HEAD, or at CI to re-read checks.',
     };
   }
   if (ci.status === 'none') {
     return {
       line: `GitHub reports no checks ${at}.`,
       guidance:
-        'Add CI and Approve back to ci, or accept the delivery by hand (recorded as a human close-out).',
+        'Add CI and Resume at CI, or accept the delivery by hand (recorded as a human close-out).',
     };
   }
   if (ci.outcome === 'infrastructure') {
     return {
       line: `Required checks did not reach a verdict ${at}.${stale}`,
-      guidance: 'Not a code defect: re-run the workflow or fix CI, then Approve back to ci.',
+      guidance: 'Not a code defect: re-run the workflow or fix CI, then Resume at CI.',
     };
   }
   if (ci.status === 'failing') {
@@ -284,7 +284,7 @@ export function ciSummary(
         line: `CI still failing ${at}; ${budget}.`,
         guidance:
           'The repair budget is spent. Request rework for one more attempt, fix it by hand on the ' +
-          'branch and Approve back to ci, or cancel. Completion is not available while checks fail.',
+          'branch and Resume at CI, or cancel. Completion is not available while checks fail.',
       };
     }
     if (job.stage !== 'ci') {

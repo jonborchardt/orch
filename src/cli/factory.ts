@@ -1,6 +1,7 @@
 /** `orch factory ...` handlers: the skill-facing commands. */
 import { UsageError } from '../core/errors.ts';
 import { type Stage, STAGES } from '../core/workflow.ts';
+import { cancelJob } from '../ops/actions.ts';
 import { dispatchJob, listFactory } from '../ops/dispatch.ts';
 import {
   checkReadonly,
@@ -23,6 +24,7 @@ export interface FactoryOptions {
   session?: string;
   to?: string;
   force?: boolean;
+  reason?: string;
   ui?: boolean;
   'no-ui'?: boolean;
   fingerprint?: string;
@@ -41,13 +43,17 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
                               Refused unless the repository's factory.json is ready. Nothing is
                               claimed, no worktree is made, no session is started.
   list [--repo <path|identity>]
-                              Every job with its state, owner, attention needed, session, PR
+                              One row per job: stage, status, action (human/resume/wait/none),
+                              PR, age, title; --json adds owner, session, resume command
   next <id> [--ui|--no-ui]    What to do now (read-only): step, agents (with models), artifacts,
                               exact commands. status <id> is an alias of next with the same options
   resume <id> --session <name> [--to <stage>] [--force] [--ui|--no-ui] [--adopt <worktree>]
                               Adopt an interrupted or orphaned job from persisted state; --adopt
                               records an existing worktree of the repository (the one this session
                               runs in) when the job has none yet
+  cancel <id> --reason <r> --session <name> [--force]
+                              Cancel the job in one short episode as this session; exit 4 when
+                              another session holds a live lease, unless --force takes it over
   check-readonly <id> --fingerprint <f>
                               Exit 1 if the worktree changed since the plan was taken
   config                      Effective role -> model configuration and its file location
@@ -111,6 +117,13 @@ export function runFactory(
         ui,
         adopt: o.adopt,
       });
+    case 'cancel': {
+      const jobId = needId();
+      if (o.reason === undefined || o.reason.trim() === '') {
+        throw new UsageError('cancel needs --reason "<why>"; it is recorded with the job');
+      }
+      return cancelJob(store, jobId, { session: needSession(), reason: o.reason, force: o.force });
+    }
     case 'check-readonly':
       return checkReadonly(store, needId(), need(o.fingerprint, '--fingerprint <f>'));
     case 'config':

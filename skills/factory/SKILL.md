@@ -75,8 +75,7 @@ Pick a session name once and reuse it for the whole job: `claude-<YYYYMMDD-HHMM>
 | anything else (a request)       | step 2                                                        |
 
 Job ids look like `job-1a2b3c4d`. Arguments can also be `status`, `resume`, or `cancel <job-id>`
-(cancel: `orch job claim <id> --session <s> --json` for the token, then `orch job transition <id>
-cancel --reason "<why>" --token <t>`).
+(cancel: `orch factory cancel <id> --reason "<why>" --session <s> --json`).
 
 ## 2. Start a job (from the invoking repository)
 

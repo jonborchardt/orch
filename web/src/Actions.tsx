@@ -19,7 +19,7 @@ import type { ActionResponse, JobDetailView } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
 
 const LABEL: Record<DashboardAction, string> = {
-  approve: 'Approve (return to stage)',
+  approve: 'Resume at stage',
   'request-review': 'Request another review round',
   'request-rework': 'Request rework',
   'accept-policy': 'Accept the verification policy from the worktree',
@@ -33,6 +33,10 @@ const LABEL: Record<DashboardAction, string> = {
 
 const STAGES = ['spec', 'build', 'review', 'approve', 'pr', 'ci'] as const;
 
+/** `approve` resumes the job at a stage; label it by that stage (`ci` and `pr` in capitals). */
+const resumeAt = (stage: string) =>
+  `Resume at ${stage === 'ci' || stage === 'pr' ? stage.toUpperCase() : stage}`;
+
 /**
  * Human controls. Every action goes through the API, which applies the same validated workflow
  * transitions as the CLI. None of them can wake a session: the response says to resume.
@@ -41,7 +45,10 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   const [open, setOpen] = useState<DashboardAction | null>(null);
   const [reason, setReason] = useState('');
   const [force, setForce] = useState(false);
-  const [to, setTo] = useState<string>(detail.job.returnStage ?? 'build');
+  // The detail view is not remounted per job or per poll, so the default stage is re-read here and
+  // on every open: the button and Confirm never carry a stage over from another job.
+  const resumeStage = detail.job.returnStage ?? 'build';
+  const [to, setTo] = useState<string>(resumeStage);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ActionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +57,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   // The server lists what the workflow allows here; the client only decides prominence.
   const allowed = new Set(detail.actions);
   const kind = detail.blocker?.kind;
-  // Approve is the primary action only at a genuine approval gate (the approver escalated).
+  // Resume is the primary action only at a genuine approval gate (the approver escalated).
   const approvalGate = kind === 'decision';
   // Rework is primary only where the workflow itself would go back to build: reviewers still
   // requested changes at the last allowed round. Interruptions, verification failures, and
@@ -68,6 +75,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   const start = (a: DashboardAction) => {
     setReason('');
     setForce(false);
+    setTo(resumeStage);
     setError(null);
     setOpen(a);
   };
@@ -140,7 +148,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
               start('approve');
             }}
           >
-            Approve
+            {resumeAt(resumeStage)}
           </Button>
         )}
         {allowed.has('request-rework') && (
@@ -231,8 +239,8 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
       {allowed.has('approve') && !approvalGate && (
         <Alert severity="warning" variant="outlined" data-testid="approve-caution">
           This job is not waiting for an approval; it stopped because of a problem (
-          {detail.blocker?.summary ?? 'see the status above'}). Approve only moves it back to a
-          stage without fixing anything; use it only once you have decided the job may continue.
+          {detail.blocker?.summary ?? 'see the status above'}). Resume only moves it back to a stage
+          without fixing anything; use it only once you have decided the job may continue.
         </Alert>
       )}
       {allowed.has('accept-policy') && (
@@ -280,9 +288,11 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             ? 'Merge this PR?'
             : plain
               ? `${verb} this job?`
-              : open
-                ? LABEL[open]
-                : ''}
+              : open === 'approve'
+                ? resumeAt(to)
+                : open
+                  ? LABEL[open]
+                  : ''}
         </DialogTitle>
         {plain ? (
           (open === 'merge' || error) && (
@@ -305,7 +315,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
               {open === 'approve' && (
                 <TextField
                   select
-                  label="Return to stage"
+                  label="Resume at stage"
                   value={to}
                   onChange={(e) => {
                     setTo(e.target.value);
