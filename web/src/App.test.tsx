@@ -618,7 +618,7 @@ describe('Job detail', () => {
       outcome: 'none',
       checkedAt: base.job.updatedAt,
       guidance:
-        'Add CI and Approve back to ci, or accept the delivery by hand (recorded as a human close-out).',
+        'Add CI and Resume at CI, or accept the delivery by hand (recorded as a human close-out).',
     });
     data.detail = detail({
       job: {
