@@ -42,6 +42,8 @@ export function runVerify(
   }
   if (second !== undefined)
     throw new UsageError(`Unexpected argument: ${second}\n\n${VERIFY_HELP}`);
-  const result = verifyJob(store, first, authFrom(o, env));
+  const result = verifyJob(store, first, authFrom(o, env), {
+    onWait: (message) => process.stderr.write(message + '\n'),
+  });
   return { result, exitCode: result.status === 'passed' ? 0 : 1 };
 }

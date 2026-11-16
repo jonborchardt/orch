@@ -14,10 +14,9 @@ import {
   VERDICTS,
 } from '../core/workflow.ts';
 import { SESSION_PROVIDERS, type SessionProvider, validateSessionRef } from '../core/session.ts';
-import { describeRepo } from '../git/repo.ts';
 import { supersede } from '../ops/actions.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
-import { findJobs } from '../ops/repo.ts';
+import { findJobs, jobRepository } from '../ops/repo.ts';
 import { jobUsage } from '../ops/usage.ts';
 import { repointRepo } from '../ops/worktree.ts';
 import type { Store } from '../storage/client.ts';
@@ -110,14 +109,14 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
   switch (cmd) {
     case 'create': {
       const title = need(o.title, '--title');
-      const repo = describeRepo(o.repo ?? process.cwd());
+      const { repo, base } = jobRepository(o.repo ?? process.cwd(), o.base);
       const job = createJob(store, {
         title,
         description: o.description,
         issueRef: o.issue,
         repo: repo.identity,
         repoPath: repo.root,
-        baseBranch: o.base ?? repo.currentBranch,
+        baseBranch: base,
         maxRounds: int(o['max-rounds'], '--max-rounds', 1),
         actor: session,
       });

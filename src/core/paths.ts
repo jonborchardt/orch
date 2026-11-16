@@ -101,6 +101,11 @@ export function databasePath(paths: RuntimePaths = runtimePaths()): string {
   return join(paths.data, 'orch.sqlite');
 }
 
+/** Lock held by the one `orch verify` running checks for this runtime home. */
+export function verifyLockPath(paths: RuntimePaths = runtimePaths()): string {
+  return join(paths.data, 'verify.lock');
+}
+
 /** Per-job artifact directory (spec.md, build.md, round-N/...). Distinct from any worktree. */
 export function jobArtifactDir(jobId: string, paths: RuntimePaths = runtimePaths()): string {
   return join(paths.data, 'jobs', jobId, 'artifacts');

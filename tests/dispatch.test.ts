@@ -11,9 +11,10 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { OwnershipError, ValidationError } from '../src/core/errors.ts';
+import { canonicalPath } from '../src/core/paths.ts';
 import { SESSION_EVENT, sessionLinks, validateSessionRef } from '../src/core/session.ts';
 import { dispatchJob, listFactory, normalizeIssue } from '../src/ops/dispatch.ts';
-import { planJob, resumeFactoryJob } from '../src/ops/factory.ts';
+import { planJob, resumeFactoryJob, startJob } from '../src/ops/factory.ts';
 import { transitionGuarded } from '../src/ops/gates.ts';
 import { detail } from '../src/server/api.ts';
 import { listEvents } from '../src/storage/events.ts';
@@ -278,6 +279,35 @@ describe('independent sessions adopt their worktrees and progress separately', (
     expect(history.map((e) => e.payload['ref'])).toEqual([LINK, LINK2]);
     expect(history[1]?.payload['previous']).toEqual({ provider: 'vscode-agents', ref: LINK });
     expect(listEvents(store.db, job.id).some((e) => e.type === 'job.interrupted')).toBe(true);
+  });
+});
+
+describe('a job created from a linked worktree belongs to the primary checkout', () => {
+  it('dispatch records the primary checkout and its branch; the session adopts its worktree', () => {
+    const linked = hostWorktree(beta, 'x');
+    const r = dispatch(linked);
+    expect(canonicalPath(r.job.repoPath)).toBe(canonicalPath(beta));
+    expect(r.job.baseBranch).toBe('main');
+    expect(canonicalPath(r.launch.workspace)).toBe(canonicalPath(beta));
+    const resumed = resumeFactoryJob(store, r.job.id, { session: 'child-x', adopt: linked });
+    expect(resumed.adopted).toBe('adopted');
+    expect(resumed.job.worktreePath).toBe(linked);
+  });
+
+  it('start does the same; an explicit base still wins', () => {
+    const linked = hostWorktree(beta, 'y');
+    const s = startJob(store, { title: 'From a worktree', session: 'child-y', cwd: linked });
+    expect(canonicalPath(s.job.repoPath)).toBe(canonicalPath(beta));
+    expect(s.job.baseBranch).toBe('main');
+    const t = startJob(store, {
+      title: 'Explicit base',
+      session: 'child-z',
+      cwd: alpha,
+      repo: linked,
+      base: 'agents/y',
+    });
+    expect(canonicalPath(t.job.repoPath)).toBe(canonicalPath(beta));
+    expect(t.job.baseBranch).toBe('agents/y');
   });
 });
 

@@ -68,9 +68,10 @@ describe('agents', () => {
     expect(readFileSync(join(agentsDir, 'factory-approver.md'), 'utf8')).toContain(
       'The decision file is the deliverable',
     );
-    expect(readFileSync(join(agentsDir, 'factory-spec-writer.md'), 'utf8')).toContain(
-      'The spec file is the deliverable',
-    );
+    const specWriter = readFileSync(join(agentsDir, 'factory-spec-writer.md'), 'utf8');
+    expect(specWriter).toContain('The spec file is the deliverable');
+    // job-0bda70aa turned "document next as an alias of status" into the reverse.
+    expect(specWriter).toContain('never invert');
     expect(tools('factory-builder')).toContain('Edit');
     expect(tools('factory-spec-writer')).not.toContain('Edit');
   });

@@ -81,6 +81,23 @@ export function checkoutIdentity(path: string): CheckoutIdentity | undefined {
   return { key, root, commonDir, kind: key === commonDir ? 'primary' : 'worktree' };
 }
 
+/**
+ * Root of the primary checkout of the repository containing `cwd` (itself, or the checkout a
+ * linked worktree belongs to): the first entry of `git worktree list`, which also holds when the
+ * common directory is not `<primary>/.git`. A bare repository has no primary checkout.
+ */
+export function primaryCheckout(cwd: string): string {
+  const first = git(cwd, 'worktree', 'list', '--porcelain').split(/\r?\n\r?\n/)[0] ?? '';
+  const lines = first.split(/\r?\n/);
+  const path = lines[0]?.startsWith('worktree ') ? lines[0].slice('worktree '.length) : undefined;
+  if (path === undefined || lines.includes('bare')) {
+    throw new ValidationError(
+      `${cwd} belongs to a bare repository, which has no primary checkout; pass --repo <a checkout>.`,
+    );
+  }
+  return resolve(path);
+}
+
 /** Paths with uncommitted changes (staged, unstaged, untracked). Empty when clean. */
 export function dirtyFiles(cwd: string): string[] {
   // Raw stdout, not `git()`: that trims, so a first line like " M path" would lose its leading

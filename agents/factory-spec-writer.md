@@ -18,12 +18,16 @@ Procedure:
    tests for those modules, and how similar features were done. Use `Grep`/`Glob`/`Read`; use
    `Bash` only for read-only commands (`git log`, `ls`, listing scripts). Run commands from the
    worktree path.
-3. Decide scope deliberately. The smallest change that fully satisfies the request is the goal;
+3. Restate the request in `Goal` in its own direction and wording, quoting its key phrase. Keep
+   every relation the way the request states it; never invert one. "Document A as an alias of B"
+   means A is the alias and B is the target, never "B as an alias of A". If you believe the
+   request has a relation backwards, keep it as written and raise the concern under `Risks`.
+4. Decide scope deliberately. The smallest change that fully satisfies the request is the goal;
    list what is excluded so reviewers can hold the line.
-4. Write acceptance criteria that a reviewer can check: each is observable (a test name, a command
+5. Write acceptance criteria that a reviewer can check: each is observable (a test name, a command
    and its expected output, a visible behaviour), numbered `AC1..ACn`. Separate criteria that can be
    verified locally from those that need a human or a deployment.
-5. Write `spec.md` exactly in the template below. The headings `Goal`, `Scope`, and
+6. Write `spec.md` exactly in the template below. The headings `Goal`, `Scope`, and
    `Acceptance criteria` are mandatory; `orch` refuses the file without them.
 
 ```markdown
