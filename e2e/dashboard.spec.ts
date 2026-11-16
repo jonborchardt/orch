@@ -227,7 +227,7 @@ test('a stopped job explains itself and offers recovery, not approval', async ({
   await expect(page.getByRole('heading', { name: 'Retry flaky uploads' })).toBeVisible();
   await expect(page.getByText('Stage failed.')).toBeVisible();
   await expect(page.getByText(/Recorded reason: required check "test" failed twice/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Resume at / })).toHaveCount(0);
   const resume = page.getByTestId('resume');
   await expect(resume).toContainText(`/factory resume ${ids.failed}`);
   await expect(resume).toContainText('Copying does not resume anything');
@@ -235,10 +235,12 @@ test('a stopped job explains itself and offers recovery, not approval', async ({
     'href',
     /^vscode:\/\/file\//,
   );
-  // The approver's escalation is a real decision gate: Approve is the primary control there.
+  // The approver's escalation is a real decision gate: Resume is the primary control there.
   await page.goto(`/#/jobs/${ids.blocked}`);
   await expect(page.getByText('Decision needed.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Approve' })).toHaveClass(/MuiButton-contained/);
+  await expect(page.getByRole('button', { name: 'Resume at approve' })).toHaveClass(
+    /MuiButton-contained/,
+  );
   // Its session holds a live lease, so no resume command is advertised; the holder is named.
   await expect(page.getByTestId('resume')).toHaveCount(0);
   await expect(page.getByTestId('resume-unavailable')).toContainText('claude-20261113-0800-1d2e');
@@ -258,9 +260,9 @@ test('controls cannot bypass workflow rules, and never claim to wake a session',
   await expect(page.getByRole('dialog').getByText(/live lease/)).toBeVisible();
   await page.getByRole('button', { name: 'Close' }).click();
 
-  // The human-blocked job can be approved back to its stage; the result says to resume.
+  // The human-blocked job can be resumed at its stage; the result says to resume a session.
   await page.goto(`/#/jobs/${ids.blocked}`);
-  await page.getByRole('button', { name: 'Approve' }).click();
+  await page.getByRole('button', { name: 'Resume at approve' }).click();
   await page.getByLabel(/Reason/).fill('Deployment check done by hand');
   await page.getByRole('button', { name: 'Confirm' }).click();
   const status = page.getByRole('status');

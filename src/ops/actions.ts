@@ -121,7 +121,7 @@ function target(action: DashboardAction, job: Job, to: Stage | undefined): Stage
   // approve
   const stage = to ?? job.returnStage ?? undefined;
   if (!stage || stage === 'needs-human' || stage === 'completed') {
-    throw new ValidationError('Approve needs a stage to return to (to: <stage>).');
+    throw new ValidationError('Resume needs a stage to return to (to: <stage>).');
   }
   return stage;
 }
