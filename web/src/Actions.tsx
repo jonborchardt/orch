@@ -71,7 +71,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   };
 
   // Archive and unarchive are a plain confirm: only finished jobs qualify, so the dashboard always
-  // takes over a finishing session's lingering lease instead of asking.
+  // takes over the lease of any session that claimed it again instead of asking.
   const plain = open === 'archive' || open === 'unarchive';
   const verb = open === 'archive' ? 'Archive' : 'Unarchive';
 

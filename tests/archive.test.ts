@@ -79,7 +79,7 @@ describe('setArchived (storage)', () => {
 describe('archive through dashboardAction (ops)', () => {
   it('archives a finished job as a short dashboard episode and returns no resume command', () => {
     const before = getJob(store.db, ids.completed);
-    // The session that finished it still holds a live lease: respected unless forced.
+    // A session that claimed it again (to observe CI) holds a live lease: respected unless forced.
     expect(() => dashboardAction(store, ids.completed, { action: 'archive' })).toThrow(
       /live lease/,
     );

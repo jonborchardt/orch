@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { CI_GRACE_POLLS } from '../src/core/ci.ts';
 import { planJob, resumeFactoryJob } from '../src/ops/factory.ts';
 import { listEvents } from '../src/storage/events.ts';
-import { type Ctx, head, start, toCi } from './drive.ts';
+import { type Ctx, head, SESSION, start, toCi } from './drive.ts';
 import { store, clone, shim, run, checks, reconcile, job, ghCalls } from './ci-fixture.ts';
 
 const readyEvents = (c: Ctx) =>
@@ -31,8 +31,13 @@ describe('ci stage: orch marks a passing PR ready', () => {
       ciHead: sha,
       prState: 'ready',
       archivedAt: null,
+      // The lease was held through the ready write, which released it.
+      ownerSession: null,
+      ownerToken: null,
+      leaseExpiresAt: null,
     });
     expect(readyEvents(c).map((e) => e.payload)).toEqual([{ head: sha, ok: true, error: null }]);
+    expect(readyEvents(c)[0]?.actor).toBe(SESSION);
     expect(planJob(store, c.id).reason).toContain('orch marked the PR ready for review');
     expect(planJob(store, c.id).reason).toContain('Humans merge');
     // Nothing merged.
@@ -55,6 +60,7 @@ describe('ci stage: orch marks a passing PR ready', () => {
       ciHead: sha,
       prState: 'draft',
       archivedAt: null,
+      ownerToken: null,
     });
     expect(readyEvents(c).map((e) => e.payload)).toEqual([
       { head: sha, ok: false, error: 'shim: simulated failure' },
@@ -74,6 +80,8 @@ describe('ci stage: orch marks a passing PR ready', () => {
     expect(ghCalls('ready')).toHaveLength(0);
     expect(readyEvents(c)).toHaveLength(0);
     expect(job(c).prState).toBe('ready');
+    // No ready write follows, so the completing write itself released the job.
+    expect(job(c).ownerToken).toBeNull();
   });
 
   it('wait, rework, escalate, and a human close-out never call gh pr ready', () => {
@@ -92,7 +100,7 @@ describe('ci stage: orch marks a passing PR ready', () => {
     for (let i = 1; i < CI_GRACE_POLLS; i++) reconcile(d);
     expect(reconcile(d)).toMatchObject({ action: 'escalate', ready: null });
     resumeFactoryJob(store, d.id, { session: 'human-decided', to: 'completed', force: true });
-    expect(job(d)).toMatchObject({ stage: 'completed', prState: 'draft' });
+    expect(job(d)).toMatchObject({ stage: 'completed', prState: 'draft', ownerToken: null });
 
     expect(ghCalls('ready')).toHaveLength(0);
     expect(readyEvents(c)).toHaveLength(0);

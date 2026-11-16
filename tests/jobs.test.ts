@@ -348,11 +348,21 @@ describe('jobs: full workflow through storage', () => {
     const done = go(id, token, 'complete');
     expect([done.stage, done.status]).toEqual(['completed', 'completed']);
     expect(done.completedAt).toBeTruthy();
-    // PR state can still be updated after completion (ready, merged); nothing else can.
-    expect(recordPr(store, id, { token, url: pr.prUrl ?? '', state: 'ready' }).prState).toBe(
+    // Completing releases the job in the same write; the finishing token no longer works.
+    expect([done.ownerSession, done.ownerToken, done.leaseExpiresAt]).toEqual([null, null, null]);
+    expect(listEvents(store.db, id, 1000).at(-1)).toMatchObject({
+      type: 'job.completed',
+      actor: 's1',
+    });
+    expect(() => recordPr(store, id, { token, url: pr.prUrl ?? '', state: 'ready' })).toThrow(
+      OwnershipError,
+    );
+    // PR state can still be updated after completion (ready, merged) by a new claim; nothing else.
+    const { token: later } = claimJob(store, id, { session: 's1' });
+    expect(recordPr(store, id, { token: later, url: pr.prUrl ?? '', state: 'ready' }).prState).toBe(
       'ready',
     );
-    expect(() => go(id, token, 'start')).toThrow(/finished/);
+    expect(() => go(id, later, 'start')).toThrow(/finished/);
 
     const detail = jobDetail(store, id, 1000);
     expect(detail.reviews).toHaveLength(6);
@@ -412,8 +422,20 @@ describe('jobs: full workflow through storage', () => {
     expect(resumed.stage).toBe('spec');
     const cancelled = transitionJob(store, id, 'cancel', { token, reason: 'nvm' });
     expect(cancelled.status).toBe('cancelled');
-    expect(() => go(id, token, 'cancel')).toThrow(/already cancelled/);
-    expect(() => go(id, token, 'start')).toThrow(/finished/);
+    // Cancelling releases the job in the same write, attributed to the cancelling session.
+    expect([cancelled.ownerSession, cancelled.ownerToken, cancelled.leaseExpiresAt]).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    expect(listEvents(store.db, id, 100).at(-1)).toMatchObject({
+      type: 'job.cancelled',
+      actor: 's1',
+    });
+    expect(() => go(id, token, 'cancel')).toThrow(OwnershipError);
+    const { token: later } = claimJob(store, id, { session: 's1' });
+    expect(() => go(id, later, 'cancel')).toThrow(/already cancelled/);
+    expect(() => go(id, later, 'start')).toThrow(/finished/);
   });
 
   it('rejects malformed reviews and PRs outside the pr stage', () => {

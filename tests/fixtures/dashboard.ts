@@ -260,7 +260,9 @@ export function seedDashboard(
     run(id, token, 'start');
     recordCi(store, id, { token, ciStatus: 'passing', head: 'f1e2d3c4b5a69788' });
     run(id, token, 'complete');
-    recordCi(store, id, { token, ciStatus: 'failing', head: 'f1e2d3c4b5a69788' });
+    // Completion released the job; the session comes back to observe CI and still holds it.
+    const later = claimJob(store, id, { session: 'claude-20261112-1500-9f1e' }).token;
+    recordCi(store, id, { token: later, ciStatus: 'failing', head: 'f1e2d3c4b5a69788' });
   }
 
   // 2. In review round 2 with a live session.
