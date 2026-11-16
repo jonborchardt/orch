@@ -39,9 +39,10 @@ server's order stands. The **Columns** menu shows or hides every column except J
 Actions; Repository, Session, and Branch / worktree start hidden. The choice is a per-browser view
 preference in `localStorage` (`orch.board.hiddenColumns`), not job state. The Actions column holds
 **Archive** on each finished, unarchived row and **Unarchive** on each archived row (so under
-Show: archived). Either opens a confirm dialog with an optional reason and, when another live
-session still holds the lease (a freshly completed job usually does), the same takeover checkbox
-as the detail page; the server decides as for any action, and the board reloads afterwards.
+Show: archived). Either opens a plain Cancel / Archive (or Unarchive) confirm. Only finished jobs
+qualify and a freshly completed one usually still holds its finishing session's lease, so the
+board always sends `force` to take it over; the server decides as for any action, and the board
+reloads afterwards.
 Nothing archives automatically.
 
 **Job detail** (`#/jobs/<id>`): next step and agents from the plan, the request, and tabs for the

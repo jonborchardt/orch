@@ -824,8 +824,9 @@ describe('Archive', () => {
     mount();
     await screen.findByRole('table', { name: 'Factory jobs' });
     await show('archived');
-    expect(await screen.findByText('No archived jobs.')).toBeInTheDocument();
+    expect(await screen.findByText('No jobs match these filters.')).toBeInTheDocument();
     expect(screen.queryByText(/No jobs yet/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Columns' })).toBeInTheDocument();
   });
 
   it('offers Archive and Unarchive only when the server lists them, and posts the action', async () => {
@@ -854,8 +855,11 @@ describe('Archive', () => {
     expect(screen.queryByRole('button', { name: 'Unarchive' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(/only hides a finished job/)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    // A plain confirm: no reason field and no takeover checkbox.
+    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Job archived');
     });
@@ -863,7 +867,7 @@ describe('Archive', () => {
       (f.mock.calls as [RequestInfo | URL, RequestInit | undefined][])
         .filter(([, i]) => i?.method === 'POST')
         .map(([, i]) => JSON.parse(i?.body as string) as unknown);
-    expect(posts()).toEqual([{ action: 'archive' }]);
+    expect(posts()).toEqual([{ action: 'archive', force: true }]);
     cleanup();
 
     f.mockClear();
@@ -880,9 +884,9 @@ describe('Archive', () => {
     expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Unarchive' }));
     const again = await screen.findByRole('dialog');
-    fireEvent.click(within(again).getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(within(again).getByRole('button', { name: 'Unarchive' }));
     await waitFor(() => {
-      expect(posts()).toEqual([{ action: 'unarchive' }]);
+      expect(posts()).toEqual([{ action: 'unarchive', force: true }]);
     });
     cleanup();
 
@@ -1040,18 +1044,27 @@ describe('Board grid: columns, sort, filter, row archive', () => {
       expect(archiveIn(id)).toBeNull();
     }
     expect(archiveIn('job-00000004')).not.toBeNull();
-    // A completed job still holding its finishing session's live lease: takeover offered, unchecked.
     expect(screen.getByRole('button', { name: 'Archive Done job (job-0000000a)' })).toBe(
       archiveIn('job-0000000a'),
     );
+    // A plain confirm: no reason field, no takeover checkbox; Cancel posts nothing.
     fireEvent.click(must(archiveIn('job-0000000a')));
     let dialog = await screen.findByRole('dialog');
-    expect(
-      within(dialog).getByRole('checkbox', { name: /Take the job from session claude-1/ }),
-    ).not.toBeChecked();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => {
-      expect(posts(f)).toEqual([['/api/jobs/job-0000000a/actions', { action: 'archive' }]]);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(posts(f)).toEqual([]);
+    // Archive always takes over a finished job's lingering lease.
+    fireEvent.click(must(archiveIn('job-0000000a')));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => {
+      expect(posts(f)).toEqual([
+        ['/api/jobs/job-0000000a/actions', { action: 'archive', force: true }],
+      ]);
     });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -1060,29 +1073,12 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Columns' })).toHaveFocus();
     });
-    fireEvent.click(must(archiveIn('job-0000000a')));
-    dialog = await screen.findByRole('dialog');
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Take the job/ }));
-    fireEvent.change(within(dialog).getByRole('textbox', { name: /Reason/ }), {
-      target: { value: 'old run' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
-    await waitFor(() => {
-      expect(posts(f)[1]).toEqual([
-        '/api/jobs/job-0000000a/actions',
-        { action: 'archive', reason: 'old run', force: true },
-      ]);
-    });
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    });
-    // The cancelled row has no owner, so no takeover checkbox; a refusal shows in the dialog.
+    // A refusal shows in the dialog.
     data.actionStatus = 409;
     data.actionBody = { error: { type: 'OwnershipError', message: 'held by claude-9' } };
     fireEvent.click(must(archiveIn('job-00000004')));
     dialog = await screen.findByRole('dialog');
-    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     expect(await within(dialog).findByText('OwnershipError: held by claude-9')).toBeInTheDocument();
   });
 
@@ -1111,9 +1107,11 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     );
     const dialog = await screen.findByRole('dialog');
     data.rows = [...rows, { ...archived, archivedAt: null }];
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unarchive' }));
     await waitFor(() => {
-      expect(posts(f)).toEqual([['/api/jobs/job-00000009/actions', { action: 'unarchive' }]]);
+      expect(posts(f)).toEqual([
+        ['/api/jobs/job-00000009/actions', { action: 'unarchive', force: true }],
+      ]);
     });
     await waitFor(() => {
       expect(ids()).toEqual([]);
