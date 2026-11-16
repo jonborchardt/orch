@@ -13,7 +13,7 @@ import {
   Toolbar,
   Typography,
 } from '@mui/material';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { BoardRow } from '../../src/server/types.ts';
 import { JobBoard } from './JobBoard.tsx';
@@ -132,11 +132,20 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   }, [load, refreshMs]);
 
   const jobMatch = /^#\/jobs\/(job-[0-9a-f]{8})$/.exec(hash);
-  const visible = (rows ?? []).filter((r) => matches(r, status) && matchesText(r, text));
-  // Counts come from the selected repository's rows, before the text filter.
-  const counts = Object.fromEntries(
-    STATUS_FILTERS.map((f) => [f, (rows ?? []).filter((r) => matches(r, f)).length]),
-  ) as Record<StatusFilter, number>;
+  const visible = useMemo(
+    () => (rows ?? []).filter((r) => matches(r, status) && matchesText(r, text)),
+    [rows, status, text],
+  );
+  // Counts come from the selected repository's rows, before the text filter; none until the
+  // first response, so the first load never reads as real zeros.
+  const counts = useMemo(
+    () =>
+      rows &&
+      (Object.fromEntries(
+        STATUS_FILTERS.map((f) => [f, rows.filter((r) => matches(r, f)).length]),
+      ) as Record<StatusFilter, number>),
+    [rows],
+  );
   // A background poll after the first load; never shown alongside a first-load bar.
   const boardPolling = inFlight > 0 && rows !== null;
   const refreshing = jobMatch
@@ -166,14 +175,19 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
               return (
                 <Chip
                   key={c.filter}
-                  label={`${String(counts[c.filter])} ${c.label}`}
+                  label={counts ? `${String(counts[c.filter])} ${c.label}` : c.label}
                   color={c.color}
-                  variant={counts[c.filter] ? 'filled' : 'outlined'}
+                  variant={counts?.[c.filter] ? 'filled' : 'outlined'}
                   aria-pressed={pressed}
                   onClick={() => {
                     setStatus(pressed ? 'current' : c.filter);
                   }}
-                  sx={pressed ? { outline: 2, outlineOffset: 1 } : undefined}
+                  // A full ring in the text colour reads on filled and outlined chips, light or dark.
+                  sx={
+                    pressed
+                      ? { outline: '2px solid', outlineColor: 'text.primary', outlineOffset: 2 }
+                      : undefined
+                  }
                 />
               );
             })}
@@ -225,7 +239,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             >
               {STATUS_FILTERS.map((s) => (
                 <MenuItem key={s} value={s}>
-                  {s} ({String(counts[s])})
+                  {counts ? `${s} (${String(counts[s])})` : s}
                 </MenuItem>
               ))}
             </Select>
@@ -245,9 +259,12 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
         {jobMatch ? (
           <JobDetail id={jobMatch[1] ?? ''} refreshMs={refreshMs} onActivity={setDetailActivity} />
         ) : rows === null ? (
-          <Box sx={{ p: 3 }}>
-            <LinearProgress aria-label="Loading jobs" />
-          </Box>
+          // A failed first load shows only the error alert above, not a bar that never ends.
+          !error && (
+            <Box sx={{ p: 3 }}>
+              <LinearProgress aria-label="Loading jobs" />
+            </Box>
+          )
         ) : (
           <JobBoard rows={visible} total={rows.length} now={now} onChanged={load} />
         )}

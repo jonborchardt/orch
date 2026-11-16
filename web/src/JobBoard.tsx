@@ -22,7 +22,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BoardRow } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
@@ -292,6 +292,7 @@ export function JobBoard({
     columnsButton.current?.focus();
     setRefocus(false);
   }, [refocus]);
+  const ordered = useMemo(() => sorted(rows, sort), [rows, sort]);
 
   if (total === 0) {
     return (
@@ -397,7 +398,7 @@ export function JobBoard({
               </TableRow>
             </TableHead>
             <TableBody>
-              {sorted(rows, sort).map((r) => (
+              {ordered.map((r) => (
                 <TableRow key={r.id} hover data-job-id={r.id}>
                   {columns.map((c) => (
                     <TableCell key={c.id} align={c.align} sx={c.sx}>

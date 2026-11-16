@@ -381,6 +381,8 @@ describe('App board', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('Boom: db locked');
     });
+    // A failed first load shows the error, not a loading bar that never ends.
+    expect(screen.queryByRole('progressbar', { name: 'Loading jobs' })).not.toBeInTheDocument();
   });
 });
 
@@ -1467,9 +1469,16 @@ describe('Board attention order, summary chips, review rollup', () => {
         .getAllByRole('button')
         .map((c) => c.textContent),
     ).toEqual(['1 running', '1 stale', '1 need human', '2 failed', '1 idle']);
+    // Pressed shows as a visible ring as well as aria-pressed; unpressed chips have none.
+    const ringed = () =>
+      within(summary)
+        .getAllByRole('button')
+        .filter((c) => getComputedStyle(c).outlineStyle === 'solid')
+        .map((c) => c.textContent);
     for (const c of within(summary).getAllByRole('button')) {
       expect(c).toHaveAttribute('aria-pressed', 'false');
     }
+    expect(ringed()).toEqual([]);
     const show = screen.getByRole('combobox', { name: 'Show' });
     expect(show).toHaveTextContent('current (7)');
 
@@ -1478,6 +1487,10 @@ describe('Board attention order, summary chips, review rollup', () => {
       expect(ids()).toEqual(['job-00000003']);
     });
     expect(chip('1 need human')).toHaveAttribute('aria-pressed', 'true');
+    expect(ringed()).toEqual(['1 need human']);
+    // An explicit text-colour ring, not currentColor (white on a filled chip).
+    expect(getComputedStyle(chip('1 need human')).outlineColor).toBe(theme.palette.text.primary);
+    expect(getComputedStyle(chip('1 need human')).outlineWidth).toBe('2px');
     expect(show).toHaveTextContent('needs human (1)');
     fireEvent.click(chip('2 failed'));
     await waitFor(() => {
@@ -1533,10 +1546,18 @@ describe('Loading and refresh progress', () => {
     expect(await screen.findByRole('progressbar', { name: 'Loading jobs' })).toBeInTheDocument();
     expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
     expect(refreshing()).not.toBeInTheDocument();
+    // No counts until the first response: bare labels, never zeros that look real.
+    expect(
+      within(screen.getByLabelText('Summary'))
+        .getAllByRole('button')
+        .map((c) => c.textContent),
+    ).toEqual(['running', 'stale', 'need human', 'failed', 'idle']);
+    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent(/^current$/);
     hold = {};
     gate.resolve(undefined);
     await screen.findByRole('table', { name: 'Factory jobs' });
     expect(screen.queryByRole('progressbar', { name: 'Loading jobs' })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent('current (4)');
   });
 
   it('shows Refreshing under the app bar only while a board poll is in flight', async () => {
