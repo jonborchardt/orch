@@ -15,9 +15,13 @@ ORCH_HOME=/tmp/demo npm run ui:seed && ORCH_HOME=/tmp/demo orch ui   # represent
 ```
 
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
-worktree, review round, per-reviewer verdicts for the current round, blocking-finding count from
-the latest consolidation, elapsed time, last update, PR link and CI rollup. The stage column is the
-workflow position; the status column is the execution state, kept separate so a job stopped in
+worktree, review round, reviews, elapsed time, last update, PR link and CI rollup. The Reviews
+column is one rollup chip for the current round: `n/n pass` (green) when every reviewer passed,
+`p/n, k pending` (neutral) while some are pending and none requested changes, `c changes` (amber)
+when any did, and nothing before the round has reviews; hovering or focusing it lists each
+reviewer and its verdict. Beside it, `n blocking` (red) shows the blocking-finding count from the
+latest consolidation when it is above zero; there is no separate Blocking column. The stage
+column is the workflow position; the status column is the execution state, kept separate so a job stopped in
 `build` never reads as done. Its states (each with a glyph and label, never colour alone):
 `running (lease live)` means a session renewed its lease recently; `last reported running` means
 the status is still `running` but the lease lapsed, so the session is presumed gone;
@@ -28,14 +32,22 @@ derived from persisted fields only (`src/server/status.ts`): the latest `job.blo
 `decision.md` marker, the consolidation's BLOCKING count, and the newest verification run. When
 the state does not classify an escalation the line says so (`Escalated from build`) rather than
 guessing. Jobs a session may resume get a **Copy resume** control. Filter by repository and by
-active / needs human / finished / cancelled / archived, plus a free-text **Filter** box matching
-title, id, repository, stage, status, session, or branch; the page refreshes every few seconds
-while visible. Archived jobs (see **Archive** below) are left out of every filter except
-`archived`, which shows only them, each marked with an `archived` chip.
+**Show**: `current` (the default, every unarchived job), `active`, `needs human`, `running`,
+`stale`, `failed` (failed or interrupted), `idle`, `finished`, `cancelled`, or `archived`, each
+labelled with its count; plus a free-text **Filter** box matching title, id, repository, stage,
+status, session, or branch. The app bar's summary chips (`n running`, `n stale`, `n need human`,
+`n failed`, `n idle`) are toggle buttons for the matching Show option and carry its count; pressing
+the pressed chip again returns to `current`. Counts are taken from the selected repository's jobs,
+before the text filter. The page refreshes every few seconds while visible. The first load of the
+board or a job's detail shows a progress bar; after that a thin `Refreshing` bar in a fixed slot
+under the app bar shows while a poll is in flight. Archived jobs (see **Archive** below) are left
+out of every filter except `archived`, which shows only them, each marked with an `archived` chip.
 
 The board is a plain MUI table (`web/src/JobBoard.tsx`, no data-grid package). Clicking a header
-sorts by that column, ascending then descending (`aria-sort` says which); with no sort chosen the
-server's order stands. The **Columns** menu shows or hides every column except Job, Status, and
+sorts by that column, ascending then descending (`aria-sort` says which; Reviews sorts by blocking
+count). With no sort chosen the board orders by attention, in the client: needs human, last
+reported running (stale), failed or interrupted, running, idle, then completed and cancelled, most
+recently updated first within each group; `GET /api/jobs` keeps its own order (newest created first). The **Columns** menu shows or hides every column except Job, Status, and
 Actions; Repository, Session, and Branch / worktree start hidden. The choice is a per-browser view
 preference in `localStorage` (`orch.board.hiddenColumns`), not job state. The Actions column holds
 **Archive** on each finished, unarchived row and **Unarchive** on each archived row (so under

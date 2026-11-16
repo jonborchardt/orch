@@ -5,6 +5,7 @@ import {
   Chip,
   FormControl,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Select,
   Stack,
@@ -16,7 +17,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import type { BoardRow } from '../../src/server/types.ts';
 import { JobBoard } from './JobBoard.tsx';
-import { JobDetail } from './JobDetail.tsx';
+import { type DetailActivity, JobDetail } from './JobDetail.tsx';
 import { ApiFailure, fetchBoard, fetchRepos } from './api.ts';
 
 function useHashRoute(): string {
@@ -34,9 +35,13 @@ function useHashRoute(): string {
 }
 
 const STATUS_FILTERS = [
-  'all',
+  'current',
   'active',
   'needs human',
+  'running',
+  'stale',
+  'failed',
+  'idle',
   'finished',
   'cancelled',
   'archived',
@@ -48,18 +53,33 @@ function matches(row: BoardRow, f: StatusFilter): boolean {
   if (f === 'archived') return row.archivedAt !== null;
   if (row.archivedAt !== null) return false;
   switch (f) {
-    case 'all':
+    case 'current':
       return true;
     case 'active':
       return !['blocked', 'completed', 'cancelled'].includes(row.liveness);
     case 'needs human':
       return row.liveness === 'blocked';
+    case 'running':
+    case 'stale':
+    case 'idle':
+      return row.liveness === f;
+    case 'failed':
+      return row.liveness === 'failed' || row.liveness === 'interrupted';
     case 'finished':
       return row.liveness === 'completed' || row.liveness === 'cancelled';
     case 'cancelled':
       return row.liveness === 'cancelled';
   }
 }
+
+/** App-bar summary chips; each is a shortcut for its Show option and shares its count. */
+const CHIPS = [
+  { filter: 'running', label: 'running', color: 'primary' },
+  { filter: 'stale', label: 'stale', color: 'warning' },
+  { filter: 'needs human', label: 'need human', color: 'error' },
+  { filter: 'failed', label: 'failed', color: 'error' },
+  { filter: 'idle', label: 'idle', color: 'default' },
+] as const;
 
 /** Free-text filter: any of title, id, repo, stage, liveness, session, or branch contains it. */
 function matchesText(row: BoardRow, text: string): boolean {
@@ -75,23 +95,30 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const [rows, setRows] = useState<BoardRow[] | null>(null);
   const [repos, setRepos] = useState<string[]>([]);
   const [repo, setRepo] = useState<string>('');
-  const [status, setStatus] = useState<StatusFilter>('all');
+  const [status, setStatus] = useState<StatusFilter>('current');
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [inFlight, setInFlight] = useState(0);
+  const [detailActivity, setDetailActivity] = useState<DetailActivity>('loading');
 
   const load = useCallback(() => {
-    Promise.all([fetchBoard(repo || undefined), fetchRepos()]).then(
-      ([b, r]) => {
-        setRows(b);
-        setRepos(r);
-        setError(null);
-        setNow(Date.now());
-      },
-      (err: unknown) => {
-        setError(err instanceof ApiFailure ? `${err.type}: ${err.message}` : String(err));
-      },
-    );
+    setInFlight((n) => n + 1);
+    Promise.all([fetchBoard(repo || undefined), fetchRepos()])
+      .then(
+        ([b, r]) => {
+          setRows(b);
+          setRepos(r);
+          setError(null);
+          setNow(Date.now());
+        },
+        (err: unknown) => {
+          setError(err instanceof ApiFailure ? `${err.type}: ${err.message}` : String(err));
+        },
+      )
+      .finally(() => {
+        setInFlight((n) => n - 1);
+      });
   }, [repo]);
 
   useEffect(() => {
@@ -106,11 +133,15 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
 
   const jobMatch = /^#\/jobs\/(job-[0-9a-f]{8})$/.exec(hash);
   const visible = (rows ?? []).filter((r) => matches(r, status) && matchesText(r, text));
-  const counts = {
-    running: (rows ?? []).filter((r) => r.liveness === 'running').length,
-    stale: (rows ?? []).filter((r) => r.liveness === 'stale').length,
-    blocked: (rows ?? []).filter((r) => r.liveness === 'blocked').length,
-  };
+  // Counts come from the selected repository's rows, before the text filter.
+  const counts = Object.fromEntries(
+    STATUS_FILTERS.map((f) => [f, (rows ?? []).filter((r) => matches(r, f)).length]),
+  ) as Record<StatusFilter, number>;
+  // A background poll after the first load; never shown alongside a first-load bar.
+  const boardPolling = inFlight > 0 && rows !== null;
+  const refreshing = jobMatch
+    ? detailActivity === 'refreshing' || (detailActivity === 'idle' && boardPolling)
+    : boardPolling;
 
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -130,21 +161,22 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             orch factory
           </Typography>
           <Stack direction="row" spacing={0.5} aria-label="Summary">
-            <Chip
-              label={`${String(counts.running)} running`}
-              color="primary"
-              variant={counts.running ? 'filled' : 'outlined'}
-            />
-            <Chip
-              label={`${String(counts.stale)} stale`}
-              color="warning"
-              variant={counts.stale ? 'filled' : 'outlined'}
-            />
-            <Chip
-              label={`${String(counts.blocked)} need human`}
-              color="error"
-              variant={counts.blocked ? 'filled' : 'outlined'}
-            />
+            {CHIPS.map((c) => {
+              const pressed = status === c.filter;
+              return (
+                <Chip
+                  key={c.filter}
+                  label={`${String(counts[c.filter])} ${c.label}`}
+                  color={c.color}
+                  variant={counts[c.filter] ? 'filled' : 'outlined'}
+                  aria-pressed={pressed}
+                  onClick={() => {
+                    setStatus(pressed ? 'current' : c.filter);
+                  }}
+                  sx={pressed ? { outline: 2, outlineOffset: 1 } : undefined}
+                />
+              );
+            })}
           </Stack>
           <Box sx={{ flex: 1 }} />
           <TextField
@@ -193,12 +225,16 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             >
               {STATUS_FILTERS.map((s) => (
                 <MenuItem key={s} value={s}>
-                  {s}
+                  {s} ({String(counts[s])})
                 </MenuItem>
               ))}
             </Select>
           </FormControl>
         </Toolbar>
+        {/* Fixed-height slot so the page never shifts when a poll starts or ends. */}
+        <Box sx={{ height: 4 }}>
+          {refreshing && <LinearProgress aria-label="Refreshing" sx={{ height: 4 }} />}
+        </Box>
       </AppBar>
       {error && (
         <Alert severity="error" sx={{ m: 1 }} role="alert">
@@ -207,11 +243,11 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
       )}
       <Box component="main" sx={{ flex: 1 }}>
         {jobMatch ? (
-          <JobDetail id={jobMatch[1] ?? ''} refreshMs={refreshMs} />
+          <JobDetail id={jobMatch[1] ?? ''} refreshMs={refreshMs} onActivity={setDetailActivity} />
         ) : rows === null ? (
-          <Typography sx={{ p: 3 }} color="text.secondary">
-            Loading…
-          </Typography>
+          <Box sx={{ p: 3 }}>
+            <LinearProgress aria-label="Loading jobs" />
+          </Box>
         ) : (
           <JobBoard rows={visible} total={rows.length} now={now} onChanged={load} />
         )}

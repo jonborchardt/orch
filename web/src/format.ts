@@ -1,4 +1,4 @@
-import type { BlockerKind, Liveness } from '../../src/server/types.ts';
+import type { BlockerKind, BoardRow, Liveness, Verdict } from '../../src/server/types.ts';
 
 export function elapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -105,6 +105,39 @@ export function verdictColor(v: string | null): ChipColor {
   if (v === 'pass') return 'success';
   if (v === 'changes') return 'warning';
   return 'default';
+}
+
+/** Board default order: what needs a human first, finished jobs last. */
+const ATTENTION: Record<Liveness, number> = {
+  blocked: 0,
+  stale: 1,
+  failed: 2,
+  interrupted: 2,
+  running: 3,
+  idle: 4,
+  completed: 5,
+  cancelled: 5,
+};
+
+/** Attention group, then most recently updated first. */
+export function byAttention(
+  a: Pick<BoardRow, 'liveness' | 'updatedAt'>,
+  b: Pick<BoardRow, 'liveness' | 'updatedAt'>,
+): number {
+  const d = ATTENTION[a.liveness] - ATTENTION[b.liveness];
+  if (d) return d;
+  return a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0;
+}
+
+/** One chip for a round's reviews; null when the round has none. */
+export function reviewRollup(reviews: Verdict[]): { label: string; color: ChipColor } | null {
+  const n = reviews.length;
+  if (!n) return null;
+  const changes = reviews.filter((v) => v.verdict === 'changes').length;
+  if (changes) return { label: `${String(changes)} changes`, color: 'warning' };
+  const pass = reviews.filter((v) => v.verdict === 'pass').length;
+  if (pass === n) return { label: `${String(n)}/${String(n)} pass`, color: 'success' };
+  return { label: `${String(pass)}/${String(n)}, ${String(n - pass)} pending`, color: 'default' };
 }
 
 export function ciColor(v: string | null): ChipColor {

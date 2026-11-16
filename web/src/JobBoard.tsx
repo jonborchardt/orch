@@ -28,7 +28,7 @@ import type { BoardRow } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
 import { CiChip, PrPhaseChip } from './Ci.tsx';
 import { BlockerText, CopyResume, StatusChip, Supersession } from './Status.tsx';
-import { ago, elapsed, verdictColor } from './format.ts';
+import { ago, byAttention, elapsed, reviewRollup } from './format.ts';
 
 interface Column {
   id: string;
@@ -164,31 +164,10 @@ const COLUMNS: Column[] = [
     id: 'reviews',
     label: 'Reviews',
     hideable: true,
-    cell: (r) => (
-      <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap' }}>
-        {r.reviews.map((v) => (
-          <Chip
-            key={v.reviewer}
-            label={`${v.reviewer}: ${v.verdict ?? 'pending'}`}
-            color={verdictColor(v.verdict)}
-            variant={v.verdict ? 'filled' : 'outlined'}
-          />
-        ))}
-      </Stack>
-    ),
-  },
-  {
-    id: 'blocking',
-    label: 'Blocking',
-    hideable: true,
-    align: 'right',
+    // The blocking count folded into this column; sorting by it keeps that capability.
     sortValue: (r) => r.blocking ?? -1,
-    cell: (r) =>
-      r.blocking === null ? (
-        '—'
-      ) : (
-        <Chip label={r.blocking} color={r.blocking > 0 ? 'error' : 'success'} />
-      ),
+    sx: { whiteSpace: 'nowrap' },
+    cell: (r) => <ReviewsCell row={r} />,
   },
   {
     id: 'elapsed',
@@ -232,6 +211,35 @@ const COLUMNS: Column[] = [
   },
 ];
 
+/** One verdict rollup for the round, every reviewer in its tooltip, and any blocking count. */
+function ReviewsCell({ row }: { row: BoardRow }) {
+  const rollup = reviewRollup(row.reviews);
+  return (
+    <Stack direction="row" spacing={0.5}>
+      {rollup && (
+        <Tooltip
+          describeChild
+          title={row.reviews.map((v) => (
+            <div key={v.reviewer}>
+              {v.reviewer}: {v.verdict ?? 'pending'}
+            </div>
+          ))}
+        >
+          <Chip
+            label={rollup.label}
+            color={rollup.color}
+            variant={rollup.color === 'default' ? 'outlined' : 'filled'}
+            tabIndex={0}
+          />
+        </Tooltip>
+      )}
+      {row.blocking !== null && row.blocking > 0 && (
+        <Chip label={`${String(row.blocking)} blocking`} color="error" />
+      )}
+    </Stack>
+  );
+}
+
 /** Per-browser view preference, not job state. */
 export const HIDDEN_COLUMNS_KEY = 'orch.board.hiddenColumns';
 const DEFAULT_HIDDEN = ['repo', 'session', 'branch'];
@@ -249,7 +257,7 @@ type Sort = { id: string; dir: 'asc' | 'desc' } | null;
 
 function sorted(rows: BoardRow[], sort: Sort): BoardRow[] {
   const key = COLUMNS.find((c) => c.id === sort?.id)?.sortValue;
-  if (!sort || !key) return rows; // no sort chosen: the server's order
+  if (!sort || !key) return [...rows].sort(byAttention); // no sort chosen: what needs attention
   const sign = sort.dir === 'asc' ? 1 : -1;
   return [...rows].sort((a, b) => {
     const x = key(a);
