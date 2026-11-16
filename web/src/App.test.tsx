@@ -819,6 +819,15 @@ describe('Archive', () => {
     expect(within(shown).getByText('archived')).toBeInTheDocument();
   });
 
+  it('says there are no archived jobs instead of "No jobs yet" under Show: archived', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    await show('archived');
+    expect(await screen.findByText('No archived jobs.')).toBeInTheDocument();
+    expect(screen.queryByText(/No jobs yet/)).not.toBeInTheDocument();
+  });
+
   it('offers Archive and Unarchive only when the server lists them, and posts the action', async () => {
     const f = mockFetch();
     const base = detail();
@@ -1180,5 +1189,14 @@ describe('Job detail: reviews', () => {
     // Expanding one reviewer leaves the others collapsed.
     expect(other).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText('Correctness body text')).not.toBeInTheDocument();
+    // aria-controls names only a mounted region: absent while collapsed, unique while expanded.
+    expect(other).not.toHaveAttribute('aria-controls');
+    const controls = must(header.getAttribute('aria-controls'));
+    expect(document.querySelectorAll(`[id="${controls}"]`)).toHaveLength(1);
+    expect(must(document.getElementById(controls))).toHaveTextContent('Security body text');
+    fireEvent.click(header);
+    await waitFor(() => {
+      expect(header).not.toHaveAttribute('aria-controls');
+    });
   });
 });

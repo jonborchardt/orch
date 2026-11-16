@@ -212,6 +212,10 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           <Typography sx={{ p: 3 }} color="text.secondary">
             Loading…
           </Typography>
+        ) : visible.length === 0 && rows.length > 0 ? (
+          <Typography sx={{ p: 3 }} color="text.secondary" role="status">
+            {status === 'archived' ? 'No archived jobs.' : 'No jobs match this filter.'}
+          </Typography>
         ) : (
           <JobBoard rows={visible} total={rows.length} now={now} onChanged={load} />
         )}
