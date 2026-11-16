@@ -7,7 +7,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  FormControlLabel,
   Link,
   ListItemText,
   Menu,
@@ -20,7 +19,6 @@ import {
   TableHead,
   TableRow,
   TableSortLabel,
-  TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -432,9 +430,9 @@ export function JobBoard({
 }
 
 /**
- * Confirm an archive or unarchive from the board. A freshly completed job usually still holds its
- * finishing session's lease, so the same takeover checkbox as the detail page is offered; the
- * server decides and re-checks either way.
+ * Confirm an archive or unarchive from the board. Only finished jobs can be archived, and a freshly
+ * completed one usually still holds its finishing session's lease, so the board always takes it
+ * over (`force`); the server decides and re-checks either way.
  */
 function ArchiveDialog({
   row,
@@ -446,20 +444,15 @@ function ArchiveDialog({
   onDone: () => void;
 }) {
   const archive = row.archivedAt === null;
-  const [reason, setReason] = useState('');
-  const [force, setForce] = useState(false);
+  const verb = archive ? 'Archive' : 'Unarchive';
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const liveOwner = row.owner?.live === true && row.owner.session !== 'dashboard';
 
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      const body: Parameters<typeof postAction>[1] = { action: archive ? 'archive' : 'unarchive' };
-      if (reason.trim()) body.reason = reason.trim();
-      if (force) body.force = true;
-      await postAction(row.id, body);
+      await postAction(row.id, { action: archive ? 'archive' : 'unarchive', force: true });
       onDone();
     } catch (err) {
       setError(err instanceof ApiFailure ? `${err.type}: ${err.message}` : String(err));
@@ -479,42 +472,16 @@ function ArchiveDialog({
       maxWidth="sm"
     >
       <DialogTitle id="row-archive-title">
-        {archive ? 'Archive' : 'Unarchive'} {row.title} ({row.id})
+        {verb} {row.title} ({row.id})?
       </DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          <TextField
-            label="Reason (recorded in the job's events)"
-            value={reason}
-            onChange={(e) => {
-              setReason(e.target.value);
-            }}
-            slotProps={{ htmlInput: { maxLength: 500 } }}
-            autoFocus
-          />
-          {liveOwner && (
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={force}
-                  onChange={(e) => {
-                    setForce(e.target.checked);
-                  }}
-                />
-              }
-              label={`Take the job from session ${row.owner?.session ?? ''} (its token stops working)`}
-            />
-          )}
-          <Alert severity="info" variant="outlined">
-            Archiving only hides a finished job from the board&apos;s default views; its state,
-            worktree, branch, and artifacts are unchanged. Show: archived lists archived jobs.
-          </Alert>
-          {error && <Alert severity="error">{error}</Alert>}
-        </Stack>
-      </DialogContent>
+      {error && (
+        <DialogContent>
+          <Alert severity="error">{error}</Alert>
+        </DialogContent>
+      )}
       <DialogActions>
         <Button onClick={onClose} disabled={busy}>
-          Close
+          Cancel
         </Button>
         <Button
           variant="contained"
@@ -522,8 +489,9 @@ function ArchiveDialog({
             void submit();
           }}
           disabled={busy}
+          autoFocus
         >
-          Confirm
+          {verb}
         </Button>
       </DialogActions>
     </Dialog>
