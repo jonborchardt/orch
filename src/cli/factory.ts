@@ -1,6 +1,7 @@
 /** `orch factory ...` handlers: the skill-facing commands. */
 import { UsageError } from '../core/errors.ts';
 import { type Stage, STAGES } from '../core/workflow.ts';
+import { cancelJob } from '../ops/actions.ts';
 import { dispatchJob, listFactory } from '../ops/dispatch.ts';
 import {
   checkReadonly,
@@ -23,6 +24,7 @@ export interface FactoryOptions {
   session?: string;
   to?: string;
   force?: boolean;
+  reason?: string;
   ui?: boolean;
   'no-ui'?: boolean;
   fingerprint?: string;
@@ -49,6 +51,9 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
                               Adopt an interrupted or orphaned job from persisted state; --adopt
                               records an existing worktree of the repository (the one this session
                               runs in) when the job has none yet
+  cancel <id> --reason <r> --session <name> [--force]
+                              Cancel the job in one short episode as this session; exit 4 when
+                              another session holds a live lease, unless --force takes it over
   check-readonly <id> --fingerprint <f>
                               Exit 1 if the worktree changed since the plan was taken
   config                      Effective role -> model configuration and its file location
@@ -112,6 +117,13 @@ export function runFactory(
         ui,
         adopt: o.adopt,
       });
+    case 'cancel': {
+      const jobId = needId();
+      if (o.reason === undefined || o.reason.trim() === '') {
+        throw new UsageError('cancel needs --reason "<why>"; it is recorded with the job');
+      }
+      return cancelJob(store, jobId, { session: needSession(), reason: o.reason, force: o.force });
+    }
     case 'check-readonly':
       return checkReadonly(store, needId(), need(o.fingerprint, '--fingerprint <f>'));
     case 'config':

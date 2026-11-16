@@ -191,6 +191,7 @@ orch factory dispatch --title <t> | --issue <ref> [--description <d>] [--repo <p
 orch factory list   [--repo <path|identity>]              # one row per job: stage, status, action, PR, title
 orch factory next|status <id> [--ui|--no-ui]
 orch factory resume <id> --session <name> [--to <stage>] [--force] [--adopt <worktree>]
+orch factory cancel <id> --reason <r> --session <name> [--force]   # exit 4 if another session holds a live lease
 orch factory check-readonly <id> --fingerprint <f>
 orch factory config
 orch job session attach <id> --provider vscode-agents|claude-code --ref <link|uuid> [--cwd <dir>] [--token <t>]
