@@ -57,7 +57,14 @@ export interface Auth {
   token: string | undefined;
   /** Optimistic concurrency: reject if the job's revision differs. */
   expectRevision?: number | undefined;
+  /**
+   * Keep the lease through a write that finishes the job, because the same operation writes once
+   * more (`orch gh ci` recording `pr.ready`); that last write releases it.
+   */
+  holdLease?: boolean | undefined;
 }
+
+const RELEASED = { ownerSession: null, ownerToken: null, leaseExpiresAt: null } as const;
 
 export function createJob(store: Store, input: CreateJobInput): Job {
   const ts = now();
@@ -273,7 +280,7 @@ export function claimJob(
 
 export function releaseJob(store: Store, id: string, auth: Auth): Job {
   return mutate(store, id, auth, (job) => ({
-    patch: { ownerSession: null, ownerToken: null, leaseExpiresAt: null },
+    patch: RELEASED,
     events: [{ type: 'job.released', payload: { session: job.ownerSession } }],
   }));
 }
@@ -616,7 +623,8 @@ export function recordPr(
 
 /**
  * Record the outcome of `gh pr ready` after `orch gh ci` completed the job: event `pr.ready`, and
- * `prState` becomes `ready` on success. Never changes stage, status, or the CI verdict.
+ * `prState` becomes `ready` on success. Never changes stage, status, or the CI verdict. It is the
+ * last write of the completing `orch gh ci` (which held the lease for it), so it releases the job.
  */
 export function recordPrReady(
   store: Store,
@@ -626,8 +634,9 @@ export function recordPrReady(
   return mutate(store, id, input, (job) => {
     if (!job.prUrl) throw new ValidationError('No PR recorded for this job.');
     const ok = input.error === null;
+    const release = TERMINAL_STATUSES.includes(job.status) ? RELEASED : {};
     return {
-      patch: ok ? { prState: 'ready' } : {},
+      patch: ok ? { prState: 'ready', ...release } : release,
       events: [{ type: 'pr.ready', payload: { head: input.head, ok, error: input.error } }],
     };
   });
@@ -776,7 +785,13 @@ export function mutate(
       const ts = now();
       const job = getJob(tx, id);
       checkAuth(job, auth);
-      const { patch, events } = decide(job, tx, ts);
+      const decided = decide(job, tx, ts);
+      const { events } = decided;
+      // A finished job has no worker: the write that finishes it gives up the lease. Events
+      // still name the finishing session as actor.
+      const finishes =
+        decided.patch.status !== undefined && TERMINAL_STATUSES.includes(decided.patch.status);
+      const patch = finishes && !auth.holdLease ? { ...decided.patch, ...RELEASED } : decided.patch;
       const renew = patch.ownerToken === undefined && job.leaseExpiresAt !== null;
       return apply(
         tx,

@@ -73,7 +73,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   };
 
   // Archive, unarchive, and merge are a plain confirm: only finished jobs qualify, so the dashboard
-  // always takes over a finishing session's lingering lease instead of asking.
+  // always takes over the lease of any session that claimed it again instead of asking.
   const plain = open === 'archive' || open === 'unarchive' || open === 'merge';
   const verb = open === 'archive' ? 'Archive' : open === 'merge' ? 'Merge' : 'Unarchive';
 

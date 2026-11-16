@@ -820,7 +820,7 @@ describe('Archive', () => {
     expect(within(shown).getByText('archived')).toBeInTheDocument();
   });
 
-  it('says there are no archived jobs instead of "No jobs yet" under Show: archived', async () => {
+  it('says nothing matches instead of "No jobs yet" under Show: archived', async () => {
     mockFetch();
     mount();
     await screen.findByRole('table', { name: 'Factory jobs' });
@@ -1058,7 +1058,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
     expect(posts(f)).toEqual([]);
-    // Archive always takes over a finished job's lingering lease.
+    // Archive always takes over any lease a session holds on the finished job.
     fireEvent.click(must(archiveIn('job-0000000a')));
     dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));

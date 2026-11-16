@@ -488,8 +488,9 @@ describe('mutations', () => {
     expect(cancelled.job.status).toBe('cancelled');
     expect(cancelled.resumeCommand).toBeUndefined();
     const events = detail(store, ids.fresh).events.map((e) => `${e.type}:${e.actor ?? ''}`);
-    expect(events).toContain('job.cancelled:dashboard');
-    expect(events.at(-1)).toBe('job.released:dashboard');
+    // The cancel itself releases the job; no separate job.released follows.
+    expect(events.at(-1)).toBe('job.cancelled:dashboard');
+    expect(getJob(store.db, ids.fresh).ownerToken).toBeNull();
   });
 
   it('accept-delivery closes out a no-checks escalation with a reason, never a failing one', async () => {
@@ -558,7 +559,7 @@ describe('mutations', () => {
     ).toBe(403);
     expect((await row(ids.completed))?.archivedAt).toBeNull();
 
-    // The session that delivered it still holds a live lease: refused unless forced.
+    // A session that claimed it again (to observe CI) holds a live lease: refused unless forced.
     const held = await post(ids.completed, { action: 'archive' }, h);
     expect(held.status).toBe(422);
     expect(((await held.json()) as { error: { message: string } }).error.message).toContain(

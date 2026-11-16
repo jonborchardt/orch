@@ -157,8 +157,9 @@ function withLease<T>(
   try {
     return fn(token);
   } finally {
-    // Give the job up so a real session can resume it; a dashboard is not a worker.
-    releaseJob(store, before.id, { token });
+    // Give the job up so a real session can resume it; a dashboard is not a worker. A cancel or
+    // accepted delivery already released it in the write that finished it.
+    if (getJob(store.db, before.id).ownerToken === token) releaseJob(store, before.id, { token });
   }
 }
 

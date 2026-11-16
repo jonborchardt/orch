@@ -135,6 +135,9 @@ describe('approval, rejection, delivery', () => {
     runStage(c, 'spec.md');
     go(c, 'cancel', 'not needed');
     expect(next(c.id).step).toBe('cancelled');
+    // Cancelling released the job; even a new owner cannot restart it.
+    expect(() => go(c, 'start')).toThrow(OwnershipError);
+    c.token = claimJob(store, c.id, { session: SESSION }).token;
     expect(() => go(c, 'start')).toThrow(WorkflowError);
   });
 });
