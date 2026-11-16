@@ -43,7 +43,42 @@ interface Summary {
 describe('orch CLI: basics', () => {
   it('--version, --help, usage errors', () => {
     expect(orch(home, tmpdir(), ['--version']).out.trim()).toBe(packageInfo().version);
-    expect(orch(home, tmpdir(), ['--help']).out).toContain('Usage: orch');
+    const help = orch(home, tmpdir(), ['--help']).out;
+    expect(help).toContain('Usage: orch');
+    // The normal path comes first, in order, then primary commands, then the low-level group.
+    const workflow = [
+      'Typical workflow:',
+      '  orch init --check ',
+      '  /factory <request> ',
+      '  orch factory list ',
+      '  orch factory status <id> ',
+      '  orch ui ',
+      'Commands:',
+      '  factory <subcommand> ',
+      'Low-level commands (used internally and by generated plans):',
+      '  job <subcommand> ',
+      'Options:',
+    ].map((s) => help.indexOf(s));
+    expect(workflow.every((i) => i >= 0)).toBe(true);
+    expect(workflow).toEqual([...workflow].sort((a, b) => a - b));
+    expect(help).toMatch(/\/factory <request> +In Claude Code \(a skill, not an orch command\)/);
+    expect(help).toMatch(/ {2}factory <subcommand> +The primary interface/);
+    for (const cmd of ['doctor', 'init', 'install', 'ui']) {
+      const at = help.indexOf(`\n  ${cmd} `);
+      expect(at).toBeGreaterThan(help.indexOf('Commands:'));
+      expect(at).toBeLessThan(help.indexOf('Low-level commands'));
+    }
+    for (const cmd of ['job', 'worktree', 'checkout', 'gh', 'verify']) {
+      expect(help.indexOf(`\n  ${cmd} `)).toBeGreaterThan(help.indexOf('Low-level commands'));
+      expect(help.indexOf(`\n  ${cmd} `)).toBeLessThan(help.indexOf('Options:'));
+    }
+    expect(help).toContain('  -h, --help             Show this help');
+    expect(help).toContain('  -v, --version          Show version');
+    expect(help).toContain('--json             Machine-readable output');
+    expect(help).toContain('orch is a one-shot CLI');
+    expect(orch(home, tmpdir(), ['gh', '--help']).out).toContain(
+      'recorded on the job when --token is given',
+    );
     expect(orch(home, tmpdir(), []).code).toBe(2);
     const bogus = orch(home, tmpdir(), ['bogus']);
     expect(bogus.code).toBe(2);

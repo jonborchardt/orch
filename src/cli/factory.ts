@@ -45,8 +45,8 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
   list [--repo <path|identity>]
                               One row per job: stage, status, action (human/resume/wait/none),
                               PR, age, title; --json adds owner, session, resume command
-  next <id> [--ui|--no-ui]    What to do now: step, agents (with models), artifacts, exact commands
-  status <id>                 Same as next (read-only; for humans and dashboards)
+  next <id> [--ui|--no-ui]    What to do now (read-only): step, agents (with models), artifacts,
+                              exact commands. status <id> is an alias of next with the same options
   resume <id> --session <name> [--to <stage>] [--force] [--ui|--no-ui] [--adopt <worktree>]
                               Adopt an interrupted or orphaned job from persisted state; --adopt
                               records an existing worktree of the repository (the one this session

@@ -26,8 +26,16 @@ import { useEffect, useState } from 'react';
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
 import { CiChip, CiPanel, PrPhaseChip } from './Ci.tsx';
-import { Markdown } from './Markdown.tsx';
-import { BlockerText, ResumeBox, StatusChip, Supersession } from './Status.tsx';
+import { Markdown, blockingLines, section } from './Markdown.tsx';
+import {
+  BlockerNotes,
+  BlockerText,
+  CopyResume,
+  ResumeBox,
+  StatusChip,
+  Supersession,
+  nextAction,
+} from './Status.tsx';
 import { ApiFailure, fetchDetail } from './api.ts';
 import { STATE, ago, verdictColor } from './format.ts';
 
@@ -64,6 +72,7 @@ export function JobDetail({
   const [tab, setTab] = useState<TabName>('Overview');
   const [tick, setTick] = useState(0);
   const [openReviews, setOpenReviews] = useState<Record<number, boolean>>({});
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -126,6 +135,7 @@ export function JobDetail({
   const { job } = detail;
   const worktree = detail.plan?.worktree ?? null;
   const consolidatedRounds = detail.rounds.filter((r) => r.consolidated !== null).reverse();
+  const next = nextAction(detail);
   const content = (path: string | null | undefined) =>
     path && detail.contents[path] !== undefined ? (
       <Markdown text={detail.contents[path] ?? ''} />
@@ -198,33 +208,70 @@ export function JobDetail({
 
       <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }} component="section" aria-label="Status">
         <Stack spacing={1}>
-          {detail.blocker ? (
-            <BlockerText blocker={detail.blocker} />
-          ) : detail.liveness === 'completed' ? (
-            // Completed by GitHub's verdict, by a human, or before the ci stage existed: say which.
-            <Typography data-testid="completion">{detail.ci.line}</Typography>
-          ) : (
-            <Typography>{STATE[detail.liveness].describe}</Typography>
-          )}
-          {detail.blocker?.kind === 'ci' && (
-            <Typography variant="body2" color="text.secondary" data-testid="ci-guidance">
-              {detail.ci.guidance}
-            </Typography>
-          )}
-          {detail.resume && (
-            <ResumeBox
-              id={job.id}
-              resume={detail.resume}
-              cli={detail.resumeCommand}
-              state={detail.liveness}
-              checkout={job.repoPath}
-              checkoutLink={detail.links.checkout}
-              worktree={job.worktreePath}
-            />
-          )}
-          <SessionLine session={detail.session} />
+          <Stack
+            direction="row"
+            spacing={1}
+            useFlexGap
+            sx={{ alignItems: 'center', flexWrap: 'wrap' }}
+          >
+            <Box sx={{ flex: 1, minWidth: 240 }}>
+              <Box data-testid="status-summary">
+                {detail.blocker ? (
+                  <BlockerText blocker={detail.blocker} ciLine={detail.ci.line} />
+                ) : detail.liveness === 'completed' ? (
+                  // Completed by GitHub's verdict, by a human, or before the ci stage existed.
+                  <Typography data-testid="completion">{detail.ci.line}</Typography>
+                ) : (
+                  <Typography>{STATE[detail.liveness].describe}</Typography>
+                )}
+              </Box>
+              {next && (
+                <Typography data-testid="status-next">
+                  <b>Next:</b> {next}
+                </Typography>
+              )}
+            </Box>
+            {detail.resume?.command && (
+              <CopyResume id={job.id} command={detail.resume.command} checkout={job.repoPath} />
+            )}
+          </Stack>
+          <Accordion
+            variant="outlined"
+            disableGutters
+            expanded={detailsOpen}
+            onChange={(_e, open) => {
+              setDetailsOpen(open);
+            }}
+            slotProps={{ transition: { unmountOnExit: true } }}
+          >
+            <AccordionSummary
+              expandIcon={<span aria-hidden>▾</span>}
+              id="status-details-header"
+              aria-controls={detailsOpen ? 'status-details-body' : undefined}
+            >
+              <Typography variant="body2">Details</Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Stack spacing={1}>
+                {detail.blocker && <BlockerNotes blocker={detail.blocker} />}
+                {detail.resume && (
+                  <ResumeBox
+                    resume={detail.resume}
+                    cli={detail.resumeCommand}
+                    state={detail.liveness}
+                    checkout={job.repoPath}
+                    checkoutLink={detail.links.checkout}
+                    worktree={job.worktreePath}
+                  />
+                )}
+                <SessionLine session={detail.session} />
+              </Stack>
+            </AccordionDetails>
+          </Accordion>
         </Stack>
       </Paper>
+
+      {job.stage === 'needs-human' && <Escalation detail={detail} />}
 
       <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }}>
         <Typography variant="subtitle2">Controls</Typography>
@@ -262,9 +309,6 @@ export function JobDetail({
                   <Typography variant="body2">
                     Agents: {detail.plan.agents.map((a) => `${a.agent} (${a.model})`).join(', ')}
                   </Typography>
-                )}
-                {detail.plan.blockedReason && (
-                  <Alert severity="warning">Blocked: {detail.plan.blockedReason}</Alert>
                 )}
               </>
             ) : (
@@ -487,6 +531,59 @@ export function JobDetail({
         )}
       </Box>
     </Box>
+  );
+}
+
+/**
+ * At needs-human, what a human deciding needs beside the Controls: the approver's DECISION marker
+ * with its Rationale verbatim, and the newest consolidated round's blocking findings. The
+ * BLOCKING marker is authoritative; tagged lines are listed only when it is above zero.
+ */
+function Escalation({ detail }: { detail: JobDetailView }) {
+  const decision = detail.artifacts.find((a) => a.path === 'decision.md');
+  const rationale = section(detail.contents['decision.md'] ?? '', 'Rationale');
+  const latest = detail.rounds.filter((r) => r.consolidated !== null).at(-1);
+  const blocking = latest?.blocking ?? 0;
+  const lines =
+    latest?.consolidated && blocking > 0
+      ? blockingLines(section(detail.contents[latest.consolidated] ?? '', 'Findings') ?? '')
+      : [];
+  return (
+    <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }} component="section" aria-label="Escalation">
+      <Stack spacing={1}>
+        <Box data-testid="decision-summary">
+          {decision ? (
+            <>
+              <Typography sx={{ fontFamily: 'monospace', fontWeight: 700 }} data-marker="DECISION">
+                DECISION: {decision.marker?.toUpperCase() ?? '?'}
+              </Typography>
+              {rationale ? (
+                <Markdown text={rationale} />
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  No rationale could be read; see the Decision tab.
+                </Typography>
+              )}
+            </>
+          ) : (
+            <Typography color="text.secondary">No approver decision recorded.</Typography>
+          )}
+        </Box>
+        <Box data-testid="blocking-findings">
+          {latest ? (
+            <>
+              <Typography sx={{ fontWeight: 600 }}>
+                Round {latest.round}:{' '}
+                {blocking > 0 ? `${String(blocking)} blocking finding(s)` : 'no blocking findings.'}
+              </Typography>
+              {lines.length > 0 && <Markdown text={lines.join('\n')} />}
+            </>
+          ) : (
+            <Typography color="text.secondary">No consolidated findings yet.</Typography>
+          )}
+        </Box>
+      </Stack>
+    </Paper>
   );
 }
 

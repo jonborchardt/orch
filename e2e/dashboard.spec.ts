@@ -81,6 +81,9 @@ test('job detail exposes spec, reviews, long findings, decision, events, and lin
   const { ids } = state();
   await page.goto(`/#/jobs/${ids.completed}`);
   await expect(page.getByRole('heading', { name: 'Export reports as CSV' })).toBeVisible();
+  // Not at needs-human: no approver decision or blocking-findings block.
+  await expect(page.getByTestId('decision-summary')).toHaveCount(0);
+  await expect(page.getByTestId('blocking-findings')).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Open PR on GitHub' })).toHaveAttribute(
     'href',
     'https://github.com/acme/alpha/pull/41',
@@ -227,9 +230,21 @@ test('a stopped job explains itself and offers recovery, not approval', async ({
   await page.goto(`/#/jobs/${ids.failed}`);
   await expect(page.getByRole('heading', { name: 'Retry flaky uploads' })).toBeVisible();
   await expect(page.getByText('Stage failed.')).toBeVisible();
-  await expect(page.getByText(/Recorded reason: required check "test" failed twice/)).toBeVisible();
+  const summary = page.getByTestId('status-summary');
+  await expect(summary).toContainText('Stage failed.');
+  await expect(summary).toContainText('required check "test" failed twice');
+  await expect(page.getByTestId('status-next')).toContainText(
+    "Resume from a Claude Code session in the job's checkout.",
+  );
   await expect(page.getByRole('button', { name: /^Resume at / })).toHaveCount(0);
+  // The copy button is beside the summary, once; the command's particulars wait in Details.
+  const copy = page.getByRole('button', { name: /Copy resume command/ });
+  await expect(copy).toHaveCount(1);
+  await expect(copy).toBeVisible();
   const resume = page.getByTestId('resume');
+  await expect(resume).toBeHidden();
+  await page.getByRole('button', { name: 'Details' }).click();
+  await expect(resume).toBeVisible();
   await expect(resume).toContainText(`/factory resume ${ids.failed}`);
   await expect(resume).toContainText('Copying does not resume anything');
   await expect(resume.getByRole('link', { name: 'Open checkout in VS Code' })).toHaveAttribute(
@@ -242,7 +257,22 @@ test('a stopped job explains itself and offers recovery, not approval', async ({
   await expect(page.getByRole('button', { name: 'Resume at approve' })).toHaveClass(
     /MuiButton-contained/,
   );
+  await expect(page.getByTestId('status-next')).toContainText(
+    'Resume at approve or Request rework',
+  );
+  // The approver's decision is above the Controls: marker and Rationale only.
+  const decision = page.getByTestId('decision-summary');
+  await expect(decision).toContainText('ESCALATE');
+  await expect(decision).toContainText('AC2 needs a deployment to verify');
+  await expect(decision).not.toContainText('Examined');
+  await expect(decision).not.toContainText('Scope changes');
+  const decisionBox = await decision.boundingBox();
+  const controlsBox = await page.getByText('Controls', { exact: true }).boundingBox();
+  expect(decisionBox && controlsBox && decisionBox.y < controlsBox.y).toBe(true);
+  // Its newest consolidation records BLOCKING: 0; the marker is trusted over tagged lines.
+  await expect(page.getByTestId('blocking-findings')).toContainText('no blocking findings');
   // Its session holds a live lease, so no resume command is advertised; the holder is named.
+  await page.getByRole('button', { name: 'Details' }).click();
   await expect(page.getByTestId('resume')).toHaveCount(0);
   await expect(page.getByTestId('resume-unavailable')).toContainText('claude-20261113-0800-1d2e');
 });
@@ -254,7 +284,13 @@ test('controls cannot bypass workflow rules, and never claim to wake a session',
   // The reviewing job has a live lease: an action without a forced takeover is refused.
   await page.goto(`/#/jobs/${ids.reviewing}`);
   await expect(page.getByText(/Actions will be refused/)).toBeVisible();
+  await expect(page.getByTestId('status-next')).toContainText(
+    'Continue from, or wait for, session claude-20261113-0900-ab12.',
+  );
+  await expect(page.getByTestId('decision-summary')).toHaveCount(0);
+  await expect(page.getByTestId('blocking-findings')).toHaveCount(0);
   // A live lease also means no resume command is advertised; the holder is named instead.
+  await page.getByRole('button', { name: 'Details' }).click();
   await expect(page.getByTestId('resume-unavailable')).toContainText('claude-20261113-0900-ab12');
   await page.getByRole('button', { name: 'Request rework' }).click();
   await page.getByRole('button', { name: 'Confirm' }).click();
@@ -282,8 +318,22 @@ test('CI escalations: close-out is offered only where the workflow allows it', a
   // the job by hand is not on offer, and rework is not promoted either.
   await page.goto(`/#/jobs/${ids.ciExhausted}`);
   await expect(page.getByText('CI stopped.')).toBeVisible();
-  await expect(page.getByText(/CI still failing after 1 of 1 repair cycles/).first()).toBeVisible();
-  await expect(page.getByTestId('ci-guidance')).toContainText('repair budget is spent');
+  const summary = page.getByTestId('status-summary');
+  await expect(summary).toContainText('CI stopped.');
+  await expect(summary).toContainText('CI still failing for d4e5f60; 1 of 1 repairs used.');
+  await expect(page.getByTestId('status-next')).toContainText('repair budget is spent');
+  await expect(page.getByTestId('ci-guidance')).toHaveCount(0);
+  // Details is collapsed: the CLI form, the checkout, and the session line appear only on expand.
+  const details = page.getByRole('button', { name: 'Details' });
+  await expect(details).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByText(/Equivalent CLI/)).toBeHidden();
+  await expect(page.getByText(/the checkout this job was started from/)).toBeHidden();
+  await expect(page.getByTestId('session').or(page.getByTestId('session-none'))).toBeHidden();
+  await details.click();
+  await expect(details).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByText(/Equivalent CLI/)).toBeVisible();
+  await expect(page.getByText(/the checkout this job was started from/)).toBeVisible();
+  await expect(page.getByTestId('session').or(page.getByTestId('session-none'))).toBeVisible();
   await expect(page.getByRole('button', { name: 'Accept delivery' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Request rework' })).toHaveClass(
     /MuiButton-outlined/,
@@ -291,7 +341,9 @@ test('CI escalations: close-out is offered only where the workflow allows it', a
   await page.getByRole('tab', { name: 'PR' }).click();
   const panel = page.getByTestId('ci-panel');
   await expect(panel).toContainText('CI failing @d4e5f60');
-  await expect(panel).toContainText('Repairs used: 1 of 1');
+  // The budget is in the CI line and the chip's caption, not repeated as a sentence.
+  await expect(panel).not.toContainText('Repairs used:');
+  await expect(panel.getByText('repairs 1/1')).toBeVisible();
   await expect(panel.getByRole('link', { name: 'GitHub log' })).toHaveAttribute(
     'href',
     'https://github.com/acme/alpha/actions/runs/9/job/901',

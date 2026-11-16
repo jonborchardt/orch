@@ -150,6 +150,9 @@ Repeat until `plan.step` is `done`, `needs-human`, or `cancelled`:
 orch factory next <job-id> --json
 ```
 
+`orch factory status <job-id>` is an alias of `orch factory next <job-id>`: the same read-only plan
+and the same JSON.
+
 Act on `plan.step`:
 
 - `resume`: `orch factory resume <id> --session <s> --json` (adds `--force` only if the user
