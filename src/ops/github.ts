@@ -50,6 +50,7 @@ import {
   recordEvent,
   recordPr,
   recordPrReady,
+  recordPrState,
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
@@ -198,7 +199,10 @@ export interface PrStatusResult {
   recorded: boolean;
 }
 
-/** Fetch PR state and checks. With a token, the observation is stored on the job. */
+/**
+ * Fetch PR state and checks. With a token, the observation is stored on the job; on a completed
+ * job only the PR state is, so the verdict that completed it is never overwritten by a rollup.
+ */
 export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): PrStatusResult {
   const job = getJob(store.db, id);
   if (!job.prUrl) throw new ValidationError(`Job ${id} has no PR recorded.`);
@@ -206,6 +210,16 @@ export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): Pr
   const pr = viewPr(job.prUrl, cwd);
   const ciStatus = summarizeChecks(pr.checks);
   const state = prWorkflowState(pr);
+  if (auth.token && job.status === 'completed') {
+    // The completed verdict (ciHead, ciStatus) stays as recorded; only the PR's state is news.
+    const updated = recordPrState(
+      store,
+      id,
+      { token: auth.token, expectRevision: auth.expectRevision },
+      { event: 'pr.observed', state, head: pr.headSha },
+    );
+    return { job: updated, pr, ciStatus, prState: state, recorded: true };
+  }
   if (auth.token) {
     const updated = recordCi(store, id, {
       token: auth.token,

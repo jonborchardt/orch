@@ -237,7 +237,7 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default; paginated in
  * pages of 100 under `--paginate --slurp`), `protection`, `rules`, `logs` (keyed by job id), or
  * `api` (keyed by path), else HTTP 404. `gh run rerun` succeeds and is only logged; `gh pr ready`
- * takes the PR out of draft.
+ * takes the PR out of draft; `gh pr merge` sets it MERGED.
  */
 const GH_SHIM_SOURCE = String.raw`
 const fs = require('node:fs');
@@ -270,6 +270,9 @@ else if (a === 'pr' && b === 'view') {
 } else if (a === 'pr' && b === 'ready') {
   const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
   if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.isDraft = false; out(''); }
+} else if (a === 'pr' && b === 'merge') {
+  const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
+  if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.state = 'MERGED'; out(''); }
 } else if (a === 'api') {
   const path = b.replace(/^\//, '').split('?')[0];
   // --paginate --slurp: pages of 100, returned as one array, like gh does.

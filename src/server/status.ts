@@ -4,7 +4,14 @@
  * recorded one, verbatim, never parsed or guessed.
  */
 import { leaseExpired } from '../core/ownership.ts';
-import { blockingCount, MAX_CI_REPAIRS_REASON, MAX_ROUNDS_REASON, now } from '../core/workflow.ts';
+import {
+  blockingCount,
+  completionOf,
+  MAX_CI_REPAIRS_REASON,
+  MAX_ROUNDS_REASON,
+  now,
+  prPhase,
+} from '../core/workflow.ts';
 import type { Artifact, Event, Job, VerificationRun } from '../storage/schema.ts';
 import type { Blocker, CiView, Liveness, Resume } from './types.ts';
 
@@ -216,9 +223,17 @@ export function ciSummary(
     };
   }
   if (ci.completion === 'ci') {
+    const guidance: Record<string, string> = {
+      'ready-to-merge':
+        'Ready to merge: a human merges (Merge here, or on GitHub); the factory never does.',
+      merged: 'Merged.',
+      closed: 'The PR was closed without merging.',
+      'ready-mark-failed': `Ready marking failed: run gh pr ready ${job.prUrl ?? ''}, then Refresh PR.`,
+    };
+    const phase = prPhase({ prUrl: job.prUrl, prState: job.prState, ciStatus: ci.status }, 'ci');
     return {
       line: `Completed: required checks passed ${at}.`,
-      guidance: 'orch marks the draft PR ready; humans merge, the factory never does.',
+      guidance: guidance[phase] ?? 'Refresh the PR to read its state from GitHub.',
     };
   }
   if (!job.prUrl) return { line: 'No PR yet.', guidance: 'CI is observed once a draft PR exists.' };
@@ -319,16 +334,7 @@ export function ciView(
   const failures = Array.isArray(forHead?.payload['failures'])
     ? (forHead.payload['failures'] as CiView['failures'])
     : [];
-  const completed = events.get('job.completed');
-  let completion: CiView['completion'] = null;
-  if (job.stage === 'completed') {
-    completion =
-      completed?.payload['acceptedByHuman'] === true
-        ? 'human'
-        : typeof completed?.payload['head'] === 'string'
-          ? 'ci'
-          : 'legacy';
-  }
+  const completion = completionOf(job.stage, events.get('job.completed')?.payload);
   const view = {
     head: job.ciHead,
     current: head == null ? null : job.ciHead !== null && job.ciHead === head,

@@ -1,5 +1,6 @@
 /** Shapes shared by the API (src/server/api.ts) and the web client (web/src). Types only. */
 import type { SessionLinks, SessionRef } from '../core/session.ts';
+import type { Completion, PrPhase } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
 import type { Plan } from '../ops/factory.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
@@ -75,7 +76,7 @@ export interface CiView {
    * How a completed job finished: GitHub's verdict for `head`, a human close-out (recorded with
    * its reason), or a job completed before the ci stage existed, which carries no verdict at all.
    */
-  completion: 'ci' | 'human' | 'legacy' | null;
+  completion: Completion;
   /** What the CI state means for the reader, and what happens or may be done next. */
   line: string;
   guidance: string;
@@ -102,7 +103,8 @@ export interface BoardRow {
   resume: Resume | null;
   updatedAt: string;
   elapsedMs: number;
-  pr: { url: string | null; state: string | null };
+  /** `phase` is orch's recorded view (`prPhase`); GitHub is asked again only on Merge or Refresh PR. */
+  pr: { url: string | null; state: string | null; phase: PrPhase };
   /** Job that replaced this one, and jobs this one replaced (`orch job supersede`). */
   supersededBy: string | null;
   supersedes: string[];
@@ -143,6 +145,8 @@ export interface JobDetailView {
   planError: string | null;
   blocker: Blocker | null;
   ci: CiView;
+  /** Where the PR stands in delivery, from recorded fields (`prPhase`). */
+  prPhase: PrPhase;
   /** Dashboard actions the workflow allows in this state (the server re-checks on POST). */
   actions: DashboardAction[];
   /** `vscode://file/...` for the worktree (when recorded) and for the initiating checkout. */

@@ -29,7 +29,7 @@ function row(over: Partial<BoardRow>): BoardRow {
     resume: null,
     updatedAt: '2026-11-13T08:30:00.000Z',
     elapsedMs: 1_800_000,
-    pr: { url: null, state: null },
+    pr: { url: null, state: null, phase: 'no-pr' },
     supersededBy: null,
     supersedes: [],
     archivedAt: null,
@@ -90,7 +90,7 @@ const rows: BoardRow[] = [
       detail: 'AC2 needs deployment verification',
     },
     resume: { command: '/factory resume job-00000003', heldBy: null },
-    pr: { url: 'https://github.com/x/y/pull/1', state: 'draft' },
+    pr: { url: 'https://github.com/x/y/pull/1', state: 'draft', phase: 'ci-failing' },
     ci: noCi({ status: 'failing', head: 'abcdef0123456789', outcome: 'failing', repairs: 1 }),
   }),
   row({
@@ -165,6 +165,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       detail: 'AC2 needs deployment verification',
     },
     ci: noCi(),
+    prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null },
     session: null,
@@ -1196,5 +1197,107 @@ describe('Job detail: reviews', () => {
     await waitFor(() => {
       expect(header).not.toHaveAttribute('aria-controls');
     });
+  });
+});
+
+describe('PR phase, Merge, and Refresh PR', () => {
+  const pr = 'https://github.com/x/y/pull/1';
+  const head = 'abcdef0123456789';
+  function readyDetail(over: Partial<JobDetailView> = {}): JobDetailView {
+    const base = detail();
+    return detail({
+      job: {
+        ...base.job,
+        stage: 'completed',
+        status: 'completed',
+        completedAt: base.job.updatedAt,
+        prUrl: pr,
+        prState: 'ready',
+        ciStatus: 'passing',
+        ciHead: head,
+      },
+      liveness: 'completed',
+      blocker: null,
+      resume: null,
+      ci: noCi({ status: 'passing', head, completion: 'ci' }),
+      prPhase: 'ready-to-merge',
+      actions: ['merge', 'refresh-pr', 'archive'],
+      ...over,
+    });
+  }
+  const posts = (f: FetchMock) =>
+    (f.mock.calls as [RequestInfo | URL, RequestInit | undefined][])
+      .filter(([, i]) => i?.method === 'POST')
+      .map(([, i]) => JSON.parse(i?.body as string) as unknown);
+
+  it('shows the phase chip with a text label on the board', async () => {
+    mockFetch();
+    mount();
+    await screen.findByText('Gamma blocked');
+    const chip = must(document.querySelector('[data-phase="ci-failing"]'));
+    expect(chip).toHaveTextContent('CI failing');
+  });
+
+  it('renders Merge and Refresh PR only when the server lists them', async () => {
+    mockFetch();
+    data.detail = readyDetail({ actions: ['archive'] });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(must(document.querySelector('[data-phase="ready-to-merge"]'))).toHaveTextContent(
+      'ready to merge',
+    );
+    expect(screen.queryByRole('button', { name: 'Merge' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh PR' })).not.toBeInTheDocument();
+    cleanup();
+
+    data.detail = readyDetail({ actions: ['refresh-pr', 'archive'] });
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByRole('button', { name: 'Merge' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh PR' })).toBeInTheDocument();
+  });
+
+  it('Merge is a plain confirm naming the PR and the short SHA, posted with force', async () => {
+    const f = mockFetch();
+    data.detail = readyDetail();
+    data.actionBody = { job: readyDetail().job, message: `Merged ${pr} at abcdef0.` };
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByTestId('merge-confirm')).toHaveTextContent(pr);
+    expect(within(dialog).getByTestId('merge-confirm')).toHaveTextContent('abcdef0');
+    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Merge' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Merged');
+    });
+    expect(posts(f)).toEqual([{ action: 'merge', force: true }]);
+  });
+
+  it('Refresh PR posts at once and shows a refused merge error', async () => {
+    const f = mockFetch();
+    data.detail = readyDetail();
+    data.actionBody = { job: readyDetail().job, message: `GitHub reports ${pr} as merged.` };
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh PR' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('as merged');
+    });
+    expect(posts(f)).toEqual([{ action: 'refresh-pr', force: true }]);
+
+    data.actionStatus = 400;
+    data.actionBody = {
+      error: { type: 'ValidationError', message: 'gh pr merge failed: not mergeable' },
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Merge' }));
+    expect(await within(dialog).findByText(/not mergeable/)).toBeInTheDocument();
   });
 });

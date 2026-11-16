@@ -221,8 +221,14 @@ identity, that the base branch exists on `origin`, and (for the PR) that `origin
 the worktree HEAD. An open (or merged) PR for the
 branch with the same base is reused instead of creating a duplicate. The PR is recorded on the job
 (`prUrl`, `prState`) together with the CI rollup (`ciStatus`: `none`, `pending`, `passing`,
-`failing`) but no head (`ciHead` is written by `orch gh ci` alone). `orch` never merges or force-pushes, and marks the
+`failing`) but no head (`ciHead` is written by `orch gh ci` alone). `orch` never force-pushes, and marks the
 PR ready only after `orch gh ci` completes the job; a recorded draft PR is not a passing CI run, which is what the `ci` stage then establishes.
+No `orch` command merges: the only merge is a human clicking Merge in `orch ui` for a job completed
+on a passing verdict, which merges exactly `ciHead`
+(`docs/decisions/2026-11-15-humans-merge-from-the-dashboard.md`). After completion, `prState`
+(`draft`, `ready`, `merged`, `closed`) changes only from GitHub's answer: `orch gh pr status <id>
+--token` and the dashboard's Refresh PR record `prState` alone (event `pr.observed`) and keep the
+completed verdict's `ciHead` and `ciStatus`; a merge is never inferred.
 `orch gh ci` reads check runs and statuses with `gh api` for the head SHA (not the PR rollup), the
 base branch's protection and rulesets for the required list, and Actions job logs for failures.
 

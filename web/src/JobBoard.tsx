@@ -26,7 +26,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 import type { BoardRow } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
-import { CiChip } from './Ci.tsx';
+import { CiChip, PrPhaseChip } from './Ci.tsx';
 import { BlockerText, CopyResume, StatusChip, Supersession } from './Status.tsx';
 import { ago, elapsed, verdictColor } from './format.ts';
 
@@ -210,7 +210,7 @@ const COLUMNS: Column[] = [
     id: 'pr',
     label: 'PR / CI',
     hideable: true,
-    sortValue: (r) => r.pr.state ?? '',
+    sortValue: (r) => r.pr.phase,
     sx: { whiteSpace: 'nowrap' },
     cell: (r) =>
       r.pr.url ? (
@@ -218,6 +218,7 @@ const COLUMNS: Column[] = [
           <Link href={r.pr.url} target="_blank" rel="noreferrer noopener">
             PR ({r.pr.state})
           </Link>
+          <PrPhaseChip phase={r.pr.phase} />
           <CiChip ci={r.ci} compact />
         </Stack>
       ) : (
