@@ -70,14 +70,19 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     setOpen(a);
   };
 
+  // Archive and unarchive are a plain confirm: only finished jobs qualify, so the dashboard always
+  // takes over the lease of any session that claimed it again instead of asking.
+  const plain = open === 'archive' || open === 'unarchive';
+  const verb = open === 'archive' ? 'Archive' : 'Unarchive';
+
   const submit = async () => {
     if (!open) return;
     setBusy(true);
     setError(null);
     try {
       const body: Parameters<typeof postAction>[1] = { action: open };
-      if (reason.trim()) body.reason = reason.trim();
-      if (force) body.force = true;
+      if (!plain && reason.trim()) body.reason = reason.trim();
+      if (plain || force) body.force = true;
       if (open === 'approve') body.to = to;
       const r = await postAction(detail.job.id, body);
       setResult(r);
@@ -238,73 +243,78 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle id="action-title">{open ? LABEL[open] : ''}</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            {open === 'approve' && (
+        <DialogTitle id="action-title">
+          {plain ? `${verb} this job?` : open ? LABEL[open] : ''}
+        </DialogTitle>
+        {plain ? (
+          error && (
+            <DialogContent>
+              <Alert severity="error">{error}</Alert>
+            </DialogContent>
+          )
+        ) : (
+          <DialogContent>
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              {open === 'approve' && (
+                <TextField
+                  select
+                  label="Return to stage"
+                  value={to}
+                  onChange={(e) => {
+                    setTo(e.target.value);
+                  }}
+                >
+                  {STAGES.map((s) => (
+                    <MenuItem key={s} value={s}>
+                      {s}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
               <TextField
-                select
-                label="Return to stage"
-                value={to}
-                onChange={(e) => {
-                  setTo(e.target.value);
-                }}
-              >
-                {STAGES.map((s) => (
-                  <MenuItem key={s} value={s}>
-                    {s}
-                  </MenuItem>
-                ))}
-              </TextField>
-            )}
-            <TextField
-              label={
-                open === 'accept-delivery'
-                  ? 'Reason (required; recorded as the human close-out)'
-                  : "Reason (recorded in the job's events)"
-              }
-              required={open === 'accept-delivery'}
-              value={reason}
-              onChange={(e) => {
-                setReason(e.target.value);
-              }}
-              multiline
-              minRows={2}
-              slotProps={{ htmlInput: { maxLength: 500 } }}
-              autoFocus
-            />
-            {liveOwner && (
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={force}
-                    onChange={(e) => {
-                      setForce(e.target.checked);
-                    }}
-                  />
+                label={
+                  open === 'accept-delivery'
+                    ? 'Reason (required; recorded as the human close-out)'
+                    : "Reason (recorded in the job's events)"
                 }
-                label={`Take the job from session ${detail.job.ownerSession ?? ''} (its token stops working)`}
+                required={open === 'accept-delivery'}
+                value={reason}
+                onChange={(e) => {
+                  setReason(e.target.value);
+                }}
+                multiline
+                minRows={2}
+                slotProps={{ htmlInput: { maxLength: 500 } }}
+                autoFocus
               />
-            )}
-            {open === 'archive' || open === 'unarchive' ? (
-              <Alert severity="info" variant="outlined">
-                Archiving only hides a finished job from the board&apos;s default views; its state,
-                worktree, branch, and artifacts are unchanged. Show: archived lists archived jobs.
-              </Alert>
-            ) : open === 'accept-delivery' ? (
-              <Alert severity="warning" variant="outlined">
-                This completes the job without a passing CI verdict and records your reason as the
-                human close-out. It does not merge or mark the PR ready.
-              </Alert>
-            ) : (
-              <Alert severity="warning" variant="outlined">
-                This records the decision and returns the job to a pending stage. It does not start
-                or wake any Claude session; resume the job from a session afterwards.
-              </Alert>
-            )}
-            {error && <Alert severity="error">{error}</Alert>}
-          </Stack>
-        </DialogContent>
+              {liveOwner && (
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={force}
+                      onChange={(e) => {
+                        setForce(e.target.checked);
+                      }}
+                    />
+                  }
+                  label={`Take the job from session ${detail.job.ownerSession ?? ''} (its token stops working)`}
+                />
+              )}
+              {open === 'accept-delivery' ? (
+                <Alert severity="warning" variant="outlined">
+                  This completes the job without a passing CI verdict and records your reason as the
+                  human close-out. It does not merge or mark the PR ready.
+                </Alert>
+              ) : (
+                <Alert severity="warning" variant="outlined">
+                  This records the decision and returns the job to a pending stage. It does not
+                  start or wake any Claude session; resume the job from a session afterwards.
+                </Alert>
+              )}
+              {error && <Alert severity="error">{error}</Alert>}
+            </Stack>
+          </DialogContent>
+        )}
         <DialogActions>
           <Button
             onClick={() => {
@@ -312,7 +322,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             }}
             disabled={busy}
           >
-            Close
+            {plain ? 'Cancel' : 'Close'}
           </Button>
           <Button
             variant="contained"
@@ -321,8 +331,9 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
               void submit();
             }}
             disabled={busy || (open === 'accept-delivery' && reason.trim() === '')}
+            autoFocus={plain}
           >
-            {open === 'cancel' ? 'Cancel job' : 'Confirm'}
+            {plain ? verb : open === 'cancel' ? 'Cancel job' : 'Confirm'}
           </Button>
         </DialogActions>
       </Dialog>

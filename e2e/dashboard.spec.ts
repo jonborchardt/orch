@@ -129,10 +129,10 @@ test('a finished job can be archived, found under Show: archived, and unarchived
   const title = 'Export reports as CSV';
   await page.goto(`/#/jobs/${ids.completed}`);
   await page.getByRole('button', { name: 'Archive' }).click();
-  // A session that claimed it again to observe CI holds its lease, so archiving is a takeover.
+  // A session that claimed it again to observe CI holds its lease; a plain confirm takes it over.
   const dialog = page.getByRole('dialog');
-  await dialog.getByLabel(/Take the job from session/).check();
-  await dialog.getByRole('button', { name: 'Confirm' }).click();
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Archive' }).click();
   await expect(page.getByRole('status')).toContainText('Job archived');
   await expect(page.getByRole('button', { name: 'Unarchive' })).toBeVisible();
 
@@ -149,7 +149,7 @@ test('a finished job can be archived, found under Show: archived, and unarchived
   // Unarchive so later tests see the seeded board.
   await table.getByRole('link', { name: title }).click();
   await page.getByRole('button', { name: 'Unarchive' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Unarchive' }).click();
   await expect(page.getByRole('status')).toContainText('Job unarchived');
   await page.goto('/');
   await expect(table.getByRole('row')).toHaveCount(11);
@@ -157,7 +157,7 @@ test('a finished job can be archived, found under Show: archived, and unarchived
 });
 
 test('archives and unarchives from the board row', async ({ page }) => {
-  // The cancelled job has no owner, so no takeover is needed (App.test covers the live-lease case).
+  // A plain Cancel / Archive confirm; the board always takes over a finished job's lease.
   const title = 'Migrate to pnpm';
   await page.goto('/');
   const table = page.getByRole('table', { name: 'Factory jobs' });
@@ -170,9 +170,8 @@ test('archives and unarchives from the board row', async ({ page }) => {
     .getByRole('button', { name: new RegExp(`^Archive ${title} [(]job-[0-9a-f]{8}[)]$`) })
     .click();
   const dialog = page.getByRole('dialog');
-  await expect(dialog.getByLabel(/Take the job from session/)).toHaveCount(0);
-  await dialog.getByLabel(/Reason/).fill('old run');
-  await dialog.getByRole('button', { name: 'Confirm' }).click();
+  await expect(dialog.getByRole('textbox')).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Archive' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(table.getByText(title)).toHaveCount(0);
   await expect(table.getByRole('row')).toHaveCount(10);
@@ -183,7 +182,7 @@ test('archives and unarchives from the board row', async ({ page }) => {
   await rowOf(title)
     .getByRole('button', { name: new RegExp(`^Unarchive ${title} [(]job-[0-9a-f]{8}[)]$`) })
     .click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Unarchive' }).click();
   // Nothing is archived any more: the archived view is empty.
   await expect(table).toHaveCount(0);
   await expect(page.getByText('No jobs match these filters.')).toBeVisible();
