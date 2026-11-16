@@ -77,16 +77,17 @@ with no verdict recorded at all.
 **Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
 short-lived `dashboard` session and then releases the job. The detail API lists the actions the
 workflow allows in the current state (`allowedActions`) and the client renders only those; the
-server re-checks every request. Approve is the primary control only when the approver escalated
-(`decision.md` says ESCALATE); for any other blocker it is demoted behind a warning, because
-approving moves the job without fixing anything. Request rework is primary only when reviewers
+server re-checks every request. `Resume at <stage>` (the `approve` action, labelled by the stage
+it sends the job to) is the primary control only when the approver escalated (`decision.md` says
+ESCALATE); for any other blocker it is demoted behind a warning, because resuming moves the job
+without fixing anything. Request rework is primary only when reviewers
 still requested changes at the last allowed round, which is where the workflow itself would go
 back to `build`; for interruptions, verification failures, and unclassified escalations every
 control stays neutral, since the right transition is a human call.
 
 | Action                     | Allowed when                                                                                                                       | Effect                                                 |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Approve                    | stage `needs-human`                                                                                                                | `resume --to <stage>` (default: where it came from)    |
+| `Resume at <stage>`        | stage `needs-human`                                                                                                                | `resume --to <stage>` (default: where it came from)    |
 | Request review round       | round ≥ 1, not finished                                                                                                            | `escalate` + `resume --to review`                      |
 | Request rework             | not finished                                                                                                                       | `escalate` + `resume --to build`                       |
 | Accept verification policy | worktree `factory.json` differs                                                                                                    | snapshot it as the job's policy (`jobs.policy`)        |

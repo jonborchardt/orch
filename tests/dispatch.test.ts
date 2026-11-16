@@ -392,6 +392,8 @@ describe('session association', () => {
 describe('CLI', () => {
   it('factory dispatch, list, resume --adopt, and job session attach, with their usage errors', () => {
     const home = store.home;
+    const empty = orch(home, tmpdir(), ['factory', 'list']);
+    expect([empty.code, empty.out.trim()]).toEqual([0, '(none)']);
     const r = orch(home, alpha, [
       '--json',
       'factory',
@@ -417,6 +419,20 @@ describe('CLI', () => {
     );
     expect(list.map((x) => x.id)).toEqual([d.job.id]);
     expect(list[0]?.resume).toContain('orch factory resume');
+    const text = orch(home, tmpdir(), ['factory', 'list']).out.split('\n').filter(Boolean);
+    expect(text).toHaveLength(2);
+    expect(text[0]?.split(/\s+/)).toEqual([
+      'ID',
+      'REPO',
+      'STAGE',
+      'STATUS',
+      'ACTION',
+      'PR',
+      'UPDATED',
+      'TITLE',
+    ]);
+    expect(text[1]?.startsWith(`${d.job.id} `)).toBe(true);
+    expect(text[1]).toMatch(/\sresume\s.*Beta via CLI$/);
 
     const attach = orch(home, tmpdir(), [
       '--json',

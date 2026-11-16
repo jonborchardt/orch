@@ -88,6 +88,7 @@ describe('skill', () => {
       'orch factory list',
       'orch factory next',
       'orch factory resume',
+      'orch factory cancel',
       'orch factory check-readonly',
       'orch job session attach',
       '--adopt',
