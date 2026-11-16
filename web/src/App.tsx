@@ -8,6 +8,7 @@ import {
   MenuItem,
   Select,
   Stack,
+  TextField,
   Toolbar,
   Typography,
 } from '@mui/material';
@@ -60,12 +61,22 @@ function matches(row: BoardRow, f: StatusFilter): boolean {
   }
 }
 
+/** Free-text filter: any of title, id, repo, stage, liveness, session, or branch contains it. */
+function matchesText(row: BoardRow, text: string): boolean {
+  const q = text.trim().toLowerCase();
+  if (!q) return true;
+  return [row.title, row.id, row.repo, row.stage, row.liveness, row.owner?.session, row.branch]
+    .filter((x): x is string => typeof x === 'string')
+    .some((x) => x.toLowerCase().includes(q));
+}
+
 export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const hash = useHashRoute();
   const [rows, setRows] = useState<BoardRow[] | null>(null);
   const [repos, setRepos] = useState<string[]>([]);
   const [repo, setRepo] = useState<string>('');
   const [status, setStatus] = useState<StatusFilter>('all');
+  const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -94,7 +105,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   }, [load, refreshMs]);
 
   const jobMatch = /^#\/jobs\/(job-[0-9a-f]{8})$/.exec(hash);
-  const visible = (rows ?? []).filter((r) => matches(r, status));
+  const visible = (rows ?? []).filter((r) => matches(r, status) && matchesText(r, text));
   const counts = {
     running: (rows ?? []).filter((r) => r.liveness === 'running').length,
     stale: (rows ?? []).filter((r) => r.liveness === 'stale').length,
@@ -136,6 +147,18 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             />
           </Stack>
           <Box sx={{ flex: 1 }} />
+          <TextField
+            size="small"
+            type="search"
+            label="Filter"
+            placeholder="title, id, stage, branch…"
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+            }}
+            slotProps={{ inputLabel: { shrink: true } }}
+            sx={{ minWidth: 200 }}
+          />
           <FormControl size="small" sx={{ minWidth: 180 }}>
             <InputLabel id="repo-label" shrink>
               Repository
@@ -190,7 +213,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             Loading…
           </Typography>
         ) : (
-          <JobBoard rows={visible} now={now} />
+          <JobBoard rows={visible} total={rows.length} now={now} onChanged={load} />
         )}
       </Box>
       <Box component="footer" sx={{ p: 1, borderTop: 1, borderColor: 'divider' }}>

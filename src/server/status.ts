@@ -218,7 +218,7 @@ export function ciSummary(
   if (ci.completion === 'ci') {
     return {
       line: `Completed: required checks passed ${at}.`,
-      guidance: 'Humans mark the PR ready and merge; the factory never does.',
+      guidance: 'orch marks the draft PR ready; humans merge, the factory never does.',
     };
   }
   if (!job.prUrl) return { line: 'No PR yet.', guidance: 'CI is observed once a draft PR exists.' };
@@ -298,7 +298,7 @@ export function ciSummary(
     guidance:
       ci.current === false
         ? `Run orch gh ci ${job.id} again for the current HEAD.`
-        : 'The session completes the job; nothing here merges or marks the PR ready.',
+        : 'The session completes the job with orch gh ci, which marks the draft PR ready; nothing here merges.',
   };
 }
 

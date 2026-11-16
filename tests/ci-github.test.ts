@@ -188,6 +188,6 @@ describe('ci stage: GitHub answers that are not verdicts', () => {
     const c2 = { ...c, token: h.token };
     go(store, c2, 'start');
     expect(reconcile(c2)).toMatchObject({ outcome: 'passing', action: 'complete' });
-    expect(job(c2)).toMatchObject({ stage: 'completed', prState: 'draft' });
+    expect(job(c2)).toMatchObject({ stage: 'completed', prState: 'ready' });
   });
 });

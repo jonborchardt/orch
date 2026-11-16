@@ -22,8 +22,9 @@ daemon, no scheduler, no service.
   them are labelled for review, not trusted);
   reviews are recorded against a clean commit; delivery ends with GitHub's verdict for the exact PR
   head. A draft PR is not "done" until its required checks pass.
-- **Humans keep merge authority.** The factory never merges, never marks a PR ready, never
-  force-pushes, and parks on a human decision when it cannot proceed honestly.
+- **Humans keep merge authority.** The factory never merges and never force-pushes. It marks its
+  draft PR ready for review only once `orch gh ci` reads passing required checks for the PR head,
+  and parks on a human decision when it cannot proceed honestly.
 - **Resumable from persisted state.** Jobs recover from the database, the artifact directory, and
   Git; never from a surviving conversation.
 - **Local-first.** One developer, one machine, Windows first, cross-platform by default; the only
@@ -179,7 +180,8 @@ never pretends to wake a session. Details: [docs/dashboard.md](docs/dashboard.md
 
 ## What still needs a human
 
-- Merging. Marking a PR ready. Fixing GitHub Actions itself (billing, runners, a workflow that never
+- Merging. Marking a PR ready when `gh pr ready` failed (reported, not retried). Fixing GitHub
+  Actions itself (billing, runners, a workflow that never
   reports): `orch` escalates after one re-run.
 - Accepting a verification policy a job proposed, or onboarding a repository that has none.
 - Deciding on an approver's `ESCALATE`, a review round that still requests changes at the limit, a

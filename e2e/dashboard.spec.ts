@@ -19,6 +19,12 @@ test('job board shows every repository and job with honest liveness', async ({ p
   const table = page.getByRole('table', { name: 'Factory jobs' });
   await expect(table).toBeVisible();
   await expect(table.getByRole('row')).toHaveCount(11); // header + 10 jobs
+  // Repository, Session, and Branch / worktree are hidden until chosen from the Columns menu.
+  await expect(table.getByRole('columnheader', { name: 'Repository' })).toHaveCount(0);
+  await expect(table.getByRole('columnheader', { name: 'Session' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Columns' }).click();
+  await page.getByRole('checkbox', { name: 'Repository column' }).check();
+  await page.keyboard.press('Escape');
   await expect(table.getByText('github.com/acme/alpha').first()).toBeVisible();
   await expect(table.getByText('github.com/acme/beta').first()).toBeVisible();
   await expect(table.getByText('last reported running')).toBeVisible();
@@ -148,6 +154,72 @@ test('a finished job can be archived, found under Show: archived, and unarchived
   await page.goto('/');
   await expect(table.getByRole('row')).toHaveCount(11);
   await expect(table.getByText(title)).toBeVisible();
+});
+
+test('archives and unarchives from the board row', async ({ page }) => {
+  // The cancelled job has no owner, so no takeover is needed (App.test covers the live-lease case).
+  const title = 'Migrate to pnpm';
+  await page.goto('/');
+  const table = page.getByRole('table', { name: 'Factory jobs' });
+  const rowOf = (t: string) => table.getByRole('row').filter({ hasText: t });
+  // Only finished rows offer Archive: the completed and the cancelled job.
+  await expect(table.getByRole('button', { name: /^Archive / })).toHaveCount(2);
+  await expect(rowOf('Fix login redirect loop').getByRole('button')).toHaveCount(0);
+  // The row's button names its job: "Archive <title> (<id>)".
+  await rowOf(title)
+    .getByRole('button', { name: new RegExp(`^Archive ${title} [(]job-[0-9a-f]{8}[)]$`) })
+    .click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel(/Take the job from session/)).toHaveCount(0);
+  await dialog.getByLabel(/Reason/).fill('old run');
+  await dialog.getByRole('button', { name: 'Confirm' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(table.getByText(title)).toHaveCount(0);
+  await expect(table.getByRole('row')).toHaveCount(10);
+
+  await page.getByRole('combobox', { name: 'Show' }).click();
+  await page.getByRole('option', { name: 'archived' }).click();
+  await expect(table.getByRole('row')).toHaveCount(2);
+  await rowOf(title)
+    .getByRole('button', { name: new RegExp(`^Unarchive ${title} [(]job-[0-9a-f]{8}[)]$`) })
+    .click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+  // Nothing is archived any more: the archived view is empty.
+  await expect(table).toHaveCount(0);
+  await expect(page.getByText('No jobs match these filters.')).toBeVisible();
+  await page.getByRole('combobox', { name: 'Show' }).click();
+  await page.getByRole('option', { name: 'all' }).click();
+  await expect(table.getByRole('row')).toHaveCount(11);
+  await expect(table.getByText(title)).toBeVisible();
+});
+
+test('filters by text and sorts by a header', async ({ page }) => {
+  await page.goto('/');
+  const table = page.getByRole('table', { name: 'Factory jobs' });
+  await expect(table.getByRole('row')).toHaveCount(11);
+  const filter = page.getByRole('searchbox', { name: 'Filter' });
+  await filter.fill('pnpm');
+  await expect(table.getByRole('row')).toHaveCount(2);
+  await expect(table.getByText('Migrate to pnpm')).toBeVisible();
+  // Combines with Show: no cancelled job matches "csv".
+  await filter.fill('csv');
+  await expect(table.getByRole('row')).toHaveCount(2);
+  await page.getByRole('combobox', { name: 'Show' }).click();
+  await page.getByRole('option', { name: 'cancelled' }).click();
+  await expect(table).toHaveCount(0);
+  await filter.fill('');
+  await expect(table.getByRole('row')).toHaveCount(2);
+  await page.getByRole('combobox', { name: 'Show' }).click();
+  await page.getByRole('option', { name: 'all' }).click();
+  await expect(table.getByRole('row')).toHaveCount(11);
+
+  const job = table.getByRole('columnheader', { name: 'Job' });
+  await job.getByRole('button').click();
+  await expect(job).toHaveAttribute('aria-sort', 'ascending');
+  await expect(table.getByRole('row').nth(1)).toContainText('Add health endpoint');
+  await job.getByRole('button').click();
+  await expect(job).toHaveAttribute('aria-sort', 'descending');
+  await expect(table.getByRole('row').last()).toContainText('Add health endpoint');
 });
 
 test('a stopped job explains itself and offers recovery, not approval', async ({ page }) => {

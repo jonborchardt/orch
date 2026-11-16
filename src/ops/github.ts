@@ -1,7 +1,8 @@
 /**
  * GitHub delivery operations for a job: push the branch, create or reuse a draft PR, observe
- * PR and CI state. Every mutation checks job ownership first and validates that the GitHub
- * repository and base branch match the job before anything is pushed or created.
+ * PR and CI state, and mark the PR ready once CI completes the job. Every mutation checks job
+ * ownership first and validates that the GitHub repository and base branch match the job before
+ * anything is pushed or created.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -30,6 +31,7 @@ import {
   type GhRepo,
   listChecksFor,
   listPrsForBranch,
+  markPrReady,
   prWorkflowState,
   requiredChecksFor,
   rerunFailedJobs,
@@ -47,6 +49,7 @@ import {
   recordCi,
   recordEvent,
   recordPr,
+  recordPrReady,
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
@@ -247,6 +250,12 @@ export interface CiReconcileResult {
   /** What this call did to the workflow. */
   action: 'wait' | 'complete' | 'rework' | 'escalate' | 'exhausted';
   reason: string;
+  /**
+   * For `complete`: whether orch took the draft PR out of draft (`marked`), found it already
+   * ready or merged (`already`), or `gh pr ready` failed (`failed`, see readyError). Null otherwise.
+   */
+  ready: 'marked' | 'already' | 'failed' | null;
+  readyError: string | null;
 }
 
 /** Reconciliations already recorded for `head` (`pr status` observations carry no outcome). */
@@ -485,6 +494,8 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     });
   }
   let updated: Job;
+  let ready: CiReconcileResult['ready'] = null;
+  let readyError: string | null = null;
   if (action === 'rework' || action === 'exhausted') {
     updated = transitionJob(store, id, 'rework', { ...tok, reason });
   } else if (action === 'escalate') {
@@ -492,6 +503,15 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
   } else if (action === 'complete') {
     // The read and the completion are one operation: no stored verdict is ever reused.
     updated = completeCi(store, id, tok);
+    // Strictly after the verdict commits: a failed or interrupted ready never undoes it, and is
+    // not retried (a human runs gh pr ready; the board still shows the PR as draft).
+    if (prState === 'draft') {
+      readyError = markPrReady(pr.url, tree.path);
+      updated = recordPrReady(store, id, { ...tok, head, error: readyError });
+      ready = readyError === null ? 'marked' : 'failed';
+    } else {
+      ready = 'already';
+    }
   } else {
     updated = getJob(store.db, id);
   }
@@ -509,5 +529,7 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     waitSeconds: action === 'wait' ? waitSeconds(polls) : null,
     action,
     reason,
+    ready,
+    readyError,
   };
 }

@@ -1,7 +1,7 @@
 /**
- * GitHub access through the `gh` CLI, invoked with argument arrays. Never merges, force-pushes,
- * or marks a PR ready. Set ORCH_GH_SHIM to a JavaScript file to replace `gh` with
- * `node <shim> <args>` in tests.
+ * GitHub access through the `gh` CLI, invoked with argument arrays. Never merges or force-pushes;
+ * the only PR mutations are creating a draft and marking it ready. Set ORCH_GH_SHIM to a
+ * JavaScript file to replace `gh` with `node <shim> <args>` in tests.
  */
 import type { CiCheck } from '../core/ci.ts';
 import { ToolError } from '../core/errors.ts';
@@ -262,11 +262,20 @@ export function actionsJobRunId(nameWithOwner: string, jobId: number, cwd: strin
 
 /**
  * `gh run rerun <id> --failed`: GitHub re-runs the failed jobs of that workflow run (and their
- * dependents) against the same commit. Returns null on success, else gh's message. The only
- * GitHub mutation besides creating a draft PR; it never touches source, the branch, or the PR.
+ * dependents) against the same commit. Returns null on success, else gh's message. It never
+ * touches source, the branch, or the PR.
  */
 export function rerunFailedJobs(nameWithOwner: string, runId: number, cwd: string): string | null {
   const r = ghResult(['run', 'rerun', String(runId), '--failed', '--repo', nameWithOwner], cwd);
+  return r.status === 0 ? null : (r.stderr || r.stdout).trim() || `exit ${String(r.status)}`;
+}
+
+/**
+ * `gh pr ready <url>`: take a draft PR out of draft once `orch gh ci` completed the job on a
+ * passing verdict for its head. Returns null on success, else gh's message. Never merges.
+ */
+export function markPrReady(url: string, cwd: string): string | null {
+  const r = ghResult(['pr', 'ready', url], cwd);
   return r.status === 0 ? null : (r.stderr || r.stdout).trim() || `exit ${String(r.status)}`;
 }
 

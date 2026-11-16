@@ -257,7 +257,9 @@ describe('App board', () => {
     expect(within(table).getByText('correctness: pending')).toBeInTheDocument();
     expect(within(table).getByText('CI failing @abcdef0')).toBeInTheDocument();
     expect(within(table).getByText('repairs 1/2')).toBeInTheDocument();
-    expect(within(table).getByText('github.com/acme/beta')).toBeInTheDocument();
+    // Repository is hidden by default (Columns menu); the job ids still identify each row.
+    expect(within(table).queryByText('github.com/acme/beta')).not.toBeInTheDocument();
+    expect(within(table).getByText('job-00000002')).toBeInTheDocument();
     expect(screen.getByText('1 stale')).toBeInTheDocument();
   });
 
@@ -882,6 +884,240 @@ describe('Archive', () => {
     expect(screen.getByRole('button', { name: 'Cancel job' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Unarchive' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Board grid: columns, sort, filter, row archive', () => {
+  const headers = () =>
+    within(screen.getByRole('table', { name: 'Factory jobs' }))
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent);
+  const ids = () =>
+    [...document.querySelectorAll<HTMLElement>('[data-job-id]')].map((r) => r.dataset['jobId']);
+  const posts = (f: FetchMock) =>
+    (f.mock.calls as [string, RequestInit | undefined][])
+      .filter(([, i]) => i?.method === 'POST')
+      .map(([u, i]) => [u, JSON.parse(i?.body as string) as unknown]);
+  async function show(filter: string) {
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
+    fireEvent.click(await screen.findByRole('option', { name: filter }));
+  }
+
+  it('hides Repository, Session, and Branch by default; the Columns menu toggles and remembers', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(headers()).not.toContain('Repository');
+    expect(headers()).not.toContain('Session');
+    expect(headers()).not.toContain('Branch / worktree');
+    expect(headers()).toEqual(expect.arrayContaining(['Job', 'Status', 'Stage', 'Actions']));
+    fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
+    const menu = await screen.findByRole('menu');
+    expect(
+      within(menu)
+        .getAllByRole('checkbox')
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual([
+      'Repository column',
+      'Stage column',
+      'Session column',
+      'Branch / worktree column',
+      'Round column',
+      'Reviews column',
+      'Blocking column',
+      'Elapsed column',
+      'Updated column',
+      'PR / CI column',
+    ]);
+    expect(within(menu).getByRole('checkbox', { name: 'Session column' })).not.toBeChecked();
+    fireEvent.click(within(menu).getByRole('checkbox', { name: 'Session column' }));
+    fireEvent.click(within(menu).getByRole('checkbox', { name: 'Stage column' }));
+    expect(within(menu).getByRole('checkbox', { name: 'Session column' })).toBeChecked();
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    expect(headers()).toContain('Session');
+    expect(headers()).not.toContain('Stage');
+    expect(screen.getAllByText('claude-1').length).toBeGreaterThan(0);
+    cleanup();
+    // Remounting reads the saved choice.
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(headers()).toContain('Session');
+    expect(headers()).not.toContain('Stage');
+    expect(headers()).not.toContain('Repository');
+  });
+
+  it('sorts by a header click, ascending then descending, and keeps server order until then', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(ids()).toEqual(['job-00000001', 'job-00000002', 'job-00000003', 'job-00000004']);
+    const header = (name: string) =>
+      must(screen.getByRole('button', { name }).closest<HTMLElement>('th'));
+    fireEvent.click(screen.getByRole('button', { name: 'Blocking' }));
+    expect(header('Blocking')).toHaveAttribute('aria-sort', 'ascending');
+    expect(ids().at(-1)).toBe('job-00000002');
+    fireEvent.click(screen.getByRole('button', { name: 'Blocking' }));
+    expect(header('Blocking')).toHaveAttribute('aria-sort', 'descending');
+    expect(ids()[0]).toBe('job-00000002');
+    fireEvent.click(screen.getByRole('button', { name: 'Job' }));
+    expect(header('Job')).toHaveAttribute('aria-sort', 'ascending');
+    expect(header('Blocking')).not.toHaveAttribute('aria-sort');
+    expect(ids()).toEqual(['job-00000001', 'job-00000002', 'job-00000004', 'job-00000003']);
+    fireEvent.click(screen.getByRole('button', { name: 'Job' }));
+    expect(ids()).toEqual(['job-00000003', 'job-00000004', 'job-00000002', 'job-00000001']);
+    for (const name of ['Stage', 'Status', 'Round', 'Elapsed', 'Updated']) {
+      fireEvent.click(screen.getByRole('button', { name }));
+      expect(header(name)).toHaveAttribute('aria-sort', 'ascending');
+    }
+  });
+
+  it('filters by text, combined with the Show and Repository selects', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    const filter = screen.getByRole('searchbox', { name: 'Filter' });
+    fireEvent.change(filter, { target: { value: 'gamma' } });
+    expect(ids()).toEqual(['job-00000003', 'job-00000004']);
+    fireEvent.change(filter, { target: { value: 'job-00000002' } });
+    expect(ids()).toEqual(['job-00000002']);
+    fireEvent.change(filter, { target: { value: 'gamma' } });
+    await show('cancelled');
+    await waitFor(() => {
+      expect(ids()).toEqual(['job-00000004']);
+    });
+    fireEvent.change(filter, { target: { value: '' } });
+    await show('all');
+    await waitFor(() => {
+      expect(ids()).toHaveLength(4);
+    });
+    // The Repository select narrows server-side; the text filter applies on top.
+    data.rows = rows.filter((r) => r.repo === 'gamma');
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Repository' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'gamma' }));
+    fireEvent.change(filter, { target: { value: 'delta' } });
+    await waitFor(() => {
+      expect(ids()).toEqual(['job-00000004']);
+    });
+  });
+
+  it('offers Archive only on finished rows and posts it, with takeover only when checked', async () => {
+    const done = row({
+      id: 'job-0000000a',
+      title: 'Done job',
+      stage: 'completed',
+      status: 'completed',
+      liveness: 'completed',
+    });
+    const failed = row({
+      id: 'job-0000000b',
+      title: 'Failed',
+      status: 'failed',
+      liveness: 'failed',
+    });
+    data.rows = [...rows, done, failed];
+    data.actionBody = { job: detail().job, message: 'Job archived' };
+    const f = mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    const archiveIn = (id: string) => {
+      const r = must(document.querySelector<HTMLElement>(`[data-job-id="${id}"]`));
+      // Each row's button names its job, so a screen reader can tell them apart.
+      return within(r).queryByRole('button', { name: new RegExp(`^Archive .+ [(]${id}[)]$`) });
+    };
+    for (const id of ['job-00000001', 'job-00000002', 'job-00000003', 'job-0000000b']) {
+      expect(archiveIn(id)).toBeNull();
+    }
+    expect(archiveIn('job-00000004')).not.toBeNull();
+    // A completed job still holding its finishing session's live lease: takeover offered, unchecked.
+    expect(screen.getByRole('button', { name: 'Archive Done job (job-0000000a)' })).toBe(
+      archiveIn('job-0000000a'),
+    );
+    fireEvent.click(must(archiveIn('job-0000000a')));
+    let dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByRole('checkbox', { name: /Take the job from session claude-1/ }),
+    ).not.toBeChecked();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(posts(f)).toEqual([['/api/jobs/job-0000000a/actions', { action: 'archive' }]]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    // The row may leave the view, so focus moves to the Columns button, not to the page body.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Columns' })).toHaveFocus();
+    });
+    fireEvent.click(must(archiveIn('job-0000000a')));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Take the job/ }));
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Reason/ }), {
+      target: { value: 'old run' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(posts(f)[1]).toEqual([
+        '/api/jobs/job-0000000a/actions',
+        { action: 'archive', reason: 'old run', force: true },
+      ]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    // The cancelled row has no owner, so no takeover checkbox; a refusal shows in the dialog.
+    data.actionStatus = 409;
+    data.actionBody = { error: { type: 'OwnershipError', message: 'held by claude-9' } };
+    fireEvent.click(must(archiveIn('job-00000004')));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect(await within(dialog).findByText('OwnershipError: held by claude-9')).toBeInTheDocument();
+  });
+
+  it('Show: archived lists Unarchive on each row; after it the row returns to all', async () => {
+    const archived = row({
+      id: 'job-00000009',
+      title: 'Omega archived',
+      stage: 'completed',
+      status: 'completed',
+      liveness: 'completed',
+      owner: null,
+      archivedAt: '2026-11-14T00:00:00.000Z',
+    });
+    data.rows = [...rows, archived];
+    data.actionBody = { job: detail().job, message: 'Job unarchived' };
+    const f = mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(screen.queryByRole('button', { name: /^Unarchive / })).not.toBeInTheDocument();
+    await show('archived');
+    await waitFor(() => {
+      expect(ids()).toEqual(['job-00000009']);
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Unarchive Omega archived (job-00000009)' }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    data.rows = [...rows, { ...archived, archivedAt: null }];
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(posts(f)).toEqual([['/api/jobs/job-00000009/actions', { action: 'unarchive' }]]);
+    });
+    await waitFor(() => {
+      expect(ids()).toEqual([]);
+    });
+    // Jobs exist but none match: say so, and keep the Columns button (and focus on it).
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('No jobs match these filters.');
+    });
+    expect(screen.getByRole('button', { name: 'Columns' })).toHaveFocus();
+    await show('all');
+    await waitFor(() => {
+      expect(ids()).toContain('job-00000009');
+    });
   });
 });
 

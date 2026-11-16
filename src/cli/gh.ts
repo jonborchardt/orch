@@ -30,10 +30,11 @@ export const GH_HELP = `Usage: orch gh <command> [options]
   pr status <job-id>                  PR state and CI rollup; recorded on the job when --token is given
   ci <job-id>                         Reconcile CI for the PR head (ci stage): record GitHub's verdict for
                                       that exact commit; failing checks save logs and rework, checks that
-                                      cannot run escalate, pending checks wait for the next call
+                                      cannot run escalate, pending checks wait for the next call; a
+                                      passing verdict completes the job and marks the draft PR ready
 
-gh must be installed and authenticated (gh auth login). Nothing here merges, force-pushes, or
-marks a PR ready; humans do that.
+gh must be installed and authenticated (gh auth login). Nothing here merges or force-pushes;
+humans merge.
 `;
 
 export function runGh(store: Store, args: string[], o: GhOptions, env = process.env): unknown {
