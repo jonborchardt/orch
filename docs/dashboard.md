@@ -51,21 +51,38 @@ shows the reviewer, verdict, and summary; expand it for the full review text), c
 findings per round, the approval decision, registered artifacts (size, marker, hash), the event
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
 the PR with its CI state. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
-GitHub. A status panel above the controls repeats the board's explanation with the full recorded
-reason and a **Resume** block. When no live lease is held (unowned, lapsed lease, interrupted,
-failed, or released at `needs-human`) it shows the `/factory resume <id>` command with a copy
-button, the checkout to run it in (the repository the job was started from, with an "open in VS
-Code" link), and the note that copying changes nothing; only a Claude Code session opened in that
-checkout resumes the job. While any session holds a live lease the command is withheld and the
-holder is named, because `orch factory resume` would be refused without a deliberate `--force`;
-the dashboard never forces ownership.
+GitHub. A status panel above the controls reads as one summary line, one **Next:** line, and a
+collapsed **Details** expander. The summary is the bold blocker label and one sentence: for a
+`CI stopped` job the CI line (head and repair budget), otherwise the blocker summary with the
+recorded reason, or the completion line or state description when nothing blocks. The next line
+names what to do for that state: the CI guidance (also for completed jobs); for an approver
+escalation, read the decision below and then Resume at the return stage or Request rework; for
+exhausted review rounds, Request rework or cancel; for a failed verification, Request rework or
+resume; for an unclassified escalation, no recommended control; for a failed, interrupted,
+waiting, or lapsed job, resume from a Claude Code session in the checkout; while a session holds a
+live lease or runs the job, continue from or wait for that session. A cancelled job has no next
+line. When a session may resume the job, a **Copy resume command** button for
+`/factory resume <id>` sits beside those two lines. Details holds the rest: a `CI stopped` job's
+recorded reason, the command with the checkout to run it in (the repository the job was started
+from, with an "open in VS Code" link) and the worktree, the note that copying changes nothing
+(only a Claude Code session opened in that checkout resumes the job), the per-state note and the
+equivalent CLI, and the execution session. While any session holds a live lease the command is
+withheld and Details names the holder, because `orch factory resume` would be refused without a
+deliberate `--force`; the dashboard never forces ownership. At `needs-human` a block between the
+status panel and the controls shows the approver's `DECISION` marker with the `Rationale` section
+of `decision.md` verbatim (or "No approver decision recorded."), and the newest consolidated
+round's blocking findings: "Round N: K blocking finding(s)" with that round's `[BLOCKING]` lines.
+The `BLOCKING:` marker is authoritative, so a round recorded as 0 says "no blocking findings" even
+when tagged lines remain in the file.
 
 **CI state** is shown with the commit it was read for, never on its own: the board's chip reads
 `CI <rollup> @<sha7>` (plus `repairs n/m` once a repair happened) and the detail's PR tab carries
 the full head, when it was observed, whether it is still the worktree HEAD (an old green verdict
-for a commit that is no longer HEAD is marked as not current), the repair budget, GitHub's reason
+for a commit that is no longer HEAD is marked as not current), GitHub's reason
 from the last `orch gh ci` reconciliation, each failed required check with its GitHub log link and
-the log saved under the artifact directory, and one line of guidance. Everything comes from
+the log saved under the artifact directory, and one line of guidance. The repair budget is stated
+once, in the CI line (`n of m repairs used`) and the chip's `repairs n/m` caption; the detail's
+status panel uses the CI line as its summary and the guidance as its next line. Everything comes from
 persisted fields (`src/server/status.ts` `ciView`): the rollup columns, the newest `ci.observed`
 event, and the `job.completed` event. A ci-stage escalation gets its own blocker (`CI stopped`)
 naming the cause from the recorded reason code and outcome: repair budget spent, no checks for the

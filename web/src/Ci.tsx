@@ -99,7 +99,7 @@ export function CiChip({ ci, compact }: { ci: CiView; compact?: boolean }) {
   );
 }
 
-/** The PR tab's CI panel: the verdict with its commit, the budget, the failures, and what to do. */
+/** The PR tab's CI panel: the verdict with its commit, the failures, and what to do. */
 export function CiPanel({ detail }: { detail: JobDetailView }) {
   const { ci, job } = detail;
   return (
@@ -117,7 +117,7 @@ export function CiPanel({ detail }: { detail: JobDetailView }) {
             {ci.current === true ? ' (current worktree HEAD)' : ''}
           </>
         ) : null}
-        . Repairs used: {ci.repairs} of {ci.maxRepairs}.{ci.reason ? ` GitHub: ${ci.reason}` : ''}
+        .{ci.reason ? ` GitHub: ${ci.reason}` : ''}
       </Typography>
       {ci.failures.length > 0 && (
         <ul style={{ margin: 0 }}>

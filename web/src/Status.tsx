@@ -1,7 +1,7 @@
 import { Button, Chip, Link, Snackbar, Stack, Tooltip, Typography } from '@mui/material';
 import { useState } from 'react';
 
-import type { Blocker, Liveness, Resume } from '../../src/server/types.ts';
+import type { Blocker, JobDetailView, Liveness, Resume } from '../../src/server/types.ts';
 import { BLOCKER_LABEL, STATE } from './format.ts';
 
 /** Execution state chip: glyph plus label, never colour alone. Same look on board and detail. */
@@ -19,7 +19,16 @@ export function StatusChip({ state }: { state: Liveness }) {
 }
 
 /** One compact line explaining why the job is not progressing. */
-export function BlockerText({ blocker, compact }: { blocker: Blocker; compact?: boolean }) {
+export function BlockerText({
+  blocker,
+  compact,
+  ciLine,
+}: {
+  blocker: Blocker;
+  compact?: boolean;
+  /** Detail only: a ci blocker's summary is the CI line. */
+  ciLine?: string;
+}) {
   const text = blocker.detail ? `${blocker.summary}: ${blocker.detail}` : blocker.summary;
   if (compact) {
     return (
@@ -36,25 +45,57 @@ export function BlockerText({ blocker, compact }: { blocker: Blocker; compact?: 
       </Tooltip>
     );
   }
+  // The detail's summary sentence: a ci blocker reads the CI line, which already names the head
+  // and the repair budget; the recorded reason sits in the Details expander (BlockerNotes).
+  const sentence = blocker.kind === 'ci' && ciLine ? ciLine : `${text}${blocker.detail ? '' : '.'}`;
   return (
-    <Stack spacing={0.5} data-blocker={blocker.kind}>
-      <Typography>
-        <b>{BLOCKER_LABEL[blocker.kind]}.</b> {blocker.summary}
-        {blocker.detail ? '' : '.'}
-      </Typography>
-      {blocker.detail ? (
-        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-          Recorded reason: {blocker.detail}
-        </Typography>
-      ) : (
-        (blocker.kind === 'escalated' || blocker.kind === 'failed') && (
-          <Typography variant="body2" color="text.secondary">
-            No reason was recorded with the escalation; check the events and artifacts.
-          </Typography>
-        )
-      )}
-    </Stack>
+    <Typography data-blocker={blocker.kind}>
+      <b>{BLOCKER_LABEL[blocker.kind]}.</b> {sentence}
+    </Typography>
   );
+}
+
+/** What the detail's Details expander adds to the summary line about the blocker. */
+export function BlockerNotes({ blocker }: { blocker: Blocker }) {
+  if (blocker.kind === 'ci' && blocker.detail) {
+    return (
+      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+        Recorded reason: {blocker.detail}
+      </Typography>
+    );
+  }
+  if (!blocker.detail && (blocker.kind === 'escalated' || blocker.kind === 'failed')) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        No reason was recorded with the escalation; check the events and artifacts.
+      </Typography>
+    );
+  }
+  return null;
+}
+
+/** Same label as the Resume control in Actions.tsx (`ci` and `pr` in capitals). */
+const resumeAt = (stage: string) =>
+  `Resume at ${stage === 'ci' || stage === 'pr' ? stage.toUpperCase() : stage}`;
+
+/** The detail's one "Next:" line, from fields the detail view already carries; null when cancelled. */
+export function nextAction(d: JobDetailView): string | null {
+  if (d.liveness === 'cancelled') return null;
+  if (d.liveness === 'completed' || d.blocker?.kind === 'ci') return d.ci.guidance || null;
+  switch (d.blocker?.kind) {
+    case 'decision':
+      return `Read the approver's decision below, then ${resumeAt(d.job.returnStage ?? 'build')} or Request rework.`;
+    case 'findings':
+      return 'Request rework to address the blocking findings, or cancel.';
+    case 'verification':
+      return 'Request rework to fix the failing check, or resume to run it again.';
+    case 'escalated':
+      return 'No control is recommended; read the events and artifacts, then choose.';
+  }
+  const holder =
+    d.resume?.heldBy?.session ?? (d.liveness === 'running' ? d.job.ownerSession : null);
+  if (holder) return `Continue from, or wait for, session ${holder}.`;
+  return "Resume from a Claude Code session in the job's checkout.";
 }
 
 async function toClipboard(text: string): Promise<boolean> {
@@ -126,9 +167,11 @@ const RESUME_NOTE: Partial<Record<Liveness, string>> = {
   idle: 'No live session owns the job; resuming picks it up where it stopped.',
 };
 
-/** The full affordance for the detail view: command, where to run it, copy, open the checkout. */
+/**
+ * The detail's resume particulars, inside the Details expander: the command, where to run it, and
+ * the checkout link. The Copy resume command button sits outside, next to the summary.
+ */
 export function ResumeBox({
-  id,
   resume,
   cli,
   state,
@@ -136,7 +179,6 @@ export function ResumeBox({
   checkoutLink,
   worktree,
 }: {
-  id: string;
   resume: Resume;
   /** The orch CLI form of the same resume, from the server. */
   cli: string;
@@ -167,7 +209,6 @@ export function ResumeBox({
       <Typography variant="subtitle2">Resume</Typography>
       <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
         <code>{command}</code>
-        <CopyResume id={id} command={command} checkout={checkout} />
         <Button variant="outlined" href={checkoutLink} component="a">
           Open checkout in VS Code
         </Button>

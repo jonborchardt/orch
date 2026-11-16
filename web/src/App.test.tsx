@@ -182,6 +182,10 @@ function must<T>(x: T | null | undefined): T {
   if (x === null || x === undefined) throw new Error('expected an element');
   return x;
 }
+/** Expands the detail status panel's Details (collapsed by default, unmounted while closed). */
+function openDetails() {
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+}
 let data: { rows: BoardRow[]; detail: JobDetailView; actionStatus: number; actionBody: unknown };
 
 function mockFetch(): FetchMock {
@@ -460,12 +464,23 @@ describe('Job detail', () => {
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     expect(screen.getByText('Decision needed.')).toBeInTheDocument();
-    expect(screen.getByText(/Recorded reason: AC2 needs deployment verification/)).toBeVisible();
+    // The recorded reason is part of the one summary sentence.
+    expect(screen.getByTestId('status-summary')).toHaveTextContent(
+      'Approver escalated: a human must decide: AC2 needs deployment verification',
+    );
+    expect(screen.getByTestId('status-next')).toHaveTextContent(
+      "Read the approver's decision below, then Resume at approve or Request rework.",
+    );
     const approve = screen.getByRole('button', { name: 'Resume at approve' }).className;
     expect(approve).toContain('MuiButton-contained');
     expect(approve).toContain('MuiButton-colorSuccess');
     expect(screen.queryByTestId('approve-caution')).not.toBeInTheDocument();
-    const resume = screen.getByTestId('resume');
+    // The command's particulars wait in Details; the copy button does not.
+    expect(screen.queryByTestId('resume')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Copy resume command/ })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Copy resume command/ })).toBeVisible();
+    openDetails();
+    const resume = await screen.findByTestId('resume');
     expect(within(resume).getByText('/factory resume job-00000003')).toBeInTheDocument();
     expect(within(resume).getByText(/opened in/).textContent).toContain('/g');
     expect(within(resume).getByText(/Copying does not resume anything/)).toBeInTheDocument();
@@ -485,7 +500,12 @@ describe('Job detail', () => {
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
-    expect(screen.getByText(/No reason was recorded/)).toBeInTheDocument();
+    expect(screen.getByTestId('status-next')).toHaveTextContent(
+      'No control is recommended; read the events and artifacts, then choose.',
+    );
+    expect(screen.queryByText(/No reason was recorded/)).not.toBeInTheDocument();
+    openDetails();
+    expect(await screen.findByText(/No reason was recorded/)).toBeVisible();
     // No recorded return stage: Resume defaults to build.
     const approve = screen.getByRole('button', { name: 'Resume at build' });
     expect(approve.className).toContain('MuiButton-outlined');
@@ -510,6 +530,9 @@ describe('Job detail', () => {
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByTestId('status-next')).toHaveTextContent(
+      'Request rework to address the blocking findings, or cancel.',
+    );
     expect(screen.getByRole('button', { name: 'Request rework' }).className).toContain(
       'MuiButton-contained',
     );
@@ -555,8 +578,10 @@ describe('Job detail', () => {
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByTestId('resume-unavailable')).not.toBeInTheDocument();
+    openDetails();
     expect(screen.queryByTestId('resume')).not.toBeInTheDocument();
-    const unavailable = screen.getByTestId('resume-unavailable');
+    const unavailable = await screen.findByTestId('resume-unavailable');
     expect(unavailable).toHaveTextContent('claude-9');
     expect(unavailable).toHaveTextContent('never forces ownership');
     expect(screen.queryByRole('button', { name: /Copy resume command/ })).not.toBeInTheDocument();
@@ -589,7 +614,12 @@ describe('Job detail', () => {
       'MuiButton-outlined',
     );
     expect(screen.getByText('Interrupted.')).toBeInTheDocument();
-    expect(screen.getByTestId('resume')).toHaveTextContent('/factory resume job-00000003');
+    expect(screen.getByTestId('status-next')).toHaveTextContent(
+      "Resume from a Claude Code session in the job's checkout.",
+    );
+    expect(screen.getByRole('button', { name: /Copy resume command/ })).toBeVisible();
+    openDetails();
+    expect(await screen.findByTestId('resume')).toHaveTextContent('/factory resume job-00000003');
     expect(screen.getByTestId('resume')).toHaveTextContent('takes the job over');
     expect(screen.getByRole('button', { name: 'Cancel job' })).toBeInTheDocument();
     cleanup();
@@ -606,7 +636,8 @@ describe('Job detail', () => {
     expect(screen.getByText('No actions: the job is cancelled.')).toBeInTheDocument();
     expect(screen.queryByTestId('resume')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel job' })).not.toBeInTheDocument();
-    expect(screen.getByText(/Recorded reason: dup/)).toBeInTheDocument();
+    expect(screen.getByTestId('status-summary')).toHaveTextContent('Cancelled during build: dup');
+    expect(screen.queryByTestId('status-next')).not.toBeInTheDocument();
   });
 
   it('offers Accept delivery only when the server lists it, requires a reason, and labels the result', async () => {
@@ -646,7 +677,8 @@ describe('Job detail', () => {
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     expect(screen.getByText('CI stopped.')).toBeInTheDocument();
-    expect(screen.getByTestId('ci-guidance')).toHaveTextContent('accept the delivery by hand');
+    expect(screen.queryByTestId('ci-guidance')).not.toBeInTheDocument();
+    expect(screen.getByTestId('status-next')).toHaveTextContent(`Next: ${ciNone.guidance}`);
     expect(screen.getByTestId('close-out-caution')).toHaveTextContent('CI is none for b2c3d4e');
     expect(screen.getByRole('button', { name: 'Resume at CI' })).toBeInTheDocument();
     // Neutral, never primary: a close-out is a human override, not the workflow's own next step.
@@ -681,6 +713,7 @@ describe('Job detail', () => {
     // Without the server's permission there is no button, whatever the CI state says.
     data.detail = detail({
       ci: noCi({
+        line: 'CI still failing for d4e5f60; 1 of 1 repairs used.',
         guidance: 'The repair budget is spent.',
         head: 'd4e5f60718293041',
         status: 'failing',
@@ -708,9 +741,18 @@ describe('Job detail', () => {
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     expect(screen.queryByRole('button', { name: 'Accept delivery' })).not.toBeInTheDocument();
-    expect(screen.getByTestId('ci-guidance')).toHaveTextContent('repair budget is spent');
+    // A ci blocker's summary is the CI line; its recorded reason waits in Details.
+    expect(screen.getByTestId('status-summary')).toHaveTextContent(
+      'CI stopped. CI still failing for d4e5f60; 1 of 1 repairs used.',
+    );
+    expect(screen.getByTestId('status-summary')).not.toHaveTextContent('CI failed: test');
+    expect(screen.getByTestId('status-next')).toHaveTextContent('repair budget is spent');
+    openDetails();
+    expect(await screen.findByText('Recorded reason: CI failed: test')).toBeVisible();
     fireEvent.click(screen.getByRole('tab', { name: 'PR' }));
-    expect(screen.getByTestId('ci-panel')).toHaveTextContent('Repairs used: 1 of 1');
+    // The budget is in the CI line and the chip's caption, not repeated as a sentence.
+    expect(screen.getByTestId('ci-panel')).not.toHaveTextContent('Repairs used:');
+    expect(within(screen.getByTestId('ci-panel')).getByText('repairs 1/1')).toBeInTheDocument();
     expect(screen.getByTestId('ci-panel')).toHaveTextContent('CI failing @d4e5f60');
   });
 
@@ -742,9 +784,10 @@ describe('Job detail: execution session', () => {
     window.location.hash = '#/jobs/job-00000003';
     mockFetch();
     mount();
-    await waitFor(() => {
-      expect(screen.getByTestId('session-none')).toHaveTextContent('No execution session');
-    });
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByTestId('session-none')).not.toBeInTheDocument();
+    openDetails();
+    expect(await screen.findByTestId('session-none')).toHaveTextContent('No execution session');
   });
 
   it('offers an in-VS-Code link for copying, never as a dead browser control', async () => {
@@ -766,9 +809,9 @@ describe('Job detail: execution session', () => {
     window.location.hash = '#/jobs/job-00000003';
     mockFetch();
     mount();
-    await waitFor(() => {
-      expect(screen.getByTestId('session')).toBeInTheDocument();
-    });
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    openDetails();
+    await screen.findByTestId('session');
     const s = screen.getByTestId('session');
     expect(s).toHaveTextContent('vscode-agents');
     expect(s).toHaveTextContent(link);
@@ -798,9 +841,9 @@ describe('Job detail: execution session', () => {
     window.location.hash = '#/jobs/job-00000003';
     mockFetch();
     mount();
-    await waitFor(() => {
-      expect(screen.getByTestId('session')).toBeInTheDocument();
-    });
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    openDetails();
+    await screen.findByTestId('session');
     const s = screen.getByTestId('session');
     expect(within(s).getByRole('link', { name: 'Open session in VS Code' })).toHaveAttribute(
       'href',
@@ -808,6 +851,178 @@ describe('Job detail: execution session', () => {
     );
     expect(s).toHaveTextContent(`claude --resume ${uuid}`);
     expect(s).not.toHaveTextContent('earlier attachment');
+  });
+});
+
+describe('Job detail: status panel and escalation', () => {
+  const decisionMd = `# Decision: Gamma
+
+## Examined
+
+spec.md, build.md, the diff.
+
+## Scope changes
+
+The logging format changed.
+
+## Rationale
+
+AC2 needs a deployment to verify; a human should decide.
+
+DECISION: ESCALATE
+`;
+  const decisionRow = {
+    id: 7,
+    jobId: 'job-00000003',
+    stage: 'approve',
+    round: null,
+    path: 'decision.md',
+    bytes: decisionMd.length,
+    sha256: null,
+    marker: 'escalate',
+    head: null,
+    createdAt: '2026-11-13T08:20:00.000Z',
+  } satisfies JobDetailView['artifacts'][number];
+  const consolidated = (marker: number) => `# Consolidated findings (round 2)
+
+## Findings
+
+1. [BLOCKING] a.ts:1 — quotes are not escaped → escape them
+2. [MAJOR] a.ts:9 — buffers everything → stream
+3. [BLOCKING] b.ts:4 — no backpressure → add it
+4. [MINOR] c.ts:2 — naming → rename
+
+## Dropped
+
+- [BLOCKING] dropped.ts:1 — out of scope
+
+BLOCKING: ${String(marker)}
+`;
+  const withRounds = (marker: number) =>
+    detail({
+      artifacts: [decisionRow],
+      contents: {
+        'decision.md': decisionMd,
+        'round-1/consolidated.md': consolidated(5),
+        'round-2/consolidated.md': consolidated(marker),
+      },
+      rounds: [
+        { round: 1, reviews: [], consolidated: 'round-1/consolidated.md', blocking: 5 },
+        { round: 2, reviews: [], consolidated: 'round-2/consolidated.md', blocking: marker },
+        { round: 3, reviews: [], consolidated: null, blocking: null },
+      ],
+    });
+
+  it('shows the approver decision and the newest blocking findings above Controls', async () => {
+    mockFetch();
+    data.detail = withRounds(2);
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    const decision = await screen.findByTestId('decision-summary');
+    expect(decision).toHaveTextContent('DECISION: ESCALATE');
+    expect(decision).toHaveTextContent('AC2 needs a deployment to verify; a human should decide.');
+    expect(decision).not.toHaveTextContent('Examined');
+    expect(decision).not.toHaveTextContent('Scope changes');
+    expect(decision).not.toHaveTextContent('logging format');
+    const controls = screen.getByText('Controls');
+    expect(decision.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    const findings = screen.getByTestId('blocking-findings');
+    expect(findings).toHaveTextContent('Round 2: 2 blocking finding(s)');
+    const items = within(findings).getAllByRole('listitem');
+    expect(items.map((li) => li.textContent)).toEqual([
+      '[BLOCKING] a.ts:1 — quotes are not escaped → escape them',
+      '[BLOCKING] b.ts:4 — no backpressure → add it',
+    ]);
+    expect(findings.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it('trusts the BLOCKING marker over tagged lines, and says when nothing is consolidated', async () => {
+    mockFetch();
+    data.detail = withRounds(0);
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    const findings = await screen.findByTestId('blocking-findings');
+    expect(findings).toHaveTextContent('Round 2: no blocking findings.');
+    expect(within(findings).queryAllByRole('listitem')).toHaveLength(0);
+    cleanup();
+
+    data.detail = detail({ contents: {}, rounds: [] });
+    mount();
+    expect(await screen.findByTestId('blocking-findings')).toHaveTextContent(
+      'No consolidated findings yet.',
+    );
+    expect(screen.getByTestId('decision-summary')).toHaveTextContent(
+      'No approver decision recorded.',
+    );
+  });
+
+  it('renders neither block away from needs-human', async () => {
+    mockFetch();
+    const base = withRounds(2);
+    data.detail = {
+      ...base,
+      job: { ...base.job, stage: 'review', status: 'running', ownerSession: 'claude-9' },
+      liveness: 'running',
+      blocker: null,
+      actions: ['cancel'],
+      resume: {
+        command: null,
+        heldBy: { session: 'claude-9', leaseExpiresAt: '2999-01-01T00:00:00.000Z' },
+      },
+    };
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    // A live lease: the next line names the holder.
+    expect(await screen.findByTestId('status-next')).toHaveTextContent(
+      'Continue from, or wait for, session claude-9.',
+    );
+    expect(screen.queryByTestId('decision-summary')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('blocking-findings')).not.toBeInTheDocument();
+  });
+
+  it('keeps Equivalent CLI and the checkout in a collapsed Details, and the next line per kind', async () => {
+    mockFetch();
+    data.detail = detail({
+      blocker: { kind: 'verification', summary: 'Verification failed at abc1234', detail: null },
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    expect(await screen.findByTestId('status-next')).toHaveTextContent(
+      'Request rework to fix the failing check, or resume to run it again.',
+    );
+    const details = screen.getByRole('button', { name: 'Details' });
+    expect(details).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/Equivalent CLI/)).not.toBeInTheDocument();
+    openDetails();
+    expect(details).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.findByText(/Equivalent CLI/)).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Open checkout in VS Code' })).toBeVisible();
+  });
+
+  it('never repeats the plan blocked reason as an Overview alert', async () => {
+    mockFetch();
+    data.detail = detail({
+      plan: {
+        step: 'blocked',
+        reason: 'needs a human',
+        agents: [],
+        artifacts: [],
+        blockedReason: 'AC2 needs deployment verification',
+        worktree: null,
+      } as unknown as JobDetailView['plan'],
+      planError: null,
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByText(/Next step:/);
+    expect(screen.queryByText(/^Blocked:/)).not.toBeInTheDocument();
+    expect(
+      screen.queryAllByRole('alert').filter((a) => a.textContent.startsWith('Blocked:')),
+    ).toHaveLength(0);
   });
 });
 
