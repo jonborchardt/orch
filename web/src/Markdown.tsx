@@ -139,3 +139,41 @@ function Inline({ text }: { text: string }) {
     </>
   );
 }
+
+const HEADING = /^(#{1,6})\s+(.*?)\s*$/;
+const MARKER = /^(VERDICT|DECISION|BLOCKING):/;
+
+/**
+ * The body of the section under the heading named `name`, up to the next heading of the same or a
+ * higher level, without marker lines; null when there is no such heading.
+ */
+export function section(text: string, name: string): string | null {
+  const lines = text.split(/\r?\n/);
+  const at = lines.findIndex((l) => HEADING.exec(l)?.[2] === name);
+  if (at < 0) return null;
+  const level = HEADING.exec(lines[at] ?? '')?.[1]?.length ?? 1;
+  const body: string[] = [];
+  for (const line of lines.slice(at + 1)) {
+    const h = HEADING.exec(line);
+    if (h && (h[1]?.length ?? 1) <= level) break;
+    if (!MARKER.test(line)) body.push(line);
+  }
+  return body.join('\n').trim();
+}
+
+/** The lines tagged `[BLOCKING]`, each with the indented continuation lines under it. */
+export function blockingLines(text: string): string[] {
+  const out: string[] = [];
+  let open = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (line.includes('[BLOCKING]')) {
+      out.push(line);
+      open = true;
+    } else if (open && /^\s{2,}\S/.test(line) && !/^\s*([-*]|\d+[.)])\s+/.test(line)) {
+      out[out.length - 1] = `${out[out.length - 1] ?? ''}\n${line}`;
+    } else {
+      open = false;
+    }
+  }
+  return out;
+}
