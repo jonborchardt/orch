@@ -6,3 +6,4 @@ test-results/
 node_modules/
 package-lock.json
 drizzle/**/snapshot.json
+.claude/skills/log-todo/

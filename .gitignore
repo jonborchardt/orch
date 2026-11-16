@@ -40,3 +40,6 @@ Thumbs.db
 
 # Claude Code local overrides
 .claude/settings.local.json
+
+# Private log-todo register (.claude/skills/log-todo)
+/todo/
