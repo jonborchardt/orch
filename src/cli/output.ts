@@ -1,5 +1,6 @@
 /** Human vs JSON rendering. Handlers return plain data; this decides how it is printed. */
 import { OrchError } from '../core/errors.ts';
+import type { FactoryRow } from '../ops/dispatch.ts';
 
 export function print(data: unknown, json: boolean): void {
   console.log(json ? JSON.stringify(data, null, 2) : human(data));
@@ -41,4 +42,68 @@ export function human(data: unknown, indent = ''): string {
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Column header and width cap, in display order. ID is never cut: it is what the user copies. */
+const FACTORY_COLUMNS: readonly [string, number][] = [
+  ['ID', Infinity],
+  ['REPO', 16],
+  ['STAGE', 12],
+  ['STATUS', 12],
+  ['ACTION', 6],
+  ['PR', 8],
+  ['UPDATED', 10],
+  ['TITLE', 50],
+];
+
+/** `orch factory list` text: a header and one row per job; `--json` keeps the full rows. */
+export function formatFactoryList(rows: FactoryRow[], now: Date): string {
+  if (rows.length === 0) return '(none)';
+  const cells = rows.map((r) =>
+    [
+      r.id,
+      r.repo.split('/').pop() ?? r.repo,
+      r.stage,
+      r.status,
+      factoryAction(r),
+      prNumber(r.pr.url),
+      age(r.updatedAt, now),
+      r.title,
+    ].map((c, i) => truncate(c, FACTORY_COLUMNS[i]?.[1] ?? Infinity)),
+  );
+  const table = [FACTORY_COLUMNS.map(([h]) => h), ...cells];
+  const widths = FACTORY_COLUMNS.map((_, i) =>
+    Math.max(...table.map((row) => row[i]?.length ?? 0)),
+  );
+  return table
+    .map((row) =>
+      row
+        .map((c, i) => c.padEnd(widths[i] ?? 0))
+        .join('  ')
+        .trimEnd(),
+    )
+    .join('\n');
+}
+
+function factoryAction(r: FactoryRow): string {
+  if (r.needsHuman) return 'human';
+  if (r.status === 'completed' || r.status === 'cancelled') return 'none';
+  return r.resume === null ? 'wait' : 'resume';
+}
+
+function prNumber(url: string | null): string {
+  const n = /\/pull\/(\d+)/.exec(url ?? '')?.[1];
+  return n === undefined ? '-' : `#${n}`;
+}
+
+function truncate(s: string, cap: number): string {
+  return s.length <= cap ? s : `${s.slice(0, cap - 3)}...`;
+}
+
+function age(iso: string, now: Date): string {
+  const s = Math.max(0, Math.floor((now.getTime() - Date.parse(iso)) / 1000));
+  if (s < 60) return `${String(s)}s ago`;
+  if (s < 3600) return `${String(Math.floor(s / 60))}m ago`;
+  if (s < 86400) return `${String(Math.floor(s / 3600))}h ago`;
+  return `${String(Math.floor(s / 86400))}d ago`;
 }

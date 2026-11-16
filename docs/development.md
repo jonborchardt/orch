@@ -188,7 +188,7 @@ orch factory start  --title <t> | --issue <ref> [--description <d>] [--repo <pat
                     [--max-rounds <n>] --session <name> [--ui|--no-ui]
 orch factory dispatch --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
                     [--max-rounds <n>] --session <name>   # job for another repo; an independent session runs it
-orch factory list   [--repo <path|identity>]              # every job: state, owner, attention, session, PR
+orch factory list   [--repo <path|identity>]              # one row per job: stage, status, action, PR, title
 orch factory next|status <id> [--ui|--no-ui]
 orch factory resume <id> --session <name> [--to <stage>] [--force] [--adopt <worktree>]
 orch factory check-readonly <id> --fingerprint <f>

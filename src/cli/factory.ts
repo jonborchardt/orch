@@ -41,7 +41,8 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
                               Refused unless the repository's factory.json is ready. Nothing is
                               claimed, no worktree is made, no session is started.
   list [--repo <path|identity>]
-                              Every job with its state, owner, attention needed, session, PR
+                              One row per job: stage, status, action (human/resume/wait/none),
+                              PR, age, title; --json adds owner, session, resume command
   next <id> [--ui|--no-ui]    What to do now: step, agents (with models), artifacts, exact commands
   status <id>                 Same as next (read-only; for humans and dashboards)
   resume <id> --session <name> [--to <stage>] [--force] [--ui|--no-ui] [--adopt <worktree>]
