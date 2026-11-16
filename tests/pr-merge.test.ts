@@ -10,7 +10,7 @@ import { resumeFactoryJob } from '../src/ops/factory.ts';
 import { prStatus } from '../src/ops/github.ts';
 import { detail } from '../src/server/api.ts';
 import { listEvents } from '../src/storage/events.ts';
-import { recordCi, transitionJob } from '../src/storage/jobs.ts';
+import { claimJob, recordCi, transitionJob } from '../src/storage/jobs.ts';
 import { type Ctx, head, start, toCi } from './drive.ts';
 import { checks, clone, ghCalls, job, reconcile, run, shim, store } from './ci-fixture.ts';
 
@@ -47,7 +47,9 @@ describe('dashboard merge', () => {
     expect(detail(store, c.id).actions).toEqual(['merge', 'refresh-pr', 'archive']);
     expect(detail(store, c.id).prPhase).toBe('ready-to-merge');
     const before = verdict(c);
-    const r = merge(c);
+    // Finishing released the job, so the dashboard claims it without a forced takeover.
+    expect(job(c).ownerToken).toBeNull();
+    const r = dashboardAction(store, c.id, { action: 'merge' });
     expect(r.message).toContain(`Merged ${URL}`);
     expect(ghCalls('merge')).toEqual([['pr', 'merge', URL, '--merge', '--match-head-commit', sha]]);
     expect(job(c).prState).toBe('merged');
@@ -61,29 +63,37 @@ describe('dashboard merge', () => {
     expect(events(c, 'pr.merged')).toEqual([{ head: sha, ok: true, error: null }]);
     expect(detail(store, c.id).prPhase).toBe('merged');
     expect(detail(store, c.id).actions).toEqual(['archive']);
+    // The dashboard's episode released the job again.
+    expect(job(c)).toMatchObject({ ownerSession: null, ownerToken: null });
   });
 
   it('refuses without merging when GitHub or the record does not back the verified head', () => {
     const { c, sha } = completed();
-    const refused = () => {
+    const refused = (advice?: RegExp) => {
       expect(() => merge(c)).toThrow(ValidationError);
+      if (advice) expect(() => merge(c)).toThrow(advice);
       expect(ghCalls('merge')).toHaveLength(0);
       expect(job(c).prState).toBe('ready');
     };
-    // The recorded verdict is not passing (refused before GitHub is asked).
-    recordCi(store, c.id, { token: c.token, ciStatus: 'pending', head: sha });
+    // The recorded verdict is not passing (refused before GitHub is asked). A finished job has no
+    // lease, so a later write claims it first.
+    const { token } = claimJob(store, c.id, { session: 'tester' });
+    recordCi(store, c.id, { token, ciStatus: 'pending', head: sha });
     expect(detail(store, c.id).actions).not.toContain('merge');
     refused();
-    recordCi(store, c.id, { token: c.token, ciStatus: 'passing', head: sha });
+    recordCi(store, c.id, { token, ciStatus: 'passing', head: sha });
     // GitHub says draft, then not mergeable, then a different head.
+    // Each refusal says what a human can do about that cause.
     editPr({ isDraft: true });
-    refused();
+    refused(/draft on GitHub; mark it ready there, then Refresh PR/);
     editPr({ isDraft: false, mergeable: 'CONFLICTING' });
-    refused();
+    refused(/CONFLICTING; resolve the conflict on GitHub/);
+    editPr({ mergeable: 'UNKNOWN' });
+    refused(/UNKNOWN \(still computing\); try Merge again shortly/);
     editPr({ mergeable: 'MERGEABLE', headRefOid: '0'.repeat(40) });
     const { bare } = shim.read();
     shim.write({ bare: undefined });
-    refused();
+    refused(/not the verified .*review and merge them on GitHub/);
     shim.write({ bare });
     expect(events(c, 'pr.merged')).toEqual([]);
 
@@ -119,7 +129,8 @@ describe('refresh PR', () => {
     const completedAt = job(c).completedAt;
     // orch gh pr status --token on a completed job keeps the verdict (fix 5a).
     editPr({ state: 'CLOSED' });
-    const s = prStatus(store, c.id, { token: c.token });
+    const { token } = claimJob(store, c.id, { session: 'tester' });
+    const s = prStatus(store, c.id, { token });
     expect(s.recorded).toBe(true);
     expect(job(c)).toMatchObject({ prState: 'closed', ciHead: sha, ciStatus: 'passing' });
     // Merged on GitHub by hand: Refresh PR records it.

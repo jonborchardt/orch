@@ -11,6 +11,7 @@ import {
   MAX_ROUNDS_REASON,
   now,
   prPhase,
+  type PrPhase,
 } from '../core/workflow.ts';
 import type { Artifact, Event, Job, VerificationRun } from '../storage/schema.ts';
 import type { Blocker, CiView, Liveness, Resume } from './types.ts';
@@ -223,7 +224,7 @@ export function ciSummary(
     };
   }
   if (ci.completion === 'ci') {
-    const guidance: Record<string, string> = {
+    const guidance: Partial<Record<PrPhase, string>> = {
       'ready-to-merge':
         'Ready to merge: a human merges (Merge here, or on GitHub); the factory never does.',
       merged: 'Merged.',

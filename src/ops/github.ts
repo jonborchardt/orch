@@ -199,6 +199,11 @@ export interface PrStatusResult {
   recorded: boolean;
 }
 
+/** Where `gh` reads a job's PR from: its worktree, else the initiating checkout. */
+export function ghCwd(job: Pick<Job, 'worktreePath' | 'repoPath'>): string {
+  return job.worktreePath && existsSync(job.worktreePath) ? job.worktreePath : job.repoPath;
+}
+
 /**
  * Fetch PR state and checks. With a token, the observation is stored on the job; on a completed
  * job only the PR state is, so the verdict that completed it is never overwritten by a rollup.
@@ -206,8 +211,7 @@ export interface PrStatusResult {
 export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): PrStatusResult {
   const job = getJob(store.db, id);
   if (!job.prUrl) throw new ValidationError(`Job ${id} has no PR recorded.`);
-  const cwd = job.worktreePath && existsSync(job.worktreePath) ? job.worktreePath : job.repoPath;
-  const pr = viewPr(job.prUrl, cwd);
+  const pr = viewPr(job.prUrl, ghCwd(job));
   const ciStatus = summarizeChecks(pr.checks);
   const state = prWorkflowState(pr);
   if (auth.token && job.status === 'completed') {

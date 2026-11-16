@@ -3,8 +3,6 @@
  * ownership episode as session `dashboard`: claim, apply validated workflow transitions, release.
  * Nothing here wakes a Claude session; the result always says the job must be resumed.
  */
-import { existsSync } from 'node:fs';
-
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import {
@@ -17,7 +15,7 @@ import {
   type Stage,
   TERMINAL_STATUSES,
 } from '../core/workflow.ts';
-import { mergePr, prWorkflowState, viewPr } from '../integrations/github.ts';
+import { type GhPr, mergePr, prWorkflowState, viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
 import { policyFingerprint } from '../core/verification.ts';
 import { latestEventsByJob } from '../storage/events.ts';
@@ -32,6 +30,7 @@ import {
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { authorizePolicy } from '../storage/verification.ts';
+import { ghCwd } from './github.ts';
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
 
@@ -187,9 +186,23 @@ function completionFor(store: Store, job: Job): Completion {
   return completionOf(job.stage, completed?.payload);
 }
 
-/** Read the PR from where the job's Git state lives (the worktree, else the initiating checkout). */
-function ghCwd(job: Job): string {
-  return job.worktreePath && existsSync(job.worktreePath) ? job.worktreePath : job.repoPath;
+/** Why GitHub's view of the PR does not back merging `head`, with what a human can do, or null. */
+function mergeRefusal(pr: GhPr, head: string): string | null {
+  if (pr.state !== 'OPEN') return `GitHub reports it ${pr.state}; Refresh PR records that here`;
+  if (pr.isDraft) return 'it is a draft on GitHub; mark it ready there, then Refresh PR';
+  if (pr.headSha !== head) {
+    return (
+      `its head is ${pr.headSha?.slice(0, 7) ?? '?'}, not the verified ${head.slice(0, 7)}; ` +
+      'the new commits have no verdict here, so review and merge them on GitHub'
+    );
+  }
+  if (pr.mergeable === 'CONFLICTING') {
+    return 'GitHub reports it CONFLICTING; resolve the conflict on GitHub, then merge there';
+  }
+  if (pr.mergeable !== 'MERGEABLE') {
+    return `GitHub reports it ${pr.mergeable ?? 'UNKNOWN'} (still computing); try Merge again shortly`;
+  }
+  return null;
 }
 
 /**
@@ -213,17 +226,8 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
       recordPrState(store, before.id, { token }, { event: 'pr.observed', state, head: pr.headSha });
       return { error: null, message: `GitHub reports ${url} as ${state ?? pr.state}.` };
     }
-    const why =
-      pr.state !== 'OPEN'
-        ? `GitHub reports it ${pr.state}`
-        : pr.isDraft
-          ? 'it is still a draft'
-          : pr.headSha !== head
-            ? `its head is ${pr.headSha?.slice(0, 7) ?? '?'}, not the verified ${head.slice(0, 7)}`
-            : pr.mergeable !== 'MERGEABLE'
-              ? `GitHub reports it ${pr.mergeable ?? 'UNKNOWN'}, not MERGEABLE`
-              : null;
-    if (why) throw new ValidationError(`Cannot merge ${url}: ${why}. Refresh PR to update it.`);
+    const why = mergeRefusal(pr, head);
+    if (why) throw new ValidationError(`Cannot merge ${url}: ${why}.`);
     const failed = mergePr(url, head, ghCwd(before));
     recordPrState(store, before.id, { token }, { event: 'pr.merged', head, error: failed });
     return { error: failed, message: `Merged ${url} at ${head.slice(0, 7)}.` };

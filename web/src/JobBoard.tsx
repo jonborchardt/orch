@@ -218,7 +218,10 @@ const COLUMNS: Column[] = [
           <Link href={r.pr.url} target="_blank" rel="noreferrer noopener">
             PR ({r.pr.state})
           </Link>
-          <PrPhaseChip phase={r.pr.phase} />
+          {/* The CI chip already says "CI running/failing", with the head; don't repeat it. */}
+          {r.pr.phase !== 'ci-running' && r.pr.phase !== 'ci-failing' && (
+            <PrPhaseChip phase={r.pr.phase} />
+          )}
           <CiChip ci={r.ci} compact />
         </Stack>
       ) : (

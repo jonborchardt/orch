@@ -1230,12 +1230,29 @@ describe('PR phase, Merge, and Refresh PR', () => {
       .filter(([, i]) => i?.method === 'POST')
       .map(([, i]) => JSON.parse(i?.body as string) as unknown);
 
-  it('shows the phase chip with a text label on the board', async () => {
+  it('shows the phase chip with a text label on the board, unless the CI chip states it', async () => {
     mockFetch();
+    const failing = must(data.rows.find((r) => r.pr.phase === 'ci-failing'));
+    data.rows = [
+      failing,
+      {
+        ...failing,
+        id: 'job-00000009',
+        title: 'Ready row',
+        pr: { ...failing.pr, state: 'ready', phase: 'ready-to-merge' },
+        ci: { ...failing.ci, status: 'passing', completion: 'ci' },
+      },
+    ];
     mount();
-    await screen.findByText('Gamma blocked');
-    const chip = must(document.querySelector('[data-phase="ci-failing"]'));
-    expect(chip).toHaveTextContent('CI failing');
+    await screen.findByText('Ready row');
+    const table = screen.getByRole('table', { name: 'Factory jobs' });
+    // CI failing is said once, by the CI chip with its head.
+    expect(within(table).getAllByText(/CI failing/)).toHaveLength(1);
+    expect(document.querySelector('[data-phase="ci-failing"]')).toBeNull();
+    const chip = must(document.querySelector('[data-phase="ready-to-merge"]'));
+    expect(chip).toHaveTextContent('ready to merge');
+    // The glyph repeats the label, so it is hidden from assistive technology.
+    expect(must(chip.querySelector('[aria-hidden="true"]'))).toHaveTextContent('✓');
   });
 
   it('renders Merge and Refresh PR only when the server lists them', async () => {
@@ -1299,5 +1316,7 @@ describe('PR phase, Merge, and Refresh PR', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Merge' }));
     expect(await within(dialog).findByText(/not mergeable/)).toBeInTheDocument();
+    // The earlier refresh's success does not sit beside the new error.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });

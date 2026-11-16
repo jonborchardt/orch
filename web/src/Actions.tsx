@@ -80,6 +80,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   const send = async (body: Parameters<typeof postAction>[1]) => {
     setBusy(true);
     setError(null);
+    setResult(null);
     try {
       const r = await postAction(detail.job.id, body);
       setResult(r);
@@ -121,6 +122,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             onClick={() => {
               start('merge');
             }}
+            disabled={busy}
           >
             Merge
           </Button>
@@ -372,7 +374,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
           </Button>
           <Button
             variant="contained"
-            color={open === 'cancel' ? 'error' : 'primary'}
+            color={open === 'cancel' ? 'error' : open === 'merge' ? 'success' : 'primary'}
             onClick={() => {
               void submit();
             }}

@@ -52,7 +52,11 @@ export function PrPhaseChip({ phase }: { phase: PrPhase }) {
   const p = PHASE[phase];
   return (
     <Chip
-      label={`${p.glyph} ${p.label}`}
+      label={
+        <>
+          <span aria-hidden="true">{p.glyph}</span> {p.label}
+        </>
+      }
       color={p.color}
       variant="outlined"
       size="small"
