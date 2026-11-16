@@ -36,8 +36,10 @@ describe('supersedeJob (storage)', () => {
   it('records the replacement with an event; both jobs keep their rows and histories', () => {
     const old = mk('Export CSV');
     const next = mk('Export CSV');
+    const { token: first } = claimJob(store, old.id, { session: 's1' });
+    transitionJob(store, old.id, 'cancel', { token: first, reason: 'restarting' });
+    // Cancelling released the job; recording the replacement is a new claim.
     const { token } = claimJob(store, old.id, { session: 's1' });
-    transitionJob(store, old.id, 'cancel', { token, reason: 'restarting' });
     const updated = supersedeJob(store, old.id, { token }, next.id);
     expect(updated.supersededBy).toBe(next.id);
     expect(updated.status).toBe('cancelled');
@@ -46,7 +48,13 @@ describe('supersedeJob (storage)', () => {
     expect(jobDetail(store, next.id).supersedes).toEqual([old.id]);
     expect(jobDetail(store, old.id).supersedes).toEqual([]);
     const events = listEvents(store.db, old.id, 100).map((e) => e.type);
-    expect(events).toEqual(['job.created', 'job.claimed', 'job.cancelled', 'job.superseded']);
+    expect(events).toEqual([
+      'job.created',
+      'job.claimed',
+      'job.cancelled',
+      'job.claimed',
+      'job.superseded',
+    ]);
     expect(listEvents(store.db, old.id, 100).at(-1)?.payload).toEqual({
       by: next.id,
       previous: null,

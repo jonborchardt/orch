@@ -432,9 +432,9 @@ export function JobBoard({
 }
 
 /**
- * Confirm an archive or unarchive from the board. A freshly completed job usually still holds its
- * finishing session's lease, so the same takeover checkbox as the detail page is offered; the
- * server decides and re-checks either way.
+ * Confirm an archive or unarchive from the board. Finishing a job releases it, but a session may
+ * have claimed it again, so the same takeover checkbox as the detail page is offered; the server
+ * decides and re-checks either way.
  */
 function ArchiveDialog({
   row,

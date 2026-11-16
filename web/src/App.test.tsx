@@ -819,12 +819,12 @@ describe('Archive', () => {
     expect(within(shown).getByText('archived')).toBeInTheDocument();
   });
 
-  it('says there are no archived jobs instead of "No jobs yet" under Show: archived', async () => {
+  it('says nothing matches instead of "No jobs yet" under Show: archived', async () => {
     mockFetch();
     mount();
     await screen.findByRole('table', { name: 'Factory jobs' });
     await show('archived');
-    expect(await screen.findByText('No archived jobs.')).toBeInTheDocument();
+    expect(await screen.findByText('No jobs match these filters.')).toBeInTheDocument();
     expect(screen.queryByText(/No jobs yet/)).not.toBeInTheDocument();
   });
 

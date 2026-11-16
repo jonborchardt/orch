@@ -40,7 +40,7 @@ Actions; Repository, Session, and Branch / worktree start hidden. The choice is 
 preference in `localStorage` (`orch.board.hiddenColumns`), not job state. The Actions column holds
 **Archive** on each finished, unarchived row and **Unarchive** on each archived row (so under
 Show: archived). Either opens a confirm dialog with an optional reason and, when another live
-session still holds the lease (a freshly completed job usually does), the same takeover checkbox
+session holds the lease (finishing a job releases it, so only a session that claimed it again), the same takeover checkbox
 as the detail page; the server decides as for any action, and the board reloads afterwards.
 Nothing archives automatically.
 

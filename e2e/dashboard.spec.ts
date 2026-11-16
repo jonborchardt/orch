@@ -129,7 +129,7 @@ test('a finished job can be archived, found under Show: archived, and unarchived
   const title = 'Export reports as CSV';
   await page.goto(`/#/jobs/${ids.completed}`);
   await page.getByRole('button', { name: 'Archive' }).click();
-  // The session that delivered it still holds its lease, so archiving is a confirmed takeover.
+  // A session that claimed it again to observe CI holds its lease, so archiving is a takeover.
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel(/Take the job from session/).check();
   await dialog.getByRole('button', { name: 'Confirm' }).click();

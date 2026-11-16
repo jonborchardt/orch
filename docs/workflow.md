@@ -322,6 +322,10 @@ Several VS Code sessions may run at once, so each job has at most one owner.
   last read it (optimistic concurrency). Re-registering the same artifact or reviewer is idempotent;
   repeating `start` on a running stage is refused.
 - `orch job release <id>` gives the job up voluntarily.
+- **Finishing releases.** The write that makes a job `completed` or `cancelled` clears its owner and
+  lease, and its events name the finishing session. `orch gh ci` holds the lease while it marks a
+  draft ready; the `pr.ready` write releases it. A later write to a finished job (archive,
+  supersede, recording PR state) claims it first.
 
 ### Checkout ownership (cooperative)
 
