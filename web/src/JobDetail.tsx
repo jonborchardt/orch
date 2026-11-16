@@ -24,7 +24,7 @@ import { useEffect, useState } from 'react';
 
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
-import { CiChip, CiPanel } from './Ci.tsx';
+import { CiChip, CiPanel, PrPhaseChip } from './Ci.tsx';
 import { Markdown } from './Markdown.tsx';
 import { BlockerText, ResumeBox, StatusChip, Supersession } from './Status.tsx';
 import { ApiFailure, fetchDetail } from './api.ts';
@@ -119,6 +119,7 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
           </Tooltip>
         )}
         {detail.ci.completion === 'human' && <CiChip ci={detail.ci} compact />}
+        {job.prUrl && <PrPhaseChip phase={detail.prPhase} />}
         <Chip label={`round ${String(job.round)}/${String(job.maxRounds)}`} />
         {error && <Chip label={`refresh failed: ${error}`} color="warning" />}
       </Stack>

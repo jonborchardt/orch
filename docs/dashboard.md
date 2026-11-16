@@ -94,6 +94,8 @@ control stays neutral, since the right transition is a human call.
 | Cancel job                 | not finished                                                                                                                       | `cancel`                                               |
 | Archive                    | status `completed` or `cancelled`, not archived                                                                                    | sets `jobs.archivedAt`; event `job.archived`           |
 | Unarchive                  | status `completed` or `cancelled`, archived                                                                                        | clears `jobs.archivedAt`; event `job.unarchived`       |
+| Merge                      | completed on GitHub's verdict, `prState` `ready`, `ciStatus` `passing`, `ciHead` set                                               | `gh pr merge --merge --match-head-commit <ciHead>`     |
+| Refresh PR                 | PR recorded and not merged; the job is finished or in `needs-human`                                                                | re-reads the PR; records `prState` (`pr.observed`)     |
 
 Accept delivery is the only control that completes a job by hand. It is listed by the same rule the
 transition applies (`cannotAcceptDelivery` in `src/core/workflow.ts`), so it never appears while
@@ -101,6 +103,24 @@ checks are pending or failing, it is never the primary control, and it refuses a
 `job.completed` event carries `acceptedByHuman: true` and the reason, and the dashboard shows the
 job as completed by human close-out rather than as a passing build. It does not merge or mark the
 PR ready.
+
+**Merge** is a plain Cancel / Merge confirm naming the PR and the short head SHA. The server reads
+the PR from GitHub again and merges only if it is open, not a draft, its head is still `ciHead`,
+and GitHub reports it `MERGEABLE`; otherwise it refuses and nothing is called. A merge GitHub
+refuses (for example a repository that disallows merge commits) is recorded as `pr.merged` with
+`ok: false` and gh's message, and `prState` stays `ready`. It never deletes the branch, bypasses
+protection, or queues an auto-merge, and there is no CLI equivalent
+(`docs/decisions/2026-11-15-humans-merge-from-the-dashboard.md`). **Refresh PR** re-reads the PR
+and records only its state, never the CI verdict, stage, or status; a PR merged on GitHub by hand
+shows as merged after it, and on a ci escalation that makes Accept delivery available. Nothing
+polls GitHub: the board's periodic refresh re-reads the database only.
+
+**PR phase.** The board's PR / CI column and the detail header show a chip (glyph and label) for
+where the PR stands, from recorded fields only (`prPhase` in `src/core/workflow.ts`): `no PR`,
+`draft` (CI not passing yet), `CI running`, `CI failing`, `ready to merge` (completed on GitHub's
+verdict, marked ready, CI passing), `ready marking failed` (completed on the verdict but the PR is
+still a draft: run `gh pr ready`, then Refresh PR), `merged`, and `closed`. `ready to merge` is
+orch's record; GitHub's live mergeability is checked only when Merge is clicked.
 
 **Archive** hides a finished job from the board's default views and nothing else: stage, status,
 `completedAt`, the PR and CI columns, the worktree, the branch, and the artifacts stay as they are,

@@ -105,6 +105,8 @@ describe('seeded board and detail', () => {
     expect(by(ids.completed).pr).toEqual({
       url: 'https://github.com/acme/alpha/pull/41',
       state: 'draft',
+      // Completed on GitHub's verdict while the PR stayed a draft.
+      phase: 'ready-mark-failed',
     });
     expect(by(ids.completed).ci.status).toBe('failing');
     // Cancelled is its own state, never "finished" like a success, and carries its reason.
@@ -199,6 +201,7 @@ describe('seeded board and detail', () => {
     // Close-out is listed by the same rule the transition applies: no checks yes, failing no.
     const none = (await (await api(`/api/jobs/${ids.ciNone}`)).json()) as JobDetailView;
     expect(none.actions).toEqual([
+      'refresh-pr',
       'approve',
       'request-review',
       'request-rework',
@@ -207,7 +210,13 @@ describe('seeded board and detail', () => {
     ]);
     expect(none.ci.current).toBe(null); // no worktree on disk for the fixture
     const exhausted = (await (await api(`/api/jobs/${ids.ciExhausted}`)).json()) as JobDetailView;
-    expect(exhausted.actions).toEqual(['approve', 'request-review', 'request-rework', 'cancel']);
+    expect(exhausted.actions).toEqual([
+      'refresh-pr',
+      'approve',
+      'request-review',
+      'request-rework',
+      'cancel',
+    ]);
     const pending = (await (await api(`/api/jobs/${ids.ciPending}`)).json()) as JobDetailView;
     expect(pending.actions).not.toContain('accept-delivery');
   });
@@ -249,7 +258,8 @@ describe('seeded board and detail', () => {
     expect(d.links.checkout).toMatch(/^vscode:\/\/file\/.*alpha/);
     expect(d.resumeCommand).toContain(ids.completed);
     expect(d.liveness).toBe('completed');
-    expect(d.actions).toEqual(['archive']); // a finished job can only be archived
+    // A finished job can only be archived and have its PR re-read; merge needs a passing verdict.
+    expect(d.actions).toEqual(['refresh-pr', 'archive']);
     expect(d.resume).toBeNull();
     const blocked = (await (await api(`/api/jobs/${ids.blocked}`)).json()) as JobDetailView;
     expect(blocked.plan?.step).toBe('needs-human');
@@ -357,6 +367,50 @@ describe('mutations', () => {
       403,
     );
     expect(getJob(store.db, ids.fresh).status).toBe('pending');
+  });
+
+  it('merge and refresh-pr pass the same Origin, CSRF, and content-type guards', async () => {
+    const before = getJob(store.db, ids.completed);
+    for (const action of ['merge', 'refresh-pr']) {
+      const body = { action, force: true };
+      expect((await post(ids.completed, body, { 'Content-Type': 'application/json' })).status).toBe(
+        403,
+      );
+      expect(
+        (
+          await post(ids.completed, body, {
+            Origin: 'http://evil.example',
+            'Content-Type': 'application/json',
+            'X-Orch-Csrf': csrf,
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await post(ids.completed, body, {
+            ...same(),
+            'Content-Type': 'text/plain',
+            'X-Orch-Csrf': csrf,
+          })
+        ).status,
+      ).toBe(415);
+      expect((await post(ids.completed, body, { ...same(), 'X-Orch-Csrf': 'nope' })).status).toBe(
+        403,
+      );
+    }
+    // With the guards satisfied, merge is still refused: this job's PR was never marked ready.
+    const refused = await post(
+      ids.completed,
+      { action: 'merge', force: true },
+      { ...same(), 'X-Orch-Csrf': csrf },
+    );
+    expect(refused.status).toBe(422);
+    expect(((await refused.json()) as { error: { message: string } }).error.message).toContain(
+      'Cannot merge',
+    );
+    expect(getJob(store.db, ids.completed)).toEqual(before);
+    const rows = (await (await api('/api/jobs')).json()) as BoardRow[];
+    expect(rows.every((r) => typeof r.pr.phase === 'string')).toBe(true);
   });
 
   it('validates the body and refuses unknown or impossible actions', async () => {
@@ -473,7 +527,7 @@ describe('mutations', () => {
     expect(done.resumeCommand).toBeUndefined();
     const d = detail(store, ids.ciNone);
     expect(d.ci.completion).toBe('human');
-    expect(d.actions).toEqual(['archive']);
+    expect(d.actions).toEqual(['refresh-pr', 'archive']);
     expect(d.plan?.reason).toContain('manual close-out, not a CI verdict');
     const completed = d.events.find((e) => e.type === 'job.completed');
     expect(completed?.payload).toMatchObject({
@@ -521,7 +575,7 @@ describe('mutations', () => {
     const archived = await row(ids.completed);
     expect(archived?.archivedAt).toBe(r.job.archivedAt);
     expect([archived?.stage, archived?.status]).toEqual(['completed', 'completed']);
-    expect(detail(store, ids.completed).actions).toEqual(['unarchive']);
+    expect(detail(store, ids.completed).actions).toEqual(['refresh-pr', 'unarchive']);
     expect((await post(ids.completed, { action: 'archive' }, h)).status).toBe(422);
 
     // An active job: refused with the validation status, and nothing about the row changes.

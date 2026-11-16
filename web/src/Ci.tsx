@@ -1,7 +1,70 @@
 import { Alert, Chip, Link, Stack, Typography } from '@mui/material';
 
 import type { CiView, JobDetailView } from '../../src/server/types.ts';
-import { ago, ciColor, sha7 } from './format.ts';
+import { ago, type ChipColor, ciColor, sha7 } from './format.ts';
+
+type PrPhase = JobDetailView['prPhase'];
+
+/** One presentation per PR phase; the glyph and label carry the meaning, colour only repeats it. */
+const PHASE: Record<PrPhase, { glyph: string; label: string; color: ChipColor; title: string }> = {
+  'no-pr': { glyph: '○', label: 'no PR', color: 'default', title: 'No PR has been created yet.' },
+  draft: {
+    glyph: '◇',
+    label: 'draft',
+    color: 'default',
+    title: 'Draft PR: CI has not passed for it yet.',
+  },
+  'ci-running': {
+    glyph: '◌',
+    label: 'CI running',
+    color: 'info',
+    title: 'Required checks are still running.',
+  },
+  'ci-failing': {
+    glyph: '✕',
+    label: 'CI failing',
+    color: 'error',
+    title: 'Required checks failed.',
+  },
+  'ready-to-merge': {
+    glyph: '✓',
+    label: 'ready to merge',
+    color: 'success',
+    title: 'Completed on a passing verdict and marked ready. GitHub is checked again on Merge.',
+  },
+  'ready-mark-failed': {
+    glyph: '!',
+    label: 'ready marking failed',
+    color: 'warning',
+    title: 'CI passed but the PR is still a draft: run gh pr ready, then Refresh PR.',
+  },
+  merged: { glyph: '⇥', label: 'merged', color: 'primary', title: 'GitHub reports the PR merged.' },
+  closed: {
+    glyph: '⊘',
+    label: 'closed',
+    color: 'default',
+    title: 'GitHub reports the PR closed without merging.',
+  },
+};
+
+/** Where the PR stands in delivery, as orch last recorded it. */
+export function PrPhaseChip({ phase }: { phase: PrPhase }) {
+  const p = PHASE[phase];
+  return (
+    <Chip
+      label={
+        <>
+          <span aria-hidden="true">{p.glyph}</span> {p.label}
+        </>
+      }
+      color={p.color}
+      variant="outlined"
+      size="small"
+      data-phase={phase}
+      title={p.title}
+    />
+  );
+}
 
 /** The CI state as a chip plus one line, for the board and the detail header. */
 export function CiChip({ ci, compact }: { ci: CiView; compact?: boolean }) {

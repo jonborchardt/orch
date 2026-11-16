@@ -642,6 +642,32 @@ export function recordPrReady(
   });
 }
 
+/** GitHub's answer about the PR (`pr.observed`), or the outcome of a human's merge (`pr.merged`). */
+export type PrObservation =
+  | { event: 'pr.observed'; state: PrState | undefined; head: string | null }
+  | { event: 'pr.merged'; head: string; error: string | null };
+
+/**
+ * Record what GitHub said about the PR, or a dashboard merge attempt. Patches only `prState`
+ * (`merged` only on a successful merge); never the CI verdict, stage, or status.
+ */
+export function recordPrState(store: Store, id: string, auth: Auth, o: PrObservation): Job {
+  return mutate(store, id, auth, (job) => {
+    if (!job.prUrl) throw new ValidationError('No PR recorded for this job.');
+    if (o.event === 'pr.merged') {
+      const ok = o.error === null;
+      return {
+        patch: ok ? { prState: 'merged' } : {},
+        events: [{ type: 'pr.merged', payload: { head: o.head, ok, error: o.error } }],
+      };
+    }
+    return {
+      patch: o.state ? { prState: o.state } : {},
+      events: [{ type: 'pr.observed', payload: { state: o.state ?? null, head: o.head } }],
+    };
+  });
+}
+
 /** The session recorded by a `session.attached` event, or null when the payload is unusable. */
 export function sessionOf(e: Event | undefined): SessionRef | null {
   const p = e?.payload;

@@ -1,6 +1,7 @@
 /**
- * GitHub access through the `gh` CLI, invoked with argument arrays. Never merges or force-pushes;
- * the only PR mutations are creating a draft and marking it ready. Set ORCH_GH_SHIM to a
+ * GitHub access through the `gh` CLI, invoked with argument arrays. Never force-pushes; the PR
+ * mutations are creating a draft, marking it ready, and `mergePr`, which only a human's dashboard
+ * Merge reaches (decision 2026-11-15-humans-merge-from-the-dashboard). Set ORCH_GH_SHIM to a
  * JavaScript file to replace `gh` with `node <shim> <args>` in tests.
  */
 import type { CiCheck } from '../core/ci.ts';
@@ -101,11 +102,13 @@ export interface GhPr {
   title: string;
   /** Commit at the head of the PR branch as GitHub sees it. */
   headSha: string | null;
+  /** MERGEABLE, CONFLICTING, or UNKNOWN (GitHub has not computed it yet). */
+  mergeable: string | null;
   checks: GhCheck[];
 }
 
 const PR_FIELDS =
-  'number,url,state,isDraft,baseRefName,headRefName,headRefOid,title,statusCheckRollup';
+  'number,url,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,title,statusCheckRollup';
 
 interface RawPr {
   number: number;
@@ -115,6 +118,7 @@ interface RawPr {
   baseRefName: string;
   headRefName: string;
   headRefOid?: string | null;
+  mergeable?: string | null;
   title: string;
   statusCheckRollup?: RawCheck[] | null;
 }
@@ -141,6 +145,7 @@ function toPr(raw: RawPr): GhPr {
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
     headSha: raw.headRefOid ?? null,
+    mergeable: raw.mergeable ?? null,
     title: raw.title,
     checks,
   };
@@ -276,6 +281,16 @@ export function rerunFailedJobs(nameWithOwner: string, runId: number, cwd: strin
  */
 export function markPrReady(url: string, cwd: string): string | null {
   const r = ghResult(['pr', 'ready', url], cwd);
+  return r.status === 0 ? null : (r.stderr || r.stdout).trim() || `exit ${String(r.status)}`;
+}
+
+/**
+ * `gh pr merge <url> --merge --match-head-commit <head>`: a merge commit, refused by GitHub if the
+ * head moved. Never deletes the branch, bypasses protection, or queues an auto-merge. Returns null
+ * on success, else gh's message. Called only from the dashboard's human Merge action.
+ */
+export function mergePr(url: string, head: string, cwd: string): string | null {
+  const r = ghResult(['pr', 'merge', url, '--merge', '--match-head-commit', head], cwd);
   return r.status === 0 ? null : (r.stderr || r.stdout).trim() || `exit ${String(r.status)}`;
 }
 

@@ -5,12 +5,24 @@
  */
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
-import { cannotAcceptDelivery, now, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
+import {
+  cannotAcceptDelivery,
+  cannotMerge,
+  cannotRefreshPr,
+  type Completion,
+  completionOf,
+  now,
+  type Stage,
+  TERMINAL_STATUSES,
+} from '../core/workflow.ts';
+import { type GhPr, mergePr, prWorkflowState, viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
 import { policyFingerprint } from '../core/verification.ts';
+import { latestEventsByJob } from '../storage/events.ts';
 import {
   claimJob,
   getJob,
+  recordPrState,
   releaseJob,
   setArchived,
   supersedeJob,
@@ -18,6 +30,7 @@ import {
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { authorizePolicy } from '../storage/verification.ts';
+import { ghCwd } from './github.ts';
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
 
@@ -30,6 +43,8 @@ export const DASHBOARD_ACTIONS = [
   'cancel',
   'archive',
   'unarchive',
+  'merge',
+  'refresh-pr',
 ] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 export const DASHBOARD_SESSION = 'dashboard';
@@ -68,12 +83,17 @@ export function allowedActions(
     | 'archivedAt'
   >,
   policyDrift: boolean,
+  completion: Completion = null,
 ): DashboardAction[] {
-  // A finished job can only be hidden from (or brought back to) the board's default views.
+  const pr: DashboardAction[] = [];
+  if (cannotMerge(job, completion) === null) pr.push('merge');
+  if (cannotRefreshPr(job) === null) pr.push('refresh-pr');
+  // A finished job can only be hidden from (or brought back to) the board's default views, and
+  // have its PR merged or re-read.
   if (TERMINAL_STATUSES.includes(job.status)) {
-    return [job.archivedAt === null ? 'archive' : 'unarchive'];
+    return [...pr, job.archivedAt === null ? 'archive' : 'unarchive'];
   }
-  const out: DashboardAction[] = [];
+  const out: DashboardAction[] = [...pr];
   if (job.stage === 'needs-human') out.push('approve');
   if (job.round > 0) out.push('request-review');
   out.push('request-rework');
@@ -158,8 +178,69 @@ export function supersede(store: Store, id: string, input: SupersedeInput): Job 
   return getJob(store.db, id);
 }
 
+/** How the job completed, from its newest `job.completed` event. */
+function completionFor(store: Store, job: Job): Completion {
+  const completed = latestEventsByJob(store.db, [job.id], ['job.completed'])
+    .get(job.id)
+    ?.get('job.completed');
+  return completionOf(job.stage, completed?.payload);
+}
+
+/** Why GitHub's view of the PR does not back merging `head`, with what a human can do, or null. */
+function mergeRefusal(pr: GhPr, head: string): string | null {
+  if (pr.state !== 'OPEN') return `GitHub reports it ${pr.state}; Refresh PR records that here`;
+  if (pr.isDraft) return 'it is a draft on GitHub; mark it ready there, then Refresh PR';
+  if (pr.headSha !== head) {
+    return (
+      `its head is ${pr.headSha?.slice(0, 7) ?? '?'}, not the verified ${head.slice(0, 7)}; ` +
+      'the new commits have no verdict here, so review and merge them on GitHub'
+    );
+  }
+  if (pr.mergeable === 'CONFLICTING') {
+    return 'GitHub reports it CONFLICTING; resolve the conflict on GitHub, then merge there';
+  }
+  if (pr.mergeable !== 'MERGEABLE') {
+    return `GitHub reports it ${pr.mergeable ?? 'UNKNOWN'} (still computing); try Merge again shortly`;
+  }
+  return null;
+}
+
+/**
+ * Merge (a human's click, never a session) or re-read the PR. Merge re-reads GitHub first and
+ * merges only the head the passing verdict was recorded for, as a merge commit; a merge GitHub
+ * refuses is recorded and its message returned as the error. Nothing here changes stage or status.
+ */
+function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
+  const merge = input.action === 'merge';
+  const refused = merge
+    ? cannotMerge(before, completionFor(store, before))
+    : cannotRefreshPr(before);
+  if (refused)
+    throw new ValidationError(`Cannot ${merge ? 'merge' : 'refresh the PR'}: ${refused}.`);
+  const url = before.prUrl ?? '';
+  const head = before.ciHead ?? '';
+  const { error, message } = withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
+    const pr = viewPr(url, ghCwd(before));
+    const state = prWorkflowState(pr);
+    if (!merge) {
+      recordPrState(store, before.id, { token }, { event: 'pr.observed', state, head: pr.headSha });
+      return { error: null, message: `GitHub reports ${url} as ${state ?? pr.state}.` };
+    }
+    const why = mergeRefusal(pr, head);
+    if (why) throw new ValidationError(`Cannot merge ${url}: ${why}.`);
+    const failed = mergePr(url, head, ghCwd(before));
+    recordPrState(store, before.id, { token }, { event: 'pr.merged', head, error: failed });
+    return { error: failed, message: `Merged ${url} at ${head.slice(0, 7)}.` };
+  });
+  if (error !== null) throw new ValidationError(`gh pr merge failed: ${error}`);
+  return { job: withoutToken(getJob(store.db, before.id)), message };
+}
+
 export function dashboardAction(store: Store, id: string, input: ActionInput): ActionResult {
   const before = getJob(store.db, id);
+  if (input.action === 'merge' || input.action === 'refresh-pr') {
+    return prAction(store, before, input);
+  }
   if (input.action === 'archive' || input.action === 'unarchive') {
     const archive = input.action === 'archive';
     // Refuse before claiming so a refused request leaves the row untouched; setArchived
