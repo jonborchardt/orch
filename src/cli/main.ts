@@ -20,18 +20,31 @@ import { runWorktree, WORKTREE_HELP } from './worktree.ts';
 
 const HELP = `Usage: orch [--json] <command>
 
+Typical workflow:
+  orch init --check          Check the repository's factory.json is committed and runnable
+  /factory <request>         In Claude Code (a skill, not an orch command): build a request as a job
+  orch factory list          Every job with its state, owner, and attention needed
+  orch factory status <id>   One job's current step, agents, artifacts, and commands (read-only)
+  orch ui                    Watch jobs in the local dashboard
+
 Commands:
+  factory <subcommand>   The primary interface: start, plan, resume, dispatch, and list factory
+                         jobs for the /factory skill (orch factory --help)
   doctor                 Check the local environment (Node, Git, Claude Code, paths)
-  init                   Write a repository's factory.json verification policy, or --check its readiness (orch init --help)
-  factory <subcommand>   Start, plan, resume, dispatch, and list factory jobs for the /factory skill (orch factory --help)
-  job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
-  worktree <subcommand>  Create, inspect, adopt, remove a job's Git worktree (orch worktree --help)
-  checkout <subcommand>  Which session is working in a checkout; the Claude Code hook (orch checkout --help)
-  gh <subcommand>        GitHub via gh: issue, push, draft PR, CI status (orch gh --help)
-  verify <job-id>        Run the repository's verification policy in the job worktree (orch verify --help)
+  init                   Write a repository's factory.json verification policy, or --check its
+                         readiness (orch init --help)
   install [--dry-run]    Link skills/ and agents/ into ~/.claude (--claude-dir, --source)
   ui [--port <n>] [--open]
                          Serve the local dashboard on loopback (the only long-running command)
+
+Low-level commands (used internally and by generated plans):
+  job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
+  worktree <subcommand>  Create, inspect, adopt, remove a job's Git worktree (orch worktree --help)
+  checkout <subcommand>  Which session is working in a checkout; the Claude Code hook
+                         (orch checkout --help)
+  gh <subcommand>        GitHub via gh: issue, push, draft PR, CI status (orch gh --help)
+  verify <job-id>        Run the repository's verification policy in the job worktree
+                         (orch verify --help)
 
 Options:
   -h, --help             Show this help
