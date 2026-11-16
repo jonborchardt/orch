@@ -161,7 +161,9 @@ describe('orch verify: runs and records', () => {
     inBuild(c);
     const t0 = Date.now();
     const r = verify(store, c);
-    expect(Date.now() - t0).toBeLessThan(15000);
+    // Under 30 s proves the 1 s timeout killed the 30 s child; the slack is for loaded CI runners,
+    // where launching the four checks alone has taken over 20 s.
+    expect(Date.now() - t0).toBeLessThan(25000);
     expect(r.status).toBe('passed'); // all optional
     const by = Object.fromEntries(r.checks.map((x) => [x.checkId, x]));
     expect(by['slow']?.status).toBe('timed-out');

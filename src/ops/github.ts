@@ -502,7 +502,8 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     updated = transitionJob(store, id, 'escalate', { ...tok, reason });
   } else if (action === 'complete') {
     // The read and the completion are one operation: no stored verdict is ever reused.
-    updated = completeCi(store, id, tok);
+    // A draft still needs its ready write, so the lease is held for it; that write releases it.
+    updated = completeCi(store, id, { ...tok, holdLease: prState === 'draft' });
     // Strictly after the verdict commits: a failed or interrupted ready never undoes it, and is
     // not retried (a human runs gh pr ready; the board still shows the PR as draft).
     if (prState === 'draft') {

@@ -129,7 +129,7 @@ test('a finished job can be archived, found under Show: archived, and unarchived
   const title = 'Export reports as CSV';
   await page.goto(`/#/jobs/${ids.completed}`);
   await page.getByRole('button', { name: 'Archive' }).click();
-  // The delivering session still holds its lease; a plain confirm takes it over.
+  // A session that claimed it again to observe CI holds its lease; a plain confirm takes it over.
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('checkbox')).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Archive' }).click();

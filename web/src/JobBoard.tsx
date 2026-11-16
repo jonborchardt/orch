@@ -430,9 +430,9 @@ export function JobBoard({
 }
 
 /**
- * Confirm an archive or unarchive from the board. Only finished jobs can be archived, and a freshly
- * completed one usually still holds its finishing session's lease, so the board always takes it
- * over (`force`); the server decides and re-checks either way.
+ * Confirm an archive or unarchive from the board. Only finished jobs can be archived; finishing
+ * releases a job, but a session may have claimed it again, so the board always takes it over
+ * (`force`); the server decides and re-checks either way.
  */
 function ArchiveDialog({
   row,
