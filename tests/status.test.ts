@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { prPhase } from '../src/core/workflow.ts';
 import { ciSummary } from '../src/server/status.ts';
 import type { CiView } from '../src/server/types.ts';
 
@@ -99,5 +100,37 @@ describe('ciSummary', () => {
     expect(released).toContain('No session is polling');
     expect(released).toContain('/factory job-00000001');
     expect(released).not.toContain('the session polls');
+  });
+});
+
+describe('prPhase', () => {
+  const pr = (over: Partial<Parameters<typeof prPhase>[0]> = {}) => ({
+    prUrl: 'https://github.com/x/y/pull/9',
+    prState: 'draft' as const,
+    ciStatus: null,
+    ...over,
+  });
+  it('names where the PR stands from recorded fields only', () => {
+    expect(prPhase(pr({ prUrl: null, prState: null }), null)).toBe('no-pr');
+    expect(prPhase(pr(), null)).toBe('draft');
+    expect(prPhase(pr({ ciStatus: 'passing' }), null)).toBe('draft');
+    expect(prPhase(pr({ ciStatus: 'pending' }), null)).toBe('ci-running');
+    expect(prPhase(pr({ ciStatus: 'failing' }), null)).toBe('ci-failing');
+    expect(prPhase(pr({ prState: 'ready', ciStatus: 'passing' }), 'ci')).toBe('ready-to-merge');
+    // Ready on GitHub is not enough: only a completion on GitHub's verdict is ready to merge.
+    expect(prPhase(pr({ prState: 'ready', ciStatus: 'passing' }), 'human')).toBe('draft');
+    expect(prPhase(pr({ ciStatus: 'passing' }), 'ci')).toBe('ready-mark-failed');
+    expect(prPhase(pr({ prState: 'merged', ciStatus: 'failing' }), null)).toBe('merged');
+    expect(prPhase(pr({ prState: 'closed', ciStatus: 'passing' }), 'ci')).toBe('closed');
+  });
+
+  it('the completed-via-ci guidance names the phase', () => {
+    const done = ci({ head: 'a1b2c3d4', status: 'passing', completion: 'ci' });
+    const guide = (prState: JobBits['prState']) =>
+      ciSummary(done, withPr({ stage: 'completed', prState })).guidance;
+    expect(guide('ready')).toContain('Ready to merge');
+    expect(guide('merged')).toBe('Merged.');
+    expect(guide('draft')).toContain('Ready marking failed: run gh pr ready');
+    expect(guide('closed')).toContain('closed without merging');
   });
 });

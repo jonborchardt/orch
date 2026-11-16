@@ -27,6 +27,8 @@ const LABEL: Record<DashboardAction, string> = {
   cancel: 'Cancel job',
   archive: 'Archive job (hide it from the default board views)',
   unarchive: 'Unarchive job',
+  merge: 'Merge the PR',
+  'refresh-pr': 'Refresh the PR state from GitHub',
 };
 
 const STAGES = ['spec', 'build', 'review', 'approve', 'pr', 'ci'] as const;
@@ -70,20 +72,16 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     setOpen(a);
   };
 
-  // Archive and unarchive are a plain confirm: only finished jobs qualify, so the dashboard always
-  // takes over the lease of any session that claimed it again instead of asking.
-  const plain = open === 'archive' || open === 'unarchive';
-  const verb = open === 'archive' ? 'Archive' : 'Unarchive';
+  // Archive, unarchive, and merge are a plain confirm: only finished jobs qualify, so the dashboard
+  // always takes over the lease of any session that claimed it again instead of asking.
+  const plain = open === 'archive' || open === 'unarchive' || open === 'merge';
+  const verb = open === 'archive' ? 'Archive' : open === 'merge' ? 'Merge' : 'Unarchive';
 
-  const submit = async () => {
-    if (!open) return;
+  const send = async (body: Parameters<typeof postAction>[1]) => {
     setBusy(true);
     setError(null);
+    setResult(null);
     try {
-      const body: Parameters<typeof postAction>[1] = { action: open };
-      if (!plain && reason.trim()) body.reason = reason.trim();
-      if (plain || force) body.force = true;
-      if (open === 'approve') body.to = to;
       const r = await postAction(detail.job.id, body);
       setResult(r);
       setOpen(null);
@@ -95,6 +93,20 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     }
   };
 
+  const submit = async () => {
+    if (!open) return;
+    const body: Parameters<typeof postAction>[1] = { action: open };
+    if (!plain && reason.trim()) body.reason = reason.trim();
+    if (plain || force) body.force = true;
+    if (open === 'approve') body.to = to;
+    await send(body);
+  };
+
+  // Refresh PR only reads GitHub and records the PR state: no confirm. Finished jobs force, like Archive.
+  const refresh = () => {
+    void send(finished ? { action: 'refresh-pr', force: true } : { action: 'refresh-pr' });
+  };
+
   return (
     <Stack spacing={1}>
       {allowed.size === 0 && (
@@ -103,6 +115,23 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         </Typography>
       )}
       <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+        {allowed.has('merge') && (
+          <Button
+            variant="contained"
+            color="success"
+            onClick={() => {
+              start('merge');
+            }}
+            disabled={busy}
+          >
+            Merge
+          </Button>
+        )}
+        {allowed.has('refresh-pr') && (
+          <Button variant="outlined" onClick={refresh} disabled={busy}>
+            Refresh PR
+          </Button>
+        )}
         {allowed.has('approve') && (
           <Button
             variant={approvalGate ? 'contained' : 'outlined'}
@@ -189,6 +218,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         )}
       </Stack>
 
+      {open === null && error && <Alert severity="error">{error}</Alert>}
       {closeOut && (
         <Alert severity="warning" variant="outlined" data-testid="close-out-caution">
           Accept delivery completes the job by hand: CI is {detail.ci.status ?? 'not observed'} for{' '}
@@ -237,19 +267,36 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
       <Dialog
         open={open !== null}
         onClose={() => {
-          if (!busy) setOpen(null);
+          if (busy) return;
+          setOpen(null);
+          setError(null);
         }}
         aria-labelledby="action-title"
         fullWidth
         maxWidth="sm"
       >
         <DialogTitle id="action-title">
-          {plain ? `${verb} this job?` : open ? LABEL[open] : ''}
+          {open === 'merge'
+            ? 'Merge this PR?'
+            : plain
+              ? `${verb} this job?`
+              : open
+                ? LABEL[open]
+                : ''}
         </DialogTitle>
         {plain ? (
-          error && (
+          (open === 'merge' || error) && (
             <DialogContent>
-              <Alert severity="error">{error}</Alert>
+              <Stack spacing={2}>
+                {open === 'merge' && (
+                  <Typography data-testid="merge-confirm">
+                    Merge <b>{detail.job.prUrl}</b> at <code>{detail.ci.head?.slice(0, 7)}</code> as
+                    a merge commit. GitHub is checked first; the merge is refused if the head moved.
+                    The branch is not deleted.
+                  </Typography>
+                )}
+                {error && <Alert severity="error">{error}</Alert>}
+              </Stack>
             </DialogContent>
           )
         ) : (
@@ -319,6 +366,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
           <Button
             onClick={() => {
               setOpen(null);
+              setError(null);
             }}
             disabled={busy}
           >
@@ -326,7 +374,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
           </Button>
           <Button
             variant="contained"
-            color={open === 'cancel' ? 'error' : 'primary'}
+            color={open === 'cancel' ? 'error' : open === 'merge' ? 'success' : 'primary'}
             onClick={() => {
               void submit();
             }}

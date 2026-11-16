@@ -9,7 +9,7 @@ import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { SESSION_EVENT, sessionLinks } from '../core/session.ts';
-import { now, STAGES, type Stage } from '../core/workflow.ts';
+import { now, prPhase, STAGES, type Stage } from '../core/workflow.ts';
 import {
   allowedActions,
   DASHBOARD_ACTIONS,
@@ -90,6 +90,8 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
         }
       : null;
     const end = job.completedAt ?? ts;
+    // The board does not inspect worktrees (one Git call per job); the detail view does.
+    const ci = ciView(job, evidence.events, undefined);
     return {
       id: job.id,
       title: job.title,
@@ -109,12 +111,11 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       resume: resumeOf(job, state),
       updatedAt: job.updatedAt,
       elapsedMs: Math.max(0, Date.parse(end) - Date.parse(job.createdAt)),
-      pr: { url: job.prUrl, state: job.prState },
+      pr: { url: job.prUrl, state: job.prState, phase: prPhase(job, ci.completion) },
       supersededBy: job.supersededBy,
       archivedAt: job.archivedAt,
       supersedes: predecessors.get(job.id) ?? [],
-      // The board does not inspect worktrees (one Git call per job); the detail view does.
-      ci: ciView(job, evidence.events, undefined),
+      ci,
     };
   });
 }
@@ -205,6 +206,8 @@ export function detail(store: Store, id: string): JobDetailView {
     artifacts,
     latestRun: latestRun(store.db, id)?.run ?? null,
   };
+  // Without a readable worktree HEAD there is nothing to compare the verdict against.
+  const ci = ciView(job, evidence.events, plan?.worktree?.head ?? undefined);
   return {
     job: safeJob(job),
     liveness: state,
@@ -215,9 +218,13 @@ export function detail(store: Store, id: string): JobDetailView {
     plan,
     planError,
     blocker: blockerOf(job, state, evidence),
-    // Without a readable worktree HEAD there is nothing to compare the verdict against.
-    ci: ciView(job, evidence.events, plan?.worktree?.head ?? undefined),
-    actions: allowedActions(job, plan?.verification?.policy.authorization === 'required'),
+    ci,
+    prPhase: prPhase(job, ci.completion),
+    actions: allowedActions(
+      job,
+      plan?.verification?.policy.authorization === 'required',
+      ci.completion,
+    ),
     links: {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,
       checkout: vscodeLink(job.repoPath),

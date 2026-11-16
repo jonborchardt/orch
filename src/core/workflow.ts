@@ -316,6 +316,84 @@ export function cannotAcceptDelivery(
   return null;
 }
 
+/**
+ * How a completed job finished, from its `job.completed` event payload: GitHub's verdict for a
+ * head (`ci`), a human close-out (`human`), or before the ci stage existed (`legacy`). Null while
+ * the job is not completed.
+ */
+export type Completion = 'ci' | 'human' | 'legacy' | null;
+
+export function completionOf(
+  stage: Stage,
+  completed: Record<string, unknown> | undefined,
+): Completion {
+  if (stage !== 'completed') return null;
+  if (completed?.['acceptedByHuman'] === true) return 'human';
+  return typeof completed?.['head'] === 'string' ? 'ci' : 'legacy';
+}
+
+/** Where the PR stands in delivery, from persisted fields only (never GitHub's live answer). */
+export const PR_PHASES = [
+  'no-pr',
+  'draft',
+  'ci-running',
+  'ci-failing',
+  'ready-to-merge',
+  'ready-mark-failed',
+  'merged',
+  'closed',
+] as const;
+export type PrPhase = (typeof PR_PHASES)[number];
+
+export function prPhase(
+  job: Pick<JobState, 'prUrl' | 'prState' | 'ciStatus'>,
+  completion: Completion,
+): PrPhase {
+  if (!job.prUrl) return 'no-pr';
+  if (job.prState === 'merged') return 'merged';
+  if (job.prState === 'closed') return 'closed';
+  if (completion === 'ci' && job.prState === 'ready' && job.ciStatus === 'passing') {
+    return 'ready-to-merge';
+  }
+  if (completion === 'ci' && job.prState === 'draft') return 'ready-mark-failed';
+  if (job.ciStatus === 'pending') return 'ci-running';
+  if (job.ciStatus === 'failing') return 'ci-failing';
+  return 'draft';
+}
+
+/**
+ * Why the dashboard may not merge this job's PR, or null when it may: only a job GitHub's verdict
+ * completed, whose PR orch marked ready, with that verdict passing for a recorded head. GitHub's
+ * live state is checked again when the merge is requested.
+ */
+export function cannotMerge(
+  job: Pick<JobState, 'stage' | 'prUrl' | 'prState' | 'ciStatus' | 'ciHead'>,
+  completion: Completion,
+): string | null {
+  if (job.stage !== 'completed') return 'only a completed job can be merged';
+  if (completion !== 'ci') return 'only a job completed on a passing CI verdict can be merged';
+  if (!job.prUrl || !job.ciHead) return 'no PR head has been recorded';
+  if (job.prState !== 'ready')
+    return `the PR is ${job.prState ?? 'in an unknown state'}, not ready`;
+  if (job.ciStatus !== 'passing') return `CI is ${job.ciStatus ?? 'not observed'}, not passing`;
+  return null;
+}
+
+/**
+ * Why the dashboard may not re-read the PR from GitHub, or null when it may: a recorded, unmerged
+ * PR on a finished job or one waiting in needs-human (a running ci job reads it with orch gh ci).
+ */
+export function cannotRefreshPr(
+  job: Pick<JobState, 'stage' | 'status' | 'prUrl' | 'prState'>,
+): string | null {
+  if (!job.prUrl) return 'no PR is recorded';
+  if (job.prState === 'merged') return 'the PR is already merged';
+  if (!TERMINAL_STATUSES.includes(job.status) && job.stage !== 'needs-human') {
+    return 'only a finished job or one waiting in needs-human is refreshed from here';
+  }
+  return null;
+}
+
 function acceptDelivery(job: JobState, ctx: TransitionContext): TransitionResult {
   const refused = cannotAcceptDelivery(job);
   if (refused) throw new WorkflowError(`Cannot resume job to completed: ${refused}`);

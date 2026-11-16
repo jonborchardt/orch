@@ -50,6 +50,7 @@ import {
   recordEvent,
   recordPr,
   recordPrReady,
+  recordPrState,
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
@@ -198,14 +199,31 @@ export interface PrStatusResult {
   recorded: boolean;
 }
 
-/** Fetch PR state and checks. With a token, the observation is stored on the job. */
+/** Where `gh` reads a job's PR from: its worktree, else the initiating checkout. */
+export function ghCwd(job: Pick<Job, 'worktreePath' | 'repoPath'>): string {
+  return job.worktreePath && existsSync(job.worktreePath) ? job.worktreePath : job.repoPath;
+}
+
+/**
+ * Fetch PR state and checks. With a token, the observation is stored on the job; on a completed
+ * job only the PR state is, so the verdict that completed it is never overwritten by a rollup.
+ */
 export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): PrStatusResult {
   const job = getJob(store.db, id);
   if (!job.prUrl) throw new ValidationError(`Job ${id} has no PR recorded.`);
-  const cwd = job.worktreePath && existsSync(job.worktreePath) ? job.worktreePath : job.repoPath;
-  const pr = viewPr(job.prUrl, cwd);
+  const pr = viewPr(job.prUrl, ghCwd(job));
   const ciStatus = summarizeChecks(pr.checks);
   const state = prWorkflowState(pr);
+  if (auth.token && job.status === 'completed') {
+    // The completed verdict (ciHead, ciStatus) stays as recorded; only the PR's state is news.
+    const updated = recordPrState(
+      store,
+      id,
+      { token: auth.token, expectRevision: auth.expectRevision },
+      { event: 'pr.observed', state, head: pr.headSha },
+    );
+    return { job: updated, pr, ciStatus, prState: state, recorded: true };
+  }
   if (auth.token) {
     const updated = recordCi(store, id, {
       token: auth.token,

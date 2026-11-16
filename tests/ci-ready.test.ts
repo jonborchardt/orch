@@ -40,6 +40,8 @@ describe('ci stage: orch marks a passing PR ready', () => {
     expect(readyEvents(c)[0]?.actor).toBe(SESSION);
     expect(planJob(store, c.id).reason).toContain('orch marked the PR ready for review');
     expect(planJob(store, c.id).reason).toContain('Humans merge');
+    expect(planJob(store, c.id).reason).toContain('PR phase ready-to-merge');
+    expect(planJob(store, c.id).reason).toContain('Merge on the dashboard');
     // Nothing merged.
     expect(shim.read().calls.some((x) => x[1] === 'merge')).toBe(false);
   });
