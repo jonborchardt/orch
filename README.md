@@ -135,8 +135,9 @@ For each target the skill runs `orch factory dispatch`, which checks the reposit
 asks VS Code's `create_session` tool for an independent session on that repository with its own
 worktree. The child's `/factory <id>` adopts that worktree as the job's and runs the job; the parent
 goes back to its own work. Repeating a dispatch for the same repository and issue returns the
-existing job. `orch factory list` shows every job with its stage, status, owner, whether a human is
-needed, the attached session, PR, and the resume command for jobs no live session holds. The host
+existing job. `orch factory list` shows one row per job with its stage, status, whether a human is needed
+(ACTION), PR, and title; `--json` adds the owner, the attached session, and the resume command for
+jobs no live session holds. The host
 cannot be pointed at an existing worktree, which is why `orch` lets it create one
 ([docs/session-launch.md](docs/session-launch.md)).
 
