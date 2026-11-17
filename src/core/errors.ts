@@ -37,6 +37,13 @@ export class ToolError extends OrchError {
   }
 }
 
+/** An SMTP send failed or was refused; the message never contains credentials. */
+export class MailError extends OrchError {
+  constructor(message: string) {
+    super(message, 1);
+  }
+}
+
 /** A merge stopped on conflicts and was aborted; `files` names the conflicting paths. */
 export class MergeConflictError extends ToolError {
   readonly files: string[];

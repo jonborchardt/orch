@@ -124,6 +124,15 @@ repository) and fails if `src/storage/schema.ts` has changes without a committed
 whole Vitest suite runs on Windows too, split across four runners grouped by measured duration,
 plus the built CLI smoke checks (decision 50).
 
+No test sends real mail. `tests/setup.ts` and the CLI runner in `tests/helpers.ts` delete every
+`MAIL_*` variable, and the test home has no `mail.env`. Mail tests use the in-process fake SMTPS
+server in `tests/mail-server.ts` (`fakeSmtp()`: `node:tls` on a free loopback port with the
+test-only certificate in `tests/fixtures/mail/`; it records each message decoded and can refuse
+AUTH or RCPT, stay silent, or present an untrusted certificate). In-process senders trust it
+through `config().ca` or `tls.setDefaultCACertificates`; a spawned CLI through
+`NODE_EXTRA_CA_CERTS`, and only via `orchAsync`, since the server cannot answer while `spawnSync`
+blocks the event loop.
+
 ## Database and migrations
 
 `src/storage/schema.ts` is the schema, in TypeScript. `npm run db:generate` turns changes into a
@@ -184,6 +193,7 @@ orch gh repo | issue <ref> | push <id> | pr create <id> --body-file <md> | pr st
 orch gh ci <id> --token <t>            # reconcile CI for the PR head (ci stage only)
 orch verify <id> --token <t>           # run the repository's verification policy; exit 1 on failure
 orch verify show <id>                  # latest run and validity for HEAD
+orch mail report "<subject>" --text-file <f> [--reply-to <message-id>]   # to MAIL_TO; no database
 
 orch factory start  --title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>]
                     [--repo <path>] [--base <b>] [--max-rounds <n>] --session <name> [--ui|--no-ui]

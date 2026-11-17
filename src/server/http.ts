@@ -18,6 +18,7 @@ import {
   WorkflowError,
 } from '../core/errors.ts';
 import { webDistDir } from '../core/paths.ts';
+import { mailWatermark, reportJobMail } from '../ops/mail.ts';
 import type { Store } from '../storage/client.ts';
 import { act, artifactContent, assertJobId, board, detail, repos } from './api.ts';
 import type { ApiError, SessionInfo } from './types.ts';
@@ -247,7 +248,13 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
       guardMutation(req);
       if (root === 'jobs' && id && sub === 'actions' && rest.length === 0) {
         const body = await readBody(req);
-        send(res, 200, act(store, assertJobId(id), body));
+        const mark = mailWatermark(store);
+        try {
+          send(res, 200, act(store, assertJobId(id), body));
+        } finally {
+          // After the response: the mail never delays or changes it, and never throws.
+          await reportJobMail(store, mark);
+        }
         return;
       }
       throw new HttpError(404, 'Not found');

@@ -12,10 +12,12 @@ import { GH_HELP, runGh } from './gh.ts';
 import { formatInit, INIT_HELP, runInit } from './init.ts';
 import { formatInstall, runInstall } from './install.ts';
 import { JOB_HELP, runJob } from './job.ts';
+import { MAIL_HELP, runMail } from './mail.ts';
 import { formatFactoryList, formatPlan, print, printError } from './output.ts';
 import type { HookOutcome } from '../ops/checkout.ts';
 import type { FactoryRow } from '../ops/dispatch.ts';
 import type { Plan } from '../ops/factory.ts';
+import { mailWatermark, reportJobMail } from '../ops/mail.ts';
 import { RECOVER_HELP, runRecover } from './recover.ts';
 import { runUi, UI_HELP } from './ui.ts';
 import { runVerify, VERIFY_HELP } from './verify.ts';
@@ -51,6 +53,8 @@ Low-level commands (used internally and by generated plans):
   gh <subcommand>        GitHub via gh: issue, push, draft PR, CI status (orch gh --help)
   verify <job-id>        Run the repository's verification policy in the job worktree
                          (orch verify --help)
+  mail report <subject>  Send one plain-text report to the configured recipient
+                         (orch mail --help)
 
 Options:
   -h, --help             Show this help
@@ -72,16 +76,30 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   init: INIT_HELP,
   ui: UI_HELP,
   recover: RECOVER_HELP,
+  mail: MAIL_HELP,
 };
 
 const str = { type: 'string' } as const;
 const bool = { type: 'boolean' } as const;
 
-/** Open the shared database for one command and close it however the command ends. */
-function withStore<T>(fn: (store: Store) => T): T {
+/**
+ * Open the shared database for one command and close it however the command ends. Afterwards,
+ * mail each job the command recorded reported events for (ops/mail.ts); a mail failure only adds
+ * a stderr line in text mode and never changes the result or exit code.
+ */
+async function withStore<T>(json: boolean, fn: (store: Store) => T): Promise<T> {
   const store = openStore();
   try {
-    return fn(store);
+    const mark = mailWatermark(store);
+    try {
+      return fn(store);
+    } finally {
+      for (const o of await reportJobMail(store, mark)) {
+        if (o.error !== null && !json) {
+          process.stderr.write(`orch: mail report for ${o.jobId} failed: ${o.error}\n`);
+        }
+      }
+    }
   } finally {
     store.close();
   }
@@ -123,6 +141,9 @@ export async function main(argv: string[]): Promise<number> {
         path: str,
         all: bool,
         'body-file': str,
+        // mail
+        'text-file': str,
+        'reply-to': str,
         // factory
         ui: bool,
         'no-ui': bool,
@@ -174,13 +195,10 @@ export async function main(argv: string[]): Promise<number> {
         return checks.some((c) => c.status === 'fail') ? 1 : 0;
       }
       case 'job':
-        print(
-          withStore((store) => runJob(store, rest, o)),
-          json,
-        );
+        print(await withStore(json, (store) => runJob(store, rest, o)), json);
         return 0;
       case 'factory': {
-        const result = withStore((store) => runFactory(store, rest, o));
+        const result = await withStore(json, (store) => runFactory(store, rest, o));
         const sub = rest[0];
         print(
           json
@@ -195,10 +213,7 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       }
       case 'worktree':
-        print(
-          withStore((store) => runWorktree(store, rest, o)),
-          json,
-        );
+        print(await withStore(json, (store) => runWorktree(store, rest, o)), json);
         return 0;
       case 'checkout': {
         // No database: the guard runs from any checkout and must never migrate the shared store.
@@ -213,13 +228,10 @@ export async function main(argv: string[]): Promise<number> {
         return exitCode;
       }
       case 'gh':
-        print(
-          withStore((store) => runGh(store, rest, o)),
-          json,
-        );
+        print(await withStore(json, (store) => runGh(store, rest, o)), json);
         return 0;
       case 'verify': {
-        const { result, exitCode } = withStore((store) => runVerify(store, rest, o));
+        const { result, exitCode } = await withStore(json, (store) => runVerify(store, rest, o));
         print(result, json);
         return exitCode;
       }
@@ -233,6 +245,12 @@ export async function main(argv: string[]): Promise<number> {
       case 'recover':
         print(await runRecover(rest, o, process.argv[1] ?? ''), json);
         return 0;
+      case 'mail': {
+        // No database: a generic sender that knows nothing about jobs.
+        const receipt = await runMail(rest, o);
+        print(json ? receipt : `SENT ${receipt.messageId}`, json);
+        return 0;
+      }
       case 'install': {
         const report = runInstall(o);
         print(json ? report : formatInstall(report), json);
