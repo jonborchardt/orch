@@ -16,9 +16,9 @@ Every prompt starts with the header block from SKILL.md. Add:
 | `approve` | `factory-approver`        | Paths to `spec.md`, `build.md`, every `round-*/review-*.md` and `consolidated.md`, the base ref for the diff, and the round count.                                                                                                                                                                                                                                                               |
 
 Builder validation: `orch verify <id> --token <t>`, which runs the repository's `factory.json`
-verification policy (see README, "Verification evidence"). The builder may also run the project's
-own commands while iterating, but only `orch verify` produces evidence. Give the builder and every
-reviewer the latest run id and `plan.sensitive` (paths, disabled tests, policy drift).
+verification policy (see README, "Verification evidence"). The builder runs targeted tests while
+iterating; the full suite runs through `orch verify`, and only `orch verify` produces evidence.
+Give the builder and every reviewer the latest run id and `plan.sensitive` (paths, disabled tests, policy drift).
 
 ## spec.md
 
@@ -81,7 +81,7 @@ Verification run: `orch verify` run <id> at <HEAD sha>, status passed; checks: <
 Logs: `<artifactDir>/verification/<run>/<check>.log`. Exploratory commands you ran beyond that
 (with the tail of their output):
 
-- `npm run check` → pass (N tests)
+- `<targeted test command>` → pass (N tests)
 - ...
 
 ## Acceptance criteria

@@ -20,7 +20,9 @@ Examine, in this order:
    material beyond it? Anything suspicious (secrets, disabled tests, unrelated churn)?
 3. `build.md`: the verification run it cites must exist (`orch verify show <jobId>`), be
    `passed`, and be valid for the HEAD you are examining; read its logs. Claims without a run are
-   claims. Rerun what you need to in the worktree.
+   claims. A valid passed run is your evidence for the required checks; do not rerun the full
+   suite to reproduce it. Run targeted tests where independent confirmation is warranted, and
+   broader ones when a material concern justifies them.
 4. Each review artifact and the consolidated findings for every round. Are all BLOCKING findings
    resolved in the final diff? Did later rounds re-review what changed?
 5. Acceptance criteria: for each, name the evidence (test, output, screenshot) or state that it
