@@ -32,6 +32,16 @@ export function gh(args: string[], cwd?: string): string {
   return r.stdout.trim();
 }
 
+/** One cheap authenticated round trip (`gh api rate_limit`): null when GitHub answered, else why not. */
+export function probeGitHub(): string | null {
+  try {
+    gh(['api', 'rate_limit']);
+    return null;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- caller picks the shape
 function ghJson<T>(args: string[], cwd?: string): T {
   const out = gh(args, cwd);

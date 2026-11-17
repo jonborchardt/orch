@@ -16,6 +16,7 @@ import { formatFactoryList, formatPlan, print, printError } from './output.ts';
 import type { HookOutcome } from '../ops/checkout.ts';
 import type { FactoryRow } from '../ops/dispatch.ts';
 import type { Plan } from '../ops/factory.ts';
+import { RECOVER_HELP, runRecover } from './recover.ts';
 import { runUi, UI_HELP } from './ui.ts';
 import { runVerify, VERIFY_HELP } from './verify.ts';
 import { runWorktree, WORKTREE_HELP } from './worktree.ts';
@@ -37,7 +38,10 @@ Commands:
                          readiness (orch init --help)
   install [--dry-run]    Link skills/ and agents/ into ~/.claude (--claude-dir, --source)
   ui [--port <n>] [--open]
-                         Serve the local dashboard on loopback (the only long-running command)
+                         Serve the local dashboard on loopback (long-running, optional)
+  recover start|stop|status|run [--once]
+                         Opt-in worker that continues ci-stage jobs after a network outage
+                         (orch recover --help)
 
 Low-level commands (used internally and by generated plans):
   job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
@@ -54,7 +58,8 @@ Options:
       --json             Machine-readable output (errors go to stderr as JSON)
 
 orch is a one-shot CLI: it opens the shared SQLite database, performs one deterministic
-operation, prints the result, and exits. It runs no background work.
+operation, prints the result, and exits. The only long-running commands are orch ui and the
+opt-in orch recover worker; jobs never need either to be running.
 `;
 
 const SUBCOMMAND_HELP: Record<string, string> = {
@@ -66,6 +71,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   verify: VERIFY_HELP,
   init: INIT_HELP,
   ui: UI_HELP,
+  recover: RECOVER_HELP,
 };
 
 const str = { type: 'string' } as const;
@@ -129,6 +135,8 @@ export async function main(argv: string[]): Promise<number> {
         // ui
         port: str,
         open: bool,
+        // recover
+        once: bool,
         // init
         command: { type: 'string', multiple: true },
         'from-package-json': bool,
@@ -222,6 +230,9 @@ export async function main(argv: string[]): Promise<number> {
       }
       case 'ui':
         return await runUi(o);
+      case 'recover':
+        print(await runRecover(rest, o, process.argv[1] ?? ''), json);
+        return 0;
       case 'install': {
         const report = runInstall(o);
         print(json ? report : formatInstall(report), json);

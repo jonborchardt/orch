@@ -9,8 +9,9 @@ one machine, and a stopped job resumes from saved state.
 `orch` is the small deterministic part: a one-shot CLI over one SQLite database that holds job
 state, decides which step is legal next, validates every artifact, runs the verification policy,
 and records evidence pinned to commits. Claude Code sessions and their subagents do all the
-creative work and interact with state only through the CLI. Nothing runs in the background: no
-daemon, no scheduler, no service.
+creative work and interact with state only through the CLI. Nothing runs in the background
+unless you opt in: the dashboard (`orch ui`) and the recovery worker (`orch recover start`) are
+optional, and no job needs either.
 
 ## Why
 
@@ -43,6 +44,7 @@ VS Code Agents window, any repository
        └─ subagents (agents/*.md)              spec writer, builder, reviewers, approver, in the job worktree
 
 orch ui (optional, 127.0.0.1)                  the same database, read-only plus a few human actions
+orch recover start (optional)                  continues ci-stage jobs after a network outage
 ```
 
 A job moves `spec → build → review → approve → pr → ci → completed`. Any stage can escalate to
@@ -160,6 +162,13 @@ workflow allows (resume at a stage, request review or rework, accept a proposed 
 accept a delivery that GitHub reported no checks for, cancel), each recorded with a reason, and
 never pretends to wake a session. Details: [docs/dashboard.md](docs/dashboard.md).
 
+A network outage can stop the session driving a job. `orch recover start` (opt-in; `stop`,
+`status`, `run --once`) continues the jobs `orch` can finish by itself: a `ci`-stage job with a PR
+and no live owner is resumed as session `orch-recovery` once GitHub answers again, and `orch gh ci`
+completes it. It never forces a live lease, never launches or messages a Claude session, and
+reports jobs stalled in an agent stage as needing a session, with the resume command
+([docs/workflow.md](docs/workflow.md#recovery-worker)).
+
 ## What `orch` automates and enforces
 
 - Job state, leases, tokens, and the audit log; one owner per job; stale commands fail with exit 4.
@@ -192,7 +201,8 @@ never pretends to wake a session. Details: [docs/dashboard.md](docs/dashboard.md
 - Deciding on an approver's `ESCALATE`, a review round that still requests changes at the limit, a
   spent CI repair budget, a PR closed or moved outside the job.
 - Restarting a stopped session: `orch` records that a lease lapsed; something must run `/factory
-<id>` again (any session, or the dashboard's copyable command).
+<id>` again (any session, or the dashboard's copyable command). The opt-in recovery worker
+  continues only the `ci` stage on its own.
 - Anything cooperative: subagents staying inside the worktree, reviewers reading the logs they are
   given, the parent recording the child session before the child claims the job. These are stated in
   prose and verified after the fact (fingerprints, dirty-file lists), not prevented.

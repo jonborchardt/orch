@@ -26,7 +26,8 @@ function sleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function alive(pid: number): boolean {
+/** Whether a process with this PID is running (EPERM: it exists under another user). */
+export function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
