@@ -392,6 +392,25 @@ describe('transition: escalation, resume, cancel', () => {
     expect(() => run(job('build', 'pending'), 'resume')).toThrow(/nothing to resume/);
   });
 
+  it('resume from needs-human into review opens a new round; resuming a review stage keeps it', () => {
+    const blocked = job('needs-human', 'blocked', { round: 2, returnStage: 'approve' });
+    expect(run(blocked, 'resume', { ...none, to: 'review' }).patch).toEqual({
+      stage: 'review',
+      status: 'pending',
+      returnStage: null,
+      round: 3,
+    });
+    // Escalated mid-review: the default return to review is a fresh round too.
+    const midReview = job('needs-human', 'blocked', { round: 2, returnStage: 'review' });
+    expect(run(midReview, 'resume').patch.round).toBe(3);
+    // Any other target keeps the round.
+    expect(run(blocked, 'resume', { ...none, to: 'build' }).patch.round).toBeUndefined();
+    // An interrupted or failed review resumes in its own round.
+    for (const s of ['interrupted', 'failed'] as const) {
+      expect(run(job('review', s, { round: 2 }), 'resume').patch).toEqual({ status: 'pending' });
+    }
+  });
+
   it('cancel works from any live state and stamps completedAt', () => {
     for (const s of ['pending', 'running', 'blocked', 'interrupted', 'failed'] as const) {
       const r = run(job('review', s), 'cancel');

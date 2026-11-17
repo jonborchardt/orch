@@ -55,7 +55,9 @@ Registering changed content fails unless `--replace` is given, and is then logge
 with `--revision <n>` to also reject the replacement if the job moved on meanwhile. Review files are
 per round (`round-N/`) and are never overwritten by later rounds.
 
-**Review rounds.** Completing `build` increments the round and enters `review`. While `review` is
+**Review rounds.** Completing `build` increments the round and enters `review`; so does `resume`
+from `needs-human` into `review` (a requested re-review is a new round, keeping earlier verdicts as
+history), while resuming an interrupted `review` keeps its round. While `review` is
 `running`, each reviewer is recorded with `orch job review record` (without a verdict while it
 runs, then with `--verdict pass|changes`); the verdict is read from that reviewer's own
 `round-N/review-<name>.md`. `complete` is refused while any reviewer is pending, until all three

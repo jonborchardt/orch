@@ -106,7 +106,8 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       worktreePath: job.worktreePath,
       branch: job.branch,
       reviews: reviews.map((r) => ({ reviewer: r.reviewer, verdict: r.verdict })),
-      blocking: blockingOf(artifacts, job.round) ?? blockingOf(artifacts, job.round - 1),
+      // Current round only: a re-review must not wear the previous round's blocking chip.
+      blocking: blockingOf(artifacts, job.round),
       blocker: blockerOf(job, state, evidence),
       resume: resumeOf(job, state),
       updatedAt: job.updatedAt,

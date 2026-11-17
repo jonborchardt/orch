@@ -32,9 +32,10 @@ test('job board shows every repository and job with honest liveness', async ({ p
   await expect(table.getByText('needs human').first()).toBeVisible();
   await expect(page.getByText('2 running')).toBeVisible();
   await expect(page.getByText('1 stale')).toBeVisible();
-  // One verdict rollup per row with the blocking count beside it; reviewers are in its tooltip.
+  // One verdict rollup per row; reviewers are in its tooltip. The blocking chip is the current
+  // round's only, so round 2 under review does not wear round 1's `2 blocking`.
   await expect(table.getByText('1/3, 2 pending')).toBeVisible();
-  await expect(table.getByText('2 blocking').first()).toBeVisible();
+  await expect(table.getByText('2 blocking')).toHaveCount(0);
   // CI chips always name the commit the verdict was read for; repairs show their budget.
   await expect(table.getByText('CI failing @f1e2d3c')).toBeVisible();
   await expect(table.getByText('CI pending @a1b2c3d')).toBeVisible();
@@ -93,7 +94,7 @@ test('job detail exposes spec, reviews, long findings, decision, events, and lin
   await page.getByRole('tab', { name: 'Reviews' }).click();
   // The heading's text content includes its blocking chip ("Round 1blocking 2"): prefix match.
   await expect(page.getByText(/^Round 1/)).toBeVisible();
-  await expect(page.getByText(/^Round 2/)).toBeVisible();
+  await expect(page.getByText(/^Round 2 \(current\)/)).toBeVisible();
   // Reviewers are collapsed: the header shows the verdict, the body only once expanded.
   await expect(page.locator('[data-marker="VERDICT"]')).toHaveCount(0);
   const reviewer = page.getByRole('button', { name: /^security/ }).first();

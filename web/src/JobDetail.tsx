@@ -342,6 +342,7 @@ export function JobDetail({
               <Box key={r.round} sx={{ mb: 3 }}>
                 <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
                   Round {r.round}
+                  {r.round === job.round && ' (current)'}
                   {r.blocking !== null && (
                     <Chip
                       sx={{ ml: 1 }}
