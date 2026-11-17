@@ -7,6 +7,7 @@ import {
   Button,
   Chip,
   Divider,
+  LinearProgress,
   Link,
   Paper,
   Stack,
@@ -53,8 +54,20 @@ const TABS = [
 ] as const;
 type TabName = (typeof TABS)[number];
 
-export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: number }) {
+/** What the detail page's own fetch is doing, for the app bar's shared indicator. */
+export type DetailActivity = 'loading' | 'refreshing' | 'idle';
+
+export function JobDetail({
+  id,
+  refreshMs = 4000,
+  onActivity,
+}: {
+  id: string;
+  refreshMs?: number;
+  onActivity?: (a: DetailActivity) => void;
+}) {
   const [detail, setDetail] = useState<JobDetailView | null>(null);
+  const [inFlight, setInFlight] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabName>('Overview');
   const [tick, setTick] = useState(0);
@@ -64,18 +77,23 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
   useEffect(() => {
     let alive = true;
     const load = () => {
-      fetchDetail(id).then(
-        (d) => {
-          if (alive) {
-            setDetail(d);
-            setError(null);
-          }
-        },
-        (err: unknown) => {
-          if (alive)
-            setError(err instanceof ApiFailure ? `${err.type}: ${err.message}` : String(err));
-        },
-      );
+      setInFlight((n) => n + 1);
+      fetchDetail(id)
+        .then(
+          (d) => {
+            if (alive) {
+              setDetail(d);
+              setError(null);
+            }
+          },
+          (err: unknown) => {
+            if (alive)
+              setError(err instanceof ApiFailure ? `${err.type}: ${err.message}` : String(err));
+          },
+        )
+        .finally(() => {
+          setInFlight((n) => n - 1);
+        });
     };
     load();
     const timer = setInterval(() => {
@@ -87,6 +105,19 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
     };
   }, [id, refreshMs, tick]);
 
+  const loaded = detail !== null;
+  const busy = inFlight > 0;
+  useEffect(() => {
+    onActivity?.(!loaded ? 'loading' : busy ? 'refreshing' : 'idle');
+  }, [loaded, busy, onActivity]);
+  // The next detail page starts in its first load.
+  useEffect(
+    () => () => {
+      onActivity?.('loading');
+    },
+    [onActivity],
+  );
+
   if (error && !detail) {
     return (
       <Alert severity="error" sx={{ m: 2 }}>
@@ -94,7 +125,13 @@ export function JobDetail({ id, refreshMs = 4000 }: { id: string; refreshMs?: nu
       </Alert>
     );
   }
-  if (!detail) return <Typography sx={{ p: 2 }}>Loading {id}…</Typography>;
+  if (!detail) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <LinearProgress aria-label={`Loading ${id}`} />
+      </Box>
+    );
+  }
   const { job } = detail;
   const worktree = detail.plan?.worktree ?? null;
   const consolidatedRounds = detail.rounds.filter((r) => r.consolidated !== null).reverse();

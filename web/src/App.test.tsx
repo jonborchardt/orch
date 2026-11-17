@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BoardRow, CiView, JobDetailView } from '../../src/server/types.ts';
 import { App } from './App.tsx';
+import { byAttention, reviewRollup } from './format.ts';
 import { Markdown } from './Markdown.tsx';
 import { theme } from './main.tsx';
 
@@ -187,6 +188,8 @@ function openDetails() {
   fireEvent.click(screen.getByRole('button', { name: 'Details' }));
 }
 let data: { rows: BoardRow[]; detail: JobDetailView; actionStatus: number; actionBody: unknown };
+/** While set, board or detail responses wait for the promise (a held request). */
+let hold: { board?: Promise<void>; detail?: Promise<void> } = {};
 
 function mockFetch(): FetchMock {
   const f = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -199,24 +202,26 @@ function mockFetch(): FetchMock {
           headers: { 'Content-Type': 'application/json' },
         }),
       );
-    if (url.startsWith('/api/jobs?') || url === '/api/jobs') return json(200, data.rows);
+    if (url.startsWith('/api/jobs?') || url === '/api/jobs')
+      return (hold.board ?? Promise.resolve()).then(() => json(200, data.rows));
     if (url === '/api/repos') return json(200, [...new Set(data.rows.map((r) => r.repo))]);
     if (url === '/api/session')
       return json(200, { csrf: 'tok', version: '0', database: 'db', actions: [] });
     if (/^\/api\/jobs\/job-[0-9a-f]{8}\/actions$/.test(url) && init?.method === 'POST') {
       return json(data.actionStatus, data.actionBody);
     }
-    if (/^\/api\/jobs\/job-[0-9a-f]{8}$/.test(url)) return json(200, data.detail);
+    if (/^\/api\/jobs\/job-[0-9a-f]{8}$/.test(url))
+      return (hold.detail ?? Promise.resolve()).then(() => json(200, data.detail));
     return json(404, { error: { type: 'NotFoundError', message: `no ${url}` } });
   });
   vi.stubGlobal('fetch', f);
   return f;
 }
 
-function mount() {
+function mount(refreshMs = 50) {
   return render(
     <ThemeProvider theme={theme} defaultMode="light">
-      <App refreshMs={50} />
+      <App refreshMs={refreshMs} />
     </ThemeProvider>,
   );
 }
@@ -224,6 +229,7 @@ function mount() {
 beforeEach(() => {
   window.location.hash = '';
   window.localStorage.clear();
+  hold = {};
   data = {
     rows,
     detail: detail(),
@@ -259,7 +265,10 @@ describe('App board', () => {
     expect(within(table).getByText(/running \(lease live\)/)).toBeInTheDocument();
     expect(within(table).getByText(/last reported running/)).toBeInTheDocument();
     expect(within(table).getByText(/needs human/)).toBeInTheDocument();
-    expect(within(table).getByText('correctness: pending')).toBeInTheDocument();
+    // One verdict rollup per row, with the blocking count folded in; reviewers only in its tooltip.
+    expect(within(table).getByText('1/2, 1 pending')).toBeInTheDocument();
+    expect(within(table).getByText('2 blocking')).toBeInTheDocument();
+    expect(within(table).queryByText('correctness: pending')).not.toBeInTheDocument();
     expect(within(table).getByText('CI failing @abcdef0')).toBeInTheDocument();
     expect(within(table).getByText('repairs 1/2')).toBeInTheDocument();
     // Repository is hidden by default (Columns menu); the job ids still identify each row.
@@ -312,10 +321,10 @@ describe('App board', () => {
     expect(within(table).getByText(/presumed gone/)).toBeInTheDocument();
     const copies = within(table).getAllByRole('button', { name: /Copy resume command/ });
     expect(copies.map((b) => b.getAttribute('aria-label'))).toEqual([
-      'Copy resume command for job-00000002',
       'Copy resume command for job-00000003',
+      'Copy resume command for job-00000002',
     ]);
-    fireEvent.click(must(copies[1]));
+    fireEvent.click(must(copies[0]));
     await waitFor(() => {
       expect(write).toHaveBeenCalledWith('/factory resume job-00000003');
     });
@@ -333,7 +342,7 @@ describe('App board', () => {
     mount();
     await screen.findByRole('table', { name: 'Factory jobs' });
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
-    fireEvent.click(await screen.findByRole('option', { name: 'cancelled' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'cancelled (1)' }));
     await waitFor(() => {
       expect(screen.getAllByRole('row')).toHaveLength(2);
     });
@@ -376,6 +385,8 @@ describe('App board', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('Boom: db locked');
     });
+    // A failed first load shows the error, not a loading bar that never ends.
+    expect(screen.queryByRole('progressbar', { name: 'Loading jobs' })).not.toBeInTheDocument();
   });
 });
 
@@ -1039,7 +1050,9 @@ describe('Archive', () => {
 
   async function show(filter: string) {
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
-    fireEvent.click(await screen.findByRole('option', { name: filter }));
+    fireEvent.click(
+      await screen.findByRole('option', { name: new RegExp(`^${filter} [(][0-9]+[)]$`) }),
+    );
   }
 
   it('hides archived jobs from every view except Show: archived', async () => {
@@ -1159,7 +1172,9 @@ describe('Board grid: columns, sort, filter, row archive', () => {
       .map(([u, i]) => [u, JSON.parse(i?.body as string) as unknown]);
   async function show(filter: string) {
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
-    fireEvent.click(await screen.findByRole('option', { name: filter }));
+    fireEvent.click(
+      await screen.findByRole('option', { name: new RegExp(`^${filter} [(][0-9]+[)]$`) }),
+    );
   }
 
   it('hides Repository, Session, and Branch by default; the Columns menu toggles and remembers', async () => {
@@ -1183,7 +1198,6 @@ describe('Board grid: columns, sort, filter, row archive', () => {
       'Branch / worktree column',
       'Round column',
       'Reviews column',
-      'Blocking column',
       'Elapsed column',
       'Updated column',
       'PR / CI column',
@@ -1208,22 +1222,25 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     expect(headers()).not.toContain('Repository');
   });
 
-  it('sorts by a header click, ascending then descending, and keeps server order until then', async () => {
+  it('sorts by a header click, ascending then descending, and by attention until then', async () => {
     mockFetch();
     mount();
     await screen.findByRole('table', { name: 'Factory jobs' });
-    expect(ids()).toEqual(['job-00000001', 'job-00000002', 'job-00000003', 'job-00000004']);
+    // Needs human, then stale, then running, then finished.
+    expect(ids()).toEqual(['job-00000003', 'job-00000002', 'job-00000001', 'job-00000004']);
+    expect(headers()).not.toContain('Blocking');
     const header = (name: string) =>
       must(screen.getByRole('button', { name }).closest<HTMLElement>('th'));
-    fireEvent.click(screen.getByRole('button', { name: 'Blocking' }));
-    expect(header('Blocking')).toHaveAttribute('aria-sort', 'ascending');
+    // Reviews sorts by the blocking count it now carries.
+    fireEvent.click(screen.getByRole('button', { name: 'Reviews' }));
+    expect(header('Reviews')).toHaveAttribute('aria-sort', 'ascending');
     expect(ids().at(-1)).toBe('job-00000002');
-    fireEvent.click(screen.getByRole('button', { name: 'Blocking' }));
-    expect(header('Blocking')).toHaveAttribute('aria-sort', 'descending');
+    fireEvent.click(screen.getByRole('button', { name: 'Reviews' }));
+    expect(header('Reviews')).toHaveAttribute('aria-sort', 'descending');
     expect(ids()[0]).toBe('job-00000002');
     fireEvent.click(screen.getByRole('button', { name: 'Job' }));
     expect(header('Job')).toHaveAttribute('aria-sort', 'ascending');
-    expect(header('Blocking')).not.toHaveAttribute('aria-sort');
+    expect(header('Reviews')).not.toHaveAttribute('aria-sort');
     expect(ids()).toEqual(['job-00000001', 'job-00000002', 'job-00000004', 'job-00000003']);
     fireEvent.click(screen.getByRole('button', { name: 'Job' }));
     expect(ids()).toEqual(['job-00000003', 'job-00000004', 'job-00000002', 'job-00000001']);
@@ -1248,7 +1265,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
       expect(ids()).toEqual(['job-00000004']);
     });
     fireEvent.change(filter, { target: { value: '' } });
-    await show('all');
+    await show('current');
     await waitFor(() => {
       expect(ids()).toHaveLength(4);
     });
@@ -1328,7 +1345,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     expect(await within(dialog).findByText('OwnershipError: held by claude-9')).toBeInTheDocument();
   });
 
-  it('Show: archived lists Unarchive on each row; after it the row returns to all', async () => {
+  it('Show: archived lists Unarchive on each row; after it the row returns to current', async () => {
     const archived = row({
       id: 'job-00000009',
       title: 'Omega archived',
@@ -1367,7 +1384,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
       expect(screen.getByRole('status')).toHaveTextContent('No jobs match these filters.');
     });
     expect(screen.getByRole('button', { name: 'Columns' })).toHaveFocus();
-    await show('all');
+    await show('current');
     await waitFor(() => {
       expect(ids()).toContain('job-00000009');
     });
@@ -1563,5 +1580,268 @@ describe('PR phase, Merge, and Refresh PR', () => {
     expect(await within(dialog).findByText(/not mergeable/)).toBeInTheDocument();
     // The earlier refresh's success does not sit beside the new error.
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+});
+
+describe('Board attention order, summary chips, review rollup', () => {
+  const ids = () =>
+    [...document.querySelectorAll<HTMLElement>('[data-job-id]')].map((r) => r.dataset['jobId']);
+
+  it('orders by attention group, then most recently updated first', () => {
+    const at = (
+      id: string,
+      liveness: BoardRow['liveness'],
+      updatedAt = '2026-11-13T08:00:00.000Z',
+    ) => row({ id, liveness, updatedAt });
+    const input = [
+      at('cancelled', 'cancelled'),
+      at('completed', 'completed', '2026-11-13T09:00:00.000Z'),
+      at('idle', 'idle'),
+      at('running', 'running'),
+      at('interrupted', 'interrupted', '2026-11-13T07:00:00.000Z'),
+      at('failed', 'failed'),
+      at('stale', 'stale'),
+      at('blocked-old', 'blocked'),
+      at('blocked-new', 'blocked', '2026-11-13T09:00:00.000Z'),
+    ];
+    expect([...input].sort(byAttention).map((r) => r.id)).toEqual([
+      'blocked-new',
+      'blocked-old',
+      'stale',
+      'failed',
+      'interrupted',
+      'running',
+      'idle',
+      'completed',
+      'cancelled',
+    ]);
+  });
+
+  it('rolls a round up into one verdict', () => {
+    const v = (reviewer: string, verdict: 'pass' | 'changes' | null) => ({ reviewer, verdict });
+    expect(reviewRollup([])).toBeNull();
+    expect(reviewRollup([v('a', 'pass'), v('b', 'pass')])).toEqual({
+      label: '2/2 pass',
+      color: 'success',
+    });
+    expect(reviewRollup([v('a', 'pass'), v('b', null), v('c', null)])).toEqual({
+      label: '1/3, 2 pending',
+      color: 'default',
+    });
+    expect(reviewRollup([v('a', 'pass'), v('b', 'changes'), v('c', null)])).toEqual({
+      label: '1 changes',
+      color: 'warning',
+    });
+  });
+
+  it('shows the rollup with every reviewer in its tooltip and folds in the blocking count', async () => {
+    // A stored choice naming the removed Blocking column is harmless.
+    window.localStorage.setItem('orch.board.hiddenColumns', JSON.stringify(['blocking', 'repo']));
+    mockFetch();
+    mount();
+    const table = await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent),
+    ).not.toContain('Blocking');
+    const stale = must(table.querySelector<HTMLElement>('[data-job-id="job-00000002"]'));
+    const rollup = within(stale).getByText('1/2, 1 pending');
+    expect(
+      must(within(stale).getByText('2 blocking').closest('.MuiChip-root')).className,
+    ).toContain('MuiChip-colorError');
+    // No reviews and no blocking count: the cell is empty.
+    const running = must(table.querySelector<HTMLElement>('[data-job-id="job-00000001"]'));
+    expect(within(running).queryByText(/pass|pending|changes|blocking/)).not.toBeInTheDocument();
+    fireEvent.mouseOver(rollup);
+    const tip = await screen.findByRole('tooltip');
+    expect(tip).toHaveTextContent('security: pass');
+    expect(tip).toHaveTextContent('correctness: pending');
+    expect(within(table).queryByText('correctness: pending')).not.toBeInTheDocument();
+  });
+
+  it('summary chips filter the board, and Show lists a count per option', async () => {
+    data.rows = [
+      ...rows,
+      row({ id: 'job-0000000b', title: 'Failed', status: 'failed', liveness: 'failed' }),
+      row({ id: 'job-0000000c', title: 'Stopped', status: 'interrupted', liveness: 'interrupted' }),
+      row({ id: 'job-0000000d', title: 'Waiting', status: 'pending', liveness: 'idle' }),
+      row({
+        id: 'job-00000009',
+        title: 'Omega archived',
+        status: 'completed',
+        liveness: 'completed',
+        archivedAt: '2026-11-14T00:00:00.000Z',
+      }),
+    ];
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    const summary = screen.getByLabelText('Summary');
+    const chip = (name: string) => within(summary).getByRole('button', { name });
+    expect(
+      within(summary)
+        .getAllByRole('button')
+        .map((c) => c.textContent),
+    ).toEqual(['1 running', '1 stale', '1 need human', '2 failed', '1 idle']);
+    // Pressed shows as a visible ring as well as aria-pressed; unpressed chips have none.
+    const ringed = () =>
+      within(summary)
+        .getAllByRole('button')
+        .filter((c) => getComputedStyle(c).outlineStyle === 'solid')
+        .map((c) => c.textContent);
+    for (const c of within(summary).getAllByRole('button')) {
+      expect(c).toHaveAttribute('aria-pressed', 'false');
+    }
+    expect(ringed()).toEqual([]);
+    const show = screen.getByRole('combobox', { name: 'Show' });
+    expect(show).toHaveTextContent('current (7)');
+
+    fireEvent.click(chip('1 need human'));
+    await waitFor(() => {
+      expect(ids()).toEqual(['job-00000003']);
+    });
+    expect(chip('1 need human')).toHaveAttribute('aria-pressed', 'true');
+    expect(ringed()).toEqual(['1 need human']);
+    // An explicit text-colour ring, not currentColor (white on a filled chip).
+    expect(getComputedStyle(chip('1 need human')).outlineColor).toBe(theme.palette.text.primary);
+    expect(getComputedStyle(chip('1 need human')).outlineWidth).toBe('2px');
+    expect(show).toHaveTextContent('needs human (1)');
+    fireEvent.click(chip('2 failed'));
+    await waitFor(() => {
+      expect(ids()).toEqual(['job-0000000b', 'job-0000000c']);
+    });
+    expect(chip('1 need human')).toHaveAttribute('aria-pressed', 'false');
+    // Clicking the pressed chip again returns to current.
+    fireEvent.click(chip('2 failed'));
+    await waitFor(() => {
+      expect(ids()).toHaveLength(7);
+    });
+    expect(show).toHaveTextContent('current (7)');
+    for (const [name, id] of [
+      ['1 running', 'job-00000001'],
+      ['1 stale', 'job-00000002'],
+      ['1 idle', 'job-0000000d'],
+    ] as const) {
+      fireEvent.click(chip(name));
+      await waitFor(() => {
+        expect(ids()).toEqual([id]);
+      });
+    }
+
+    fireEvent.mouseDown(show);
+    const listbox = await screen.findByRole('listbox');
+    expect(
+      within(listbox)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual([
+      'current (7)',
+      'active (5)',
+      'needs human (1)',
+      'running (1)',
+      'stale (1)',
+      'failed (2)',
+      'idle (1)',
+      'finished (1)',
+      'cancelled (1)',
+      'archived (1)',
+    ]);
+  });
+});
+
+describe('Loading and refresh progress', () => {
+  const refreshing = () => screen.queryByRole('progressbar', { name: 'Refreshing' });
+
+  it('shows a progress bar, not text, until the first board response', async () => {
+    const gate = Promise.withResolvers<undefined>();
+    hold.board = gate.promise;
+    mockFetch();
+    mount();
+    expect(await screen.findByRole('progressbar', { name: 'Loading jobs' })).toBeInTheDocument();
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(refreshing()).not.toBeInTheDocument();
+    // No counts until the first response: bare labels, never zeros that look real.
+    expect(
+      within(screen.getByLabelText('Summary'))
+        .getAllByRole('button')
+        .map((c) => c.textContent),
+    ).toEqual(['running', 'stale', 'need human', 'failed', 'idle']);
+    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent(/^current$/);
+    hold = {};
+    gate.resolve(undefined);
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(screen.queryByRole('progressbar', { name: 'Loading jobs' })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent('current (4)');
+  });
+
+  it('shows Refreshing under the app bar only while a board poll is in flight', async () => {
+    mockFetch();
+    mount(200);
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    await waitFor(() => {
+      expect(refreshing()).not.toBeInTheDocument();
+    });
+    const ok = Promise.withResolvers<undefined>();
+    hold.board = ok.promise;
+    expect(await screen.findByRole('progressbar', { name: 'Refreshing' })).toBeInTheDocument();
+    hold = {};
+    ok.resolve(undefined);
+    await waitFor(() => {
+      expect(refreshing()).not.toBeInTheDocument();
+    });
+    // A failed poll clears it too.
+    const bad = Promise.withResolvers<undefined>();
+    hold.board = bad.promise;
+    expect(await screen.findByRole('progressbar', { name: 'Refreshing' })).toBeInTheDocument();
+    hold = {};
+    bad.reject(new Error('network down'));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('network down');
+    });
+    await waitFor(() => {
+      expect(refreshing()).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows a progress bar until the first detail response, then Refreshing for its polls', async () => {
+    const first = Promise.withResolvers<undefined>();
+    hold.detail = first.promise;
+    const f = mockFetch();
+    const boardCalls = () => (f.mock.calls as [string][]).filter(([u]) => u === '/api/jobs').length;
+    window.location.hash = '#/jobs/job-00000003';
+    mount(200);
+    expect(
+      await screen.findByRole('progressbar', { name: 'Loading job-00000003' }),
+    ).toBeInTheDocument();
+    // A board poll in flight during the detail's first load never adds a second bar.
+    await waitFor(() => {
+      expect(boardCalls()).toBeGreaterThanOrEqual(2);
+    });
+    const board = Promise.withResolvers<undefined>();
+    hold.board = board.promise;
+    const before = boardCalls();
+    await waitFor(() => {
+      expect(boardCalls()).toBeGreaterThan(before);
+    });
+    expect(refreshing()).not.toBeInTheDocument();
+    hold = {};
+    board.resolve(undefined);
+    first.resolve(undefined);
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(
+      screen.queryByRole('progressbar', { name: 'Loading job-00000003' }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(refreshing()).not.toBeInTheDocument();
+    });
+    const poll = Promise.withResolvers<undefined>();
+    hold.detail = poll.promise;
+    expect(await screen.findByRole('progressbar', { name: 'Refreshing' })).toBeInTheDocument();
+    hold = {};
+    poll.resolve(undefined);
+    await waitFor(() => {
+      expect(refreshing()).not.toBeInTheDocument();
+    });
   });
 });

@@ -32,8 +32,9 @@ test('job board shows every repository and job with honest liveness', async ({ p
   await expect(table.getByText('needs human').first()).toBeVisible();
   await expect(page.getByText('2 running')).toBeVisible();
   await expect(page.getByText('1 stale')).toBeVisible();
-  // Per-reviewer verdicts and blocking counts are visible on the board.
-  await expect(table.getByText('correctness: pending')).toBeVisible();
+  // One verdict rollup per row with the blocking count beside it; reviewers are in its tooltip.
+  await expect(table.getByText('1/3, 2 pending')).toBeVisible();
+  await expect(table.getByText('2 blocking').first()).toBeVisible();
   // CI chips always name the commit the verdict was read for; repairs show their budget.
   await expect(table.getByText('CI failing @f1e2d3c')).toBeVisible();
   await expect(table.getByText('CI pending @a1b2c3d')).toBeVisible();
@@ -190,7 +191,7 @@ test('archives and unarchives from the board row', async ({ page }) => {
   await expect(table).toHaveCount(0);
   await expect(page.getByText('No jobs match these filters.')).toBeVisible();
   await page.getByRole('combobox', { name: 'Show' }).click();
-  await page.getByRole('option', { name: 'all' }).click();
+  await page.getByRole('option', { name: /^current/ }).click();
   await expect(table.getByRole('row')).toHaveCount(11);
   await expect(table.getByText(title)).toBeVisible();
 });
@@ -212,7 +213,7 @@ test('filters by text and sorts by a header', async ({ page }) => {
   await filter.fill('');
   await expect(table.getByRole('row')).toHaveCount(2);
   await page.getByRole('combobox', { name: 'Show' }).click();
-  await page.getByRole('option', { name: 'all' }).click();
+  await page.getByRole('option', { name: /^current/ }).click();
   await expect(table.getByRole('row')).toHaveCount(11);
 
   const job = table.getByRole('columnheader', { name: 'Job' });
