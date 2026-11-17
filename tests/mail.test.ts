@@ -230,6 +230,15 @@ describe('orch mail report', () => {
     expect(smtp.messages.at(-1)?.headers['message-id']).toBe(receipt.messageId);
     expect(smtp.messages.at(-1)?.headers['in-reply-to']).toBe(id);
     noSecret(reply);
+
+    const inline = await orchAsync(
+      h,
+      tmpdir(),
+      ['mail', 'report', 'Hi', '--text', 'Inline body.'],
+      env(),
+    );
+    expect(inline.code, inline.err).toBe(0);
+    expect(smtp.messages.at(-1)?.body).toBe('Inline body.');
   });
 
   it('exits 1 unconfigured or refused, 2 on usage mistakes, and never prints the password', async () => {
@@ -262,6 +271,7 @@ describe('orch mail report', () => {
     for (const args of [
       ['mail', 'report', 'Hi'],
       ['mail', 'report', 'Hi', '--text-file', f, '--to', 'evil@example.test'],
+      ['mail', 'report', 'Hi', '--text-file', f, '--text', 'both'],
       ['mail', 'report', '--text-file', f],
       ['mail', 'send', 'Hi', '--text-file', f],
     ]) {

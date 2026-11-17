@@ -6,14 +6,15 @@ import { MAIL_ENV_FILE, mailConfig, type MailReceipt, sendReport } from '../inte
 import { need } from './args.ts';
 
 export interface MailOptions {
+  text?: string;
   'text-file'?: string;
   'reply-to'?: string;
   to?: string;
 }
 
-export const MAIL_HELP = `Usage: orch mail report "<subject>" --text-file <file> [--reply-to <message-id>]
+export const MAIL_HELP = `Usage: orch mail report "<subject>" (--text "<body>" | --text-file <file>) [--reply-to <message-id>]
 
-  report          Send the UTF-8 text in <file> to MAIL_TO with the configured subject prefix and
+  report          Send the body (inline, or the UTF-8 text in <file>) to MAIL_TO with the configured subject prefix and
                   print SENT <message-id>. --reply-to threads it after that earlier message (reuse
                   the same subject). There is no recipient option. Exit 0 means the SMTP server
                   accepted the mail, not that it was delivered; exit 1 means it was not confirmed,
@@ -36,12 +37,17 @@ export async function runMail(rest: string[], o: MailOptions): Promise<MailRecei
     throw new UsageError(`Unexpected arguments: ${extra.join(' ')}\n\n${MAIL_HELP}`);
   }
   const title = need(subject, '<subject>', MAIL_HELP);
-  const file = need(o['text-file'], '--text-file', MAIL_HELP);
-  let text: string;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch (err) {
-    throw new ValidationError(`Cannot read --text-file ${file}: ${(err as Error).message}`);
+  if ((o.text === undefined) === (o['text-file'] === undefined)) {
+    throw new UsageError(`Give exactly one of --text or --text-file.\n\n${MAIL_HELP}`);
+  }
+  let text = o.text ?? '';
+  const file = o['text-file'];
+  if (file !== undefined) {
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch (err) {
+      throw new ValidationError(`Cannot read --text-file ${file}: ${(err as Error).message}`);
+    }
   }
   const cfg = mailConfig();
   if (cfg === null) {

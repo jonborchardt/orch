@@ -193,7 +193,7 @@ with its reason, and `orch factory status <id>`. Reported events are job creatio
 completion, and failure, blocking, resume, rework, cancellation, completion, interruption, and
 failed recovery attempts; CI polls, pushes, and verification runs are not mailed. All mails of a
 job share one subject (`[orch] <id>: <title>`) and reply to the previous one, so a mail client
-shows them as one conversation. `orch mail report "<subject>" --text-file <file> [--reply-to <id>]`
+shows them as one conversation. `orch mail report "<subject>" (--text "<body>" | --text-file <file>) [--reply-to <id>]`
 sends any text the same way and prints `SENT <message-id>`.
 
 Limits: one recipient, plain text, implicit TLS only (no STARTTLS/587, so not providers that

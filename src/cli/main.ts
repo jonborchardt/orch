@@ -142,6 +142,7 @@ export async function main(argv: string[]): Promise<number> {
         all: bool,
         'body-file': str,
         // mail
+        text: str,
         'text-file': str,
         'reply-to': str,
         // factory

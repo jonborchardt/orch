@@ -193,7 +193,7 @@ orch gh repo | issue <ref> | push <id> | pr create <id> --body-file <md> | pr st
 orch gh ci <id> --token <t>            # reconcile CI for the PR head (ci stage only)
 orch verify <id> --token <t>           # run the repository's verification policy; exit 1 on failure
 orch verify show <id>                  # latest run and validity for HEAD
-orch mail report "<subject>" --text-file <f> [--reply-to <message-id>]   # to MAIL_TO; no database
+orch mail report "<subject>" (--text "<body>" | --text-file <f>) [--reply-to <message-id>]   # to MAIL_TO; no database
 
 orch factory start  --title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>]
                     [--repo <path>] [--base <b>] [--max-rounds <n>] --session <name> [--ui|--no-ui]
