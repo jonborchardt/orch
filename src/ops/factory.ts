@@ -23,6 +23,7 @@ import {
 import {
   completionOf,
   describeNext,
+  challengeSlot,
   latestChallenge,
   now,
   prPhase,
@@ -376,7 +377,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const spec = detail.artifacts.find((a) => a.path === 'spec.md');
       const latest = latestChallenge(detail.artifacts);
       const reviewed = latest?.path ?? '';
-      const n = Number(/\d+/.exec(reviewed)?.[0] ?? 0);
+      const n = challengeSlot(reviewed);
       const current = latest !== undefined && latest.specSha256 === spec?.sha256;
       const next = `orch factory next ${id}`;
       const task = (kind: Role['kind'], artifact: string) => {
@@ -395,7 +396,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         plan.reason = `Revise spec.md once to answer the material objections in ${reviewed}, then it is challenged again.`;
         plan.commands = [...start, add('spec.md', true), next];
       } else if (current) {
-        plan.reason = `The spec challenger asked for changes twice; escalate with the objections in ${reviewed}.`;
+        plan.reason = `The spec challenger asked for changes twice; escalate with the objections in ${reviewed}. After a human resume, edit spec.md first; the next plan re-challenges it.`;
         plan.commands = [
           `orch job transition ${id} escalate --reason "spec challenger requested changes twice; see ${reviewed}"${tok}`,
         ];

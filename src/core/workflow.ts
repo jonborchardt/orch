@@ -86,26 +86,45 @@ export function reviewArtifact(round: number, reviewer: string): string {
 }
 
 /** The independent spec challenge: `spec-review-1.md`, then `spec-review-2.md` after a revision. */
-export const SPEC_CHALLENGER = 'factory-spec-challenger';
-const CHALLENGE = /^spec-review-(\d+)\.md$/;
+export const SPEC_CHALLENGER =
+  ROLES.find((r) => r.kind === 'spec-challenge')?.agent ?? 'spec challenger';
+const CHALLENGE = /^spec-review-([12])\.md$/;
+/** Any spec-review-N.md name; only the two CHALLENGE slots may be registered. */
+const CHALLENGE_NAME = /^spec-review-\d+\.md$/;
+
+/** The challenge slot (1 or 2) of `path`, or 0 when it is not a spec challenge. */
+export function challengeSlot(path: string): number {
+  return Number(CHALLENGE.exec(path)?.[1] ?? 0);
+}
 
 export function isSpecChallenge(path: string): boolean {
-  return CHALLENGE.test(path);
+  return challengeSlot(path) > 0;
+}
+
+/** True for every spec-review-N.md path, including the ones that are refused. */
+export function looksLikeSpecChallenge(path: string): boolean {
+  return CHALLENGE_NAME.test(path);
 }
 
 /** The registered spec challenge with the highest number, or undefined when there is none. */
 export function latestChallenge(artifacts: readonly Artifact[]): Artifact | undefined {
-  const num = (a: Artifact) => Number(CHALLENGE.exec(a.path)?.[1] ?? 0);
+  const num = (a: Artifact) => challengeSlot(a.path);
   return artifacts
     .filter((a) => isSpecChallenge(a.path))
     .reduce<Artifact | undefined>((best, a) => (!best || num(a) > num(best) ? a : best), undefined);
 }
 
 /**
- * The spec.md hash a challenge registered at `path` binds to. Refused before spec.md is
- * registered, and for spec-review-2.md unless spec-review-1.md asked for changes.
+ * The spec.md hash a challenge registered at `path` binds to. Refused for any spec-review-N.md
+ * other than 1 and 2, before spec.md is registered, and for spec-review-2.md unless
+ * spec-review-1.md asked for changes.
  */
 export function challengeSpecHash(path: string, artifacts: readonly Artifact[]): string {
+  if (!isSpecChallenge(path)) {
+    throw new WorkflowError(
+      `${path} is not a spec challenge slot; only spec-review-1.md and spec-review-2.md are accepted.`,
+    );
+  }
   const spec = artifacts.find((a) => a.path === 'spec.md');
   if (!spec?.sha256) {
     throw new WorkflowError(`${path} reviews spec.md; register spec.md first.`);
@@ -114,7 +133,7 @@ export function challengeSpecHash(path: string, artifacts: readonly Artifact[]):
     const first = artifacts.find((a) => a.path === 'spec-review-1.md');
     if (first?.marker !== 'changes') {
       throw new WorkflowError(
-        'spec-review-2.md is only for a second challenge after spec-review-1.md says CHANGES.',
+        'spec-review-2.md is only for a second challenge after spec-review-1.md says CHANGES; register spec-review-1.md instead (--replace to re-challenge a revised spec).',
       );
     }
   }
@@ -125,14 +144,20 @@ export function challengeSpecHash(path: string, artifacts: readonly Artifact[]):
  * Why the spec may not move on, or null when it may: the latest challenge must be a PASS given
  * against the spec.md that is registered now.
  */
-export function specChallengeRefusal(artifacts: readonly Artifact[]): string | null {
+export function specChallengeRefusal(
+  artifacts: readonly Artifact[],
+  resuming = false,
+): string | null {
   const spec = artifacts.find((a) => a.path === 'spec.md');
   const latest = latestChallenge(artifacts);
   if (!latest) {
     return `no spec challenge is registered; run ${SPEC_CHALLENGER} and register spec-review-1.md`;
   }
   if (latest.marker !== 'pass') {
-    return `${latest.path} from ${SPEC_CHALLENGER} says ${(latest.marker ?? 'nothing').toUpperCase()}; revise spec.md or escalate`;
+    const advice = resuming
+      ? 'revise spec.md and re-challenge it, then resume'
+      : 'revise spec.md or escalate';
+    return `${latest.path} from ${SPEC_CHALLENGER} says ${(latest.marker ?? 'nothing').toUpperCase()}; ${advice}`;
   }
   if (latest.specSha256 !== spec?.sha256) {
     return `${latest.path} from ${SPEC_CHALLENGER} passed an earlier spec.md; challenge the current spec again`;
@@ -304,7 +329,7 @@ export function transition(
         if (!to || to === 'needs-human') reject('specify --to <stage>');
         // Leaving a spec escalation for a later stage skips nothing: the challenge gate holds.
         if (job.returnStage === 'spec' && to !== 'spec') {
-          const refused = specChallengeRefusal(ctx.artifacts);
+          const refused = specChallengeRefusal(ctx.artifacts, true);
           if (refused) reject(refused);
         }
         // A review requested from needs-human is a fresh round, as after a build: earlier

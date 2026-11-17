@@ -4,7 +4,10 @@ import { WorkflowError } from '../src/core/errors.ts';
 import {
   type Action,
   cannotAcceptDelivery,
+  challengeSlot,
+  challengeSpecHash,
   describeNext,
+  latestChallenge,
   requiredArtifact,
   type Stage,
   type Status,
@@ -406,6 +409,10 @@ describe('transition: the spec challenge gate', () => {
     const failing = { ...none, artifacts: [spec(), challenge(2, 'changes')] };
     for (const to of ['build', 'review', 'approve', 'pr'] as const) {
       expect(() => run(blocked, 'resume', { ...failing, to })).toThrow(/says CHANGES/);
+      // The job is already escalated: the advice is to re-challenge and resume, not escalate.
+      expect(() => run(blocked, 'resume', { ...failing, to })).toThrow(
+        /revise spec.md and re-challenge it, then resume/,
+      );
     }
     expect(run(blocked, 'resume', failing).patch.stage).toBe('spec');
     expect(run(blocked, 'resume', { ...failing, to: 'spec' }).patch.stage).toBe('spec');
@@ -414,6 +421,26 @@ describe('transition: the spec challenge gate', () => {
     // Escalations from later stages never look at the challenge.
     const fromBuild = job('needs-human', 'blocked', { returnStage: 'build' });
     expect(run(fromBuild, 'resume', { ...none, to: 'review' }).patch.stage).toBe('review');
+  });
+
+  it('counts only spec-review-1.md and spec-review-2.md as challenges', () => {
+    // A stray spec-review-3.md row can neither satisfy nor wedge the gate.
+    expect(() => complete([spec(), challenge(3, 'pass')])).toThrow(/no spec challenge/);
+    expect(complete([spec(), challenge(1, 'pass'), challenge(3, 'changes')]).patch.stage).toBe(
+      'build',
+    );
+    expect(latestChallenge([challenge(1, 'pass'), challenge(3, 'changes')])?.path).toBe(
+      'spec-review-1.md',
+    );
+    expect([1, 2, 3, 10].map((n) => challengeSlot(`spec-review-${String(n)}.md`))).toEqual([
+      1, 2, 0, 0,
+    ]);
+    expect(() => challengeSpecHash('spec-review-3.md', [spec()])).toThrow(
+      /not a spec challenge slot/,
+    );
+    expect(() => challengeSpecHash('spec-review-2.md', [spec(), challenge(1, 'pass')])).toThrow(
+      /register spec-review-1.md instead/,
+    );
   });
 });
 

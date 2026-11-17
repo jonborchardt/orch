@@ -26,6 +26,7 @@ import {
   challengeSpecHash,
   type CiStatus,
   isSpecChallenge,
+  looksLikeSpecChallenge,
   now,
   type PrState,
   requiredArtifact,
@@ -307,7 +308,18 @@ export function transitionJob(
 ): Job {
   return mutate(store, id, opts, (job, tx) => {
     const artifacts = listArtifacts(tx, id);
-    if (action === 'complete') verifyOnDisk(jobArtifactDir(id, store.paths), job, artifacts);
+    const dir = jobArtifactDir(id, store.paths);
+    if (action === 'complete') verifyOnDisk(dir, job.stage, job.round, artifacts);
+    // Leaving a spec escalation for a later stage relies on the challenge as much as completion.
+    const target = opts.to ?? job.returnStage;
+    if (
+      action === 'resume' &&
+      job.stage === 'needs-human' &&
+      job.returnStage === 'spec' &&
+      target !== 'spec'
+    ) {
+      verifyOnDisk(dir, 'spec', job.round, artifacts);
+    }
     return transition(job, action, {
       artifacts,
       reviews: listReviews(tx, id),
@@ -322,15 +334,15 @@ export function transitionJob(
  * artifact and, in review, the round's files (in spec, the challenges) are re-read before
  * completion counts them.
  */
-function verifyOnDisk(dir: string, job: Job, artifacts: Artifact[]): void {
-  const required = requiredArtifact(job.stage, job.round);
-  const prefix = `round-${String(job.round)}/`;
+function verifyOnDisk(dir: string, stage: Stage, round: number, artifacts: Artifact[]): void {
+  const required = requiredArtifact(stage, round);
+  const prefix = `round-${String(round)}/`;
   for (const a of artifacts) {
     const relevant =
       a.path === required ||
-      (job.stage === 'review' && a.path.startsWith(prefix)) ||
-      (job.stage === 'spec' && isSpecChallenge(a.path)) ||
-      (job.stage === 'pr' && a.path === 'decision.md');
+      (stage === 'review' && a.path.startsWith(prefix)) ||
+      (stage === 'spec' && isSpecChallenge(a.path)) ||
+      (stage === 'pr' && a.path === 'decision.md');
     if (!relevant) continue;
     let checked;
     try {
@@ -382,7 +394,7 @@ export function registerArtifact(
     const existing = findArtifact(tx, id, checked.path);
     const head = opts.head ?? null;
     // A spec challenge is bound to the spec.md registered now (core/workflow.ts).
-    const specSha256 = isSpecChallenge(checked.path)
+    const specSha256 = looksLikeSpecChallenge(checked.path)
       ? challengeSpecHash(checked.path, listArtifacts(tx, id))
       : null;
     // The commit (or spec) an artifact describes is part of what was registered: re-binding

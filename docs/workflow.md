@@ -64,7 +64,8 @@ refused unless `spec-review-1.md` says `CHANGES`; no other `spec-review-N.md` is
 challenge row records the sha256 of the `spec.md` registered at that moment. `complete` from
 `spec`, and `resume` from a `needs-human` that was escalated from `spec` to any other stage, are
 refused unless the highest-numbered challenge says `PASS` and was bound to the `spec.md` registered
-now; completion also re-reads the challenge files, so an edited file is refused as changed on disk.
+now; both also re-read `spec.md` and the challenge files, so an edited file is refused as changed
+on disk.
 On a first `CHANGES` the plan has the writer revise `spec.md` once (`--replace`) and a second
 challenger run writes `spec-review-2.md`; a second `CHANGES` makes the plan `escalate`, keeping
 the objections in the registered file. A challenge whose spec was replaced is challenged again
