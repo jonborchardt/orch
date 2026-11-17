@@ -265,6 +265,13 @@ describe('orch factory CLI', () => {
     expect(orch(home, tmpdir(), ['factory', 'next', 'job-nope']).code).toBe(3);
     const human = orch(home, tmpdir(), ['factory', 'next', id]);
     expect(human.out).toContain('factory-spec-writer');
+    for (const label of ['Job:', 'Repo:', 'Stage:', 'Status:', 'PR:', 'Next:', 'Reason:']) {
+      expect(human.out).toContain(label);
+    }
+    expect(human.out).toContain('Commands:\n  1. ');
+    expect(human.out).toContain(`Details: orch factory status ${id} --json`);
+    expect(human.out).not.toContain('fingerprint');
+    expect(orch(home, tmpdir(), ['factory', 'status', id]).out).toBe(human.out);
 
     // Follow the plan's commands literally, substituting the token.
     for (const cmd of status.commands.slice(0, 1)) {

@@ -145,7 +145,7 @@ cannot be pointed at an existing worktree, which is why `orch` lets it create on
 
 ```sh
 orch factory list                     # every job, every repository
-orch factory status job-1a2b3c4d      # the plan: next step, blockers, evidence, commands
+orch factory status job-1a2b3c4d      # where it is, what blocks it, next step, numbered commands
 orch job events job-1a2b3c4d          # the audit log
 orch verify show job-1a2b3c4d         # latest verification run and whether it still counts
 orch ui                               # dashboard at http://127.0.0.1:4777/ (optional)

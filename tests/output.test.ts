@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatFactoryList } from '../src/cli/output.ts';
+import { formatFactoryList, formatPlan } from '../src/cli/output.ts';
 import type { FactoryRow } from '../src/ops/dispatch.ts';
+import type { Plan } from '../src/ops/factory.ts';
 
 const NOW = new Date('2026-01-10T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
@@ -102,5 +103,102 @@ describe('formatFactoryList', () => {
         expect(line[s]).not.toBe(' ');
       }
     }
+  });
+});
+
+function plan(over: Partial<Plan>): Plan {
+  return {
+    jobId: 'job-00000001',
+    title: 'A job',
+    stage: 'build',
+    status: 'running',
+    round: 1,
+    maxRounds: 3,
+    step: 'run-stage',
+    reason: 'Build round 1.',
+    owner: { session: 's', leaseExpiresAt: null, expired: false },
+    repo: { identity: 'github.com/o/r', path: '/tmp/r', baseBranch: 'main' },
+    artifactDir: '/tmp/a',
+    worktree: { fingerprint: 'fp-0123456789abcdef', path: '/tmp/w' } as Plan['worktree'],
+    checkoutDirty: ['stray-file.txt'],
+    verification: null,
+    sensitive: null,
+    integration: null,
+    ui: false,
+    agents: [],
+    reviews: [],
+    requiredArtifacts: ['build.md'],
+    artifacts: [{ path: 'spec.md', stage: 'spec', ok: true }],
+    commands: [],
+    pr: { url: null, state: null, ciStatus: null },
+    ci: {
+      head: null,
+      current: false,
+      repairs: 0,
+      maxRepairs: 2,
+      polls: 7,
+      sessionPolls: 5,
+      reruns: 0,
+      waitSeconds: 90,
+      release: false,
+      lastReason: null,
+    },
+    ...over,
+  };
+}
+
+describe('formatPlan', () => {
+  it('answers where, what blocks, what next, and numbers the commands', () => {
+    const out = formatPlan(
+      plan({
+        agents: [
+          { role: 'builder', agent: 'factory-builder', model: 'opus', artifact: 'build.md' },
+        ],
+        commands: ['orch job show job-00000001', 'orch verify job-00000001 --token <token>'],
+        pr: { url: 'https://github.com/o/r/pull/42', state: 'open', ciStatus: 'pending' },
+      }),
+    );
+    expect(out).toContain('Job:     job-00000001');
+    expect(out).toContain('Repo:    r');
+    expect(out).toContain('Stage:   build (round 1 of 3)');
+    expect(out).toContain('PR:      #42 (CI pending)');
+    expect(out).toContain('Next:    Run the stage');
+    expect(out).toContain('  builder  factory-builder  (opus)  -> build.md');
+    const lines = out.split('\n');
+    const at = lines.indexOf('Commands:');
+    expect(lines.slice(at + 1, at + 3)).toEqual([
+      '  1. orch job show job-00000001',
+      '  2. orch verify job-00000001 --token <token>',
+    ]);
+    expect(lines.at(-1)).toBe('Details: orch factory status job-00000001 --json');
+    for (const hidden of [
+      'fingerprint',
+      'fp-0123',
+      'polls',
+      'waitSeconds',
+      'stray-file',
+      'spec.md',
+    ]) {
+      expect(out).not.toContain(hidden);
+    }
+    expect(out).not.toContain('Blocked:');
+  });
+
+  it('shows (none), no PR, no agents, and the block reason for a human step', () => {
+    const out = formatPlan(
+      plan({
+        step: 'needs-human',
+        status: 'blocked',
+        round: 0,
+        reason: 'Fix it, then run orch factory resume job-00000001 --session <name>.',
+        blockedReason: 'verification failed twice',
+      }),
+    );
+    expect(out).toContain('Stage:   build\n');
+    expect(out).toContain('PR:      -\n');
+    expect(out).toContain('Reason:   Fix it, then run orch factory resume');
+    expect(out).toContain('Blocked:  verification failed twice');
+    expect(out).toContain('Commands:\n  (none)\n');
+    expect(out).not.toContain('Agents:');
   });
 });

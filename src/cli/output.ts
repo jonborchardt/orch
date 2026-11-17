@@ -1,6 +1,7 @@
 /** Human vs JSON rendering. Handlers return plain data; this decides how it is printed. */
 import { OrchError } from '../core/errors.ts';
 import type { FactoryRow } from '../ops/dispatch.ts';
+import type { Plan, Step } from '../ops/factory.ts';
 
 export function print(data: unknown, json: boolean): void {
   console.log(json ? JSON.stringify(data, null, 2) : human(data));
@@ -83,6 +84,56 @@ export function formatFactoryList(rows: FactoryRow[], now: Date): string {
         .trimEnd(),
     )
     .join('\n');
+}
+
+const NEXT_LABEL: Record<Step, string> = {
+  resume: 'Resume the job',
+  'create-worktree': 'Create the worktree',
+  'run-stage': 'Run the stage',
+  'needs-human': 'A human decides',
+  done: 'Nothing; the job is done',
+  cancelled: 'Nothing; the job was cancelled',
+};
+
+/**
+ * `orch factory next|status` text: where the job is, what blocks it, what happens next, and the
+ * commands to run. Reads only `Plan` fields; `--json` keeps the full plan.
+ */
+export function formatPlan(plan: Plan): string {
+  const lines = (rows: [string, string][]): string[] => {
+    const width = Math.max(...rows.map(([k]) => k.length)) + 1;
+    return rows.map(([k, v]) => `${`${k}:`.padEnd(width)}  ${v}`);
+  };
+  const round = plan.round > 0 ? ` (round ${String(plan.round)} of ${String(plan.maxRounds)})` : '';
+  const pr = prNumber(plan.pr.url);
+  const ci = pr !== '-' && plan.pr.ciStatus ? ` (CI ${plan.pr.ciStatus})` : '';
+  const next: [string, string][] = [
+    ['Next', NEXT_LABEL[plan.step]],
+    ['Reason', plan.reason],
+  ];
+  if (plan.blockedReason) next.push(['Blocked', plan.blockedReason]);
+  const out = [
+    ...lines([
+      ['Job', plan.jobId],
+      ['Title', plan.title],
+      ['Repo', plan.repo.identity.split('/').pop() ?? plan.repo.identity],
+      ['Stage', plan.stage + round],
+      ['Status', plan.status],
+      ['PR', pr + ci],
+    ]),
+    '',
+    ...lines(next),
+  ];
+  if (plan.agents.length) {
+    out.push('', 'Agents:');
+    for (const a of plan.agents)
+      out.push(`  ${a.role}  ${a.agent}  (${a.model})  -> ${a.artifact}`);
+  }
+  out.push('', 'Commands:');
+  if (plan.commands.length === 0) out.push('  (none)');
+  plan.commands.forEach((c, i) => out.push(`  ${String(i + 1)}. ${c}`));
+  out.push('', `Details: orch factory status ${plan.jobId} --json`);
+  return out.join('\n');
 }
 
 function factoryAction(r: FactoryRow): string {

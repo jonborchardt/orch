@@ -189,7 +189,7 @@ orch factory start  --title <t> | --issue <ref> [--description <d>] [--repo <pat
 orch factory dispatch --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
                     [--max-rounds <n>] --session <name>   # job for another repo; an independent session runs it
 orch factory list   [--repo <path|identity>]              # one row per job: stage, status, action, PR, title
-orch factory next|status <id> [--ui|--no-ui]
+orch factory next|status <id> [--ui|--no-ui]          # where, what blocks, next step, numbered commands; --json for the full plan
 orch factory resume <id> --session <name> [--to <stage>] [--force] [--adopt <worktree>]
 orch factory cancel <id> --reason <r> --session <name> [--force]   # exit 4 if another session holds a live lease
 orch factory check-readonly <id> --fingerprint <f>
