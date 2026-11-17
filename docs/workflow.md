@@ -211,7 +211,10 @@ before the operation and call `reportJobMail` after it, also when it threw. For 
 1. claim: one immediate transaction moves `jobs.mailCursor` to the batch's last event id only if
    it still holds the value read, so concurrent processes send a batch at most once;
 2. compose: subject `<prefix> <id>: <title>` (kept in `mailSubject` from the first send) and a body
-   with the job's current stage, status, PR, each event with its `reason`, and the status command;
+   with an outcome emoji, status, and stage on its first line (the inbox preview), every `STAGES`
+   entry marked done, current (with the outcome emoji), or pending, the PR, each event prefixed by
+   its kind's emoji with its `reason`, and the status command. The emoji table is in
+   `src/core/mail-report.ts`; the subject carries none, because a changing subject splits the thread;
 3. send, as a reply to `mailLastId` with `References: <mailThreadId> <mailLastId>` once a thread
    exists;
 4. record `mail.sent` (`messageId`, `inReplyTo`) and the thread ids, or `mail.failed` (`error`,
