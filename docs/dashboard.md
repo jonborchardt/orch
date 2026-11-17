@@ -128,6 +128,7 @@ control stays neutral, since the right transition is a human call.
 | Unarchive                  | status `completed` or `cancelled`, archived                                                                                        | clears `jobs.archivedAt`; event `job.unarchived`       |
 | Merge                      | completed on GitHub's verdict, `prState` `ready`, `ciStatus` `passing`, `ciHead` set                                               | `gh pr merge --merge --match-head-commit <ciHead>`     |
 | Refresh PR                 | PR recorded and not merged; the job is finished or in `needs-human`                                                                | re-reads the PR; records `prState` (`pr.observed`)     |
+| Remove worktree            | status `completed` or `cancelled`, `prState` `merged`, worktree recorded                                                           | `orch worktree remove`: refused if dirty; branch kept  |
 
 Accept delivery is the only control that completes a job by hand. It is listed by the same rule the
 transition applies (`cannotAcceptDelivery` in `src/core/workflow.ts`), so it never appears while

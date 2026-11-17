@@ -188,8 +188,13 @@ export function adoptWorktree(
  * Remove the job's worktree directory. Refused while it has uncommitted changes; the branch and
  * its commits are always kept. A worktree already gone from disk is simply forgotten.
  */
-export function dropWorktree(store: Store, id: string, auth: Auth): WorktreeResult {
-  const checked = jobCheckout(store, authorize(store, id, auth), auth);
+export function dropWorktree(
+  store: Store,
+  id: string,
+  auth: Auth,
+  opts: { repo?: string | undefined } = {},
+): WorktreeResult {
+  const checked = jobCheckout(store, authorize(store, id, auth), auth, opts.repo);
   const { job, root } = checked;
   auth = checked.auth;
   if (!job.worktreePath) throw new ValidationError(`Job ${id} has no worktree.`);

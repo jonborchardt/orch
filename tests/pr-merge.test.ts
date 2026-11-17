@@ -3,6 +3,8 @@
  * ready, after GitHub confirms it; refresh records only the PR's state. Nothing changes stage,
  * status, or the CI verdict, and nothing merges unless asked.
  */
+import { existsSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 import { ValidationError } from '../src/core/errors.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
@@ -62,9 +64,16 @@ describe('dashboard merge', () => {
     });
     expect(events(c, 'pr.merged')).toEqual([{ head: sha, ok: true, error: null }]);
     expect(detail(store, c.id).prPhase).toBe('merged');
-    expect(detail(store, c.id).actions).toEqual(['archive']);
+    // Once merged, the worktree can go.
+    expect(detail(store, c.id).actions).toEqual(['remove-worktree', 'archive']);
     // The dashboard's episode released the job again.
     expect(job(c)).toMatchObject({ ownerSession: null, ownerToken: null });
+    // Remove worktree deletes the directory, keeps the branch, and is offered no more.
+    const removed = dashboardAction(store, c.id, { action: 'remove-worktree', force: true });
+    expect(removed.job.worktreePath).toBeNull();
+    expect(existsSync(c.wt)).toBe(false);
+    expect(job(c).branch).not.toBeNull();
+    expect(detail(store, c.id).actions).toEqual(['archive']);
   });
 
   it('refuses without merging when GitHub or the record does not back the verified head', () => {
