@@ -30,7 +30,9 @@ styled like a success. Under the chip, one line says why a stopped job stopped, 
 persisted fields only (`src/server/status.ts`): the latest `job.blocked`, `stage.failed`,
 `job.interrupted`, or `job.cancelled` event and its recorded reason, the `decision.md` marker, the
 consolidation's BLOCKING count, and the newest verification run. When the state does not classify an
-escalation the line says so (`Escalated from build`) rather than guessing. Jobs a session may resume
+escalation the line says so (`Escalated from build`) rather than guessing. The line wraps to two
+lines before its ellipsis and is dotted-underlined; hovering or focusing it (it is in the Tab order)
+shows the full text, prefixed with the blocker label, in a tooltip. Jobs a session may resume
 get a **Copy resume** control. Filter by repository and by **Show**: `current` (the default, every
 unarchived job), `active`, `needs human`, `running`, `stale`, `failed` (failed or interrupted),
 `idle`, `finished`, `cancelled`, or `archived`, each labelled with its count; plus a free-text

@@ -337,6 +337,28 @@ describe('App board', () => {
     ).toBe(false);
   });
 
+  it('clamps the board blocker line at two lines with its full text in a hover or focus tooltip', async () => {
+    mockFetch();
+    mount();
+    const table = await screen.findByRole('table', { name: 'Factory jobs' });
+    const line = must(table.querySelector<HTMLElement>('[data-blocker="decision"]'));
+    expect(line).toHaveAttribute('tabindex', '0');
+    const style = getComputedStyle(line);
+    expect(style.whiteSpace).toBe('normal');
+    expect(style.overflow).toBe('hidden');
+    expect(style.cursor).toBe('help');
+    const full =
+      'Decision needed — Approver escalated: a human must decide: AC2 needs deployment verification';
+    fireEvent.mouseOver(line);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(full);
+    fireEvent.mouseLeave(line);
+    await waitFor(() => {
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    });
+    line.focus();
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(full);
+  });
+
   it('filters cancelled jobs separately from finished ones', async () => {
     mockFetch();
     mount();
