@@ -162,8 +162,8 @@ orch init  [--repo <path>] --command "<id>=<exe> [args...]"... | --from-package-
 orch init  [--repo <path>] --check     # policy present, valid, committed, pushed, tools on PATH; exit 1 unless ready
 orch install [--dry-run] [--source <dir>] [--claude-dir <dir>]
 
-orch job create    --title <t> [--description <d>] [--issue <ref>] [--repo <path>] [--base <branch>]
-                   [--max-rounds <n>]
+orch job create    --title <t> --description <d> [--issue <ref>] [--repo <path>] [--base <branch>]
+                   [--max-rounds <n>]   # --description required and non-blank; --issue only recorded
 orch job list      [--repo <path|identity>] [--status <s>] [--stage <s>]
 orch job show      <id>
 orch job events    <id> [--limit <n>]
@@ -184,9 +184,10 @@ orch gh ci <id> --token <t>            # reconcile CI for the PR head (ci stage 
 orch verify <id> --token <t>           # run the repository's verification policy; exit 1 on failure
 orch verify show <id>                  # latest run and validity for HEAD
 
-orch factory start  --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
-                    [--max-rounds <n>] --session <name> [--ui|--no-ui]
-orch factory dispatch --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <b>]
+orch factory start  --title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>]
+                    [--repo <path>] [--base <b>] [--max-rounds <n>] --session <name> [--ui|--no-ui]
+orch factory dispatch --title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>]
+                    [--repo <path>] [--base <b>]
                     [--max-rounds <n>] --session <name>   # job for another repo; an independent session runs it
 orch factory list   [--repo <path|identity>]              # one row per job: stage, status, action, PR, title
 orch factory next|status <id> [--ui|--no-ui]          # where, what blocks, next step, numbered commands; --json for the full plan
@@ -227,7 +228,7 @@ A typical session:
 
 ```sh
 cd ~/code/my-app
-orch job create --title "Add rate limiting" --json          # -> jobId
+orch job create --title "Add rate limiting" --description "Limit /api to 100 req/min per key" --json   # -> jobId
 orch job claim job-3f9a1c2e --session vscode-1 --json         # -> token
 export ORCH_TOKEN=...
 orch job transition job-3f9a1c2e start

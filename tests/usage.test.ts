@@ -27,6 +27,7 @@ describe('jobUsage', () => {
   it('derives stage visits, reviewer runs, and CI counters from the records; tokens are unmeasured', () => {
     const job = createJob(store, {
       title: 'Export CSV',
+      description: 'Test request',
       repo: 'github.com/acme/alpha',
       repoPath: '/repos/alpha',
       baseBranch: 'main',

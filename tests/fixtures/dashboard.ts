@@ -197,7 +197,14 @@ export function seedDashboard(
   repos: { alpha: string; beta: string; gamma: string },
 ): SeededJobs {
   const mk = (title: string, repo: string, repoPath: string, extra: Record<string, unknown> = {}) =>
-    createJob(store, { title, repo, repoPath, baseBranch: 'main', ...extra });
+    createJob(store, {
+      title,
+      description: `Request: ${title}`,
+      repo,
+      repoPath,
+      baseBranch: 'main',
+      ...extra,
+    });
   const run = (id: string, token: string, a: Parameters<typeof transitionJob>[2], extra = {}) =>
     transitionJob(store, id, a, { token, ...extra });
   const art = (id: string, token: string, rel: string, body: string, replace = false) => {

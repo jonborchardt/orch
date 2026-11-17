@@ -25,6 +25,7 @@ afterEach(() => {
 const mk = () =>
   createJob(store, {
     title: 'Cancel me',
+    description: 'Test request',
     repo: 'github.com/acme/alpha',
     repoPath: '/repos/alpha',
     baseBranch: 'main',

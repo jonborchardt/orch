@@ -9,7 +9,7 @@ import { mkdirSync } from 'node:fs';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 
 import { assertStageOwns } from '../core/artifact-rules.ts';
-import { NotFoundError, OwnershipError, ValidationError } from '../core/errors.ts';
+import { NotFoundError, OwnershipError, UsageError, ValidationError } from '../core/errors.ts';
 import {
   assertOwner,
   decideClaim,
@@ -43,7 +43,8 @@ import { type Artifact, type Event, type Job, jobs, type Review, reviews } from 
 
 export interface CreateJobInput {
   title: string;
-  description?: string | undefined;
+  /** Required and non-blank; optional in the type only so `createJob` can reject it as a usage error. */
+  description?: string | null | undefined;
   repo: string;
   repoPath: string;
   issueRef?: string | undefined;
@@ -67,6 +68,12 @@ export interface Auth {
 const RELEASED = { ownerSession: null, ownerToken: null, leaseExpiresAt: null } as const;
 
 export function createJob(store: Store, input: CreateJobInput): Job {
+  // No job row without a request: checked before the insert and the artifact directory.
+  if (!input.description?.trim()) {
+    throw new UsageError(
+      'A job needs a non-empty description: pass --description "<request>" (or --issue so it can be fetched). Nothing was created.',
+    );
+  }
   const ts = now();
   const id = `job-${randomBytes(4).toString('hex')}`;
   const job = store.db.transaction(

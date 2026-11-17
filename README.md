@@ -121,7 +121,9 @@ under the runtime data directory on branch `factory/<id>-<slug>`, and loops on
 `orch factory next <id> --json`, which returns the plan: the step, the agents to launch with their
 models, the artifact each must write, the worktree state, and the exact `orch` commands to run.
 Every state change is a CLI call `orch` validates. The same loop works from a shell without Claude
-(`orch factory start`, `next`, `resume`; see `orch factory --help`).
+(`orch factory start`, `next`, `resume`; see `orch factory --help`). Every job needs its request:
+`--description`, or `--issue` so the description is fetched from the issue; a job with a missing or
+blank description is refused (exit 2) and nothing is created.
 
 ## Dispatch several jobs at once
 

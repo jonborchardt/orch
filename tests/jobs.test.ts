@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, sep } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   NotFoundError,
   OwnershipError,
+  UsageError,
   ValidationError,
   WorkflowError,
 } from '../src/core/errors.ts';
@@ -25,11 +26,12 @@ import {
   resumeJob,
   transitionJob,
 } from '../src/storage/jobs.ts';
-import type { Job } from '../src/storage/schema.ts';
+import { events, type Job } from '../src/storage/schema.ts';
 import { fixture, type TempStore, tempStore, writeArtifact } from './helpers.ts';
 
 const input = (title = 'T', repo = 'github.com/o/r') => ({
   title,
+  description: 'Test request',
   repo,
   repoPath: '/r',
   baseBranch: 'main',
@@ -71,6 +73,43 @@ describe('jobs: create, read, list', () => {
     ]);
     expect(existsSync(jobArtifactDir(a.id, store.paths))).toBe(true);
     expect(listEvents(store.db, a.id).map((e) => e.type)).toEqual(['job.created']);
+  });
+
+  it('refuses a missing, empty, or whitespace-only description and writes nothing', () => {
+    const jobsRoot = join(store.paths.data, 'jobs');
+    const dirsNow = () => (existsSync(jobsRoot) ? readdirSync(jobsRoot) : []);
+    const before = dirsNow();
+    const withoutDescription = {
+      title: 'T',
+      repo: 'github.com/o/r',
+      repoPath: '/r',
+      baseBranch: 'main',
+    };
+    for (const bad of [
+      withoutDescription,
+      { ...input(), description: '' },
+      { ...input(), description: ' \n\t ' },
+    ]) {
+      let caught: unknown;
+      try {
+        createJob(store, bad);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(UsageError);
+      expect((caught as UsageError).exitCode).toBe(2);
+      expect((caught as UsageError).message).toContain('--description');
+    }
+    expect(listJobs(store.db)).toEqual([]);
+    expect(store.db.select().from(events).all()).toEqual([]);
+    expect(dirsNow()).toEqual(before);
+  });
+
+  it('stores a valid description exactly as given', () => {
+    const description = '  Do X\n\nthen Y  ';
+    const job = createJob(store, { ...input(), description });
+    expect(job.description).toBe(description);
+    expect(getJob(store.db, job.id).description).toBe(description);
   });
 
   it('throws NotFoundError for unknown ids', () => {

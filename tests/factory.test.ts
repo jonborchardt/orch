@@ -2,7 +2,7 @@
  * Workflow contracts as the /factory skill exercises them: fixture "subagent outputs" are written
  * to the artifact directory and the deterministic CLI decides everything else.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -243,6 +243,15 @@ describe('orch factory CLI', () => {
     const noTitle = orch(home, clone, ['factory', 'start', '--session', 's']);
     expect(noTitle.code).toBe(1);
     expect(noTitle.err).toContain('Provide --title');
+    // Without a description (none, or blank) a title alone creates nothing: no job, no worktree.
+    for (const blank of [[], ['--description', '']]) {
+      const r = orch(home, clone, ['factory', 'start', '--title', 't', '--session', 's', ...blank]);
+      expect(r.code, r.err).toBe(2);
+      expect(r.err).toContain('--description');
+    }
+    expect(json(orch(home, tmpdir(), ['--json', 'job', 'list']))).toEqual([]);
+    const created = readdirSync(home, { recursive: true }).map(String);
+    expect(created.filter((p) => p.split(/[\\/]/).includes('worktrees'))).toEqual([]);
     expect(orch(home, tmpdir(), ['factory', 'start', '--title', 'x', '--session', 's']).code).toBe(
       1,
     );

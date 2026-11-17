@@ -108,6 +108,7 @@ describe('archive through dashboardAction (ops)', () => {
     // An interrupted job: a running job whose lease another session reclaimed.
     const interrupted = createJob(store, {
       title: 'Interrupted',
+      description: 'Test request',
       repo: 'gamma',
       repoPath: '/g',
       baseBranch: 'main',
