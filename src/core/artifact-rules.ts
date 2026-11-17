@@ -23,6 +23,13 @@ export interface ArtifactRule {
 
 export const ARTIFACT_RULES: readonly ArtifactRule[] = [
   { path: /^spec\.md$/, stage: 'spec', headings: ['Goal', 'Scope', 'Acceptance criteria'] },
+  {
+    // The independent spec challenge: one review, one more after a revision, nothing else.
+    path: /^spec-review-[12]\.md$/,
+    stage: 'spec',
+    headings: ['Findings'],
+    marker: { name: 'VERDICT', values: ['PASS', 'CHANGES'] },
+  },
   { path: /^build\.md$/, stage: 'build', headings: ['Summary', 'Validation'] },
   {
     path: /^round-\d+\/review-[a-z0-9-]+\.md$/,

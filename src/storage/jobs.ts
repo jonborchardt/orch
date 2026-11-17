@@ -23,7 +23,10 @@ import { DEFAULT_CONFIG } from '../core/roles.ts';
 import { SESSION_EVENT, type SessionRef } from '../core/session.ts';
 import {
   type Action,
+  challengeSpecHash,
   type CiStatus,
+  isSpecChallenge,
+  looksLikeSpecChallenge,
   now,
   type PrState,
   requiredArtifact,
@@ -305,7 +308,18 @@ export function transitionJob(
 ): Job {
   return mutate(store, id, opts, (job, tx) => {
     const artifacts = listArtifacts(tx, id);
-    if (action === 'complete') verifyOnDisk(jobArtifactDir(id, store.paths), job, artifacts);
+    const dir = jobArtifactDir(id, store.paths);
+    if (action === 'complete') verifyOnDisk(dir, job.stage, job.round, artifacts);
+    // Leaving a spec escalation for a later stage relies on the challenge as much as completion.
+    const target = opts.to ?? job.returnStage;
+    if (
+      action === 'resume' &&
+      job.stage === 'needs-human' &&
+      job.returnStage === 'spec' &&
+      target !== 'spec'
+    ) {
+      verifyOnDisk(dir, 'spec', job.round, artifacts);
+    }
     return transition(job, action, {
       artifacts,
       reviews: listReviews(tx, id),
@@ -317,16 +331,18 @@ export function transitionJob(
 
 /**
  * A registered row is only evidence while the file still matches it: the stage's required
- * artifact and, in review, the round's files are re-read before completion counts them.
+ * artifact and, in review, the round's files (in spec, the challenges) are re-read before
+ * completion counts them.
  */
-function verifyOnDisk(dir: string, job: Job, artifacts: Artifact[]): void {
-  const required = requiredArtifact(job.stage, job.round);
-  const prefix = `round-${String(job.round)}/`;
+function verifyOnDisk(dir: string, stage: Stage, round: number, artifacts: Artifact[]): void {
+  const required = requiredArtifact(stage, round);
+  const prefix = `round-${String(round)}/`;
   for (const a of artifacts) {
     const relevant =
       a.path === required ||
-      (job.stage === 'review' && a.path.startsWith(prefix)) ||
-      (job.stage === 'pr' && a.path === 'decision.md');
+      (stage === 'review' && a.path.startsWith(prefix)) ||
+      (stage === 'spec' && isSpecChallenge(a.path)) ||
+      (stage === 'pr' && a.path === 'decision.md');
     if (!relevant) continue;
     let checked;
     try {
@@ -377,12 +393,24 @@ export function registerArtifact(
     assertStageOwns(checked.path, job.stage, job.round);
     const existing = findArtifact(tx, id, checked.path);
     const head = opts.head ?? null;
-    // The commit an artifact describes is part of what was registered: re-binding unchanged text
-    // to a new HEAD is a replacement too, and leaves the same audit trail.
+    // A spec challenge is bound to the spec.md registered now (core/workflow.ts).
+    const specSha256 = looksLikeSpecChallenge(checked.path)
+      ? challengeSpecHash(checked.path, listArtifacts(tx, id))
+      : null;
+    // The commit (or spec) an artifact describes is part of what was registered: re-binding
+    // unchanged text to a new one is a replacement too, and leaves the same audit trail.
     const replaced =
-      existing !== undefined && (existing.sha256 !== checked.sha256 || existing.head !== head);
+      existing !== undefined &&
+      (existing.sha256 !== checked.sha256 ||
+        existing.head !== head ||
+        existing.specSha256 !== specSha256);
     if (replaced && !opts.replace) {
-      const what = existing.sha256 !== checked.sha256 ? 'different content' : 'a different commit';
+      const what =
+        existing.sha256 !== checked.sha256
+          ? 'different content'
+          : existing.head !== head
+            ? 'a different commit'
+            : 'a different spec.md';
       throw new ValidationError(
         `${checked.path} is already registered for ${what}; pass --replace to replace it.`,
       );
@@ -396,9 +424,16 @@ export function registerArtifact(
       sha256: checked.sha256,
       marker: checked.marker,
       head,
+      specSha256,
       createdAt: ts,
     });
-    const payload = { path: checked.path, stage: job.stage, sha256: checked.sha256, head };
+    const payload = {
+      path: checked.path,
+      stage: job.stage,
+      sha256: checked.sha256,
+      head,
+      ...(specSha256 ? { specSha256 } : {}),
+    };
     return {
       patch: {},
       events: [
@@ -569,6 +604,7 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
         sha256: checked.sha256,
         marker: checked.marker,
         head: input.head ?? null,
+        specSha256: null,
         createdAt: ts,
       }).id;
     }

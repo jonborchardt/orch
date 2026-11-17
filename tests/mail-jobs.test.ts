@@ -92,8 +92,10 @@ describe('job status mail through the CLI', () => {
     expect(sent()).toHaveLength(1);
     await cli(home, ['job', 'transition', id, 'start'], env);
     expect(sent()).toHaveLength(2);
-    writeArtifact(jobArtifactDir(id, homePaths(home)), 'spec.md');
-    await cli(home, ['job', 'artifact', 'add', id, 'spec.md'], env); // not reported
+    for (const rel of ['spec.md', 'spec-review-1.md']) {
+      writeArtifact(jobArtifactDir(id, homePaths(home)), rel);
+      await cli(home, ['job', 'artifact', 'add', id, rel], env); // not reported
+    }
     expect(sent()).toHaveLength(2);
     await cli(home, ['job', 'transition', id, 'complete'], env);
     expect(sent()).toHaveLength(3);

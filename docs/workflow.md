@@ -34,14 +34,15 @@ Required artifacts, relative to the job's artifact directory and registered with
 Registration checks the file is inside the artifact directory (no absolute paths or `..`), is
 `.md`, exists, is non-empty, and has the structure its path requires (`src/core/artifact-rules.ts`):
 
-| Artifact                   | Required headings                | Marker line (exactly once)        |
-| -------------------------- | -------------------------------- | --------------------------------- |
-| `spec.md`                  | Goal, Scope, Acceptance criteria |                                   |
-| `build.md`                 | Summary, Validation              |                                   |
-| `round-N/review-<name>.md` | Findings                         | `VERDICT: PASS` or `CHANGES`      |
-| `round-N/consolidated.md`  | Findings                         | `BLOCKING: <count>`               |
-| `decision.md`              | Rationale                        | `DECISION: APPROVE` or `ESCALATE` |
-| `pr.md`                    | Validation, Known limitations    |                                   |
+| Artifact                    | Required headings                | Marker line (exactly once)        |
+| --------------------------- | -------------------------------- | --------------------------------- |
+| `spec.md`                   | Goal, Scope, Acceptance criteria |                                   |
+| `spec-review-1.md`, `-2.md` | Findings                         | `VERDICT: PASS` or `CHANGES`      |
+| `build.md`                  | Summary, Validation              |                                   |
+| `round-N/review-<name>.md`  | Findings                         | `VERDICT: PASS` or `CHANGES`      |
+| `round-N/consolidated.md`   | Findings                         | `BLOCKING: <count>`               |
+| `decision.md`               | Rationale                        | `DECISION: APPROVE` or `ESCALATE` |
+| `pr.md`                     | Validation, Known limitations    |                                   |
 
 Headings match case-insensitively at any level. The marker is stored on the artifact row and the
 workflow reads it: `review record --verdict pass` is refused if the file says `CHANGES`, and
@@ -54,6 +55,22 @@ Registering changed content fails unless `--replace` is given, and is then logge
 `artifact.replaced` with the previous hash, so the history of what was accepted survives. Combine
 with `--revision <n>` to also reject the replacement if the job moved on meanwhile. Review files are
 per round (`round-N/`) and are never overwritten by later rounds.
+
+**Spec challenge.** In `spec`, after `spec.md` is registered, `factory-spec-challenger` (an
+independent subagent, Sonnet by default, role `spec-challenger` in `factory.json` `models`)
+reviews it against the request and the repository's conventions and writes `spec-review-1.md`.
+Registering a challenge is refused before `spec.md` is registered, and `spec-review-2.md` is
+refused unless `spec-review-1.md` says `CHANGES`; no other `spec-review-N.md` is accepted. The
+challenge row records the sha256 of the `spec.md` registered at that moment. `complete` from
+`spec`, and `resume` from a `needs-human` that was escalated from `spec` to any other stage, are
+refused unless the highest-numbered challenge says `PASS` and was bound to the `spec.md` registered
+now; both also re-read `spec.md` and the challenge files, so an edited file is refused as changed
+on disk.
+On a first `CHANGES` the plan has the writer revise `spec.md` once (`--replace`) and a second
+challenger run writes `spec-review-2.md`; a second `CHANGES` makes the plan `escalate`, keeping
+the objections in the registered file. A challenge whose spec was replaced is challenged again
+(`--replace` on the same file). The loop bound is the plan's, not a code cap; see
+[the decision](decisions/2026-11-17-spec-challenger-gates-the-spec.md).
 
 **Review rounds.** Completing `build` increments the round and enters `review`; so does `resume`
 from `needs-human` into `review` (a requested re-review is a new round, keeping earlier verdicts as

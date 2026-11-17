@@ -85,6 +85,11 @@ export function runStage(c: Ctx, artifact: string, body = fixture(artifact), rep
   }
   writeArtifact(c.dir, artifact, body);
   addArtifact(store, c.id, artifact, { token: c.token, replace });
+  // The spec stage completes only after the challenger's PASS for this spec.md.
+  if (artifact === 'spec.md') {
+    writeArtifact(c.dir, 'spec-review-1.md');
+    addArtifact(store, c.id, 'spec-review-1.md', { token: c.token, replace });
+  }
   return go(c, 'complete');
 }
 

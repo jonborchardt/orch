@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { jobArtifactDir, packageInfo } from '../src/core/paths.ts';
 import {
+  fixture,
   gitIn,
   homePaths,
   json,
@@ -216,6 +217,50 @@ describe('orch CLI: jobs across repositories', () => {
       orch(home, tmpdir(), ['--json', 'job', 'artifact', 'add', a.jobId, 'spec.md'], env),
     );
     expect(added.artifact.path).toBe('spec.md');
+
+    // The spec challenger gates the spec: no challenge, or a CHANGES, refuses completion, and
+    // escalating does not open a way around it.
+    const dir = jobArtifactDir(a.jobId, homePaths(home));
+    const complete = () => orch(home, tmpdir(), ['job', 'transition', a.jobId, 'complete'], env);
+    const unchallenged = complete();
+    expect(unchallenged.code).toBe(1);
+    expect(unchallenged.err).toContain('factory-spec-challenger');
+    writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
+    const add = (rel: string, ...more: string[]) =>
+      orch(home, tmpdir(), ['job', 'artifact', 'add', a.jobId, rel, ...more], env);
+    expect(add('spec-review-1.md').code).toBe(0);
+    const changes = complete();
+    expect(changes.code).toBe(1);
+    expect(changes.err).toContain('spec-review-1.md from factory-spec-challenger says CHANGES');
+    const escalated = orch(home, tmpdir(), ['job', 'transition', a.jobId, 'escalate'], env);
+    expect(escalated.code).toBe(0);
+    for (const to of ['build', 'review']) {
+      const skip = orch(home, tmpdir(), [
+        'job',
+        'resume',
+        a.jobId,
+        '--session',
+        'vscode-1',
+        '--to',
+        to,
+      ]);
+      expect(skip.code, to).toBe(1);
+      expect(skip.err).toContain('factory-spec-challenger');
+    }
+    const blocked = json<{ job: { stage: string } }>(
+      orch(home, tmpdir(), ['--json', 'job', 'show', a.jobId]),
+    );
+    expect(blocked.job.stage).toBe('needs-human');
+    const back = json<Summary>(
+      orch(home, tmpdir(), ['--json', 'job', 'resume', a.jobId, '--session', 'vscode-1']),
+    );
+    expect(back.stage).toBe('spec');
+    env.ORCH_TOKEN = back.token ?? '';
+    expect(orch(home, tmpdir(), ['job', 'transition', a.jobId, 'start'], env).code).toBe(0);
+    writeArtifact(dir, 'spec.md', fixture('spec.md') + '\nRevised.\n');
+    expect(add('spec.md', '--replace').code).toBe(0);
+    writeArtifact(dir, 'spec-review-2.md');
+    expect(add('spec-review-2.md').code).toBe(0);
     const done = json<Summary>(
       orch(home, tmpdir(), ['--json', 'job', 'transition', a.jobId, 'complete'], env),
     );
@@ -240,6 +285,16 @@ describe('orch CLI: jobs across repositories', () => {
       'job.created',
       'job.claimed',
       'stage.started',
+      'artifact.registered',
+      'artifact.registered',
+      'job.blocked',
+      // The two refused resumes claimed (renewed) but changed nothing else.
+      'job.claimed',
+      'job.claimed',
+      'job.claimed',
+      'job.resumed',
+      'stage.started',
+      'artifact.replaced',
       'artifact.registered',
       'stage.completed',
     ]);

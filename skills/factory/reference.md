@@ -11,6 +11,7 @@ Every prompt starts with the header block from SKILL.md. Add:
 | Stage     | Agent                     | Extra inputs                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `spec`    | `factory-spec-writer`     | The request; issue body if any; "read CLAUDE.md / AGENTS.md / README in the worktree first".                                                                                                                                                                                                                                                                                                     |
+| `spec`    | `factory-spec-challenger` | The request; issue body if any; path to `spec.md`; for `spec-review-2.md` the path to `spec-review-1.md`; "read CLAUDE.md / AGENTS.md / README in the worktree first". For the writer's revision: the path to the latest `spec-review-N.md` and "answer its material findings, do not expand scope".                                                                                             |
 | `build`   | `factory-builder`         | Path to `spec.md`; round number; for rounds > 1 the path to `round-<N-1>/consolidated.md` and "address every blocking finding, do not expand scope"; validation commands. After a CI rework (`plan.reason` says "CI repair"): the failing check names and the saved log paths under `<artifactDir>/ci/<sha7>/`, and "fix the defect; never weaken checks, tests, CI workflows, or factory.json". |
 | `review`  | each `factory-reviewer-*` | Paths to `spec.md`, `build.md`, the evidence dir if one exists, `git diff <baseRef>...HEAD` hint, the base ref (`plan.worktree.baseRef`), round number, and the artifact path.                                                                                                                                                                                                                   |
 | `approve` | `factory-approver`        | Paths to `spec.md`, `build.md`, every `round-*/review-*.md` and `consolidated.md`, the base ref for the diff, and the round count.                                                                                                                                                                                                                                                               |
@@ -97,6 +98,24 @@ Logs: `<artifactDir>/verification/<run>/<check>.log`. Exploratory commands you r
 
 <anything not done, or "none">
 ```
+
+## spec-review-N.md
+
+```markdown
+# Spec challenge
+
+## Findings
+
+1. <spec section> — <material problem: missing behaviour or AC, ambiguity, unneeded scope,
+   convention conflict, unverifiable AC, unjustified assumption> → <correction>
+   (or "None material.")
+
+VERDICT: PASS
+```
+
+`VERDICT: CHANGES` when any finding is material. Only `spec-review-1.md` and, after one revision
+of `spec.md`, `spec-review-2.md` exist; `orch` binds each to the `spec.md` registered at the time,
+and the spec stage completes only on a PASS for the current `spec.md`.
 
 ## round-N/review-<reviewer>.md
 

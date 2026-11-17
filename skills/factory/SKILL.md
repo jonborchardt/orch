@@ -194,6 +194,14 @@ Request: <job description>
 plus the stage-specific inputs listed in [reference.md](reference.md). Wait for every agent to
 finish before registering anything.
 
+### Spec stage
+
+The plan walks the spec stage one step at a time: write `spec.md`, challenge it, revise once,
+challenge again, then `complete` or `escalate`. Run `orch factory next` after each registration.
+Launch `factory-spec-challenger` as its own fresh subagent, never the spec writer's session or
+yourself, and give it the request, not your summary of the spec. `orch` refuses to leave `spec`
+without a `VERDICT: PASS` bound to the registered `spec.md`.
+
 ### Review rounds
 
 Follow `plan.commands`; the coordinator adds:

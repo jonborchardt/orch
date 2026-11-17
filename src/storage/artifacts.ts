@@ -76,6 +76,7 @@ export function upsertArtifact(tx: Db, row: Omit<Artifact, 'id'>): Artifact {
         sha256: row.sha256,
         marker: row.marker,
         head: row.head,
+        specSha256: row.specSha256,
         stage: row.stage,
         round: row.round,
         createdAt: row.createdAt,

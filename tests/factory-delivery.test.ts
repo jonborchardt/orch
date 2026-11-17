@@ -162,7 +162,10 @@ describe('resume, ownership, and cross-project', () => {
     expect([r.plan.stage, r.plan.status, r.plan.step]).toEqual(['build', 'pending', 'run-stage']);
     expect(r.plan.worktree?.path).toBe(c.wt);
     expect(r.plan.worktree?.commits.map((x) => x.subject)).toEqual(['add src/half.ts']);
-    expect(r.plan.artifacts).toEqual([{ path: 'spec.md', stage: 'spec', ok: true }]);
+    expect(r.plan.artifacts).toEqual([
+      { path: 'spec.md', stage: 'spec', ok: true },
+      { path: 'spec-review-1.md', stage: 'spec', ok: true },
+    ]);
     expect(r.plan.reason).toContain('Implement spec.md');
     // The old session's token is dead; the new one continues.
     expect(() => go(c, 'start')).toThrow(OwnershipError);
@@ -185,6 +188,7 @@ describe('resume, ownership, and cross-project', () => {
     expect(existsSync(c.wt)).toBe(true);
     expect(r.plan.artifacts).toEqual([
       { path: 'spec.md', stage: 'spec', ok: false, problem: 'content changed since registration' },
+      { path: 'spec-review-1.md', stage: 'spec', ok: true },
     ]);
     rmSync(join(c.dir, 'spec.md'));
     expect(next(c.id).artifacts[0]?.problem).toMatch(/not found/);

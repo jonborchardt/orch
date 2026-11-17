@@ -26,6 +26,7 @@ import {
   resumeJob,
   transitionJob,
 } from '../src/storage/jobs.ts';
+import type { Stage } from '../src/core/workflow.ts';
 import { events, type Job } from '../src/storage/schema.ts';
 import { fixture, type TempStore, tempStore, writeArtifact } from './helpers.ts';
 
@@ -172,11 +173,13 @@ describe('jobs: ownership', () => {
     go(job.id, token, 'start');
     writeArtifact(jobArtifactDir(job.id, store.paths), 'spec.md');
     registerArtifact(store, job.id, 'spec.md', { token });
+    writeArtifact(jobArtifactDir(job.id, store.paths), 'spec-review-1.md');
+    registerArtifact(store, job.id, 'spec-review-1.md', { token });
     await sleep(5);
     const r = resumeJob(store, job.id, { session: 's2' });
     expect(r.detail.job.status).toBe('pending');
     expect(r.detail.job.stage).toBe('spec');
-    expect(r.detail.artifacts.map((a) => a.path)).toEqual(['spec.md']);
+    expect(r.detail.artifacts.map((a) => a.path)).toEqual(['spec.md', 'spec-review-1.md']);
     // The new owner can continue; completed-stage artifacts were preserved.
     go(job.id, r.token, 'start');
     expect(go(job.id, r.token, 'complete').stage).toBe('build');
@@ -267,6 +270,80 @@ describe('jobs: artifacts', () => {
     });
   });
 
+  it('binds a spec challenge to the registered spec.md and re-reads it at completion', () => {
+    const { id, token, dir } = setup();
+    go(id, token, 'start');
+    const reg = (rel: string, replace = false) =>
+      registerArtifact(store, id, rel, { token, replace });
+    writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
+    expect(() => reg('spec-review-1.md')).toThrow(WorkflowError);
+    expect(() => reg('spec-review-1.md')).toThrow(/register spec.md first/);
+    writeArtifact(dir, 'spec.md');
+    const spec = reg('spec.md');
+    writeArtifact(dir, 'spec-review-2.md');
+    expect(() => reg('spec-review-2.md')).toThrow(/only for a second challenge/);
+    writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md', 'PASS'));
+    expect(reg('spec-review-1.md').specSha256).toBe(spec.sha256);
+    expect(() => reg('spec-review-2.md')).toThrow(/only for a second challenge/);
+    // The PASS is evidence only while its file is unchanged on disk.
+    writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md') + '\nedited\n');
+    expect(() => go(id, token, 'complete')).toThrow(/spec-review-1.md changed on disk/);
+    writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
+    reg('spec-review-1.md', true);
+    // A revised spec, then the second challenge binds to the new hash.
+    writeArtifact(dir, 'spec.md', fixture('spec.md') + '\nrevised\n');
+    const revised = reg('spec.md', true);
+    const second = reg('spec-review-2.md');
+    expect(second.specSha256).toBe(revised.sha256);
+    expect(second.specSha256).not.toBe(spec.sha256);
+    // Unchanged challenge text cannot silently re-bind to a newer spec.md.
+    writeArtifact(dir, 'spec.md', fixture('spec.md') + '\nrevised again\n');
+    reg('spec.md', true);
+    expect(() => reg('spec-review-2.md')).toThrow(/a different spec.md; pass --replace/);
+    expect(() => go(id, token, 'complete')).toThrow(/passed an earlier spec.md/);
+    reg('spec-review-2.md', true);
+    expect(go(id, token, 'complete').stage).toBe('build');
+  });
+
+  it('refuses spec-review-N.md outside the two challenge slots', () => {
+    const { id, token, dir } = setup();
+    go(id, token, 'start');
+    writeArtifact(dir, 'spec.md');
+    registerArtifact(store, id, 'spec.md', { token });
+    writeArtifact(dir, 'spec-review-3.md', fixture('spec-review-1.md', 'CHANGES'));
+    expect(() => registerArtifact(store, id, 'spec-review-3.md', { token })).toThrow(
+      /not a spec challenge slot/,
+    );
+    expect(jobDetail(store, id).artifacts.map((a) => a.path)).toEqual(['spec.md']);
+    // Nothing was registered, so a PASS in slot 1 still completes the stage.
+    writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md', 'PASS'));
+    registerArtifact(store, id, 'spec-review-1.md', { token });
+    expect(go(id, token, 'complete').stage).toBe('build');
+  });
+
+  it('re-reads spec.md and the challenges when a spec escalation resumes past spec', () => {
+    const { id, token, dir } = setup();
+    go(id, token, 'start');
+    writeArtifact(dir, 'spec.md');
+    registerArtifact(store, id, 'spec.md', { token });
+    writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md', 'PASS'));
+    registerArtifact(store, id, 'spec-review-1.md', { token });
+    go(id, token, 'escalate');
+    const resume = (to: Stage) => transitionJob(store, id, 'resume', { token, to });
+    // A spec edited while the job waits for a human may not reach build under the old PASS.
+    writeArtifact(dir, 'spec.md', fixture('spec.md') + '\nedited while escalated\n');
+    expect(() => resume('build')).toThrow(/spec.md changed on disk/);
+    expect(() => resume('review')).toThrow(/spec.md changed on disk/);
+    expect(getJob(store.db, id).stage).toBe('needs-human');
+    writeArtifact(dir, 'spec.md');
+    writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md') + '\nedited\n');
+    expect(() => resume('build')).toThrow(/spec-review-1.md changed on disk/);
+    expect(getJob(store.db, id).stage).toBe('needs-human');
+    // Going back to spec is how the edit is re-registered and re-challenged, so it is allowed.
+    writeArtifact(dir, 'spec.md', fixture('spec.md') + '\nedited while escalated\n');
+    expect(resume('spec').stage).toBe('spec');
+  });
+
   it('rejects absolute paths and traversal from nested directories', () => {
     const { id, token, dir } = setup();
     writeArtifact(dir, 'spec.md');
@@ -306,6 +383,10 @@ describe('jobs: full workflow through storage', () => {
     go(id, token, 'start');
     writeArtifact(dir, artifact);
     registerArtifact(store, id, artifact, { token });
+    if (artifact === 'spec.md') {
+      writeArtifact(dir, 'spec-review-1.md');
+      registerArtifact(store, id, 'spec-review-1.md', { token });
+    }
     return go(id, token, 'complete');
   }
 
@@ -417,6 +498,7 @@ describe('jobs: full workflow through storage', () => {
       'round-2/review-code-quality.md',
       'round-2/review-correctness.md',
       'round-2/review-security.md',
+      'spec-review-1.md',
       'spec.md',
     ]);
     const types = detail.events.map((e) => e.type);

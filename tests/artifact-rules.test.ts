@@ -51,6 +51,26 @@ describe('artifact rules', () => {
       checkArtifact('decision.md', '## Rationale\nI write DECISION: APPROVE here\n'),
     ).toThrow(/exactly one/);
   });
+
+  it('spec challenges: spec-review-1.md and -2.md only, Findings plus one VERDICT', () => {
+    expect(checkArtifact('spec-review-1.md', fixture('spec-review-1.md'))).toBe('pass');
+    expect(checkArtifact('spec-review-2.md', fixture('spec-review-2.md', 'CHANGES'))).toBe(
+      'changes',
+    );
+    expect(ruleFor('spec-review-1.md')?.stage).toBe('spec');
+    expect(() => checkArtifact('spec-review-1.md', '# Review\n\nVERDICT: PASS\n')).toThrow(
+      /"Findings"/,
+    );
+    expect(() => checkArtifact('spec-review-1.md', '## Findings\nnone\n')).toThrow(/exactly one/);
+    expect(() =>
+      checkArtifact('spec-review-1.md', '## Findings\nVERDICT: PASS\nVERDICT: CHANGES\n'),
+    ).toThrow(/exactly one/);
+    expect(() => checkArtifact('spec-review-2.md', '## Findings\nVERDICT: MAYBE\n')).toThrow(
+      ValidationError,
+    );
+    expect(ruleFor('spec-review-3.md')).toBeUndefined();
+    expect(ruleFor('round-1/spec-review-1.md')).toBeUndefined();
+  });
 });
 
 describe('worktree paths', () => {

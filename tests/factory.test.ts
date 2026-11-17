@@ -38,7 +38,7 @@ describe('factory start and spec stage', () => {
     expect(c.plan.commands).toEqual([
       `orch job transition ${c.id} start --token <token>`,
       `orch job artifact add ${c.id} spec.md --token <token>`,
-      `orch job transition ${c.id} complete --token <token>`,
+      `orch factory next ${c.id}`,
     ]);
     expect(c.plan.requiredArtifacts).toEqual(['spec.md']);
     expect(existsSync(c.wt)).toBe(true);
@@ -76,7 +76,57 @@ describe('factory start and spec stage', () => {
     expect(plan.agents[0]?.agent).toBe('factory-builder');
     expect(plan.commands).toContain(`orch job artifact add ${c.id} build.md --token <token>`);
     expect(plan.reason).toContain('Implement spec.md');
-    expect(plan.artifacts).toEqual([{ path: 'spec.md', stage: 'spec', ok: true }]);
+    expect(plan.artifacts).toEqual([
+      { path: 'spec.md', stage: 'spec', ok: true },
+      { path: 'spec-review-1.md', stage: 'spec', ok: true },
+    ]);
+  });
+
+  it('plans the spec challenge, one revision, a second challenge, then escalation', () => {
+    const c = start();
+    const reg = (rel: string, body = fixture(rel), replace = false) => {
+      writeArtifact(c.dir, rel, body);
+      addArtifact(store, c.id, rel, { token: c.token, replace });
+    };
+    const add = (rel: string, replace = false) =>
+      `orch job artifact add ${c.id} ${rel}${replace ? ' --replace' : ''} --token <token>`;
+    const writer = { role: 'spec-writer', agent: 'factory-spec-writer', model: 'opus' };
+    const challenger = {
+      role: 'spec-challenger',
+      agent: 'factory-spec-challenger',
+      model: 'sonnet',
+    };
+    go(c, 'start');
+    reg('spec.md');
+    let plan = next(c.id);
+    expect(plan.agents).toEqual([{ ...challenger, artifact: 'spec-review-1.md' }]);
+    expect(plan.commands).toEqual([add('spec-review-1.md'), `orch factory next ${c.id}`]);
+    reg('spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
+    plan = next(c.id);
+    expect(plan.agents).toEqual([{ ...writer, artifact: 'spec.md' }]);
+    expect(plan.commands).toEqual([add('spec.md', true), `orch factory next ${c.id}`]);
+    expect(plan.commands.join(' ')).not.toContain('complete');
+    reg('spec.md', fixture('spec.md') + '\nrevised\n', true);
+    plan = next(c.id);
+    expect(plan.agents).toEqual([{ ...challenger, artifact: 'spec-review-2.md' }]);
+    reg('spec-review-2.md', fixture('spec-review-2.md', 'CHANGES'));
+    plan = next(c.id);
+    expect(plan.agents).toEqual([]);
+    expect(plan.commands).toEqual([
+      `orch job transition ${c.id} escalate --reason "spec challenger requested changes twice; see spec-review-2.md" --token <token>`,
+    ]);
+    // The json CLI names the same challenger and model.
+    const d = start('Second request');
+    writeArtifact(d.dir, 'spec.md');
+    addArtifact(store, d.id, 'spec.md', { token: d.token });
+    const viaCli = json<Plan>(orch(store.home, tmpdir(), ['--json', 'factory', 'next', d.id]));
+    expect(viaCli.agents).toEqual([{ ...challenger, artifact: 'spec-review-1.md' }]);
+    writeArtifact(d.dir, 'spec-review-1.md');
+    addArtifact(store, d.id, 'spec-review-1.md', { token: d.token });
+    expect(next(d.id).commands).toEqual([
+      `orch job transition ${d.id} start --token <token>`,
+      `orch job transition ${d.id} complete --token <token>`,
+    ]);
   });
 });
 
@@ -136,6 +186,7 @@ describe('review rounds', () => {
       'round-1/review-code-quality.md',
       'round-1/review-correctness.md',
       'round-1/review-security.md',
+      'spec-review-1.md',
       'spec.md',
     ]);
   });
@@ -290,9 +341,16 @@ describe('orch factory CLI', () => {
     const dir = status.artifactDir;
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'spec.md'), fixture('spec.md'));
-    for (const cmd of status.commands.slice(1)) {
-      const argv = cmd.replace('<token>', token).split(' ').slice(1);
-      expect(orch(home, tmpdir(), argv).code).toBe(0);
+    writeFileSync(join(dir, 'spec-review-1.md'), fixture('spec-review-1.md'));
+    // Write, challenge, complete: each plan ends by asking for the next one.
+    let commands = status.commands.slice(1);
+    for (let i = 0; i < 3 && commands.length > 0; i++) {
+      for (const cmd of commands.filter((x) => !x.startsWith('orch factory next'))) {
+        const argv = cmd.replace('<token>', token).split(' ').slice(1);
+        expect(orch(home, tmpdir(), argv).code, cmd).toBe(0);
+      }
+      const plan = json<Plan>(orch(home, tmpdir(), ['--json', 'factory', 'next', id]));
+      commands = plan.stage === 'spec' ? plan.commands : [];
     }
     expect(json<Plan>(orch(home, tmpdir(), ['--json', 'factory', 'next', id])).stage).toBe('build');
 

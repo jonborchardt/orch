@@ -23,6 +23,8 @@ import {
 import {
   completionOf,
   describeNext,
+  challengeSlot,
+  latestChallenge,
   now,
   prPhase,
   rejectedBefore,
@@ -371,10 +373,41 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
 
   switch (job.stage) {
     case 'spec': {
-      const r = role('spec');
-      if (r) plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'spec.md' }];
-      plan.reason = 'Write the specification from the request and the repository.';
-      plan.commands = [...start, add('spec.md'), complete];
+      // Write, challenge, revise once, challenge again; a second CHANGES goes to a human.
+      const spec = detail.artifacts.find((a) => a.path === 'spec.md');
+      const latest = latestChallenge(detail.artifacts);
+      const reviewed = latest?.path ?? '';
+      const n = challengeSlot(reviewed);
+      const current = latest !== undefined && latest.specSha256 === spec?.sha256;
+      const next = `orch factory next ${id}`;
+      const task = (kind: Role['kind'], artifact: string) => {
+        const r = role(kind);
+        if (r) plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact }];
+      };
+      if (!spec) {
+        task('spec', 'spec.md');
+        plan.reason = 'Write the specification from the request and the repository.';
+        plan.commands = [...start, add('spec.md'), next];
+      } else if (current && latest.marker === 'pass') {
+        plan.reason = `${reviewed} passes the current spec.md; complete the stage.`;
+        plan.commands = [...start, complete];
+      } else if (current && n < 2) {
+        task('spec', 'spec.md');
+        plan.reason = `Revise spec.md once to answer the material objections in ${reviewed}, then it is challenged again.`;
+        plan.commands = [...start, add('spec.md', true), next];
+      } else if (current) {
+        plan.reason = `The spec challenger asked for changes twice; escalate with the objections in ${reviewed}. After a human resume, edit spec.md first; the next plan re-challenges it.`;
+        plan.commands = [
+          `orch job transition ${id} escalate --reason "spec challenger requested changes twice; see ${reviewed}"${tok}`,
+        ];
+      } else {
+        // No challenge yet, or the latest one reviewed an earlier spec.md.
+        const slot = n === 2 || (n === 1 && latest?.marker === 'changes') ? 2 : 1;
+        const artifact = `spec-review-${String(slot)}.md`;
+        task('spec-challenge', artifact);
+        plan.reason = `Independent challenge of spec.md against the request and the repository's conventions: write ${artifact} with VERDICT: PASS or CHANGES.`;
+        plan.commands = [...start, add(artifact, has(artifact)), next];
+      }
       break;
     }
     case 'build': {
