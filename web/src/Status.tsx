@@ -38,7 +38,17 @@ export function BlockerText({
           variant="caption"
           color="text.secondary"
           data-blocker={blocker.kind}
-          sx={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis' }}
+          tabIndex={0}
+          sx={{
+            maxWidth: 240,
+            whiteSpace: 'normal',
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: 2,
+            cursor: 'help',
+            textDecoration: 'underline dotted',
+          }}
         >
           {text}
         </Typography>

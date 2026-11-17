@@ -337,6 +337,28 @@ describe('App board', () => {
     ).toBe(false);
   });
 
+  it('clamps the board blocker line at two lines with its full text in a hover or focus tooltip', async () => {
+    mockFetch();
+    mount();
+    const table = await screen.findByRole('table', { name: 'Factory jobs' });
+    const line = must(table.querySelector<HTMLElement>('[data-blocker="decision"]'));
+    expect(line).toHaveAttribute('tabindex', '0');
+    const style = getComputedStyle(line);
+    expect(style.whiteSpace).toBe('normal');
+    expect(style.overflow).toBe('hidden');
+    expect(style.cursor).toBe('help');
+    const full =
+      'Decision needed — Approver escalated: a human must decide: AC2 needs deployment verification';
+    fireEvent.mouseOver(line);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(full);
+    fireEvent.mouseLeave(line);
+    await waitFor(() => {
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    });
+    line.focus();
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(full);
+  });
+
   it('filters cancelled jobs separately from finished ones', async () => {
     mockFetch();
     mount();
@@ -1387,6 +1409,101 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     await show('current');
     await waitFor(() => {
       expect(ids()).toContain('job-00000009');
+    });
+  });
+
+  const boardRow = (id: string) =>
+    must(document.querySelector<HTMLElement>(`[data-job-id="${id}"]`));
+
+  it('a click on a plain cell, or Enter on the focused row, opens that job', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    // The title stays a real anchor, so middle-click and open-in-new-tab keep working.
+    expect(screen.getByRole('link', { name: 'Gamma blocked' })).toHaveAttribute(
+      'href',
+      '#/jobs/job-00000003',
+    );
+    fireEvent.click(within(boardRow('job-00000003')).getByText('needs-human'));
+    expect(window.location.hash).toBe('#/jobs/job-00000003');
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+
+    window.location.hash = '';
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    const r = boardRow('job-00000002');
+    expect(r).toHaveAttribute('tabindex', '0');
+    r.focus();
+    expect(r).toHaveFocus();
+    fireEvent.keyDown(r, { key: 'Enter' });
+    expect(window.location.hash).toBe('#/jobs/job-00000002');
+  });
+
+  it('inner buttons, chips, and links act on their own and never open the row', async () => {
+    const write = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: write },
+      configurable: true,
+    });
+    data.rows = [
+      ...rows,
+      row({ id: 'job-00000006', title: 'Old', status: 'cancelled', liveness: 'cancelled' }),
+      row({
+        id: 'job-00000007',
+        title: 'Replaced',
+        status: 'cancelled',
+        liveness: 'cancelled',
+        supersededBy: 'job-00000006',
+      }),
+    ];
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+
+    // Archive opens its confirm dialog, not the job; Enter on it does not open the row either.
+    const archive = within(boardRow('job-00000004')).getByRole('button', { name: /^Archive / });
+    fireEvent.keyDown(archive, { key: 'Enter' });
+    fireEvent.click(archive);
+    const dialog = await screen.findByRole('dialog');
+    expect(window.location.hash).toBe('');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(window.location.hash).toBe('');
+
+    // Copy resume copies (and shows its snackbar) without navigating.
+    fireEvent.click(
+      within(boardRow('job-00000003')).getByRole('button', {
+        name: 'Copy resume command for job-00000003',
+      }),
+    );
+    await waitFor(() => {
+      expect(write).toHaveBeenCalledWith('/factory resume job-00000003');
+    });
+    expect(window.location.hash).toBe('');
+
+    // The PR link keeps its own target and href and does not open the row.
+    const pr = within(boardRow('job-00000003')).getByRole('link', { name: 'PR (draft)' });
+    expect(pr).toHaveAttribute('target', '_blank');
+    expect(pr).toHaveAttribute('href', 'https://github.com/x/y/pull/1');
+    fireEvent.click(pr);
+    expect(window.location.hash).not.toBe('#/jobs/job-00000003');
+
+    // Enter on the focusable Reviews chip does not open the row.
+    const chip = must(
+      within(boardRow('job-00000002'))
+        .getByText('1/2, 1 pending')
+        .closest<HTMLElement>('[tabindex]'),
+    );
+    expect(chip).not.toBe(boardRow('job-00000002'));
+    chip.focus();
+    fireEvent.keyDown(chip, { key: 'Enter' });
+    expect(window.location.hash).not.toBe('#/jobs/job-00000002');
+
+    // A supersession link lands on the other job, not this row's.
+    fireEvent.click(within(boardRow('job-00000007')).getByRole('link', { name: 'job-00000006' }));
+    await waitFor(() => {
+      expect(window.location.hash).toBe('#/jobs/job-00000006');
     });
   });
 });
