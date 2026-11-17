@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BoardRow, CiView, JobDetailView } from '../../src/server/types.ts';
 import { App } from './App.tsx';
-import { byAttention, reviewRollup } from './format.ts';
+import { byAttention, repoLabels, reviewRollup } from './format.ts';
 import { Markdown } from './Markdown.tsx';
 import { theme } from './main.tsx';
 
@@ -1306,6 +1306,58 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     });
   });
 
+  it('labels each job with its repository when the board spans several, Repository column hidden', async () => {
+    data.rows = [
+      row({ id: 'job-000000a1', title: 'Same title', repo: 'github.com/acme/alpha' }),
+      row({ id: 'job-000000b1', title: 'Same title', repo: 'github.com/acme/beta' }),
+    ];
+    mockFetch();
+    mount();
+    const table = await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(headers()).not.toContain('Repository');
+    const at = (id: string) => must(table.querySelector<HTMLElement>(`[data-job-id="${id}"]`));
+    // The label's accessible name (and hover) is the full identity.
+    expect(within(at('job-000000a1')).getByText('alpha')).toHaveAttribute(
+      'aria-label',
+      'github.com/acme/alpha',
+    );
+    expect(within(at('job-000000b1')).getByText('beta')).toBeInTheDocument();
+    expect(within(at('job-000000a1')).queryByText('beta')).not.toBeInTheDocument();
+    expect(within(at('job-000000b1')).queryByText('alpha')).not.toBeInTheDocument();
+    // The id stays in the caption.
+    expect(within(at('job-000000a1')).getByText(/job-000000a1/)).toBeInTheDocument();
+    // Showing the Repository column leaves the caption label in place.
+    fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
+    const menu = await screen.findByRole('menu');
+    fireEvent.click(within(menu).getByRole('checkbox', { name: 'Repository column' }));
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    expect(headers()).toContain('Repository');
+    expect(within(at('job-000000b1')).getByText('beta')).toBeInTheDocument();
+  });
+
+  it('drops the repository label when every row comes from one repository', async () => {
+    data.rows = [row({ id: 'job-000000a1' }), row({ id: 'job-000000a2' })];
+    mockFetch();
+    const view = mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(document.querySelectorAll('[data-repo-label]')).toHaveLength(0);
+    expect(screen.getByText('job-000000a2')).toBeInTheDocument();
+    view.unmount();
+    // Several repositories label every row; narrowing to one removes the now-redundant label.
+    data.rows = rows;
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(document.querySelectorAll('[data-repo-label]')).toHaveLength(4);
+    data.rows = rows.filter((r) => r.repo === 'gamma');
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Repository' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'gamma' }));
+    await waitFor(() => {
+      expect(ids()).toEqual(['job-00000003', 'job-00000004']);
+    });
+    expect(document.querySelectorAll('[data-repo-label]')).toHaveLength(0);
+    expect(screen.getByText('job-00000003')).toBeInTheDocument();
+  });
+
   it('offers Archive only on finished rows and posts it, with takeover only when checked', async () => {
     const done = row({
       id: 'job-0000000a',
@@ -1787,6 +1839,29 @@ describe('PR phase, Merge, and Refresh PR', () => {
 describe('Board attention order, summary chips, review rollup', () => {
   const ids = () =>
     [...document.querySelectorAll<HTMLElement>('[data-job-id]')].map((r) => r.dataset['jobId']);
+
+  it('labels repositories by basename, a longer unique suffix on collision, nothing for one repo', () => {
+    const labels = (...repos: string[]) => Object.fromEntries(repoLabels(repos));
+    expect(labels('github.com/acme/alpha', 'github.com/acme/alpha')).toEqual({});
+    expect(labels()).toEqual({});
+    expect(labels('github.com/acme/alpha', 'github.com/acme/beta', 'gamma')).toEqual({
+      'github.com/acme/alpha': 'alpha',
+      'github.com/acme/beta': 'beta',
+      gamma: 'gamma',
+    });
+    expect(
+      labels('github.com/acme/alpha', 'github.com/other/alpha', 'github.com/acme/beta'),
+    ).toEqual({
+      'github.com/acme/alpha': 'acme/alpha',
+      'github.com/other/alpha': 'other/alpha',
+      'github.com/acme/beta': 'beta',
+    });
+    // No unique suffix: the full identity.
+    expect(labels('acme/alpha', 'x/acme/alpha')).toEqual({
+      'acme/alpha': 'acme/alpha',
+      'x/acme/alpha': 'x/acme/alpha',
+    });
+  });
 
   it('orders by attention group, then most recently updated first', () => {
     const at = (
