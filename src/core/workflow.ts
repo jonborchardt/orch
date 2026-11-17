@@ -244,8 +244,15 @@ export function transition(
         const to = ctx.to ?? job.returnStage;
         if (to === 'completed') return acceptDelivery(job, ctx);
         if (!to || to === 'needs-human') reject('specify --to <stage>');
+        // A review requested from needs-human is a fresh round, as after a build: earlier
+        // verdicts stay as that round's history instead of being shown or overwritten.
         return {
-          patch: { stage: to, status: 'pending', returnStage: null },
+          patch: {
+            stage: to,
+            status: 'pending',
+            returnStage: null,
+            ...(to === 'review' ? { round: job.round + 1 } : {}),
+          },
           events: [{ type: 'job.resumed', payload: { to } }],
         };
       }

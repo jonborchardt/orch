@@ -84,7 +84,8 @@ describe('seeded board and detail', () => {
     expect(by(ids.reviewing).reviews.map((v) => `${v.reviewer}:${v.verdict ?? 'pending'}`)).toEqual(
       ['security:pass', 'correctness:pending', 'code-quality:pending'],
     );
-    expect(by(ids.reviewing).blocking).toBe(2); // from round 1 while round 2 is open
+    // Current round only: round 1's blocking count is history while round 2 is unconsolidated.
+    expect(by(ids.reviewing).blocking).toBeNull();
     expect(by(ids.stale).liveness).toBe('stale');
     expect(by(ids.stale).owner?.live).toBe(false);
     expect(by(ids.stale).blocker?.kind).toBe('interrupted');

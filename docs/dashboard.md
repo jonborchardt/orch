@@ -19,8 +19,10 @@ worktree, review round, reviews, elapsed time, last update, PR link and CI rollu
 column is one rollup chip for the current round: `n/n pass` (green) when every reviewer passed,
 `p/n, k pending` (neutral) while some are pending and none requested changes, `c changes` (amber)
 when any did, and nothing before the round has reviews; hovering or focusing it lists each reviewer
-and its verdict. Beside it, `n blocking` (red) shows the blocking-finding count from the latest
-consolidation when it is above zero; there is no separate Blocking column. The stage column is the
+and its verdict. Beside it, `n blocking` (red) shows the blocking-finding count from the current
+round's consolidation when it is above zero; there is no separate Blocking column. Both are
+current-round only: while a new round is open, earlier rounds' verdicts and blocking counts are
+not shown on the board (they stay in the detail view's Reviews and Findings tabs). The stage column is the
 workflow position; the status column is the execution state, kept separate so a job stopped in
 `build` never reads as done. Its states (each with a glyph and label, never colour alone):
 `running (lease live)` means a session renewed its lease recently; `last reported running` means the
@@ -62,8 +64,9 @@ it over; the server decides as for any action, and the board reloads afterwards.
 Nothing archives automatically.
 
 **Job detail** (`#/jobs/<id>`): next step and agents from the plan, the request, and tabs for the
-spec, build summary, review history per round (one collapsed panel per reviewer whose header
-shows the reviewer, verdict, and summary; expand it for the full review text), consolidated
+spec, build summary, review history per round (the job's current round is labelled
+`Round N (current)`; one collapsed panel per reviewer whose header shows the reviewer, verdict,
+and summary; expand it for the full review text), consolidated
 findings per round, the approval decision, registered artifacts (size, marker, hash), the event
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
 the PR with its CI state. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
@@ -121,7 +124,7 @@ control stays neutral, since the right transition is a human call.
 | Action                     | Allowed when                                                                                                                       | Effect                                                 |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `Resume at <stage>`        | stage `needs-human`                                                                                                                | `resume --to <stage>` (default: where it came from)    |
-| Request review round       | round ≥ 1, not finished                                                                                                            | `escalate` + `resume --to review`                      |
+| Request review round       | round ≥ 1, not finished                                                                                                            | `escalate` + `resume --to review` (opens a new round)  |
 | Request rework             | not finished                                                                                                                       | `escalate` + `resume --to build`                       |
 | Accept verification policy | worktree `factory.json` differs                                                                                                    | snapshot it as the job's policy (`jobs.policy`)        |
 | Accept delivery            | `needs-human` from `ci`, PR head observed, and GitHub reported no checks at all or the PR was merged by hand; a reason is required | `resume --to completed`, recorded as a human close-out |
