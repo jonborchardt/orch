@@ -30,6 +30,18 @@ import { CiChip, PrPhaseChip } from './Ci.tsx';
 import { BlockerText, CopyResume, StatusChip, Supersession } from './Status.tsx';
 import { ago, byAttention, elapsed, reviewRollup } from './format.ts';
 
+function openJob(id: string): void {
+  window.location.hash = `#/jobs/${id}`;
+}
+
+/** True when a row event came from the row's own cells, not an inner control or a portal (Snackbar, tooltip). */
+function fromRowBody(e: { target: EventTarget; currentTarget: HTMLElement }): boolean {
+  const t = e.target;
+  if (!(t instanceof Element) || !e.currentTarget.contains(t)) return false;
+  const control = t.closest('a, button, input, textarea, select, [tabindex]');
+  return control === null || control === e.currentTarget;
+}
+
 interface Column {
   id: string;
   label: string;
@@ -399,7 +411,22 @@ export function JobBoard({
             </TableHead>
             <TableBody>
               {ordered.map((r) => (
-                <TableRow key={r.id} hover data-job-id={r.id}>
+                <TableRow
+                  key={r.id}
+                  hover
+                  data-job-id={r.id}
+                  tabIndex={0}
+                  sx={{ cursor: 'pointer' }}
+                  onClick={(e) => {
+                    if (fromRowBody(e) && !window.getSelection()?.toString()) openJob(r.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+                      e.preventDefault();
+                      openJob(r.id);
+                    }
+                  }}
+                >
                   {columns.map((c) => (
                     <TableCell key={c.id} align={c.align} sx={c.sx}>
                       {c.cell(r, now)}

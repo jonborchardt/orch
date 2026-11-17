@@ -43,7 +43,9 @@ the board or a job's detail shows a progress bar; after that a thin `Refreshing`
 under the app bar shows while a poll is in flight. Archived jobs (see **Archive** below) are left
 out of every filter except `archived`, which shows only them, each marked with an `archived` chip.
 
-The board is a plain MUI table (`web/src/JobBoard.tsx`, no data-grid package). Clicking a header
+The board is a plain MUI table (`web/src/JobBoard.tsx`, no data-grid package). Clicking a row, or
+focusing it and pressing Enter, opens the job; the buttons, links, and chips inside a row act on
+their own and never open it. Clicking a header
 sorts by that column, ascending then descending (`aria-sort` says which; Reviews sorts by blocking
 count). With no sort chosen the board orders by attention, in the client: needs human, last reported
 running (stale), failed or interrupted, running, idle, then completed and cancelled, most recently
