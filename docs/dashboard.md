@@ -25,10 +25,12 @@ current-round only: while a new round is open, earlier rounds' verdicts and bloc
 not shown on the board (they stay in the detail view's Reviews and Findings tabs). The stage column is the
 workflow position; the status column is the execution state, kept separate so a job stopped in
 `build` never reads as done. Its states (each with a glyph and label, never colour alone):
-`running (lease live)` means a session renewed its lease recently; `last reported running` means the
-status is still `running` but the lease lapsed, so the session is presumed gone; `interrupted`,
-`failed`, `needs human`, `idle` (pending), `completed`, and `cancelled`, which is grey and never
-styled like a success. Under the chip, one line says why a stopped job stopped, derived from
+`running` means the status is `running` and a session renewed its lease recently (a live lease, not
+proof that a process is alive now); `stale` means the status is still `running` but the lease lapsed
+without renewal, so the session may no longer be working or may only have missed a renewal;
+`interrupted`, `failed`, `needs human`, `idle` (pending), `completed`, and `cancelled`, which is grey
+and never styled like a success. A lapsed lease never reads as `running`; each chip's tooltip, and
+the detail view, carries the full meaning of its state. Under the chip, one line says why a stopped job stopped, derived from
 persisted fields only (`src/server/status.ts`): the latest `job.blocked`, `stage.failed`,
 `job.interrupted`, or `job.cancelled` event and its recorded reason, the `decision.md` marker, the
 consolidation's BLOCKING count, and the newest verification run. When the state does not classify an

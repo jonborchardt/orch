@@ -167,11 +167,11 @@ export function CopyResume({
   );
 }
 
-const RESUME_NOTE: Partial<Record<Liveness, string>> = {
+export const RESUME_NOTE: Partial<Record<Liveness, string>> = {
   blocked:
     'The job is waiting for a human. Resuming without a recorded decision sends it back to the stage it was escalated from; record a decision with the controls first if one is needed.',
   stale:
-    'The lease lapsed, so the previous session is presumed gone; resuming takes the job over and continues from saved state.',
+    'The lease lapsed, so the previous session may no longer be working; resuming takes the job over and continues from saved state.',
   interrupted: 'Resuming takes the job over and continues from saved state.',
   failed: 'Resuming puts the failed stage back to pending and runs it again from saved state.',
   idle: 'No live session owns the job; resuming picks it up where it stopped.',
