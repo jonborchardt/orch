@@ -220,6 +220,26 @@ describe('worktree show, adopt, remove', () => {
     expect(listEvents(store.db, id).at(-1)?.payload).toMatchObject({ reason: 'missing' });
   });
 
+  it('removes through --repo when the recorded checkout no longer exists', () => {
+    // A job recorded from a session's linked worktree that was deleted afterwards.
+    const linked = join(tempDir('orch-linked-'), 'session');
+    extra.push(linked);
+    gitIn(clone, 'worktree', 'add', '--detach', linked);
+    const repo = describeRepo(clone);
+    const job = createJob(store, {
+      title: 'Stale checkout',
+      repo: repo.identity,
+      repoPath: linked,
+      baseBranch: 'main',
+    });
+    const { token } = claimJob(store, job.id, { session: 's1' });
+    const wt = createWorktree(store, job.id, { token }).job.worktreePath ?? '';
+    gitIn(clone, 'worktree', 'remove', linked);
+    expect(() => dropWorktree(store, job.id, { token })).toThrow(/does not exist/);
+    expect(dropWorktree(store, job.id, { token }, { repo: clone }).job.worktreePath).toBeNull();
+    expect(existsSync(wt)).toBe(false);
+  });
+
   it('adopt records an existing worktree once; two jobs cannot share one', () => {
     const a = newJob();
     const b = newJob(store, clone, 'Second job');
