@@ -18,6 +18,7 @@ logged ("done with the board filter" is a todo, not a close).
 | --- | --- | --- |
 | `log` (default) | any text, pasted images, paths | files one or more todos (below) |
 | `done <id>`, `drop <id>` | an id | sets `status`, `updated`, adds a dated Note |
+| `start <id> ...` | one or more ids | `status: in-progress`, `updated`, a dated Note; INDEX.md lists it under In progress instead of the proposed order |
 | `dup <id> <of>` | two ids | `status: duplicate`, `duplicate_of`, appends `<id>`'s What to `<of>` as a checklist item, dated Note on both |
 | `reclassify <id> key=value ...` | area, priority, effort, type, depends_on, related | sets them, `classified: user`, a dated Note with the old values |
 | `show [<id> \| <area>]` | nothing, an id or an area | prints from `--json`; writes nothing |
@@ -85,7 +86,7 @@ Transcription; a link to `assets/0012-a.png` when a path was given. Omit when th
 - 2026-11-06: priority and area guessed, effort given.
 ```
 
-Every key, in this order, every file; `status` `open|done|dropped|duplicate`; `type` `bug|feature|chore|question`
+Every key, in this order, every file; `status` `open|in-progress|done|dropped|duplicate`; `type` `bug|feature|chore|question`
 (`question` is a decision to make, not code); `duplicate_of` an id exactly when `status: duplicate`; dates `YYYY-MM-DD`.
 No personal data (names, emails, credentials) in a todo.
 
