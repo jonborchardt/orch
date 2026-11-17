@@ -158,7 +158,7 @@ orch ui                               # dashboard at http://127.0.0.1:4777/ (opt
 
 A job whose session stopped keeps its state. `/factory <id>` in any session resumes it: it takes
 over the lapsed lease (a live one needs `--force`, which rotates the token so the old session's
-commands fail), recreates the worktree if it is gone, re-verifies every registered artifact, and
+commands fail, and the skill forces only when the previous session has clearly died), recreates the worktree if it is gone, re-verifies every registered artifact, and
 continues from the plan. A job in `needs-human` waits: the dashboard offers the decisions the
 workflow allows (resume at a stage, request review or rework, accept a proposed policy,
 accept a delivery that GitHub reported no checks for, cancel), each recorded with a reason, and
