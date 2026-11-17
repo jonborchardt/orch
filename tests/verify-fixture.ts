@@ -36,6 +36,7 @@ export function setBaselinePolicy(commands: Record<string, unknown>[]): void {
 export function inBuild(c: Ctx, s: Store = store): void {
   go(s, c, 'start');
   add(s, c, 'spec.md');
+  add(s, c, 'spec-review-1.md');
   go(s, c, 'complete');
   go(s, c, 'start');
 }

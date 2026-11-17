@@ -115,6 +115,8 @@ export const artifacts = sqliteTable(
     marker: text(),
     /** Worktree HEAD when the artifact was registered; null when the job had no worktree. */
     head: text(),
+    /** For spec-review-N.md: sha256 of the spec.md registered when the challenge was; else null. */
+    specSha256: text(),
     createdAt: text().notNull(),
   },
   (t) => [uniqueIndex('artifacts_job_path_idx').on(t.jobId, t.path)],

@@ -649,6 +649,7 @@ describe('blocker and resume derivation', () => {
     sha256: null,
     marker,
     head: null,
+    specSha256: null,
     createdAt: past,
   });
   const evidence = (over: Partial<Evidence> = {}): Evidence => ({

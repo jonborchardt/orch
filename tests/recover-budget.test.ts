@@ -22,6 +22,7 @@ describe('recovery pass: what it leaves alone', () => {
     const build = start(store, clone, 'Build job');
     go(store, build, 'start');
     add(store, build, 'spec.md');
+    add(store, build, 'spec-review-1.md');
     go(store, build, 'complete');
     releaseJob(store, build.id, { token: build.token });
 

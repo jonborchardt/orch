@@ -79,6 +79,10 @@ function jobAt(stage: 'spec' | 'pr') {
     if (artifact !== 'spec.md') verifyJob(store, job.id, { token });
     writeArtifact(dir, artifact);
     addArtifact(store, job.id, artifact, { token });
+    if (artifact === 'spec.md') {
+      writeArtifact(dir, 'spec-review-1.md');
+      addArtifact(store, job.id, 'spec-review-1.md', { token });
+    }
     go('complete');
   };
   if (stage === 'pr') {

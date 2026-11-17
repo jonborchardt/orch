@@ -85,6 +85,61 @@ export function reviewArtifact(round: number, reviewer: string): string {
   return `round-${String(round)}/review-${reviewer}.md`;
 }
 
+/** The independent spec challenge: `spec-review-1.md`, then `spec-review-2.md` after a revision. */
+export const SPEC_CHALLENGER = 'factory-spec-challenger';
+const CHALLENGE = /^spec-review-(\d+)\.md$/;
+
+export function isSpecChallenge(path: string): boolean {
+  return CHALLENGE.test(path);
+}
+
+/** The registered spec challenge with the highest number, or undefined when there is none. */
+export function latestChallenge(artifacts: readonly Artifact[]): Artifact | undefined {
+  const num = (a: Artifact) => Number(CHALLENGE.exec(a.path)?.[1] ?? 0);
+  return artifacts
+    .filter((a) => isSpecChallenge(a.path))
+    .reduce<Artifact | undefined>((best, a) => (!best || num(a) > num(best) ? a : best), undefined);
+}
+
+/**
+ * The spec.md hash a challenge registered at `path` binds to. Refused before spec.md is
+ * registered, and for spec-review-2.md unless spec-review-1.md asked for changes.
+ */
+export function challengeSpecHash(path: string, artifacts: readonly Artifact[]): string {
+  const spec = artifacts.find((a) => a.path === 'spec.md');
+  if (!spec?.sha256) {
+    throw new WorkflowError(`${path} reviews spec.md; register spec.md first.`);
+  }
+  if (path === 'spec-review-2.md') {
+    const first = artifacts.find((a) => a.path === 'spec-review-1.md');
+    if (first?.marker !== 'changes') {
+      throw new WorkflowError(
+        'spec-review-2.md is only for a second challenge after spec-review-1.md says CHANGES.',
+      );
+    }
+  }
+  return spec.sha256;
+}
+
+/**
+ * Why the spec may not move on, or null when it may: the latest challenge must be a PASS given
+ * against the spec.md that is registered now.
+ */
+export function specChallengeRefusal(artifacts: readonly Artifact[]): string | null {
+  const spec = artifacts.find((a) => a.path === 'spec.md');
+  const latest = latestChallenge(artifacts);
+  if (!latest) {
+    return `no spec challenge is registered; run ${SPEC_CHALLENGER} and register spec-review-1.md`;
+  }
+  if (latest.marker !== 'pass') {
+    return `${latest.path} from ${SPEC_CHALLENGER} says ${(latest.marker ?? 'nothing').toUpperCase()}; revise spec.md or escalate`;
+  }
+  if (latest.specSha256 !== spec?.sha256) {
+    return `${latest.path} from ${SPEC_CHALLENGER} passed an earlier spec.md; challenge the current spec again`;
+  }
+  return null;
+}
+
 export interface Next {
   stage: Stage;
   status: Status;
@@ -165,8 +220,11 @@ export function transition(
       const completed = { type: 'stage.completed', payload: { stage, round: job.round } };
       const blocking = blockingCount(ctx.artifacts, job.round);
       switch (stage) {
-        case 'spec':
+        case 'spec': {
+          const refused = specChallengeRefusal(ctx.artifacts);
+          if (refused) reject(refused);
           return { patch: { stage: 'build', status: 'pending' }, events: [completed] };
+        }
         case 'build':
           return {
             patch: { stage: 'review', status: 'pending', round: job.round + 1 },
@@ -244,6 +302,11 @@ export function transition(
         const to = ctx.to ?? job.returnStage;
         if (to === 'completed') return acceptDelivery(job, ctx);
         if (!to || to === 'needs-human') reject('specify --to <stage>');
+        // Leaving a spec escalation for a later stage skips nothing: the challenge gate holds.
+        if (job.returnStage === 'spec' && to !== 'spec') {
+          const refused = specChallengeRefusal(ctx.artifacts);
+          if (refused) reject(refused);
+        }
         // A review requested from needs-human is a fresh round, as after a build: earlier
         // verdicts stay as that round's history instead of being shown or overwritten.
         return {

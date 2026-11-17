@@ -87,7 +87,7 @@ export function fixture(rel: string, marker?: string): string {
     return '# Spec\n\n## Goal\nG\n\n## Scope\nS\n\n## Acceptance criteria\n- [ ] a\n';
   }
   if (p === 'build.md') return '# Build\n\n## Summary\nS\n\n## Validation\nnpm test: pass\n';
-  if (/^round-\d+\/review-/.test(p)) {
+  if (/^round-\d+\/review-/.test(p) || /^spec-review-\d+\.md$/.test(p)) {
     return `# Review\n\n## Findings\nnone\n\nVERDICT: ${marker ?? 'PASS'}\n`;
   }
   if (/^round-\d+\/consolidated\.md$/.test(p)) {

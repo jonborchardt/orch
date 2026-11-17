@@ -42,6 +42,7 @@ describe('jobUsage', () => {
     };
     go('start');
     art('spec.md');
+    art('spec-review-1.md');
     go('complete');
     go('start');
     art('build.md');

@@ -102,6 +102,7 @@ describe('invariant 6: registered artifacts must still match the disk at the gat
     const c = start();
     go(c, 'start');
     add(c, 'spec.md');
+    add(c, 'spec-review-1.md');
     go(c, 'complete');
     go(c, 'start');
     commitFile(c.wt, 'src/a.ts', 'a');
@@ -131,6 +132,7 @@ describe('invariant 6: registered artifacts must still match the disk at the gat
     const c = start();
     go(c, 'start');
     add(c, 'spec.md');
+    add(c, 'spec-review-1.md');
     go(c, 'complete');
     go(c, 'start');
     writeFileSync(join(c.wt, 'wip.ts'), 'wip');

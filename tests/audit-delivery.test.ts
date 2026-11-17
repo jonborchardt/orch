@@ -142,6 +142,7 @@ describe('invariants 10, 11, and 15: approval, blocking findings, and what gets 
     const c = start();
     go(c, 'start');
     add(c, 'spec.md');
+    add(c, 'spec-review-1.md');
     go(c, 'complete');
     go(c, 'start');
     commitFile(c.wt, 'src/export.ts', '// export\n');

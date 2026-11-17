@@ -72,6 +72,11 @@ describe('agents', () => {
     expect(specWriter).toContain('The spec file is the deliverable');
     // job-0bda70aa turned "document next as an alias of status" into the reverse.
     expect(specWriter).toContain('never invert');
+    const challenger = readFileSync(join(agentsDir, 'factory-spec-challenger.md'), 'utf8');
+    expect(tools('factory-spec-challenger')).not.toContain('Edit');
+    expect(tools('factory-spec-challenger')).toContain('Write'); // spec-review-N.md only
+    expect(challenger).toContain('VERDICT');
+    expect(challenger).toContain('The review file is the deliverable');
     expect(tools('factory-builder')).toContain('Edit');
     expect(tools('factory-spec-writer')).not.toContain('Edit');
   });
@@ -116,6 +121,7 @@ describe('skill', () => {
       return text.slice(open + 11, close);
     };
     expect(checkArtifact('spec.md', template('spec.md'))).toBeNull();
+    expect(checkArtifact('spec-review-1.md', template('spec-review-N.md'))).toBe('pass');
     expect(checkArtifact('build.md', template('build.md'))).toBeNull();
     expect(checkArtifact('round-1/review-ux.md', template('round-N/review-<reviewer>.md'))).toBe(
       'pass',

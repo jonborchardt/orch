@@ -914,6 +914,7 @@ DECISION: ESCALATE
     sha256: null,
     marker: 'escalate',
     head: null,
+    specSha256: null,
     createdAt: '2026-11-13T08:20:00.000Z',
   } satisfies JobDetailView['artifacts'][number];
   const consolidated = (marker: number) => `# Consolidated findings (round 2)

@@ -103,11 +103,17 @@ export function prBody(store: Store, c: Ctx): string {
   );
 }
 
-/** spec done; one commit; verified; build.md registered; build completed: review pending. */
-export function toReview(store: Store, c: Ctx, file = 'src/export.ts'): void {
+/** spec written, challenged with a PASS, completed: build pending. */
+export function passSpec(store: Store, c: Ctx): void {
   go(store, c, 'start');
   add(store, c, 'spec.md');
+  add(store, c, 'spec-review-1.md');
   go(store, c, 'complete');
+}
+
+/** spec done; one commit; verified; build.md registered; build completed: review pending. */
+export function toReview(store: Store, c: Ctx, file = 'src/export.ts'): void {
+  passSpec(store, c);
   go(store, c, 'start');
   commitFile(c.wt, file, `// ${file}\n`);
   verify(store, c);

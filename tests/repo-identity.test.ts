@@ -95,6 +95,7 @@ describe('repository identity follows the local repository, not the remote', () 
     const ctx = { ...c, token: r.token };
     go(store, ctx, 'start');
     add(store, ctx, 'spec.md');
+    add(store, ctx, 'spec-review-1.md');
     go(store, ctx, 'complete');
     go(store, ctx, 'start');
     commitFile(c.wt, 'src/x.ts', 'x');
@@ -289,6 +290,7 @@ describe('recovery stays within ownership and worktree boundaries', () => {
     const c = start(clone);
     go(store, c, 'start');
     add(store, c, 'spec.md');
+    add(store, c, 'spec-review-1.md');
     go(store, c, 'complete');
     go(store, c, 'start');
     commitFile(c.wt, 'src/x.ts', 'x');

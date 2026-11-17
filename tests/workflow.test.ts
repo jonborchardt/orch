@@ -32,7 +32,7 @@ function job(stage: Stage, status: Status, extra: Partial<JobState> = {}): JobSt
   };
 }
 
-function art(path: string, marker: string | null = null): Artifact {
+function art(path: string, marker: string | null = null, extra: Partial<Artifact> = {}): Artifact {
   if (path === 'decision.md' && marker === null) marker = 'approve';
   return {
     id: 1,
@@ -44,9 +44,17 @@ function art(path: string, marker: string | null = null): Artifact {
     sha256: null,
     marker,
     head: null,
+    specSha256: null,
     createdAt: '',
+    ...extra,
   };
 }
+
+/** spec.md registered with hash `s1`, challenged by `spec-review-1.md` saying PASS. */
+const passedSpec = (): Artifact[] => [
+  art('spec.md', null, { sha256: 's1' }),
+  art('spec-review-1.md', 'pass', { specSha256: 's1' }),
+];
 
 function review(round: number, reviewer: string, verdict: Review['verdict']): Review {
   return {
@@ -82,7 +90,7 @@ describe('transition: happy path', () => {
     let j = job('spec', 'pending');
     j = step(j, 'start');
     expect(j.status).toBe('running');
-    j = step(j, 'complete', { artifacts: [art('spec.md')], reviews: [] });
+    j = step(j, 'complete', { artifacts: passedSpec(), reviews: [] });
     expect([j.stage, j.status]).toEqual(['build', 'pending']);
     j = step(j, 'start');
     j = step(j, 'complete', { artifacts: [art('build.md')], reviews: [] });
@@ -364,6 +372,48 @@ describe('transition: review loop', () => {
       reviews: trio(1, 'security'),
     });
     expect(r.patch.stage).toBe('needs-human');
+  });
+});
+
+describe('transition: the spec challenge gate', () => {
+  const spec = (sha = 's1') => art('spec.md', null, { sha256: sha });
+  const challenge = (n: number, marker: string, specSha256 = 's1') =>
+    art(`spec-review-${String(n)}.md`, marker, { specSha256 });
+  const complete = (artifacts: Artifact[]) =>
+    run(job('spec', 'running'), 'complete', { artifacts, reviews: [] });
+
+  it('refuses spec completion without a PASS bound to the current spec.md', () => {
+    expect(() => complete([spec()])).toThrow(/no spec challenge.*factory-spec-challenger/);
+    expect(() => complete([spec(), challenge(1, 'changes')])).toThrow(
+      /spec-review-1.md from factory-spec-challenger says CHANGES/,
+    );
+    // The latest challenge decides: a PASS in review-1 does not outlive a CHANGES in review-2.
+    expect(() => complete([spec(), challenge(1, 'pass'), challenge(2, 'changes')])).toThrow(
+      /spec-review-2.md .* says CHANGES/,
+    );
+    // spec.md replaced (--replace) after the PASS: the PASS reviewed an earlier spec.
+    expect(() => complete([spec('s2'), challenge(1, 'pass')])).toThrow(
+      /factory-spec-challenger passed an earlier spec.md/,
+    );
+    expect(complete([spec(), challenge(1, 'pass')]).patch.stage).toBe('build');
+    expect(
+      complete([spec('s2'), challenge(1, 'changes'), challenge(2, 'pass', 's2')]).patch,
+    ).toEqual({ stage: 'build', status: 'pending' });
+  });
+
+  it('applies to leaving a spec escalation for a later stage, and only to that', () => {
+    const blocked = job('needs-human', 'blocked', { returnStage: 'spec' });
+    const failing = { ...none, artifacts: [spec(), challenge(2, 'changes')] };
+    for (const to of ['build', 'review', 'approve', 'pr'] as const) {
+      expect(() => run(blocked, 'resume', { ...failing, to })).toThrow(/says CHANGES/);
+    }
+    expect(run(blocked, 'resume', failing).patch.stage).toBe('spec');
+    expect(run(blocked, 'resume', { ...failing, to: 'spec' }).patch.stage).toBe('spec');
+    const passing = { ...none, artifacts: [spec(), challenge(1, 'pass')], to: 'build' as const };
+    expect(run(blocked, 'resume', passing).patch.stage).toBe('build');
+    // Escalations from later stages never look at the challenge.
+    const fromBuild = job('needs-human', 'blocked', { returnStage: 'build' });
+    expect(run(fromBuild, 'resume', { ...none, to: 'review' }).patch.stage).toBe('review');
   });
 });
 

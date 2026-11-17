@@ -7,7 +7,7 @@ import { ValidationError } from './errors.ts';
 export const MODELS = ['opus', 'sonnet', 'haiku', 'inherit'] as const;
 export type Model = (typeof MODELS)[number];
 
-export type RoleKind = 'spec' | 'build' | 'review' | 'approve';
+export type RoleKind = 'spec' | 'spec-challenge' | 'build' | 'review' | 'approve';
 
 export interface Role {
   /** Short name used in `orch job review record --reviewer <name>` and review-<name>.md. */
@@ -22,6 +22,12 @@ export interface Role {
 
 export const ROLES: readonly Role[] = [
   { name: 'spec-writer', agent: 'factory-spec-writer', model: 'opus', kind: 'spec' },
+  {
+    name: 'spec-challenger',
+    agent: 'factory-spec-challenger',
+    model: 'sonnet',
+    kind: 'spec-challenge',
+  },
   { name: 'builder', agent: 'factory-builder', model: 'opus', kind: 'build' },
   { name: 'security', agent: 'factory-reviewer-security', model: 'opus', kind: 'review' },
   { name: 'correctness', agent: 'factory-reviewer-correctness', model: 'sonnet', kind: 'review' },

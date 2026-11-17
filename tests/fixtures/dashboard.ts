@@ -52,6 +52,15 @@ Web UI, HTTP API
 - Large exports could tie up a worker
 `;
 
+const SPEC_REVIEW = `# Spec challenge
+
+## Findings
+
+None material: the acceptance criteria are observable and the scope matches the request.
+
+VERDICT: PASS
+`;
+
 const BUILD = `# Build (round 1)
 
 ## Summary
@@ -222,6 +231,7 @@ export function seedDashboard(
     const id = completed.id;
     run(id, token, 'start');
     art(id, token, 'spec.md', SPEC);
+    art(id, token, 'spec-review-1.md', SPEC_REVIEW);
     run(id, token, 'complete');
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD);
@@ -281,6 +291,7 @@ export function seedDashboard(
     const id = reviewing.id;
     run(id, token, 'start');
     art(id, token, 'spec.md', SPEC.replace('Export reports as CSV', 'Fix login redirect loop'));
+    art(id, token, 'spec-review-1.md', SPEC_REVIEW);
     run(id, token, 'complete');
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD);
@@ -320,6 +331,7 @@ export function seedDashboard(
       'spec.md',
       SPEC.replace('Export reports as CSV', 'Dark mode for settings'),
     );
+    art(stale.id, token, 'spec-review-1.md', SPEC_REVIEW);
     run(stale.id, token, 'complete');
     run(stale.id, token, 'start');
   }
@@ -338,6 +350,7 @@ export function seedDashboard(
       'spec.md',
       SPEC.replace('Export reports as CSV', 'Rate limiting for public API'),
     );
+    art(id, token, 'spec-review-1.md', SPEC_REVIEW);
     run(id, token, 'complete');
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD);
@@ -384,6 +397,7 @@ export function seedDashboard(
     const { token } = claimJob(store, failed.id, { session: 'claude-20261113-1000-fa11' });
     run(failed.id, token, 'start');
     art(failed.id, token, 'spec.md', SPEC.replace('Export reports as CSV', 'Retry flaky uploads'));
+    art(failed.id, token, 'spec-review-1.md', SPEC_REVIEW);
     run(failed.id, token, 'complete');
     run(failed.id, token, 'start');
     run(failed.id, token, 'fail', { reason: 'required check "test" failed twice' });
@@ -394,6 +408,7 @@ export function seedDashboard(
   const toCi = (id: string, token: string, title: string, pr: number): void => {
     run(id, token, 'start');
     art(id, token, 'spec.md', SPEC.replace('Export reports as CSV', title));
+    art(id, token, 'spec-review-1.md', SPEC_REVIEW);
     run(id, token, 'complete');
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD);
