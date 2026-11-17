@@ -57,7 +57,17 @@ describe('orch recover', () => {
   it('run --once exits 0, prints the pass, and status reports needs-session jobs', () => {
     const repo = makeRepo();
     const created = json<{ jobId: string }>(
-      cli('job', 'create', '--title', 'Spec only', '--repo', repo, '--json'),
+      cli(
+        'job',
+        'create',
+        '--title',
+        'Spec only',
+        '--description',
+        'A job waiting for a spec',
+        '--repo',
+        repo,
+        '--json',
+      ),
     );
     const r = cli('recover', 'run', '--once', '--json');
     expect(r.code).toBe(0);
@@ -119,5 +129,11 @@ describe('freshRecord', () => {
     // No beat yet: the start time stands in for it.
     expect(freshRecord({ pid: 1, startedAt: at(0) }, nowMs, boot)).toBe(false);
     expect(freshRecord({ pid: 1, startedAt: at(110) }, nowMs, boot)).toBe(true);
+  });
+
+  it('rejects a record dated more than a minute in the future, tolerates small skew', () => {
+    expect(freshRecord({ pid: 1, startedAt: at(0), beatAt: at(122) }, nowMs, boot)).toBe(false);
+    expect(freshRecord({ pid: 1, startedAt: at(125) }, nowMs, boot)).toBe(false);
+    expect(freshRecord({ pid: 1, startedAt: at(0), beatAt: at(120.5) }, nowMs, boot)).toBe(true);
   });
 });

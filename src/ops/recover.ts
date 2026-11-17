@@ -276,14 +276,19 @@ export interface PidRecord {
  */
 export const HEARTBEAT_STALE_SECONDS = PROBE_BACKOFF_MAX_SECONDS + 600;
 
+/** Clock skew tolerated before a future-dated record (clock set back) is treated as stale. */
+const FUTURE_SKEW_MS = 60_000;
+
 /**
  * Whether a PID record can still describe a running worker: written since the last boot and
- * beaten recently. Otherwise its PID may have been reused by an unrelated process.
+ * beaten recently, and not dated in the future. Otherwise its PID may have been reused.
  */
 export function freshRecord(rec: PidRecord, nowMs: number, bootMs: number): boolean {
   const started = Date.parse(rec.startedAt);
   const beat = Date.parse(rec.beatAt ?? rec.startedAt);
   if (Number.isNaN(started) || Number.isNaN(beat)) return false;
+  const future = nowMs + FUTURE_SKEW_MS;
+  if (started > future || beat > future) return false;
   return started >= bootMs && nowMs - beat <= HEARTBEAT_STALE_SECONDS * 1000;
 }
 

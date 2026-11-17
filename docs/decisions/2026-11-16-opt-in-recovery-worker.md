@@ -43,4 +43,7 @@ the heartbeat is older than the longest sleep between passes plus ten minutes
 proceeds, and `stop` only removes the file, never signalling its PID. A worker that finds another
 worker's PID in the file after a pass (it slept past the heartbeat limit and was replaced) exits.
 `run --once` takes no PID file but refuses while a live worker runs, so two `orch-recovery`
-episodes never interleave.
+episodes never interleave. A record dated more than a minute in the future (clock set back) is
+stale too. Known limit: a worker that dies without removing its PID file leaves a window, until its
+heartbeat goes stale and with no reboot in between, in which an unrelated process reusing that PID
+is reported as the worker (`stop` would then signal it).
