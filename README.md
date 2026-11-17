@@ -171,6 +171,36 @@ completes it. It never forces a live lease, never launches or messages a Claude 
 reports jobs stalled in an agent stage as needing a session, with the resume command
 ([docs/workflow.md](docs/workflow.md#recovery-worker)).
 
+## Email reports
+
+Optional. Put SMTP settings in `<config>/mail.env` (see [Where things live](#where-things-live));
+an environment variable of the same name overrides each line:
+
+```sh
+MAIL_SMTP_HOST=smtp.example.com
+MAIL_SMTP_PORT=465            # implicit TLS (SMTPS) only; default 465
+MAIL_USER=bot@example.com
+MAIL_PASSWORD=app-password
+MAIL_FROM=bot@example.com     # default MAIL_USER
+MAIL_TO=you@example.com       # the only recipient
+MAIL_SUBJECT_PREFIX=[orch]    # default [orch]
+```
+
+The file holds a password in plain text: keep it out of every repository and readable only by
+you. With it set, every `orch` command that changes a job's state (and each dashboard action and
+recovery pass) sends one mail summarising those changes: the job's stage, status, PR, each event
+with its reason, and `orch factory status <id>`. Reported events are job creation, stage start,
+completion, and failure, blocking, resume, rework, cancellation, completion, interruption, and
+failed recovery attempts; CI polls, pushes, and verification runs are not mailed. All mails of a
+job share one subject (`[orch] <id>: <title>`) and reply to the previous one, so a mail client
+shows them as one conversation. `orch mail report "<subject>" --text-file <file> [--reply-to <id>]`
+sends any text the same way and prints `SENT <message-id>`.
+
+Limits: one recipient, plain text, implicit TLS only (no STARTTLS/587, so not providers that
+require it), no replies read. A mail is sent at most once: a failed send is recorded on the job as
+a `mail.failed` event, warned about on stderr, and never retried, and it never fails or undoes the
+command. Unset, nothing is sent and nothing changes.
+
 ## What `orch` automates and enforces
 
 - Job state, leases, tokens, and the audit log; one owner per job; stale commands fail with exit 4.

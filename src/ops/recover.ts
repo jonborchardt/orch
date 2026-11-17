@@ -40,6 +40,7 @@ import { launchFor } from './dispatch.ts';
 import { resumeFactoryJob } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
 import { reconcileCi } from './github.ts';
+import { mailWatermark, reportJobMail } from './mail.ts';
 import { alive, sleep } from './verify-lock.ts';
 
 /** Seconds between passes after a successful probe, at least. */
@@ -231,6 +232,7 @@ export async function runWorker(
   let backoff: number | null = null;
   for (;;) {
     let pass: RecoveryPass;
+    const mark = mailWatermark(store);
     try {
       pass = recoverPass(store);
     } catch (err) {
@@ -242,6 +244,7 @@ export async function runWorker(
         nextSeconds: null,
       };
     }
+    await reportJobMail(store, mark);
     const next = nextDelay(pass, backoff);
     backoff = next.backoff;
     if (!opts.once) pass.nextSeconds = next.seconds;
