@@ -12,9 +12,10 @@ import { GH_HELP, runGh } from './gh.ts';
 import { formatInit, INIT_HELP, runInit } from './init.ts';
 import { formatInstall, runInstall } from './install.ts';
 import { JOB_HELP, runJob } from './job.ts';
-import { formatFactoryList, print, printError } from './output.ts';
+import { formatFactoryList, formatPlan, print, printError } from './output.ts';
 import type { HookOutcome } from '../ops/checkout.ts';
 import type { FactoryRow } from '../ops/dispatch.ts';
+import type { Plan } from '../ops/factory.ts';
 import { runUi, UI_HELP } from './ui.ts';
 import { runVerify, VERIFY_HELP } from './verify.ts';
 import { runWorktree, WORKTREE_HELP } from './worktree.ts';
@@ -172,10 +173,15 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       case 'factory': {
         const result = withStore((store) => runFactory(store, rest, o));
+        const sub = rest[0];
         print(
-          json || rest[0] !== 'list'
+          json
             ? result
-            : formatFactoryList(result as FactoryRow[], new Date()),
+            : sub === 'list'
+              ? formatFactoryList(result as FactoryRow[], new Date())
+              : sub === 'next' || sub === 'status'
+                ? formatPlan(result as Plan)
+                : result,
           json,
         );
         return 0;
