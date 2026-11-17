@@ -22,11 +22,13 @@ export interface LockOptions {
 /** An unreadable lock this old was left by a holder that died while writing it. */
 const UNPARSEABLE_GRACE_MS = 10_000;
 
-function sleep(ms: number): void {
+/** Block this thread for `ms` milliseconds (the CLI is one-shot; nothing else needs the loop). */
+export function sleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function alive(pid: number): boolean {
+/** Whether a process with this PID is running (EPERM: it exists under another user). */
+export function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

@@ -67,8 +67,11 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   storage. `web/` is the React + MUI client with its own `tsconfig.json`; it imports only
   `src/server/types.ts` and `src/ops/actions.ts` types from `src/`.
 - The CLI is one-shot: open the store, do one operation, print, exit. No daemons, timers, or
-  background work. The single exception is `orch ui`, which serves the dashboard until interrupted
-  and is never required for jobs to run.
+  background work. There are two exceptions, both opt-in and never required for jobs to run:
+  `orch ui`, which serves the dashboard until interrupted, and the recovery worker
+  (`orch recover run`, or `orch recover start` to detach it), which repeats one-shot passes that
+  continue only `ci`-stage jobs no live session owns. It never launches or messages a Claude
+  session (decision 2026-11-16-opt-in-recovery-worker).
 
 ## Schema changes
 

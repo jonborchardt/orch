@@ -151,6 +151,34 @@ verdict for the current head is passing; `completed` therefore means "PR with pa
 checks, which orch marked ready for review" (or reported why it could not), never "PR created".
 A human close-out (`resume --to completed`, the dashboard's Accept delivery) does not mark it ready.
 
+## Recovery worker
+
+Opt-in, never required (decision 2026-11-16-opt-in-recovery-worker). `orch recover run` repeats
+passes in the foreground; `orch recover start` launches it detached and records its PID in
+`<data>/recovery.pid`; `stop` ends it; `status` reports whether it runs and the last pass
+(`<data>/recovery-status.json`). Each pass appends one line to `<logs>/recovery.log`.
+
+A pass first probes GitHub (`gh api rate_limit`). While the probe fails it changes nothing and the
+next pass backs off from 30 s, doubling, to 10 min. Otherwise every unfinished job is classified
+(`src/core/recovery.ts`):
+
+| Class           | When                                                                                              | The pass                                  |
+| --------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `human`         | `needs-human`, blocked, failed, cancelled, completed, archived, superseded                        | nothing                                   |
+| `active`        | another session holds a live lease                                                                | nothing (never `--force`)                 |
+| `exhausted`     | 5 consecutive `recovery.failed` for the current CI head                                           | nothing; reported with the resume command |
+| `recoverable`   | `ci` stage, PR recorded, no live lease (none, released, lapsed), pending, interrupted, or running | one episode as `orch-recovery`            |
+| `needs-session` | any other stage (`spec` to `pr`, or `ci` without a PR) with no live owner                         | nothing; reported with the resume command |
+
+The episode: `orch factory resume` (claim, rotate the token, interrupted work back to pending,
+worktree kept), `start` unless the job is still running, one `orch gh ci`, then release unless
+that call finished the job. It logs `recovery.attempted`; an error logs `recovery.failed` with the
+reason and releases, so the next pass or a human can pick the job up. The fifth consecutive failure
+for the same head escalates to `needs-human` with `recovery retries exhausted: <last error>`. A
+claim by any other session resets the count. After a successful probe the next pass waits the
+smallest CI `waitSeconds`, at least 60 s. The worker never launches, resumes, or messages a Claude
+session and never removes a worktree.
+
 ## Worktrees
 
 Each job gets one isolated Git worktree and branch, created from the job's base branch:

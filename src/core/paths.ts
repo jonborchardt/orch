@@ -106,6 +106,19 @@ export function verifyLockPath(paths: RuntimePaths = runtimePaths()): string {
   return join(paths.data, 'verify.lock');
 }
 
+/** The opt-in recovery worker's PID file, last-pass status, and log (`orch recover`). */
+export function recoveryPaths(paths: RuntimePaths = runtimePaths()): {
+  pid: string;
+  status: string;
+  log: string;
+} {
+  return {
+    pid: join(paths.data, 'recovery.pid'),
+    status: join(paths.data, 'recovery-status.json'),
+    log: join(paths.logs, 'recovery.log'),
+  };
+}
+
 /** Per-job artifact directory (spec.md, build.md, round-N/...). Distinct from any worktree. */
 export function jobArtifactDir(jobId: string, paths: RuntimePaths = runtimePaths()): string {
   return join(paths.data, 'jobs', jobId, 'artifacts');
