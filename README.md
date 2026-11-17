@@ -26,7 +26,8 @@ daemon, no scheduler, no service.
   draft PR ready for review only once `orch gh ci` reads passing required checks for the PR head,
   and parks on a human decision when it cannot proceed honestly. A human merges on GitHub, or by
   clicking Merge in the dashboard (`orch ui`), which merges exactly the verified head; Refresh PR
-  records a merge done on GitHub.
+  records a merge done on GitHub. Nothing removes a job's worktree on its own: once the PR is
+  merged, the dashboard offers Remove worktree (or run `orch worktree remove`); the branch is kept.
 - **Resumable from persisted state.** Jobs recover from the database, the artifact directory, and
   Git; never from a surviving conversation.
 - **Local-first.** One developer, one machine, Windows first, cross-platform by default; the only

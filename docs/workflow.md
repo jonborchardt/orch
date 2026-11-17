@@ -158,7 +158,7 @@ orch worktree create <id>            # <data>/worktrees/<repo slug>/<id>, branch
 orch worktree show <id>              # branch, HEAD, dirty files, commits and changed files vs base
 orch worktree adopt <id> --path <d>  # record an existing worktree of the same repository instead
 orch worktree integrate <id>         # merge origin/<base> (or local base) into the job branch
-orch worktree remove <id>            # delete the directory; refused while dirty; branch is kept
+orch worktree remove <id> [--repo <clone>]  # delete the directory; refused while dirty; branch kept
 ```
 
 - Worktrees live under the runtime data directory, never inside a project checkout, and many

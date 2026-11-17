@@ -34,6 +34,7 @@ import { authorizePolicy } from '../storage/verification.ts';
 import { ghCwd } from './github.ts';
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
+import { dropWorktree } from './worktree.ts';
 
 export const DASHBOARD_ACTIONS = [
   'approve',
@@ -46,6 +47,7 @@ export const DASHBOARD_ACTIONS = [
   'unarchive',
   'merge',
   'refresh-pr',
+  'remove-worktree',
 ] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 export const DASHBOARD_SESSION = 'dashboard';
@@ -82,6 +84,7 @@ export function allowedActions(
     | 'ciStatus'
     | 'prState'
     | 'archivedAt'
+    | 'worktreePath'
   >,
   policyDrift: boolean,
   completion: Completion = null,
@@ -89,9 +92,10 @@ export function allowedActions(
   const pr: DashboardAction[] = [];
   if (cannotMerge(job, completion) === null) pr.push('merge');
   if (cannotRefreshPr(job) === null) pr.push('refresh-pr');
-  // A finished job can only be hidden from (or brought back to) the board's default views, and
-  // have its PR merged or re-read.
+  // A finished job can only be hidden from (or brought back to) the board's default views, have
+  // its PR merged or re-read, and, once that PR is merged, have its worktree removed.
   if (TERMINAL_STATUSES.includes(job.status)) {
+    if (cannotRemoveWorktree(job) === null) pr.push('remove-worktree');
     return [...pr, job.archivedAt === null ? 'archive' : 'unarchive'];
   }
   const out: DashboardAction[] = [...pr];
@@ -103,6 +107,16 @@ export function allowedActions(
   if (cannotAcceptDelivery(job) === null) out.push('accept-delivery');
   out.push('cancel');
   return out;
+}
+
+/** Why the dashboard will not remove the job's worktree, or null: only after its PR merged. */
+function cannotRemoveWorktree(
+  job: Pick<Job, 'status' | 'prState' | 'worktreePath'>,
+): string | null {
+  if (!TERMINAL_STATUSES.includes(job.status)) return `the job is still ${job.status}`;
+  if (job.worktreePath === null) return 'the job has no worktree';
+  if (job.prState !== 'merged') return `the PR is ${job.prState ?? 'not recorded'}, not merged`;
+  return null;
 }
 
 export interface ActionResult {
@@ -290,6 +304,19 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   const before = getJob(store.db, id);
   if (input.action === 'merge' || input.action === 'refresh-pr') {
     return prAction(store, before, input);
+  }
+  if (input.action === 'remove-worktree') {
+    const refused = cannotRemoveWorktree(before);
+    if (refused) throw new ValidationError(`Cannot remove the worktree: ${refused}.`);
+    const path = before.worktreePath ?? '';
+    // dropWorktree refuses uncommitted changes and keeps the branch.
+    withLease(store, before, DASHBOARD_SESSION, input.force, (token) =>
+      dropWorktree(store, id, { token }),
+    );
+    return {
+      job: withoutToken(getJob(store.db, id)),
+      message: `Removed the worktree ${path}. The branch ${before.branch ?? ''} is kept.`,
+    };
   }
   if (input.action === 'archive' || input.action === 'unarchive') {
     const archive = input.action === 'archive';
