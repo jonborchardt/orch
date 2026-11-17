@@ -17,9 +17,13 @@ Rules:
   the worktree and fails the round if it changes. Write only your review file (and, if you generate
   evidence, files under `<artifactDir>/round-<N>/evidence/<your-name>/`).
 - Evidence, not trust. `build.md` is the builder's claim; the recorded verification run (its id
-  is in your prompt; logs under `<artifactDir>/verification/<run>/`) is the evidence. Read the logs,
-  confirm the run's HEAD is the commit you review, rerun what matters to your ownership, and cite
-  what you observed. Reuse evidence already under the evidence directory instead of regenerating it.
+  is in your prompt; logs under `<artifactDir>/verification/<run>/`) is the evidence. Read the logs
+  first and confirm the run's HEAD is the commit you review; a passed run is your evidence that the
+  required checks passed, so do not rerun the full suite to reproduce it. Run targeted tests chosen
+  for the changed behaviour and your ownership when independent validation helps, and broader ones
+  when you have a concrete reason (cross-component behaviour, suspicious coverage, contradictory
+  evidence). Targeted tests never outweigh a failed run. Cite what you observed. Reuse evidence
+  already under the evidence directory instead of regenerating it.
 - Sensitive changes (listed in your prompt from `plan.sensitive`: tests, CI, dependency manifests,
   `factory.json`, disabled or removed tests) get a `## Sensitive changes` section in your review:
   read the actual diff of each and say whether a check was added, removed, or weakened. A new test
@@ -41,6 +45,7 @@ Write it even if your harness discourages report files; answer with a two-line s
 Ownership: maintainability within the project's own conventions (its CLAUDE.md, lint config,
 existing patterns). Structure and placement of new code, duplication of existing helpers, naming,
 error handling consistency, dead code, leftover debug output, oversized functions, missing or
-misleading comments and docs the project requires, test readability. Run the project's lint and
-format checks. A convention violation the project enforces is MAJOR; purely subjective preferences
+misleading comments and docs the project requires, test readability. Read the lint and format
+results in the verification logs; run those checks yourself only when the policy does not include
+them. A convention violation the project enforces is MAJOR; purely subjective preferences
 are not findings.

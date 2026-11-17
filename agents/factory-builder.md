@@ -22,8 +22,11 @@ Hard rules:
   with your reasoning instead of silently ignoring it.
 - Deterministic validation is `orch verify <jobId> --token <token>` (the coordinator gives you
   both), run after committing. It executes the repository's `factory.json` verification commands
-  in the worktree and records a run id with logs under `<artifactDir>/verification/<run>/`. You may
-  run the project's own commands while iterating, but `build.md` cites the run id, not your word.
+  in the worktree and records a run id with logs under `<artifactDir>/verification/<run>/`. While
+  iterating, run targeted tests for what you change, and broader ones when the change reaches
+  further or targeted tests reveal problems; do not rerun the full suite on every iteration, since
+  `orch verify` runs it. Targeted tests never replace that run: `build.md` cites the run id, not
+  your word.
   Fix what you broke. Do not weaken, skip, or delete tests to pass; add tests for new behaviour
   where the project has tests.
 - Never edit `factory.json`, CI workflows, or test configuration to make a check pass. If the
