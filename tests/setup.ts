@@ -11,6 +11,9 @@ import { cleanupTempDirs, tempDir } from './helpers.ts';
 process.env['ORCH_HOME'] = tempDir('orch-test-home-');
 delete process.env['ORCH_TOKEN'];
 delete process.env['ORCH_SESSION'];
+// Never send real mail: a test that wants mail configures the fake server itself.
+for (const key of Object.keys(process.env))
+  if (key.startsWith('MAIL_')) Reflect.deleteProperty(process.env, key);
 
 afterAll(() => {
   cleanupTempDirs();

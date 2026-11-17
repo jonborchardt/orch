@@ -67,6 +67,14 @@ export const jobs = sqliteTable(
     supersededBy: text().references((): AnySQLiteColumn => jobs.id),
     /** When a human archived this finished job (dashboard); null when it is not archived. */
     archivedAt: text(),
+    /**
+     * Status mail (ops/mail.ts): the last event id a report was claimed for, the thread's first
+     * and latest Message-IDs, and its subject. Metadata, not workflow state: never bumps revision.
+     */
+    mailCursor: integer(),
+    mailThreadId: text(),
+    mailSubject: text(),
+    mailLastId: text(),
     /** Incremented on every mutation; optimistic concurrency check for callers. */
     revision: integer().notNull().default(1),
     createdAt: text().notNull(),

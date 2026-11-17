@@ -6,7 +6,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 
 import { assertStageOwns } from '../core/artifact-rules.ts';
 import { NotFoundError, OwnershipError, UsageError, ValidationError } from '../core/errors.ts';
@@ -776,6 +776,74 @@ export function attachSession(
         input.actor ?? job.ownerSession,
       );
       return { job: updated, changed: true };
+    },
+    { behavior: 'immediate' },
+  );
+}
+
+/**
+ * Claim one status-mail batch: move `mailCursor` from `expected` to `to` only if it still holds
+ * `expected`. True when this process won and may send. Mail state is metadata, like a session
+ * attachment: no owner check, no revision, updatedAt, or lease change.
+ */
+export function claimMailCursor(
+  store: Store,
+  id: string,
+  expected: number | null,
+  to: number,
+): boolean {
+  return store.db.transaction(
+    (tx) => {
+      const won = tx
+        .update(jobs)
+        .set({ mailCursor: to })
+        .where(
+          and(
+            eq(jobs.id, id),
+            expected === null ? isNull(jobs.mailCursor) : eq(jobs.mailCursor, expected),
+          ),
+        )
+        .returning({ id: jobs.id })
+        .get();
+      return won !== undefined;
+    },
+    { behavior: 'immediate' },
+  );
+}
+
+export type MailOutcome =
+  | { sent: true; messageId: string; subject: string; inReplyTo: string | null }
+  | { sent: false; error: string };
+
+/**
+ * Record a claimed batch's outcome: thread ids and subject on success, plus a `mail.sent` or
+ * `mail.failed` event. Metadata like `claimMailCursor`: no owner check, revision, or lease change.
+ */
+export function recordMailOutcome(store: Store, id: string, outcome: MailOutcome): void {
+  store.db.transaction(
+    (tx) => {
+      const ts = now();
+      const job = getJob(tx, id);
+      if (outcome.sent) {
+        tx.update(jobs)
+          .set({
+            mailThreadId: job.mailThreadId ?? outcome.messageId,
+            mailLastId: outcome.messageId,
+            mailSubject: outcome.subject,
+          })
+          .where(eq(jobs.id, id))
+          .run();
+        appendEvent(
+          tx,
+          id,
+          'mail.sent',
+          { messageId: outcome.messageId, inReplyTo: outcome.inReplyTo },
+          null,
+          ts,
+        );
+      } else {
+        appendEvent(tx, id, 'mail.failed', { error: outcome.error }, null, ts);
+      }
     },
     { behavior: 'immediate' },
   );

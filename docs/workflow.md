@@ -196,6 +196,35 @@ claim by any other session resets the count. After a successful probe the next p
 smallest CI `waitSeconds`, at least 60 s. The worker never launches, resumes, or messages a Claude
 session and never removes a worktree.
 
+## Status mail
+
+Optional (decision 2026-11-17-mail-reports-built-in-smtp-client; settings in the README's "Email
+reports"). `src/integrations/mail.ts` is the generic sender: config from `<config>/mail.env` and
+`MAIL_*`, and a `node:tls` SMTP client (implicit TLS, AUTH PLAIN or LOGIN, one base64 UTF-8 text
+part, no retry). `orch mail report` exposes it without opening the database.
+
+Job reporting lives in `src/ops/mail.ts`. The CLI (`job`, `factory`, `worktree`, `gh`, `verify`),
+the dashboard action route, and each recovery-worker pass take a watermark (the highest event id)
+before the operation and call `reportJobMail` after it, also when it threw. For every job with
+`REPORTED_EVENTS` (`src/core/mail-report.ts`) after `max(job.mailCursor, watermark)`:
+
+1. claim: one immediate transaction moves `jobs.mailCursor` to the batch's last event id only if
+   it still holds the value read, so concurrent processes send a batch at most once;
+2. compose: subject `<prefix> <id>: <title>` (kept in `mailSubject` from the first send) and a body
+   with the job's current stage, status, PR, each event with its `reason`, and the status command;
+3. send, as a reply to `mailLastId` with `References: <mailThreadId> <mailLastId>` once a thread
+   exists;
+4. record `mail.sent` (`messageId`, `inReplyTo`) and the thread ids, or `mail.failed` (`error`,
+   never credentials).
+
+Mail columns and events are metadata: no owner check, and `revision`, `updatedAt`, and the lease
+are untouched, so an owner's `--revision` guard never sees them. A failure is never retried (the
+claim already moved the cursor) and never changes the command's output or exit code; text mode
+adds one stderr line `orch: mail report for <id> failed: <message>`. Without configuration the hook
+only reads the watermark. Events written outside these hooks are not caught up later: the next
+report starts after its own watermark. A job created before mail was configured starts its thread
+at its first reported change afterwards.
+
 ## Worktrees
 
 Each job gets one isolated Git worktree and branch, created from the job's base branch:

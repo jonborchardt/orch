@@ -123,7 +123,9 @@ For each target, in order, continuing with the next target when one fails:
    refusal reason for targets that failed.
 
 Afterwards, `orch factory list --json` shows every job and the resume command for jobs no live
-session holds. A child that stopped is resumed from any session with `/factory <id>`.
+session holds. A child that stopped is resumed from any session with `/factory <id>`; when it has
+clearly died (step 3), the relaunch prompt tells the new session to resume with `--force` and
+states the evidence.
 
 ## 3. The loop
 
@@ -135,9 +137,14 @@ orch factory next <job-id> --json
 
 Read `plan.reason`, then act on `plan.step`:
 
-- `resume`: `orch factory resume <id> --session <s> --json` (adds `--force` only if the user
-  explicitly said to take over a live session). Every claim or resume issues a new token; use the
-  new `token` from now on.
+- `resume`: `orch factory resume <id> --session <s> --json`. Every claim or resume issues a new
+  token; use the new `token` from now on. The unforced resume is the default. Add `--force` only
+  when the user explicitly said to take over a live session, or when the owning session has
+  clearly died and you saw the evidence: its process, background task, or `create_session` child
+  exited; its run was stopped or killed; or its log shows the API or network was lost (for example
+  `ENOTFOUND`). Guessing is not evidence, and a quiet session or a slow response is not either. If
+  the owner might still be alive, do not force: report the holder and lease expiry (the exit-4
+  message or `plan.owner`), then wait for the lease to lapse or stop with the resume command.
 - A session dispatched into a linked worktree (`git rev-parse --git-common-dir` is not
   `<toplevel>/.git`) resumes a job with no worktree yet (`job.worktreePath` is null) with
   `--adopt <toplevel>`. A worktree the job already has is never replaced.
@@ -245,7 +252,7 @@ End with: job id, stage reached, worktree and branch, review rounds and verdicts
 findings left (should be none unless escalated), CI repair cycles used, PR URL and CI status
 (`pending`/`passing`/`failing`/`none` as `orch` recorded it for the PR head, never "green" unless
 `orch gh ci` said `passing` for the current head; report its `ready` field), and the resume
-command. Say "delivered" only when the job is `completed`; a draft PR is not passing CI and a
+command. If you used `--force`, name the evidence that the previous session had died. Say "delivered" only when the job is `completed`; a draft PR is not passing CI and a
 mocked check is not a real one. Distinguish what was verified by commands from what an agent
 reported.
 

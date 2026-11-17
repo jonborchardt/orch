@@ -160,7 +160,7 @@ orch ui                               # dashboard at http://127.0.0.1:4777/ (opt
 
 A job whose session stopped keeps its state. `/factory <id>` in any session resumes it: it takes
 over the lapsed lease (a live one needs `--force`, which rotates the token so the old session's
-commands fail), recreates the worktree if it is gone, re-verifies every registered artifact, and
+commands fail, and the skill forces only when the previous session has clearly died), recreates the worktree if it is gone, re-verifies every registered artifact, and
 continues from the plan. A job in `needs-human` waits: the dashboard offers the decisions the
 workflow allows (resume at a stage, request review or rework, accept a proposed policy,
 accept a delivery that GitHub reported no checks for, cancel), each recorded with a reason, and
@@ -172,6 +172,36 @@ and no live owner is resumed as session `orch-recovery` once GitHub answers agai
 completes it. It never forces a live lease, never launches or messages a Claude session, and
 reports jobs stalled in an agent stage as needing a session, with the resume command
 ([docs/workflow.md](docs/workflow.md#recovery-worker)).
+
+## Email reports
+
+Optional. Put SMTP settings in `<config>/mail.env` (see [Where things live](#where-things-live));
+an environment variable of the same name overrides each line:
+
+```sh
+MAIL_SMTP_HOST=smtp.example.com
+MAIL_SMTP_PORT=465            # implicit TLS (SMTPS) only; default 465
+MAIL_USER=bot@example.com
+MAIL_PASSWORD=app-password
+MAIL_FROM=bot@example.com     # default MAIL_USER
+MAIL_TO=you@example.com       # the only recipient
+MAIL_SUBJECT_PREFIX=[orch]    # default [orch]
+```
+
+The file holds a password in plain text: keep it out of every repository and readable only by
+you. With it set, every `orch` command that changes a job's state (and each dashboard action and
+recovery pass) sends one mail summarising those changes: the job's stage, status, PR, each event
+with its reason, and `orch factory status <id>`. Reported events are job creation, stage start,
+completion, and failure, blocking, resume, rework, cancellation, completion, interruption, and
+failed recovery attempts; CI polls, pushes, and verification runs are not mailed. All mails of a
+job share one subject (`[orch] <id>: <title>`) and reply to the previous one, so a mail client
+shows them as one conversation. `orch mail report "<subject>" (--text "<body>" | --text-file <file>) [--reply-to <id>]`
+sends any text the same way and prints `SENT <message-id>`.
+
+Limits: one recipient, plain text, implicit TLS only (no STARTTLS/587, so not providers that
+require it), no replies read. A mail is sent at most once: a failed send is recorded on the job as
+a `mail.failed` event, warned about on stderr, and never retried, and it never fails or undoes the
+command. Unset, nothing is sent and nothing changes.
 
 ## What `orch` automates and enforces
 

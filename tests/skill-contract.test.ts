@@ -108,6 +108,7 @@ describe('skill', () => {
     }
     expect(body).not.toMatch(/sqlite3|INSERT INTO|UPDATE jobs/);
     expect(body).toContain('--force');
+    expect(body).toContain('clearly died');
     expect(body.toLowerCase()).toContain('cannot restart');
   });
 

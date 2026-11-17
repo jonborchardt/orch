@@ -182,6 +182,9 @@ function cliEnv(home: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // Never inherit a real session's credentials into tests.
   delete base['ORCH_TOKEN'];
   delete base['ORCH_SESSION'];
+  // Nor its mail settings: only a test's own MAIL_* (pointing at the fake server) reach the CLI.
+  for (const key of Object.keys(base))
+    if (key.startsWith('MAIL_')) Reflect.deleteProperty(base, key);
   return { ...base, ...env };
 }
 
