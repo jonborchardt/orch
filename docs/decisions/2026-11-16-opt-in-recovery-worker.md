@@ -33,4 +33,14 @@ by default). A ci job released on purpose is also treated as recoverable; releas
 means "resume later".
 
 **Limits.** Only the `ci` stage is continued automatically. No service registration or start at
-login. A reused PID makes a dead worker look alive; delete the PID file by hand.
+login.
+
+**Why the PID file carries a heartbeat.** A PID can be reused after a reboot, crash, or sleep, so a
+live process holding the recorded PID is not proof of a worker. The file records `startedAt` and,
+after every pass, `beatAt`. It is stale when `startedAt` predates the last boot (`os.uptime()`) or
+the heartbeat is older than the longest sleep between passes plus ten minutes
+(`HEARTBEAT_STALE_SECONDS`). A stale file is never trusted: `status` reports no worker, `start`
+proceeds, and `stop` only removes the file, never signalling its PID. A worker that finds another
+worker's PID in the file after a pass (it slept past the heartbeat limit and was replaced) exits.
+`run --once` takes no PID file but refuses while a live worker runs, so two `orch-recovery`
+episodes never interleave.

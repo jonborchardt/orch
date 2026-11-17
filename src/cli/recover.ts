@@ -1,7 +1,14 @@
 /** `orch recover ...`: the opt-in recovery worker (decision 2026-11-16-opt-in-recovery-worker). */
 import { UsageError } from '../core/errors.ts';
 import { runtimePaths } from '../core/paths.ts';
-import { holdPidFile, runWorker, startWorker, stopWorker, workerStatus } from '../ops/recover.ts';
+import {
+  holdPidFile,
+  refuseIfRunning,
+  runWorker,
+  startWorker,
+  stopWorker,
+  workerStatus,
+} from '../ops/recover.ts';
 import { openStore } from '../storage/client.ts';
 
 export const RECOVER_HELP = `Usage: orch recover start|stop|status|run [--once]
@@ -38,8 +45,10 @@ export async function runRecover(
     case 'status':
       return workerStatus(paths);
     case 'run': {
+      // `--once` never takes the PID file, but must not act alongside a live worker either.
+      if (o.once) refuseIfRunning(paths);
+      const hold = o.once ? undefined : holdPidFile(paths);
       const store = openStore();
-      const release = o.once ? () => undefined : holdPidFile(paths);
       const stop = new AbortController();
       const abort = () => {
         stop.abort();
@@ -47,11 +56,11 @@ export async function runRecover(
       process.on('SIGINT', abort);
       process.on('SIGTERM', abort);
       try {
-        return await runWorker(store, { once: o.once, signal: stop.signal });
+        return await runWorker(store, { once: o.once, signal: stop.signal, beat: hold?.beat });
       } finally {
         process.off('SIGINT', abort);
         process.off('SIGTERM', abort);
-        release();
+        hold?.release();
         store.close();
       }
     }

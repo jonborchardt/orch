@@ -7,6 +7,7 @@
  */
 import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { uptime } from 'node:os';
 import { dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -39,7 +40,7 @@ import { launchFor } from './dispatch.ts';
 import { resumeFactoryJob } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
 import { reconcileCi } from './github.ts';
-import { alive } from './verify-lock.ts';
+import { alive, sleep } from './verify-lock.ts';
 
 /** Seconds between passes after a successful probe, at least. */
 export const PASS_FLOOR_SECONDS = 60;
@@ -216,10 +217,16 @@ function record(paths: RuntimePaths, pass: RecoveryPass): void {
 /**
  * Run passes until `signal` aborts (or once). Each pass writes the status file and one log line.
  * A pass that throws is logged as offline and retried with backoff, so the worker keeps going.
+ * `beat` runs after every pass; when it returns false (another worker took the PID file) the
+ * loop ends.
  */
 export async function runWorker(
   store: Store,
-  opts: { once?: boolean | undefined; signal?: AbortSignal | undefined } = {},
+  opts: {
+    once?: boolean | undefined;
+    signal?: AbortSignal | undefined;
+    beat?: (() => boolean) | undefined;
+  } = {},
 ): Promise<RecoveryPass> {
   let backoff: number | null = null;
   for (;;) {
@@ -239,6 +246,7 @@ export async function runWorker(
     backoff = next.backoff;
     if (!opts.once) pass.nextSeconds = next.seconds;
     record(store.paths, pass);
+    if (opts.beat && !opts.beat()) return pass;
     if (opts.once || opts.signal?.aborted) return pass;
     await delay(next.seconds * 1000, undefined, { signal: opts.signal }).catch(() => undefined);
     if (opts.signal?.aborted) return pass;
@@ -255,24 +263,57 @@ export interface WorkerStatus {
   last: RecoveryPass | null;
 }
 
-function readPid(file: string): number | null {
+/** What the PID file holds: who, since when, and when its last pass finished. */
+export interface PidRecord {
+  pid: number;
+  startedAt: string;
+  beatAt?: string | undefined;
+}
+
+/**
+ * A worker beats after every pass and sleeps at most PROBE_BACKOFF_MAX_SECONDS between passes;
+ * the margin covers a slow pass. A record older than this belongs to a worker that is gone.
+ */
+export const HEARTBEAT_STALE_SECONDS = PROBE_BACKOFF_MAX_SECONDS + 600;
+
+/**
+ * Whether a PID record can still describe a running worker: written since the last boot and
+ * beaten recently. Otherwise its PID may have been reused by an unrelated process.
+ */
+export function freshRecord(rec: PidRecord, nowMs: number, bootMs: number): boolean {
+  const started = Date.parse(rec.startedAt);
+  const beat = Date.parse(rec.beatAt ?? rec.startedAt);
+  if (Number.isNaN(started) || Number.isNaN(beat)) return false;
+  return started >= bootMs && nowMs - beat <= HEARTBEAT_STALE_SECONDS * 1000;
+}
+
+function readPid(file: string): PidRecord | null {
   try {
-    const pid = (JSON.parse(readFileSync(file, 'utf8')) as { pid?: unknown }).pid;
-    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : null;
+    const rec = JSON.parse(readFileSync(file, 'utf8')) as Partial<PidRecord>;
+    const { pid, startedAt, beatAt } = rec;
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return null;
+    if (typeof startedAt !== 'string') return null;
+    return { pid, startedAt, beatAt: typeof beatAt === 'string' ? beatAt : undefined };
   } catch {
     return null;
   }
 }
 
-function writePid(file: string, pid: number): void {
+function writePid(file: string, rec: PidRecord): void {
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify({ pid, startedAt: now() }));
+  writeFileSync(file, JSON.stringify(rec));
 }
 
-/** A live worker's PID, or null. A PID file whose process is gone is stale. */
+/**
+ * A live worker's PID, or null. A PID file whose process is gone, that predates the last boot,
+ * or whose heartbeat is older than HEARTBEAT_STALE_SECONDS is stale: its PID is never trusted.
+ */
 function livePid(paths: RuntimePaths): number | null {
-  const pid = readPid(recoveryPaths(paths).pid);
-  return pid !== null && alive(pid) ? pid : null;
+  const rec = readPid(recoveryPaths(paths).pid);
+  if (rec === null) return null;
+  const nowMs = Date.now();
+  const bootMs = nowMs - uptime() * 1000;
+  return freshRecord(rec, nowMs, bootMs) && alive(rec.pid) ? rec.pid : null;
 }
 
 export function workerStatus(paths: RuntimePaths): WorkerStatus {
@@ -287,7 +328,8 @@ export function workerStatus(paths: RuntimePaths): WorkerStatus {
   return { running: pid !== null, pid, files, last };
 }
 
-function refuseIfRunning(paths: RuntimePaths, self?: number): void {
+/** Refuse while a live worker other than `self` holds the PID file. */
+export function refuseIfRunning(paths: RuntimePaths, self?: number): void {
   const pid = livePid(paths);
   if (pid !== null && pid !== self) {
     throw new ValidationError(
@@ -297,49 +339,61 @@ function refuseIfRunning(paths: RuntimePaths, self?: number): void {
 }
 
 /**
- * Take the PID file for a foreground worker in this process; returns the release function,
- * which only removes the file while it is still ours.
+ * Take the PID file for a foreground worker in this process. `beat` refreshes the heartbeat and
+ * returns false once another worker holds the file; `release` removes it while it is still ours.
  */
-export function holdPidFile(paths: RuntimePaths): () => void {
+export function holdPidFile(paths: RuntimePaths): { beat: () => boolean; release: () => void } {
   const file = recoveryPaths(paths).pid;
   refuseIfRunning(paths, process.pid);
-  writePid(file, process.pid);
-  return () => {
-    if (readPid(file) === process.pid) rmSync(file, { force: true });
+  const startedAt = now();
+  writePid(file, { pid: process.pid, startedAt });
+  const ours = () => readPid(file)?.pid === process.pid;
+  return {
+    beat: () => {
+      if (!ours()) return false;
+      writePid(file, { pid: process.pid, startedAt, beatAt: now() });
+      return true;
+    },
+    release: () => {
+      if (ours()) rmSync(file, { force: true });
+    },
   };
 }
 
 /**
- * Launch `node <entry> recover run` detached, with the same environment, and record its PID.
- * Refuses while a live worker exists.
+ * Launch `node <entry> recover run` detached, with the caller's environment minus its orch
+ * session and token, and record its PID. Refuses while a live worker exists.
  */
 export function startWorker(paths: RuntimePaths, entry: string): WorkerStatus {
+  if (!entry) throw new ToolError('Cannot locate the orch entry point to start the worker.');
   // ponytail: two `start`s racing between this check and writePid can both launch; the second
   // worker refuses itself when it reads a live PID that is not its own.
   refuseIfRunning(paths);
+  const env = { ...process.env };
+  delete env['ORCH_TOKEN'];
+  delete env['ORCH_SESSION'];
   const child = spawn(process.execPath, [entry, 'recover', 'run'], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
-    env: process.env,
+    env,
   });
   if (child.pid === undefined) throw new ToolError('Could not start the recovery worker.');
   child.unref();
-  writePid(recoveryPaths(paths).pid, child.pid);
+  writePid(recoveryPaths(paths).pid, { pid: child.pid, startedAt: now() });
   return workerStatus(paths);
 }
 
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/** Stop the worker if one is running and remove its PID file. */
+/**
+ * Stop the worker if one is running and remove its PID file. A stale PID file is only removed:
+ * its PID is never signalled.
+ */
 export function stopWorker(paths: RuntimePaths): { stopped: boolean; pid: number | null } {
   const file = recoveryPaths(paths).pid;
   const pid = livePid(paths);
   if (pid !== null) {
     process.kill(pid);
-    for (let i = 0; i < 100 && alive(pid); i++) sleepSync(100);
+    for (let i = 0; i < 100 && alive(pid); i++) sleep(100);
     if (alive(pid)) throw new ToolError(`Recovery worker PID ${String(pid)} did not stop.`);
   }
   rmSync(file, { force: true });

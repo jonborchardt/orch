@@ -1,7 +1,12 @@
 /** `orch recover` from the CLI: a temp ORCH_HOME, cwd outside the repo, gh through the shim. */
+import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
+import { alive } from '../src/ops/verify-lock.ts';
+import { freshRecord, HEARTBEAT_STALE_SECONDS } from '../src/ops/recover.ts';
 import { ghShim, json, makeRepo, orch, tempDir } from './helpers.ts';
 
 const shim = ghShim();
@@ -36,6 +41,9 @@ describe('orch recover', () => {
     const again = cli('recover', 'start');
     expect(again.code).toBe(1);
     expect(again.err).toContain('already running');
+    const once = cli('recover', 'run', '--once');
+    expect(once.code).toBe(1);
+    expect(once.err).toContain('already running');
 
     const stopped = cli('recover', 'stop', '--json');
     expect(stopped.code).toBe(0);
@@ -68,5 +76,48 @@ describe('orch recover', () => {
     const text = cli('recover', 'run', '--once');
     expect(text.code).toBe(0);
     expect(text.out).toContain('needs-session');
+  });
+
+  it('never signals the PID of a stale PID file', () => {
+    // An unrelated live process holds the PID a worker had before a reboot.
+    const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    try {
+      const pid = other.pid ?? 0;
+      writeFileSync(
+        join(home, 'recovery.pid'),
+        JSON.stringify({ pid, startedAt: '2000-01-01T00:00:00.000Z' }),
+      );
+      expect(json<Status>(cli('recover', 'status', '--json'))).toMatchObject({
+        running: false,
+        pid: null,
+      });
+      expect(json(cli('recover', 'stop', '--json'))).toEqual({ stopped: false, pid: null });
+      expect(alive(pid)).toBe(true);
+    } finally {
+      other.kill();
+    }
+  });
+});
+
+describe('freshRecord', () => {
+  const boot = Date.parse('2026-11-17T08:00:00.000Z');
+  const at = (min: number) => new Date(boot + min * 60_000).toISOString();
+  const nowMs = boot + 120 * 60_000;
+
+  it('rejects a record written before the last boot', () => {
+    expect(freshRecord({ pid: 1, startedAt: at(-1), beatAt: at(119) }, nowMs, boot)).toBe(false);
+  });
+
+  it('rejects a heartbeat older than the stale limit, accepts a recent one', () => {
+    const limitMin = HEARTBEAT_STALE_SECONDS / 60;
+    expect(freshRecord({ pid: 1, startedAt: at(0), beatAt: at(119 - limitMin) }, nowMs, boot)).toBe(
+      false,
+    );
+    expect(freshRecord({ pid: 1, startedAt: at(0), beatAt: at(119) }, nowMs, boot)).toBe(true);
+    // No beat yet: the start time stands in for it.
+    expect(freshRecord({ pid: 1, startedAt: at(0) }, nowMs, boot)).toBe(false);
+    expect(freshRecord({ pid: 1, startedAt: at(110) }, nowMs, boot)).toBe(true);
   });
 });
