@@ -1577,6 +1577,64 @@ describe('Job detail: reviews', () => {
       expect(header).not.toHaveAttribute('aria-controls');
     });
   });
+
+  it('marks the round equal to job.round as current and keeps earlier rounds listed', async () => {
+    const review = {
+      jobId: 'job-00000003',
+      artifactId: 1,
+      head: 'abc',
+      summary: null,
+      createdAt: '2026-11-13T08:10:00.000Z',
+      completedAt: '2026-11-13T08:20:00.000Z',
+    };
+    const base = detail();
+    data.detail = detail({
+      job: { ...base.job, round: 2 },
+      rounds: [
+        {
+          round: 1,
+          reviews: [
+            {
+              ...review,
+              id: 1,
+              round: 1,
+              reviewer: 'correctness',
+              verdict: 'changes',
+              path: 'round-1/review-correctness.md',
+            },
+          ],
+          consolidated: null,
+          blocking: 2,
+        },
+        {
+          round: 2,
+          reviews: [
+            {
+              ...review,
+              id: 2,
+              round: 2,
+              reviewer: 'correctness',
+              verdict: 'pass',
+              path: 'round-2/review-correctness.md',
+            },
+          ],
+          consolidated: null,
+          blocking: null,
+        },
+      ],
+    });
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Reviews' }));
+    expect(screen.getByRole('heading', { name: /^Round 2 \(current\)/ })).toBeInTheDocument();
+    const old = screen.getByRole('heading', { name: /^Round 1/ });
+    expect(old).not.toHaveTextContent('current');
+    // History: round 1's CHANGES is still listed beside round 2's PASS.
+    expect(screen.getByRole('button', { name: /correctness.*changes/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /correctness.*pass/ })).toBeInTheDocument();
+  });
 });
 
 describe('PR phase, Merge, and Refresh PR', () => {

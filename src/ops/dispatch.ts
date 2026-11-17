@@ -115,9 +115,9 @@ export function dispatchJob(store: Store, input: DispatchInput): DispatchResult 
   }
   let title = input.title;
   let description = input.description;
-  if (!title && input.issue) {
+  if ((!title || description === undefined) && input.issue) {
     const found = ghIssue(input.issue, repo.root);
-    title = found.title;
+    if (!title) ({ title } = found); // also replaces an empty --title, as before
     description ??= `${found.url}\n\n${found.body}`;
   }
   if (!title) {

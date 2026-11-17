@@ -11,7 +11,13 @@ import { createJob, getJob } from '../src/storage/jobs.ts';
 import { jobs } from '../src/storage/schema.ts';
 import { homePaths, tempDir } from './helpers.ts';
 
-const input = (title = 'T') => ({ title, repo: 'r', repoPath: '/r', baseBranch: 'main' });
+const input = (title = 'T') => ({
+  title,
+  description: 'Test request',
+  repo: 'r',
+  repoPath: '/r',
+  baseBranch: 'main',
+});
 
 /** Run `fn` against a raw connection and always close it. */
 function raw<T>(file: string, fn: (db: DatabaseSync) => T): T {

@@ -53,7 +53,7 @@ export interface Ctx {
 export const SESSION = 'claude-20261113-1200-5b5b';
 
 export function start(store: Store, clone: string, title = 'Add CSV export'): Ctx {
-  const r = startJob(store, { title, session: SESSION, cwd: clone });
+  const r = startJob(store, { title, description: 'Test request', session: SESSION, cwd: clone });
   return { id: r.job.id, token: r.token, dir: r.plan.artifactDir, wt: r.job.worktreePath ?? '' };
 }
 

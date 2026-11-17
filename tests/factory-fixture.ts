@@ -56,7 +56,13 @@ export interface Ctx {
 
 /** `orch factory start` as the skill runs it. */
 export function start(title = 'Add CSV export', repoPath = clone, maxRounds?: number): Ctx {
-  const r = startJob(store, { title, session: SESSION, cwd: repoPath, maxRounds });
+  const r = startJob(store, {
+    title,
+    description: 'Test request',
+    session: SESSION,
+    cwd: repoPath,
+    maxRounds,
+  });
   return {
     id: r.job.id,
     token: r.token,

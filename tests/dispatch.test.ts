@@ -10,7 +10,7 @@ import { rmSync, writeFileSync } from 'node:fs';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { OwnershipError, ValidationError } from '../src/core/errors.ts';
+import { OwnershipError, UsageError, ValidationError } from '../src/core/errors.ts';
 import { canonicalPath } from '../src/core/paths.ts';
 import { SESSION_EVENT, sessionLinks, validateSessionRef } from '../src/core/session.ts';
 import { dispatchJob, listFactory, normalizeIssue } from '../src/ops/dispatch.ts';
@@ -84,7 +84,14 @@ function hostWorktree(repo: string, name: string): string {
 }
 
 const dispatch = (repo: string, over: Record<string, string> = {}) =>
-  dispatchJob(store, { repo, title: 'Beta feature', session: PARENT, cwd: alpha, ...over });
+  dispatchJob(store, {
+    repo,
+    title: 'Beta feature',
+    description: 'Test request',
+    session: PARENT,
+    cwd: alpha,
+    ...over,
+  });
 
 describe('dispatch prepares a job for another repository', () => {
   it('from repository A, creates an unowned job for repository B and touches neither', () => {
@@ -115,7 +122,12 @@ describe('dispatch prepares a job for another repository', () => {
   });
 
   it('targets the current directory when --repo is omitted', () => {
-    const r = dispatchJob(store, { title: 'Alpha feature', session: PARENT, cwd: alpha });
+    const r = dispatchJob(store, {
+      title: 'Alpha feature',
+      description: 'Test request',
+      session: PARENT,
+      cwd: alpha,
+    });
     expect(r.job.repo).toBe('github.com/acme/alpha');
     expect(r.job.repoPath).toBe(alpha);
   });
@@ -169,6 +181,32 @@ describe('dispatch prepares a job for another repository', () => {
     expect(r.job.title).toBe('Export CSV');
     expect(r.job.issueRef).toBe('#12');
     expect(r.job.description).toContain('https://github.com/acme/beta/issues/12');
+  });
+
+  it('with --title and --issue but no --description, the description still comes from the issue', () => {
+    shim.reset('acme/beta');
+    const d = dispatchJob(store, {
+      repo: beta,
+      title: 'Own title',
+      issue: '12',
+      session: PARENT,
+      cwd: alpha,
+    });
+    expect(d.job.title).toBe('Own title');
+    expect(d.job.description).toContain('https://github.com/acme/beta/issues/12');
+    const s = startJob(store, {
+      repo: beta,
+      title: 'Own start title',
+      issue: '#12',
+      session: 'child-s',
+      cwd: alpha,
+    });
+    expect(s.job.title).toBe('Own start title');
+    expect(s.job.description).toContain('https://github.com/acme/beta/issues/12');
+    // An explicit blank --description wins over the issue and is refused.
+    expect(() =>
+      startJob(store, { repo: beta, issue: '#12', description: ' ', session: 'c', cwd: alpha }),
+    ).toThrow(UsageError);
   });
 });
 
@@ -296,11 +334,17 @@ describe('a job created from a linked worktree belongs to the primary checkout',
 
   it('start does the same; an explicit base still wins', () => {
     const linked = hostWorktree(beta, 'y');
-    const s = startJob(store, { title: 'From a worktree', session: 'child-y', cwd: linked });
+    const s = startJob(store, {
+      title: 'From a worktree',
+      description: 'Test request',
+      session: 'child-y',
+      cwd: linked,
+    });
     expect(canonicalPath(s.job.repoPath)).toBe(canonicalPath(beta));
     expect(s.job.baseBranch).toBe('main');
     const t = startJob(store, {
       title: 'Explicit base',
+      description: 'Test request',
       session: 'child-z',
       cwd: alpha,
       repo: linked,
@@ -432,6 +476,8 @@ describe('CLI', () => {
       beta,
       '--title',
       'Beta via CLI',
+      '--description',
+      'Beta request',
       '--session',
       PARENT,
     ]);
@@ -444,6 +490,14 @@ describe('CLI', () => {
     expect(d.launch.prompt).toContain(`/factory ${d.job.id}`);
     expect(orch(home, alpha, ['factory', 'dispatch', '--session', PARENT]).code).toBe(2);
     expect(orch(home, alpha, ['factory', 'dispatch', '--title', 'x']).code).toBe(2);
+    // A job needs a description: none, or a blank one, is a usage error that creates nothing.
+    const bare = ['factory', 'dispatch', '--repo', beta, '--title', 't', '--session', PARENT];
+    for (const extra of [[], ['--description', ' ']]) {
+      const refused = orch(home, alpha, [...bare, ...extra]);
+      expect(refused.code, refused.err).toBe(2);
+      expect(refused.err).toContain('--description');
+    }
+    expect(listJobs(store.db).map((j) => j.id)).toEqual([d.job.id]);
     const list = json<{ id: string; resume: string | null }[]>(
       orch(home, tmpdir(), ['--json', 'factory', 'list']),
     );

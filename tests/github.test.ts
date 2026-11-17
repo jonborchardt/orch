@@ -63,6 +63,7 @@ function jobAt(stage: 'spec' | 'pr') {
   const repo = describeRepo(clone);
   const job = createJob(store, {
     title: 'Export CSV',
+    description: 'Test request',
     repo: repo.identity,
     repoPath: repo.root,
     baseBranch: 'main',
@@ -300,7 +301,7 @@ describe('push and draft PR delivery', () => {
       expect(orch(home, tmpdir(), ['gh', 'pr', 'nope', 'job-x']).code).toBe(2);
       expect(orch(home, tmpdir(), ['gh', 'pr', 'status', 'job-x'], env).code).toBe(3);
       const created = json<{ jobId: string }>(
-        orch(home, clone, ['--json', 'job', 'create', '--title', 'cli'], env),
+        orch(home, clone, ['--json', 'job', 'create', '--description', 'd', '--title', 'cli'], env),
       );
       const st = orch(home, tmpdir(), ['gh', 'pr', 'status', created.jobId], env);
       expect(st.code).toBe(1);

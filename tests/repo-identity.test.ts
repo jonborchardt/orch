@@ -44,7 +44,7 @@ function localRepo(dir = tempDir('orch-local-')): string {
 }
 
 function start(cwd: string, title = 'Local job') {
-  const r = startJob(store, { title, session: SESSION, cwd });
+  const r = startJob(store, { title, description: 'Test request', session: SESSION, cwd });
   return { id: r.job.id, token: r.token, dir: r.plan.artifactDir, wt: r.job.worktreePath ?? '' };
 }
 
@@ -179,6 +179,7 @@ describe('existing jobs with older stored identities', () => {
     dirs.push(clone, bare);
     const legacy = createJob(store, {
       title: 'Legacy',
+      description: 'Test request',
       repo: basename(clone).toLowerCase(),
       repoPath: clone,
       baseBranch: 'main',
@@ -227,6 +228,7 @@ describe('existing jobs with older stored identities', () => {
     gitIn(other, 'remote', 'add', 'origin', 'https://github.com/acme/proj.git');
     const job = createJob(store, {
       title: 'Orphan',
+      description: 'Test request',
       repo: 'proj',
       repoPath: gone,
       baseBranch: 'main',
@@ -315,7 +317,17 @@ describe('through the CLI', () => {
     dirs.push(home);
     const local = localRepo();
     const s = json<{ job: { id: string; worktreePath: string } }>(
-      orch(home, local, ['--json', 'factory', 'start', '--title', 'T', '--session', 'one']),
+      orch(home, local, [
+        '--json',
+        'factory',
+        'start',
+        '--title',
+        'T',
+        '--description',
+        'd',
+        '--session',
+        'one',
+      ]),
     );
     gitIn(local, 'remote', 'add', 'origin', 'https://github.com/acme/local.git');
     const wt = s.job.worktreePath;
