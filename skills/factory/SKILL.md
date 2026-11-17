@@ -87,8 +87,10 @@ orch factory start --title "<concise title>" --description "<the user's request,
   --session <s> --json
 ```
 
-Use `--issue <#N|url>` when the request names an issue (the title is fetched when `--title` is
-omitted); `--base <branch>` if the target branch is not the current one. The output contains
+A job needs its request: `--description` is required unless `--issue <#N|url>` is given, and a
+missing or blank description is refused (exit 2, nothing created). Use `--issue` when the request
+names an issue (the title is fetched when `--title` is omitted, the description, the issue's URL and
+body, when `--description` is omitted); `--base <branch>` if the target branch is not the current one. The output contains
 `token` (keep it; it is the only credential for this job), `job.worktreePath`, `job.branch`, and
 `plan`. Tell the user the job id, worktree, and branch in one line, then continue.
 
@@ -108,12 +110,15 @@ For each target, in order, continuing with the next target when one fails:
    orch factory dispatch --repo <path> --issue <#N|url> [--title <t>] [--description <d>] [--base <b>] --session <s> --json
    ```
 
+   Without an issue, pass `--title <t> --description "<the request for that target, verbatim>"`
+   instead of `--issue`; a dispatch with neither a description nor an issue is refused.
+
    `dispatch` creates the job and nothing else: no claim, no worktree, no session. It is refused,
    creating nothing, when the repository's `factory.json` is not committed and trusted (the message
    carries `orch init --check`'s verdict) or the base branch does not exist; report that target and
    move on. A repeat for the same repository and issue returns the existing job with
-   `duplicate: true`, so retrying after a failed launch never creates a second job. A title-only
-   dispatch has no such key: before retrying one, find the job it created in
+   `duplicate: true`, so retrying after a failed launch never creates a second job. A dispatch
+   with `--description` but no `--issue` has no such key: before retrying one, find the job it created in
    `orch factory list --repo <path>` and launch that.
 
 2. Launch the session from the result's `launch` block. In VS Code's Agents window this harness has

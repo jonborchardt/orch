@@ -91,9 +91,26 @@ describe('orch CLI: basics', () => {
     expect(unknown.code).toBe(2);
     expect((JSON.parse(unknown.err) as { error: { type: string } }).error.type).toBe('UsageError');
     // --max-rounds 0 would escalate on the first review round; both entry points refuse it.
-    expect(orch(home, repoA, ['job', 'create', '--title', 't', '--max-rounds', '0']).err).toContain(
-      '--max-rounds must be an integer of at least 1',
-    );
+    expect(
+      orch(home, repoA, [
+        'job',
+        'create',
+        '--description',
+        'd',
+        '--title',
+        't',
+        '--max-rounds',
+        '0',
+      ]).err,
+    ).toContain('--max-rounds must be an integer of at least 1');
+    // A job needs a non-blank description; refused before anything is written.
+    for (const blank of [[], ['--description', '   ']]) {
+      const r = orch(home, repoA, ['job', 'create', '--title', 'no-desc', ...blank]);
+      expect(r.code, r.err).toBe(2);
+      expect(r.err).toContain('--description');
+    }
+    const listed = json<{ title: string }[]>(orch(home, tmpdir(), ['--json', 'job', 'list']));
+    expect(listed.filter((j) => j.title === 'no-desc')).toEqual([]);
   });
 
   it('doctor runs outside a repository and reports the override home', () => {
@@ -116,7 +133,7 @@ describe('orch CLI: basics', () => {
   });
 
   it('job create needs a repository unless --repo is given', () => {
-    const r = orch(home, tmpdir(), ['job', 'create', '--title', 'x']);
+    const r = orch(home, tmpdir(), ['job', 'create', '--description', 'd', '--title', 'x']);
     expect(r.code).toBe(1);
     expect(r.err).toContain('not inside a Git repository');
   });
@@ -127,12 +144,24 @@ describe('orch CLI: jobs across repositories', () => {
   let b: Summary;
 
   it('creates jobs from two repositories into one shared store', () => {
-    a = json<Summary>(orch(home, repoA, ['--json', 'job', 'create', '--title', 'Alpha feature']));
+    a = json<Summary>(
+      orch(home, repoA, [
+        '--json',
+        'job',
+        'create',
+        '--description',
+        'd',
+        '--title',
+        'Alpha feature',
+      ]),
+    );
     b = json<Summary>(
       orch(home, tmpdir(), [
         '--json',
         'job',
         'create',
+        '--description',
+        'Beta request',
         '--title',
         'Beta fix',
         '--repo',
@@ -245,7 +274,9 @@ describe('orch CLI: jobs across repositories', () => {
   it('job repo re-points a job after its checkout gains an origin, same clone only', () => {
     const local = makeRepo();
     dirs.push(local);
-    const c = json<Summary>(orch(home, local, ['--json', 'job', 'create', '--title', 'Local']));
+    const c = json<Summary>(
+      orch(home, local, ['--json', 'job', 'create', '--description', 'd', '--title', 'Local']),
+    );
     expect(c.job.repo).toBe(local.split(/[\\/]/).pop()?.toLowerCase());
     const claim = json<Summary>(
       orch(home, tmpdir(), ['--json', 'job', 'claim', c.jobId, '--session', 's']),
@@ -268,7 +299,15 @@ describe('orch CLI: concurrency', () => {
   it('parallel creates all succeed with distinct ids', async () => {
     const results = await Promise.all(
       Array.from({ length: 6 }, (_, i) =>
-        orchAsync(home, repoA, ['--json', 'job', 'create', '--title', `par-${String(i)}`]),
+        orchAsync(home, repoA, [
+          '--json',
+          'job',
+          'create',
+          '--description',
+          'd',
+          '--title',
+          `par-${String(i)}`,
+        ]),
       ),
     );
     expect(results.map((r) => r.code)).toEqual([0, 0, 0, 0, 0, 0]);
@@ -277,7 +316,9 @@ describe('orch CLI: concurrency', () => {
   });
 
   it('parallel competing claims: exactly one wins', async () => {
-    const job = json<Summary>(orch(home, repoA, ['--json', 'job', 'create', '--title', 'race']));
+    const job = json<Summary>(
+      orch(home, repoA, ['--json', 'job', 'create', '--description', 'd', '--title', 'race']),
+    );
     const results = await Promise.all(
       Array.from({ length: 5 }, (_, i) =>
         orchAsync(home, repoA, ['--json', 'job', 'claim', job.jobId, '--session', `s${String(i)}`]),

@@ -50,7 +50,13 @@ afterEach(() => {
 
 function newJob(s: Store = store, repoPath = clone, title = 'Add CSV export') {
   const repo = describeRepo(repoPath);
-  const job = createJob(s, { title, repo: repo.identity, repoPath: repo.root, baseBranch: 'main' });
+  const job = createJob(s, {
+    title,
+    description: 'Test request',
+    repo: repo.identity,
+    repoPath: repo.root,
+    baseBranch: 'main',
+  });
   const { token } = claimJob(s, job.id, { session: 's1' });
   return { id: job.id, token, repo: repo.identity };
 }
@@ -96,6 +102,7 @@ describe('worktree create', () => {
     const repo = describeRepo(clone);
     const job = createJob(store, {
       title: 't',
+      description: 'Test request',
       repo: repo.identity,
       repoPath: clone,
       baseBranch: 'main',
@@ -132,6 +139,7 @@ describe('worktree create', () => {
     // A missing checkout is reported, not silently recreated.
     const gone = createJob(store, {
       title: 't2',
+      description: 'Test request',
       repo: 'github.com/acme/alpha',
       repoPath: join(tmpdir(), 'does-not-exist-orch'),
       baseBranch: 'main',
@@ -228,6 +236,7 @@ describe('worktree show, adopt, remove', () => {
     const repo = describeRepo(clone);
     const job = createJob(store, {
       title: 'Stale checkout',
+      description: 'Test request',
       repo: repo.identity,
       repoPath: linked,
       baseBranch: 'main',
@@ -406,7 +415,7 @@ describe('orch worktree CLI', () => {
     const home = tempDir('orch-cli-wt-');
     extra.push(home);
     const created = json<{ jobId: string; token: string }>(
-      orch(home, clone, ['--json', 'job', 'create', '--title', 'CLI wt']),
+      orch(home, clone, ['--json', 'job', 'create', '--description', 'd', '--title', 'CLI wt']),
     );
     const claim = json<{ token: string }>(
       orch(home, clone, ['--json', 'job', 'claim', created.jobId, '--session', 'cli']),

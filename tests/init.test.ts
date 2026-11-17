@@ -336,7 +336,12 @@ describe('orch init: trust boundary', () => {
 describe('orch init --check: same baseline as a real job', () => {
   /** Start a job from `cwd` as `orch factory start` does and return the policy it trusts. */
   function trusted(store: Store, cwd: string) {
-    const r = startJob(store, { title: 'Parity', session: SESSION, cwd });
+    const r = startJob(store, {
+      title: 'Parity',
+      description: 'Test request',
+      session: SESSION,
+      cwd,
+    });
     const wt = worktreeOf(getJob(store.db, r.job.id));
     if (!wt) throw new Error('job has no worktree');
     return effectivePolicy(getJob(store.db, r.job.id), wt);
@@ -425,9 +430,9 @@ describe('orch init --check: same baseline as a real job', () => {
       const r = checkReadiness(dir);
       expect(r).toMatchObject({ status: 'no-base-branch', ready: false, baseRef: null });
       expect(r.detail).toContain('HEAD is detached');
-      expect(() => startJob(store, { title: 'x', session: SESSION, cwd: dir })).toThrow(
-        /Base branch HEAD not found/,
-      );
+      expect(() =>
+        startJob(store, { title: 'x', description: 'x', session: SESSION, cwd: dir }),
+      ).toThrow(/Base branch HEAD not found/);
     } finally {
       store.cleanup();
     }

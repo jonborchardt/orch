@@ -33,11 +33,13 @@ export interface FactoryOptions {
 
 export const FACTORY_HELP = `Usage: orch factory <command> [options]
 
-  start   --title <t> | --issue <ref>  [--description <d>] [--repo <path>] [--base <branch>]
-          [--max-rounds <n>] --session <name> [--ui|--no-ui]
-                              Create, claim, and give a worktree to a new job; print the plan + token
-  dispatch --title <t> | --issue <ref> [--description <d>] [--repo <path>] [--base <branch>]
-          [--max-rounds <n>] --session <name>
+  start   (--title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>])
+          [--repo <path>] [--base <branch>] [--max-rounds <n>] --session <name> [--ui|--no-ui]
+                              Create, claim, and give a worktree to a new job; print the plan + token.
+                              A job needs a non-blank description: --description, or one fetched
+                              from --issue (its URL and body) when --description is omitted
+  dispatch (--title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>])
+          [--repo <path>] [--base <branch>] [--max-rounds <n>] --session <name>
                               Create a job for another (or this) repository that an independent
                               session will run; print what that session needs (workspace, prompt).
                               Refused unless the repository's factory.json is ready. Nothing is

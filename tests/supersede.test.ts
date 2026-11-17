@@ -30,7 +30,13 @@ afterEach(() => {
 });
 
 const mk = (title: string, repo = 'github.com/acme/alpha') =>
-  createJob(store, { title, repo, repoPath: `/repos/${repo}`, baseBranch: 'main' });
+  createJob(store, {
+    title,
+    description: 'Test request',
+    repo,
+    repoPath: `/repos/${repo}`,
+    baseBranch: 'main',
+  });
 
 describe('supersedeJob (storage)', () => {
   it('records the replacement with an event; both jobs keep their rows and histories', () => {

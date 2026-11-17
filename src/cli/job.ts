@@ -62,8 +62,9 @@ export interface JobOptions {
 
 export const JOB_HELP = `Usage: orch job <command> [options]
 
-  create    --title <t> [--description <d>] [--issue <ref>] [--repo <path>] [--base <branch>]
-            [--max-rounds <n>]
+  create    --title <t> --description <d> [--issue <ref>] [--repo <path>] [--base <branch>]
+            [--max-rounds <n>]              --description is required and non-blank; --issue
+                                            only records the reference (never fetched)
   list      [--repo <path|identity>] [--status <s>] [--stage <s>]
   show <id>
   events <id> [--limit <n>]
