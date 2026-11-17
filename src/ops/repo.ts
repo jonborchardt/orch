@@ -13,7 +13,13 @@ import { existsSync } from 'node:fs';
 
 import { ValidationError } from '../core/errors.ts';
 import type { Stage, Status } from '../core/workflow.ts';
-import { commonGitDir, describeRepo, type RepoInfo } from '../git/repo.ts';
+import {
+  checkoutIdentity,
+  commonGitDir,
+  describeRepo,
+  primaryCheckout,
+  type RepoInfo,
+} from '../git/repo.ts';
 import type { Store } from '../storage/client.ts';
 import { type Auth, listJobs, setRepo } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
@@ -32,6 +38,27 @@ export function localRepoKey(path: string): string | undefined {
 export function sameLocalRepo(job: Pick<Job, 'repoPath'>, path: string): boolean {
   const key = localRepoKey(path);
   return key !== undefined && key === localRepoKey(job.repoPath);
+}
+
+export interface JobRepository {
+  /** The primary checkout's view: root, identity, current branch. */
+  repo: RepoInfo;
+  /** `base` when given, else the primary checkout's current branch. */
+  base: string;
+}
+
+/**
+ * The repository a new job created from `path` belongs to. A linked worktree (a session's own)
+ * resolves to its primary checkout, so the job records that checkout and its branch as the base,
+ * and the worktree stays free to be adopted. A primary checkout resolves to itself.
+ */
+export function jobRepository(path: string, base?: string): JobRepository {
+  const here = describeRepo(path);
+  const repo =
+    checkoutIdentity(here.root)?.kind === 'worktree'
+      ? describeRepo(primaryCheckout(here.root))
+      : here;
+  return { repo, base: base ?? repo.currentBranch };
 }
 
 export interface Checkout {

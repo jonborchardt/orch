@@ -31,7 +31,7 @@ import {
   reviewArtifact,
   type Stage,
 } from '../core/workflow.ts';
-import { describeRepo, dirtyFiles } from '../git/repo.ts';
+import { dirtyFiles } from '../git/repo.ts';
 import type { WorktreeInfo } from '../git/worktree.ts';
 import { validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
@@ -39,6 +39,7 @@ import { claimJob, createJob, getJob, jobDetail, resumeJob } from '../storage/jo
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
 import { listIntegrations } from '../storage/verification.ts';
 import { issue as ghIssue } from './github.ts';
+import { jobRepository } from './repo.ts';
 import {
   effectivePolicy,
   sensitiveReport,
@@ -525,7 +526,7 @@ export interface StartResult {
 
 /** Create, claim, and give a worktree to a new job in one step; returns the first plan. */
 export function startJob(store: Store, input: StartInput): StartResult {
-  const repo = describeRepo(input.repo ?? input.cwd);
+  const { repo, base } = jobRepository(input.repo ?? input.cwd, input.base);
   let title = input.title;
   let description = input.description;
   if (!title && input.issue) {
@@ -542,7 +543,7 @@ export function startJob(store: Store, input: StartInput): StartResult {
     issueRef: input.issue,
     repo: repo.identity,
     repoPath: repo.root,
-    baseBranch: input.base ?? repo.currentBranch,
+    baseBranch: base,
     maxRounds: input.maxRounds ?? config.maxRounds,
     maxCiRepairs: config.maxCiRepairs,
     actor: input.session,

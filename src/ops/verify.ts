@@ -10,7 +10,7 @@ import path from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { spawnCommand, type ToolResult } from '../core/exec.ts';
-import { canonicalPath, jobArtifactDir } from '../core/paths.ts';
+import { canonicalPath, jobArtifactDir, verifyLockPath } from '../core/paths.ts';
 import {
   buildReport,
   classifyPath,
@@ -33,7 +33,7 @@ import {
 import { now } from '../core/workflow.ts';
 import { git, tryGit } from '../git/run.ts';
 import type { Store } from '../storage/client.ts';
-import { type Auth, authorize, getJob } from '../storage/jobs.ts';
+import { type Auth, authorize, getJob, renewLease } from '../storage/jobs.ts';
 import type { Job, VerificationCheck, VerificationRun } from '../storage/schema.ts';
 import {
   type CheckResult,
@@ -44,6 +44,7 @@ import {
   startRun,
 } from '../storage/verification.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
+import { acquireVerifyLock } from './verify-lock.ts';
 
 export interface EffectivePolicy {
   policy: VerificationPolicy;
@@ -294,15 +295,39 @@ function describeCleanup(c: NonNullable<ToolResult['cleanup']>): string {
   );
 }
 
-/** Run the effective policy in the job's clean worktree and record every step. */
-export function verifyJob(store: Store, id: string, auth: Auth): VerifyResult {
-  const owner = authorize(store, id, auth);
-  const wt = worktreeOf(owner);
-  if (!wt) throw new ValidationError(`Job ${id} has no worktree; run orch worktree create first.`);
-  const job = owner;
+export interface VerifyOptions {
+  /** Told once when another verification holds the lock (the CLI prints it to stderr). */
+  onWait?: ((message: string) => void) | undefined;
+  /** Lock poll interval; tests shorten it. */
+  pollMs?: number | undefined;
+}
+
+/** Renew a waiting verify's lease this often: well inside the default 30-minute lease. */
+const RENEW_EVERY_MS = 5 * 60_000;
+
+/** The job's clean worktree and the policy that governs it now. */
+function prepare(store: Store, job: Job) {
+  const wt = worktreeOf(job);
+  if (!wt)
+    throw new ValidationError(`Job ${job.id} has no worktree; run orch worktree create first.`);
   requireClean(wt, 'verification covers committed snapshots only. Commit first.');
   const eff = effectivePolicy(job, wt);
-  const status = verificationStatus(store, job, wt, eff);
+  return { wt, eff, status: verificationStatus(store, job, wt, eff) };
+}
+
+/**
+ * Run the effective policy in the job's clean worktree and record every step. Checks run one
+ * verification at a time per runtime home: this call waits for the lock, renewing the owner's
+ * lease (never the token) before and while it waits.
+ */
+export function verifyJob(
+  store: Store,
+  id: string,
+  auth: Auth,
+  opts: VerifyOptions = {},
+): VerifyResult {
+  const job = authorize(store, id, auth);
+  const { wt, eff, status } = prepare(store, job);
   if (!status.configured) {
     return {
       jobId: id,
@@ -318,6 +343,40 @@ export function verifyJob(store: Store, id: string, auth: Auth): VerifyResult {
           : `No verification policy: add a ${POLICY_FILE} to the repository base branch (orch init, ` +
             'review, commit, push), or propose one in the worktree for a human to accept.',
     };
+  }
+  // A renewal bumps the revision; a caller pinning one follows it.
+  const follow = (j: Job): Auth =>
+    auth.expectRevision === undefined ? auth : { ...auth, expectRevision: j.revision };
+  let owner = renewLease(store, id, auth);
+  let renewedAt = Date.now();
+  const release = acquireVerifyLock(verifyLockPath(store.paths), {
+    pollMs: opts.pollMs,
+    onWait: (holder) =>
+      opts.onWait?.(
+        'orch verify: waiting for another verification to finish' +
+          `${holder ? ` (pid ${String(holder.pid)})` : ''}; checks run one at a time.`,
+      ),
+    onPoll: () => {
+      if (Date.now() - renewedAt < RENEW_EVERY_MS) return;
+      owner = renewLease(store, id, follow(owner));
+      renewedAt = Date.now();
+    },
+  });
+  try {
+    return runPolicy(store, owner, follow(owner), eff.fingerprint);
+  } finally {
+    release();
+  }
+}
+
+/** Under the lock: recheck the worktree (it may have moved while waiting), run, and record. */
+function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): VerifyResult {
+  const id = job.id;
+  const { wt, eff, status } = prepare(store, job);
+  if (eff.fingerprint !== fingerprint) {
+    throw new ValidationError(
+      'The verification policy changed while waiting for the lock; run orch verify again.',
+    );
   }
   const tree = git(wt.path, 'rev-parse', 'HEAD^{tree}');
   const run = startRun(store, id, {

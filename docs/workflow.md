@@ -190,6 +190,10 @@ that every commit since the approval is a merge with no material edits, that the
 drifted without authorization, and that the latest verification run is valid for the pushed HEAD.
 
 - `create`, `adopt`, `remove`, and `integrate` require the job's owner token; `show` is read-only.
+- A job created from a linked worktree (`orch factory dispatch`, `orch factory start`, or
+  `orch job create`, with `--repo` or the current directory inside it) records the primary
+  checkout as `repoPath`, and without `--base` the primary checkout's current branch as its base,
+  so that worktree stays adoptable (`jobRepository` in `src/ops/repo.ts`).
 
 **Ownership is advisory at the filesystem level.** The CLI enforces that only the owner records
 changes about a job, but any process with filesystem access (including a subagent pointed at the
@@ -291,6 +295,12 @@ earlier required check already failed), exit code or signal, duration, and the l
 and is marked truncated). All expected checks are rowed before anything runs, so an interrupted run
 is visibly incomplete; starting a new run marks any still-`running` one `interrupted`.
 
+**One at a time.** Checks run for one `orch verify` at a time per runtime home (a lock file,
+`verify.lock` in the data directory, holding the holder's PID). Another `orch verify` waits inside
+its own command, prints `orch verify: waiting ...` to stderr once, and polls; a lock whose holder
+is no longer running is taken over. A job without a policy (`configuration-required`) never waits.
+Under the lock the worktree and policy are checked again, since either may have moved meanwhile.
+
 **Validity.** A run is evidence only while HEAD and its tree are unchanged, the worktree is clean,
 the policy fingerprint matches the effective policy, every currently required check passed in
 that run, and the run completed. Anything else is reported as the reason it is stale.
@@ -315,7 +325,9 @@ Several VS Code sessions may run at once, so each job has at most one owner.
 - **Renewal is explicit.** There is no daemon. Every successful mutation by the token holder extends
   the lease by the claimed length. `claim` or `resume` again, even from the same session name,
   issues a new token and kills the old one: two processes resuming under one name cannot both keep
-  driving the job. A session that goes quiet simply lets the lease lapse.
+  driving the job. A session that goes quiet simply lets the lease lapse. `orch verify` renews
+  the lease without rotating the token when it starts (before waiting for the verify lock), every
+  five minutes while it waits, and with each record it writes.
 - **Expiry and takeover.** Another session may claim an expired lease, or any lease with `--force`.
   Takeover rotates the token, so commands from the previous owner fail with exit code 4, and marks
   a `running` job `interrupted` so it must be explicitly resumed.

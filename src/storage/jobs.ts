@@ -754,6 +754,17 @@ export function authorize(store: Store, id: string, auth: Auth): Job {
   return job;
 }
 
+/**
+ * Extend the owner's lease by `job.leaseMinutes` from now, keeping the token: for a command that
+ * holds the job a long time without writing (`orch verify` waiting its turn). Owner-checked.
+ */
+export function renewLease(store: Store, id: string, auth: Auth): Job {
+  return mutate(store, id, auth, (job, _tx, ts) => ({
+    patch: { leaseExpiresAt: leaseUntil(ts, job.leaseMinutes) },
+    events: [],
+  }));
+}
+
 /** Append an informational event (worktree integrated, branch pushed) as the owner. */
 export function recordEvent(
   store: Store,

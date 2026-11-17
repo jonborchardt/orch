@@ -12,7 +12,8 @@ import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import type { SessionRef } from '../core/session.ts';
 import { now, type Stage, type Status, TERMINAL_STATUSES } from '../core/workflow.ts';
-import { baseRef, describeRepo } from '../git/repo.ts';
+import { findProjectRoot } from '../core/paths.ts';
+import { baseRef } from '../git/repo.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob } from '../storage/events.ts';
 import { createJob, listJobs, sessionsByJob } from '../storage/jobs.ts';
@@ -20,7 +21,7 @@ import type { Job } from '../storage/schema.ts';
 import { loadConfig } from './factory.ts';
 import { issue as ghIssue } from './github.ts';
 import { checkReadiness, type Readiness } from './init.ts';
-import { findJobs } from './repo.ts';
+import { findJobs, jobRepository } from './repo.ts';
 
 export interface DispatchInput {
   /** Target repository: a path inside it. Defaults to `cwd`. */
@@ -84,15 +85,22 @@ export function launchFor(job: Job): Launch {
  * repeated dispatch for the same repository and issue returns the existing active job.
  */
 export function dispatchJob(store: Store, input: DispatchInput): DispatchResult {
-  const readiness = checkReadiness(input.cwd, input.repo, input.base);
-  if (!readiness.ready || readiness.root === null) {
+  // Judge readiness against what the job will use: the primary checkout and its branch, also
+  // when the target is a linked worktree. Outside any repository, readiness reports why.
+  const target = input.repo ?? input.cwd;
+  const resolved = findProjectRoot(target) ? jobRepository(target, input.base) : undefined;
+  const readiness = checkReadiness(
+    input.cwd,
+    resolved?.repo.root ?? input.repo,
+    resolved?.base ?? input.base,
+  );
+  if (!readiness.ready || readiness.root === null || resolved === undefined) {
     throw new ValidationError(
       `Target repository is not ready for the factory (${readiness.status}): ${readiness.detail}` +
         `${readiness.next ? ` Next: ${readiness.next}` : ''} Nothing was created.`,
     );
   }
-  const repo = describeRepo(readiness.root);
-  const base = input.base ?? repo.currentBranch;
+  const { repo, base } = resolved;
   if (!baseRef(repo.root, base)) {
     throw new ValidationError(
       `Base branch ${base} not found in ${repo.root} (local or origin). Nothing was created.`,
