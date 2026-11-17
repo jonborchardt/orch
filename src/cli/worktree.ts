@@ -23,7 +23,7 @@ export const WORKTREE_HELP = `Usage: orch worktree <command> <job-id> [options]
   show <id>                           Inspect: branch, HEAD, dirty files, commits vs base
   adopt <id> --path <dir> [--repo <clone>]
                                       Record an existing worktree of the same repository
-  remove <id>                         Remove the worktree directory (refused if dirty; branch kept)
+  remove <id> [--repo <clone>]        Remove the worktree directory (refused if dirty; branch kept)
   integrate <id>                      Merge the base branch into the job branch (aborts on conflict)
 
 Mutating commands need --token (or $ORCH_TOKEN); --revision <n> rejects stale state.
@@ -48,7 +48,7 @@ export function runWorktree(
     case 'adopt':
       return adoptWorktree(store, id, auth, need(o.path, '--path <dir>'), { repo: o.repo });
     case 'remove':
-      return dropWorktree(store, id, auth);
+      return dropWorktree(store, id, auth, { repo: o.repo });
     case 'integrate':
       return integrateBase(store, id, auth);
     default:

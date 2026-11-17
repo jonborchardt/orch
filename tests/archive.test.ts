@@ -151,7 +151,28 @@ describe('allowedActions', () => {
     ciStatus: null,
     prState: null,
     archivedAt: null,
+    worktreePath: null,
   };
+
+  it('offers remove-worktree only for a finished job with a worktree and a merged PR', () => {
+    const wt = { ...base, status: 'completed' as const, worktreePath: '/wt' };
+    expect(allowedActions({ ...wt, prState: 'merged' }, false)).toContain('remove-worktree');
+    expect(allowedActions({ ...wt, prState: 'ready' }, false)).not.toContain('remove-worktree');
+    expect(allowedActions({ ...wt, prState: 'merged', worktreePath: null }, false)).not.toContain(
+      'remove-worktree',
+    );
+    expect(allowedActions({ ...wt, prState: 'merged', status: 'running' }, false)).not.toContain(
+      'remove-worktree',
+    );
+  });
+
+  it('dashboardAction refuses remove-worktree before the PR is merged, leaving the row', () => {
+    const before = getJob(store.db, ids.completed);
+    expect(() =>
+      dashboardAction(store, ids.completed, { action: 'remove-worktree', force: true }),
+    ).toThrow(/Cannot remove the worktree/);
+    expect(getJob(store.db, ids.completed)).toEqual(before);
+  });
 
   it('offers archive for a finished, unarchived job and unarchive for an archived one', () => {
     for (const status of ['completed', 'cancelled'] as const) {

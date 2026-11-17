@@ -12,6 +12,8 @@ export default tseslint.config(
       'playwright-report/',
       'test-results/',
       '.claude/skills/log-todo/',
+      // Claude Code session worktrees (`claude --worktree`): full checkouts, linted in their own.
+      '.claude/worktrees/',
     ],
   },
   eslint.configs.recommended,

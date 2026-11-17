@@ -11,7 +11,8 @@ import assert from 'node:assert/strict';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const KEYS = ['id', 'title', 'status', 'type', 'area', 'priority', 'effort', 'depends_on', 'related', 'duplicate_of', 'classified', 'created', 'updated'];
-const STATUS = ['open', 'done', 'dropped', 'duplicate'];
+const STATUS = ['open', 'in-progress', 'done', 'dropped', 'duplicate'];
+const active = (t) => t.status === 'open' || t.status === 'in-progress';
 const TYPE = ['bug', 'feature', 'chore', 'question'];
 const PRIORITY = ['P1', 'P2', 'P3'];
 const EFFORT = [0.25, 0.5, 1, 2, 3, 5];
@@ -106,7 +107,7 @@ export function load(dir) {
     if (!names.has(t.area)) refuse(t.file, 2, `area ${t.area} is not in areas.md`);
     for (const key of ['depends_on', 'related']) for (const id of t[key]) if (!byId.has(id)) refuse(t.file, 2, `${key} names ${id}, which does not exist`);
     if (t.duplicate_of !== null && !byId.has(t.duplicate_of)) refuse(t.file, 2, `duplicate_of names ${t.duplicate_of}, which does not exist`);
-    if (t.status === 'open') for (const id of t.depends_on) {
+    if (active(t)) for (const id of t.depends_on) {
       const d = byId.get(id);
       if (d.status === 'dropped') warnings.push(`${t.file} depends on ${id}, which is dropped`);
       if (d.status === 'duplicate') warnings.push(`${t.file} depends on ${id}, a duplicate of ${d.duplicate_of}: point at that instead`);
@@ -129,6 +130,7 @@ export function load(dir) {
 
 export function order(todos) {
   const open = todos.filter((t) => t.status === 'open');
+  // an in-progress item is already started, so it is not proposed and its dependents are free to follow it
   const openIds = new Set(open.map((t) => t.id));
   const rank = (t) => [PRIORITY.indexOf(t.priority), t.effort, t.area, t.id];
   const cmp = (a, b) => { const ra = rank(a), rb = rank(b); for (let i = 0; i < 4; i++) if (ra[i] !== rb[i]) return ra[i] < rb[i] ? -1 : 1; return 0; };
@@ -147,10 +149,16 @@ const row = (cells) => `| ${cells.join(' | ')} |`;
 
 export function render({ areas, todos, warnings }) {
   const ordered = order(todos);
-  const closed = todos.filter((t) => t.status !== 'open').sort((a, b) => (a.updated < b.updated ? 1 : a.updated > b.updated ? -1 : b.id - a.id));
+  const working = todos.filter((t) => t.status === 'in-progress');
+  const closed = todos.filter((t) => !active(t)).sort((a, b) => (a.updated < b.updated ? 1 : a.updated > b.updated ? -1 : b.id - a.id));
   const openCount = (name) => ordered.filter((t) => t.area === name).length;
   const lines = ['# Todo index', '', 'Derived by `node .claude/skills/log-todo/index.mjs`; never hand-edited. Edit the todo files and rerun.', ''];
   if (warnings.length) lines.push('## Warnings', '', ...warnings.map((w) => `- ${w}`), '');
+  if (working.length) {
+    lines.push('## In progress', '', row(['id', 'title', 'area', 'type', 'priority', 'effort', 'updated']), row(Array(7).fill('---')));
+    for (const t of working) lines.push(row([link(t), t.title.replace(/\|/g, '\\|'), t.area, t.type, t.priority, t.effort, t.updated]));
+    lines.push('');
+  }
   lines.push('## Proposed order', '');
   if (ordered.length) {
     lines.push(row(['#', 'id', 'title', 'area', 'type', 'priority', 'effort', 'depends on', 'classified']), row(Array(9).fill('---')));
@@ -164,7 +172,7 @@ export function render({ areas, todos, warnings }) {
   }
   const by = (p) => ordered.filter((t) => t.priority === p).length;
   const days = ordered.reduce((s, t) => s + t.effort, 0);
-  lines.push('', `${ordered.length} open: ${PRIORITY.map((p) => `${by(p)} ${p}`).join(', ')}; ${days} days of open effort. ${closed.length} closed.`, '');
+  lines.push('', `${ordered.length} open: ${PRIORITY.map((p) => `${by(p)} ${p}`).join(', ')}; ${days} days of open effort. ${working.length} in progress. ${closed.length} closed.`, '');
   return lines.join('\n');
 }
 
@@ -195,10 +203,18 @@ function selfTest() {
   assert.deepEqual(ids, ['0004', '0001', '0002']);
   assert.match(index, /duplicate of 0001/);
   assert.match(index, /\| video \| 1 \|/);
-  assert.match(index, /3 open: 3 P1, 0 P2, 0 P3; 3 days of open effort\. 1 closed\./);
+  assert.match(index, /3 open: 3 P1, 0 P2, 0 P3; 3 days of open effort\. 0 in progress\. 1 closed\./);
   run(dir);
   assert.equal(readFileSync(join(dir, 'INDEX.md'), 'utf8'), index, 'rerun is byte-identical');
   assert.ok(JSON.parse(run(dir, { json: true })).todos.length === 4);
+  // in progress: listed on its own and out of the proposed order; its dependent 0002 stays proposed
+  write(1, 'render-hang', { priority: 'P1', effort: 2, status: 'in-progress' });
+  run(dir);
+  const wip = readFileSync(join(dir, 'INDEX.md'), 'utf8');
+  assert.match(wip, /## In progress\n\n.*\n.*\n\| \[0001\]/);
+  assert.deepEqual([...wip.matchAll(/^\| \d+ \| \[(\d{4})\]/gm)].map((m) => m[1]), ['0002', '0004']);
+  assert.match(wip, /1 in progress\./);
+  write(1, 'render-hang', { priority: 'P1', effort: 2 });
   // warnings: gap, dropped dependency
   write(5, 'dropped', { status: 'dropped' });
   write(7, 'gap', { depends_on: [5] });

@@ -29,6 +29,7 @@ const LABEL: Record<DashboardAction, string> = {
   unarchive: 'Unarchive job',
   merge: 'Merge the PR',
   'refresh-pr': 'Refresh the PR state from GitHub',
+  'remove-worktree': 'Remove the worktree (the branch is kept)',
 };
 
 const STAGES = ['spec', 'build', 'review', 'approve', 'pr', 'ci'] as const;
@@ -80,10 +81,19 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     setOpen(a);
   };
 
-  // Archive, unarchive, and merge are a plain confirm: only finished jobs qualify, so the dashboard
-  // always takes over the lease of any session that claimed it again instead of asking.
-  const plain = open === 'archive' || open === 'unarchive' || open === 'merge';
-  const verb = open === 'archive' ? 'Archive' : open === 'merge' ? 'Merge' : 'Unarchive';
+  // Archive, unarchive, merge, and remove-worktree are a plain confirm: only finished jobs qualify,
+  // so the dashboard always takes over the lease of any session that claimed it again instead of
+  // asking.
+  const removal = open === 'remove-worktree';
+  const plain = open === 'archive' || open === 'unarchive' || open === 'merge' || removal;
+  const verb =
+    open === 'archive'
+      ? 'Archive'
+      : open === 'merge'
+        ? 'Merge'
+        : removal
+          ? 'Remove worktree'
+          : 'Unarchive';
 
   const send = async (body: Parameters<typeof postAction>[1]) => {
     setBusy(true);
@@ -204,6 +214,16 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             Cancel job
           </Button>
         )}
+        {allowed.has('remove-worktree') && (
+          <Button
+            variant="outlined"
+            onClick={() => {
+              start('remove-worktree');
+            }}
+          >
+            Remove worktree
+          </Button>
+        )}
         {allowed.has('archive') && (
           <Button
             variant="outlined"
@@ -286,18 +306,27 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         <DialogTitle id="action-title">
           {open === 'merge'
             ? 'Merge this PR?'
-            : plain
-              ? `${verb} this job?`
-              : open === 'approve'
-                ? resumeAt(to)
-                : open
-                  ? LABEL[open]
-                  : ''}
+            : removal
+              ? 'Remove this worktree?'
+              : plain
+                ? `${verb} this job?`
+                : open === 'approve'
+                  ? resumeAt(to)
+                  : open
+                    ? LABEL[open]
+                    : ''}
         </DialogTitle>
         {plain ? (
-          (open === 'merge' || error) && (
+          (open === 'merge' || removal || error) && (
             <DialogContent>
               <Stack spacing={2}>
+                {removal && (
+                  <Typography data-testid="remove-worktree-confirm">
+                    Delete <code>{detail.job.worktreePath}</code> from disk. Its PR is merged; the
+                    branch <code>{detail.job.branch}</code> and its commits are kept. Refused if the
+                    worktree has uncommitted changes.
+                  </Typography>
+                )}
                 {open === 'merge' && (
                   <Typography data-testid="merge-confirm">
                     Merge <b>{detail.job.prUrl}</b> at <code>{detail.ci.head?.slice(0, 7)}</code> as

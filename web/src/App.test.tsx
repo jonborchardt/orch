@@ -1579,6 +1579,27 @@ describe('PR phase, Merge, and Refresh PR', () => {
     expect(posts(f)).toEqual([{ action: 'merge', force: true }]);
   });
 
+  it('Remove worktree is a plain confirm naming the path and the kept branch', async () => {
+    const f = mockFetch();
+    const merged = readyDetail().job;
+    const job = { ...merged, prState: 'merged' as const, worktreePath: '/wt/job', branch: 'b1' };
+    data.detail = readyDetail({ job, actions: ['remove-worktree', 'archive'] });
+    data.actionBody = { job, message: 'Removed the worktree /wt/job. The branch b1 is kept.' };
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove worktree' }));
+    const dialog = await screen.findByRole('dialog');
+    const text = within(dialog).getByTestId('remove-worktree-confirm');
+    expect(text).toHaveTextContent('/wt/job');
+    expect(text).toHaveTextContent('b1');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove worktree' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Removed the worktree');
+    });
+    expect(posts(f)).toEqual([{ action: 'remove-worktree', force: true }]);
+  });
+
   it('Refresh PR posts at once and shows a refused merge error', async () => {
     const f = mockFetch();
     data.detail = readyDetail();
