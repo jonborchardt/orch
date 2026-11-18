@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { ThemeProvider } from '@mui/material';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BoardRow, CiView, JobDetailView, Progress } from '../../src/server/types.ts';
@@ -11,6 +19,9 @@ import { byAttention, ciColor, repoLabels, reviewRollup } from './format.ts';
 import { Markdown } from './Markdown.tsx';
 import { RESUME_NOTE } from './Status.tsx';
 import { theme } from './main.tsx';
+
+// The full suite runs ~20 process-heavy files in parallel; the 1 s default flakes under that load.
+configure({ asyncUtilTimeout: 10_000 });
 
 const STEP_IDS = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci', 'done'] as const;
 const STEP_LABELS = ['Spec', 'Build', 'Simplify', 'Review', 'Approve', 'PR', 'CI', 'Done'];
@@ -2309,11 +2320,12 @@ describe('Loading and refresh progress', () => {
     const bad = Promise.withResolvers<undefined>();
     hold.board = bad.promise;
     expect(await screen.findByRole('progressbar', { name: 'Refreshing' })).toBeInTheDocument();
-    hold = {};
     bad.reject(new Error('network down'));
+    // Keep polls failing until the alert is seen: a 200 ms poll that succeeds first clears it.
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('network down');
     });
+    hold = {};
     await waitFor(() => {
       expect(refreshing()).not.toBeInTheDocument();
     });
