@@ -8,6 +8,7 @@ import type { BoardRow, CiView, JobDetailView } from '../../src/server/types.ts'
 import { App } from './App.tsx';
 import { byAttention, reviewRollup } from './format.ts';
 import { Markdown } from './Markdown.tsx';
+import { RESUME_NOTE } from './Status.tsx';
 import { theme } from './main.tsx';
 
 function row(over: Partial<BoardRow>): BoardRow {
@@ -261,13 +262,32 @@ describe('App board', () => {
     });
   });
 
-  it('renders every repository and distinguishes running from last-reported-running', async () => {
+  it('renders every repository and distinguishes running from stale', async () => {
     mockFetch();
     mount();
     const table = await screen.findByRole('table', { name: 'Factory jobs' });
     expect(within(table).getAllByRole('row')).toHaveLength(5);
-    expect(within(table).getByText(/running \(lease live\)/)).toBeInTheDocument();
-    expect(within(table).getByText(/last reported running/)).toBeInTheDocument();
+    const chipOf = (id: string) =>
+      must(
+        must(table.querySelector(`[data-job-id="${id}"]`)).querySelector<HTMLElement>(
+          '[data-state]',
+        ),
+      );
+    const live = chipOf('job-00000001');
+    const lapsed = chipOf('job-00000002');
+    expect(live).toHaveAttribute('data-state', 'running');
+    expect(live).toHaveTextContent(/^● running$/);
+    expect(lapsed).toHaveAttribute('data-state', 'stale');
+    expect(lapsed).toHaveTextContent(/^◌ stale$/);
+    expect(within(table).queryByText(/running \(lease live\)|last reported running/)).toBeNull();
+    // The tooltip carries the lease meaning; stale never claims the session ended.
+    expect(live.getAttribute('title')).toMatch(/renewed its ownership lease/);
+    const staleTip = must(lapsed.getAttribute('title'));
+    expect(staleTip).toMatch(/lease lapsed/);
+    for (const claim of ['has stopped', 'is gone', 'is dead', 'presumed gone']) {
+      expect(staleTip).not.toContain(claim);
+      expect(must(RESUME_NOTE.stale)).not.toContain(claim);
+    }
     expect(within(table).getByText(/needs human/)).toBeInTheDocument();
     // One verdict rollup per row, with the blocking count folded in; reviewers only in its tooltip.
     expect(within(table).getByText('1/2, 1 pending')).toBeInTheDocument();

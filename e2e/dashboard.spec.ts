@@ -27,8 +27,10 @@ test('job board shows every repository and job with honest liveness', async ({ p
   await page.keyboard.press('Escape');
   await expect(table.getByText('github.com/acme/alpha').first()).toBeVisible();
   await expect(table.getByText('github.com/acme/beta').first()).toBeVisible();
-  await expect(table.getByText('last reported running')).toBeVisible();
-  await expect(table.getByText('running (lease live)').first()).toBeVisible();
+  await expect(table.locator('[data-state="stale"]')).toHaveText('◌ stale');
+  await expect(table.locator('[data-state="running"]').first()).toHaveText('● running');
+  await expect(table.getByText('running (lease live)')).toHaveCount(0);
+  await expect(table.getByText('last reported running')).toHaveCount(0);
   await expect(table.getByText('needs human').first()).toBeVisible();
   await expect(page.getByText('2 running')).toBeVisible();
   await expect(page.getByText('1 stale')).toBeVisible();

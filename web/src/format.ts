@@ -32,18 +32,20 @@ export interface StateStyle {
 /** One presentation per execution state, shared by the board and the detail view. */
 export const STATE: Record<Liveness, StateStyle> = {
   running: {
-    label: 'running (lease live)',
+    label: 'running',
     color: 'primary',
     variant: 'filled',
     glyph: '●',
-    describe: 'A session renewed its lease recently and reports the job running.',
+    describe:
+      'Lease live: a session renewed its ownership lease recently and reports the job running. A renewed lease is not proof that a process is alive at this moment.',
   },
   stale: {
-    label: 'last reported running',
+    label: 'stale',
     color: 'warning',
     variant: 'outlined',
     glyph: '◌',
-    describe: 'The status is still running but the lease lapsed; the session is presumed gone.',
+    describe:
+      'Last reported running: the status is still running, but the ownership lease lapsed without renewal. The session may no longer be working, or may only have missed a renewal.',
   },
   idle: {
     label: 'idle',

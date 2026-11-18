@@ -317,7 +317,7 @@ export function seedDashboard(
     recordReview(store, id, { token, reviewer: 'code-quality' });
   }
 
-  // 3. Building, but the owner's lease lapsed (a zero-minute lease): "last reported running".
+  // 3. Building, but the owner's lease lapsed (a zero-minute lease): "stale".
   const stale = mk('Dark mode for settings', 'github.com/acme/beta', repos.beta);
   {
     const { token } = claimJob(store, stale.id, {
