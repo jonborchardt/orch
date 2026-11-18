@@ -123,8 +123,8 @@ describe('job status mail through the CLI', () => {
     // The failure mail says where the job is now and why.
     const fail = mails[4]?.body ?? '';
     expect(fail).toContain(`Job:    ${id}`);
-    expect(fail).toContain('Stage:  build');
-    expect(fail).toContain('Status: failed');
+    expect(fail.split(/\r?\n/)[0]).toBe('❌ failed at build');
+    expect(fail).toContain('❌ build  current');
     expect(fail).toContain('stage.failed (build)');
     expect(fail).toContain('reason: tests broke in CI');
     expect(fail).toContain(`orch factory status ${id}`);
