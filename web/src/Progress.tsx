@@ -38,7 +38,7 @@ const HIDDEN = {
 const stepText = (s: Progress['steps'][number]) => `${s.label}: ${STEP[s.state].words}`;
 
 /**
- * The workflow at a glance: seven glyphs in order, then where the job is ("CI, needs human").
+ * The workflow at a glance: eight glyphs in order, then where the job is ("CI, needs human").
  * Focusable, with every step's state in its accessible name and its tooltip.
  */
 export function ProgressStrip({ progress }: { progress: Progress }) {

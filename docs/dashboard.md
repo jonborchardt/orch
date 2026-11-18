@@ -31,13 +31,13 @@ reads `-` before the first review round and `N / M` from round 1 on (round N of 
 tooltip says so in words ("Review round 2 of at most 3", "No review round yet (at most 3)"), and
 the same words are the text assistive technology reads.
 
-The Stage column is the workflow position, shown as a **progress strip**: seven steps in order,
-Spec, Build, Review, Approve, PR, CI, Done, each drawn with a glyph for its state (`✓` done, `▶`
+The Stage column is the workflow position, shown as a **progress strip**: eight steps in order,
+Spec, Build, Simplify, Review, Approve, PR, CI, Done, each drawn with a glyph for its state (`✓` done, `▶`
 current, `■` stopped, `○` not started; colour, from the active light or dark scheme, is only a
 second cue), followed by a short label such
 as `Build`, `CI, needs human`, `Build, interrupted`, `Review, cancelled`, or `Done`. The strip is in
 the Tab order; hovering or focusing it lists every step with its state, and its accessible name
-states all seven. The model is computed on the server (`progressOf` in `src/server/status.ts`) from
+states all eight. The model is computed on the server (`progressOf` in `src/server/status.ts`) from
 the job row and the newest `job.blocked` event the board already loads, and shipped on each row as
 `progress`. Exactly one step is current or stopped; steps before it are done and steps after it are
 not started, even when an earlier pass reached them (a job reworked from CI back to Build shows
@@ -46,7 +46,7 @@ is current at its stage; an interrupted, failed, or cancelled job is stopped at 
 escalated job (`needs-human`, never itself a step) is stopped at the `from` stage of its newest
 `job.blocked` event, else at its `returnStage`, so a CI escalation after the repair budget is spent
 reads `CI, needs human` though it would return to build; when neither names a delivery stage no
-step is marked and the label is `Needs human`. A completed job has all seven done; a cancelled job
+step is marked and the label is `Needs human`. A completed job has all eight done; a cancelled job
 never shows Done. Sorting the column orders by that workflow position. The status column is the
 execution state, kept separate so a job stopped in
 `build` never reads as done. Its states (each with a glyph and label, never colour alone):

@@ -229,7 +229,7 @@ describe('seeded board and detail', () => {
     // Escalated after the repair budget was spent: stopped at CI, though it would return to build.
     expect(by(ids.ciExhausted).progress.label).toBe('CI, needs human');
     expect(states(by(ids.ciExhausted).progress)).toEqual([
-      ...Array<string>(5).fill('done'),
+      ...Array<string>(6).fill('done'),
       'stopped',
       'not-started',
     ]);
@@ -242,6 +242,7 @@ describe('seeded board and detail', () => {
       expect(r.progress.steps.map((s) => s.id)).toEqual([
         'spec',
         'build',
+        'simplify',
         'review',
         'approve',
         'pr',

@@ -381,6 +381,7 @@ export function resumeOf(job: Lease & Pick<Job, 'id'>, state: Liveness): Resume 
 const STEPS: { id: StepId; label: string }[] = [
   { id: 'spec', label: 'Spec' },
   { id: 'build', label: 'Build' },
+  { id: 'simplify', label: 'Simplify' },
   { id: 'review', label: 'Review' },
   { id: 'approve', label: 'Approve' },
   { id: 'pr', label: 'PR' },

@@ -11,8 +11,8 @@ import { Markdown } from './Markdown.tsx';
 import { RESUME_NOTE } from './Status.tsx';
 import { theme } from './main.tsx';
 
-const STEP_IDS = ['spec', 'build', 'review', 'approve', 'pr', 'ci', 'done'] as const;
-const STEP_LABELS = ['Spec', 'Build', 'Review', 'Approve', 'PR', 'CI', 'Done'];
+const STEP_IDS = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci', 'done'] as const;
+const STEP_LABELS = ['Spec', 'Build', 'Simplify', 'Review', 'Approve', 'PR', 'CI', 'Done'];
 /** A progress model as the server builds it: steps before `position` done, after it not started. */
 function progress(position: number, at: 'current' | 'stopped', label: string): Progress {
   return {
@@ -95,7 +95,7 @@ const rows: BoardRow[] = [
     },
     resume: { command: '/factory resume job-00000002', heldBy: null },
     stage: 'review',
-    progress: progress(2, 'current', 'Review'),
+    progress: progress(3, 'current', 'Review'),
   }),
   row({
     id: 'job-00000003',
@@ -112,7 +112,7 @@ const rows: BoardRow[] = [
     resume: { command: '/factory resume job-00000003', heldBy: null },
     pr: { url: 'https://github.com/x/y/pull/1', state: 'draft', phase: 'ci-failing' },
     ci: noCi({ status: 'failing', head: 'abcdef0123456789', outcome: 'failing', repairs: 1 }),
-    progress: progress(5, 'stopped', 'CI, needs human'),
+    progress: progress(6, 'stopped', 'CI, needs human'),
   }),
   row({
     id: 'job-00000004',
@@ -191,7 +191,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       detail: 'AC2 needs deployment verification',
     },
     ci: noCi(),
-    progress: progress(3, 'stopped', 'Approve, needs human'),
+    progress: progress(4, 'stopped', 'Approve, needs human'),
     timeline: { entries: [], truncated: false },
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
@@ -418,13 +418,14 @@ describe('App board', () => {
     // The internal stage name never appears; the step and why it stopped do.
     expect(gamma).not.toHaveTextContent('needs-human');
     expect(strip).toHaveAccessibleName(
-      'Progress: CI, needs human. Spec: done, Build: done, Review: done, Approve: done, PR: done, CI: stopped, Done: not started',
+      'Progress: CI, needs human. Spec: done, Build: done, Simplify: done, Review: done, Approve: done, PR: done, CI: stopped, Done: not started',
     );
     // Not colour alone: each step carries a glyph for its state.
     const glyphs = [...strip.querySelectorAll<HTMLElement>('[data-step]')];
     expect(glyphs.map((g) => `${g.dataset['step'] ?? ''}:${g.textContent}`)).toEqual([
       'spec:✓',
       'build:✓',
+      'simplify:✓',
       'review:✓',
       'approve:✓',
       'pr:✓',
@@ -433,7 +434,7 @@ describe('App board', () => {
     ]);
     // Colours follow the active light or dark scheme (CSS variables), never fixed light values.
     expect(glyphs.map((g) => g.style.color)).toEqual([
-      ...Array<string>(5).fill('var(--mui-palette-success-main)'),
+      ...Array<string>(6).fill('var(--mui-palette-success-main)'),
       'var(--mui-palette-error-main)',
       'var(--mui-palette-text-secondary)',
     ]);
@@ -444,6 +445,7 @@ describe('App board', () => {
     expect(lines.map((d) => d.textContent)).toEqual([
       '✓ Spec: done',
       '✓ Build: done',
+      '✓ Simplify: done',
       '✓ Review: done',
       '✓ Approve: done',
       '✓ PR: done',
@@ -512,7 +514,7 @@ describe('App board', () => {
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     const strip = screen.getByRole('img', { name: /^Progress: Build\./ });
     expect(strip).toHaveAccessibleName(
-      'Progress: Build. Spec: done, Build: current, Review: not started, Approve: not started, PR: not started, CI: not started, Done: not started',
+      'Progress: Build. Spec: done, Build: current, Simplify: not started, Review: not started, Approve: not started, PR: not started, CI: not started, Done: not started',
     );
     expect(screen.queryByText(/stage:/)).not.toBeInTheDocument();
     const section = screen.getByTestId('progress-section');
@@ -522,7 +524,7 @@ describe('App board', () => {
       within(steps)
         .getAllByRole('listitem')
         .map((li) => li.getAttribute('data-step-state')),
-    ).toEqual(['done', 'current', ...Array<string>(5).fill('not-started')]);
+    ).toEqual(['done', 'current', ...Array<string>(6).fill('not-started')]);
     // Times read as elsewhere on the dashboard ("… ago"); the exact timestamp stays in the markup.
     const build = within(steps).getAllByRole('listitem')[1];
     expect(build).toHaveTextContent(/started .* ago/);
