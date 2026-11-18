@@ -22,6 +22,7 @@ import {
   go,
   runStage,
   reviewRound,
+  simplifyStage,
 } from './factory-fixture.ts';
 
 describe('factory start and spec stage', () => {
@@ -186,6 +187,8 @@ describe('review rounds', () => {
       'round-1/review-code-quality.md',
       'round-1/review-correctness.md',
       'round-1/review-security.md',
+      'round-1/simplify-review.md',
+      'round-1/simplify.md',
       'spec-review-1.md',
       'spec.md',
     ]);
@@ -259,6 +262,7 @@ describe('review rounds', () => {
     // The failed registration left the stage running; register properly and complete.
     addArtifact(store, c.id, 'build.md', { token: c.token, replace: true });
     expect(go(c, 'complete').round).toBe(2);
+    simplifyStage(c);
     expect(next(c.id).agents[0]?.artifact).toBe('round-2/review-security.md');
     const approved = reviewRound(c, {});
     expect([approved.stage, approved.status]).toEqual(['approve', 'pending']);

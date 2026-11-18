@@ -32,7 +32,7 @@ const LABEL: Record<DashboardAction, string> = {
   'remove-worktree': 'Remove the worktree (the branch is kept)',
 };
 
-const STAGES = ['spec', 'build', 'review', 'approve', 'pr', 'ci'] as const;
+const STAGES = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci'] as const;
 
 /** `approve` resumes the job at a stage; label it by that stage (`ci` and `pr` in capitals). */
 const resumeAt = (stage: string) =>

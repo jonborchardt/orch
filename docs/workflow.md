@@ -6,11 +6,11 @@ the reference for stages, artifacts, evidence, worktrees, GitHub, and ownership.
 ## Workflow
 
 ```
-spec → build → review → approve → pr → ci → completed
-                 │  changes            │     │
-                 └──────→ build        │     └─ (requires passing required checks for HEAD)
-                 ▲                     └─ (requires a recorded PR)
-                 └── rework (CI failed, repairs < max) ── ci
+spec → build → simplify → review → approve → pr → ci → completed
+                            │  changes            │     │
+                            └──────→ build        │     └─ (requires passing required checks for HEAD)
+                            ▲                     └─ (requires a recorded PR)
+                            └── rework (CI failed, repairs < max) ── ci
          any stage ── escalate ──→ needs-human ── resume --to <stage> ──→ back
 ```
 
@@ -30,19 +30,22 @@ Claude requests an action; `orch job transition <id> <action>` validates and app
 | `cancel`   | any job not already finished                                                     | status `cancelled`                                                                                                           |
 
 Required artifacts, relative to the job's artifact directory and registered with
-`orch job artifact add`: `spec.md`, `build.md`, `round-N/consolidated.md`, `decision.md`, `pr.md`.
+`orch job artifact add`: `spec.md`, `build.md`, `round-N/simplify.md` (with
+`round-N/simplify-review.md`), `round-N/consolidated.md`, `decision.md`, `pr.md`.
 Registration checks the file is inside the artifact directory (no absolute paths or `..`), is
 `.md`, exists, is non-empty, and has the structure its path requires (`src/core/artifact-rules.ts`):
 
-| Artifact                    | Required headings                | Marker line (exactly once)        |
-| --------------------------- | -------------------------------- | --------------------------------- |
-| `spec.md`                   | Goal, Scope, Acceptance criteria |                                   |
-| `spec-review-1.md`, `-2.md` | Findings                         | `VERDICT: PASS` or `CHANGES`      |
-| `build.md`                  | Summary, Validation              |                                   |
-| `round-N/review-<name>.md`  | Findings                         | `VERDICT: PASS` or `CHANGES`      |
-| `round-N/consolidated.md`   | Findings                         | `BLOCKING: <count>`               |
-| `decision.md`               | Rationale                        | `DECISION: APPROVE` or `ESCALATE` |
-| `pr.md`                     | Validation, Known limitations    |                                   |
+| Artifact                     | Required headings                | Marker line (exactly once)        |
+| ---------------------------- | -------------------------------- | --------------------------------- |
+| `spec.md`                    | Goal, Scope, Acceptance criteria |                                   |
+| `spec-review-1.md`, `-2.md`  | Findings                         | `VERDICT: PASS` or `CHANGES`      |
+| `build.md`                   | Summary, Validation              |                                   |
+| `round-N/simplify-review.md` | Findings                         |                                   |
+| `round-N/simplify.md`        | Applied, Declined, Validation    |                                   |
+| `round-N/review-<name>.md`   | Findings                         | `VERDICT: PASS` or `CHANGES`      |
+| `round-N/consolidated.md`    | Findings                         | `BLOCKING: <count>`               |
+| `decision.md`                | Rationale                        | `DECISION: APPROVE` or `ESCALATE` |
+| `pr.md`                      | Validation, Known limitations    |                                   |
 
 Headings match case-insensitively at any level. The marker is stored on the artifact row and the
 workflow reads it: `review record --verdict pass` is refused if the file says `CHANGES`, and
@@ -72,15 +75,28 @@ the objections in the registered file. A challenge whose spec was replaced is ch
 (`--replace` on the same file). The loop bound is the plan's, not a code cap; see
 [the decision](decisions/2026-11-17-spec-challenger-gates-the-spec.md).
 
-**Review rounds.** Completing `build` increments the round and enters `review`; so does `resume`
-from `needs-human` into `review` (a requested re-review is a new round, keeping earlier verdicts as
-history), while resuming an interrupted `review` keeps its round. While `review` is
+**Simplify.** Completing `build` increments the round and enters `simplify`, every time: the first
+build, a review rework, a CI repair, and a base-integration rework. `factory-simplifier` (read-only,
+Sonnet by default, role `simplifier`) reviews the job's diff for over-engineering and writes
+`round-N/simplify-review.md`; then `factory-builder` applies the findings that make sense, commits
+if anything changed, runs `orch verify`, and writes `round-N/simplify.md` with what it applied and
+each declined finding with its reason. `simplify.md` is code evidence: it is registered only from a
+clean worktree and records HEAD. `complete` is refused without both files, when HEAD moved past the
+one `simplify.md` records, or without a valid verification run for that HEAD. A simplify that
+changes nothing is valid; `simplify.md` then records the HEAD the build verified. Completing
+`simplify` enters `review` in the same round; see
+[the decision](decisions/2026-11-17-simplify-stage-before-review.md).
+
+**Review rounds.** `resume` from `needs-human` into `simplify` or `review` opens a new round (a
+requested re-review keeps earlier verdicts as history), while resuming an interrupted `simplify` or
+`review` keeps its round. While `review` is
 `running`, each reviewer is recorded with `orch job review record` (without a verdict while it
 runs, then with `--verdict pass|changes`); the verdict is read from that reviewer's own
 `round-N/review-<name>.md`. `complete` is refused while any reviewer is pending, until all three
 always-on reviewers (`security`, `correctness`, `code-quality`) have a verdict (UI reviewers join for
-UI changes), and when the verdicts describe a commit other than the one `build.md` was registered
-for. If every verdict is `pass` and `BLOCKING: 0`, the job moves to `approve`; otherwise the round is
+UI changes), and when the verdicts describe a commit other than the one this round's `simplify.md`
+was registered for (or, in a round with no `simplify.md`, such as a `request-review` or `resume --to
+review`, the one `build.md` was registered for). If every verdict is `pass` and `BLOCKING: 0`, the job moves to `approve`; otherwise the round is
 a rejection and the job returns to `build`, unless it is the `--max-rounds`-th rejection (default 3),
 in which case it escalates to `needs-human`. Rounds that passed and were followed by a CI repair or a
 base-integration rework spend nothing; `maxCiRepairs` bounds CI repairs separately.

@@ -12,7 +12,8 @@ number, and, for rounds after the first, the path to the consolidated review fin
 Hard rules:
 
 - Work only inside the worktree path. `cd` into it for every command. Never touch the user's main
-  checkout, other worktrees, or the artifact directory except to write `build.md`.
+  checkout, other worktrees, or the artifact directory except to write `build.md` (or, in the
+  simplify stage, `simplify.md`).
 - Obey the project's own instructions (`CLAUDE.md`, `AGENTS.md`, contributing docs) and reuse its
   skills, scripts, and conventions. They outrank these instructions when they conflict on style or
   process; they never permit skipping validation or committing secrets.
@@ -61,6 +62,14 @@ Procedure:
    and `Validation`; also `Changes`, `Acceptance criteria`, `Findings addressed` (rounds > 1), and
    `Known gaps`. `Validation` names the passing verification run id and HEAD; `Acceptance
 criteria` names, per criterion, the test or log line that proves it. A reviewer reads the logs.
+
+Simplify stage: after every build, the coordinator gives you `round-N/simplify-review.md` (the
+simplifier's over-engineering findings) and asks for `round-N/simplify.md` instead of `build.md`.
+Apply the findings that make sense; never widen scope or drop anything the spec or the project's
+instructions require. Same hard rules: targeted tests, commit if anything changed (nothing changed
+is fine), then `orch verify`. Write `simplify.md` with the headings `Applied` (each finding applied,
+or "none"), `Declined` (each finding not applied, with its reason), and `Validation` (the passing
+run id and HEAD). The file is the deliverable.
 
 Finish with a short message: commits made, validation result, path of `build.md`, anything you could
 not do and why.

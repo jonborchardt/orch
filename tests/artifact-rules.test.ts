@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { checkArtifact, ruleFor } from '../src/core/artifact-rules.ts';
+import { assertStageOwns, checkArtifact, ruleFor } from '../src/core/artifact-rules.ts';
 import { ValidationError } from '../src/core/errors.ts';
 import { jobWorktreeDir, repoSlug } from '../src/core/paths.ts';
 import { fixture, homePaths } from './helpers.ts';
@@ -70,6 +70,31 @@ describe('artifact rules', () => {
     );
     expect(ruleFor('spec-review-3.md')).toBeUndefined();
     expect(ruleFor('round-1/spec-review-1.md')).toBeUndefined();
+  });
+
+  it('simplify: findings need Findings; the record needs Applied, Declined, and Validation', () => {
+    expect(checkArtifact('round-1/simplify-review.md', '# S\n\n## Findings\nNone.\n')).toBeNull();
+    const record = '## Applied\nnone\n\n## Declined\n1. kept: spec needs it\n\n## Validation\nok\n';
+    expect(checkArtifact('round-1/simplify.md', record)).toBeNull();
+    expect(() => checkArtifact('round-1/simplify-review.md', '# S\nnothing\n')).toThrow(
+      /"Findings"/,
+    );
+    for (const h of ['Applied', 'Declined', 'Validation']) {
+      const without = record.replace(`## ${h}`, '## Other');
+      expect(() => checkArtifact('round-1/simplify.md', without), h).toThrow(`"${h}"`);
+    }
+    // The findings file is not a reviewer file: no VERDICT, and it belongs to simplify.
+    expect(ruleFor('round-1/simplify-review.md')?.stage).toBe('simplify');
+    expect(ruleFor('round-1/simplify-review.md')?.marker).toBeUndefined();
+    for (const p of ['round-2/simplify-review.md', 'round-2/simplify.md']) {
+      const owns = (stage: 'simplify' | 'review' | 'build', round: number) => () => {
+        assertStageOwns(p, stage, round);
+      };
+      expect(owns('simplify', 2)).not.toThrow();
+      expect(owns('simplify', 1)).toThrow(/round 2/);
+      expect(owns('review', 2)).toThrow(/simplify stage/);
+      expect(owns('build', 2)).toThrow(ValidationError);
+    }
   });
 });
 

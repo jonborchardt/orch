@@ -90,6 +90,12 @@ function jobAt(stage: 'spec' | 'pr') {
     commitFile(wt, 'export.ts', 'export const csv = 1;');
     stageWith('build.md');
     go('start');
+    for (const rel of ['round-1/simplify-review.md', 'round-1/simplify.md']) {
+      writeArtifact(dir, rel);
+      addArtifact(store, job.id, rel, { token });
+    }
+    go('complete');
+    go('start');
     for (const reviewer of ['security', 'correctness', 'code-quality']) {
       writeArtifact(dir, `round-1/review-${reviewer}.md`);
       recordVerdict(store, job.id, { token, reviewer, verdict: 'pass' });

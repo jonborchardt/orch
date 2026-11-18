@@ -31,6 +31,13 @@ export const ARTIFACT_RULES: readonly ArtifactRule[] = [
     marker: { name: 'VERDICT', values: ['PASS', 'CHANGES'] },
   },
   { path: /^build\.md$/, stage: 'build', headings: ['Summary', 'Validation'] },
+  // The simplify pass: the simplifier's findings, then the builder's record of what it applied.
+  { path: /^round-\d+\/simplify-review\.md$/, stage: 'simplify', headings: ['Findings'] },
+  {
+    path: /^round-\d+\/simplify\.md$/,
+    stage: 'simplify',
+    headings: ['Applied', 'Declined', 'Validation'],
+  },
   {
     path: /^round-\d+\/review-[a-z0-9-]+\.md$/,
     stage: 'review',
@@ -69,7 +76,7 @@ export function assertStageOwns(relPath: string, stage: Stage, round: number): v
   if (rule.stage !== stage || wrongRound) {
     throw new ValidationError(
       `${relPath} belongs to the ${rule.stage} stage${m ? ` of round ${m[1] ?? '?'}` : ''}; ` +
-        `the job is in ${stage}${stage === 'review' ? ` round ${String(round)}` : ''}.`,
+        `the job is in ${stage}${stage === 'review' || stage === 'simplify' ? ` round ${String(round)}` : ''}.`,
     );
   }
 }

@@ -12,7 +12,18 @@ import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
 import { integrateBase } from '../src/ops/worktree.ts';
 import { getJob } from '../src/storage/jobs.ts';
 import { listIntegrations } from '../src/storage/verification.ts';
-import { add, approve, go, head, passRound, start, toPr, toReview, verify } from './drive.ts';
+import {
+  add,
+  approve,
+  go,
+  head,
+  passRound,
+  simplify,
+  start,
+  toPr,
+  toReview,
+  verify,
+} from './drive.ts';
 import { fixture, gitIn } from './helpers.ts';
 import { store, clone, bare, shim, advanceBase, deliver } from './integration-fixture.ts';
 
@@ -114,6 +125,7 @@ describe('conflicts and material edits', () => {
     expect(verify(store, c).status).toBe('passed');
     add(store, c, 'build.md', fixture('build.md') + '\nresolved\n', true);
     expect(go(store, c, 'complete').round).toBe(2);
+    simplify(store, c);
     passRound(store, c);
     approve(store, c, true);
     go(store, c, 'start');

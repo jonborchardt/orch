@@ -31,6 +31,8 @@ import {
   requiredArtifact,
   RESUMABLE_STATUSES,
   reviewArtifact,
+  simplifyArtifact,
+  simplifyReviewArtifact,
   type Stage,
 } from '../core/workflow.ts';
 import { dirtyFiles } from '../git/repo.ts';
@@ -436,6 +438,28 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
           : 'Implement spec.md in the worktree, commit, run orch verify, and write build.md citing the run id.') +
         reworkNote;
       plan.commands = [...start, verify, add('build.md', rework), complete];
+      break;
+    }
+    case 'simplify': {
+      const findings = simplifyReviewArtifact(job.round);
+      const record = simplifyArtifact(job.round);
+      const task = (kind: Role['kind'], artifact: string) => {
+        const r = role(kind);
+        return r ? [{ role: r.name, agent: r.agent, model: r.model, artifact }] : [];
+      };
+      plan.agents = [...task('simplify', findings), ...task('build', record)];
+      plan.reason =
+        `Simplify round ${String(job.round)}: the simplifier reviews the job's diff for over-engineering and writes ` +
+        `${findings} without touching code; the builder applies the findings that make sense (never widening ` +
+        `scope), commits if anything changed, runs orch verify, and writes ${record} listing what was applied ` +
+        'and each declined finding with its reason.';
+      plan.commands = [
+        ...start,
+        add(findings, has(findings)),
+        verify,
+        add(record, has(record)),
+        complete,
+      ];
       break;
     }
     case 'review': {

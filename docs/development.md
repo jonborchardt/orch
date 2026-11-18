@@ -53,8 +53,9 @@ docs/                workflow.md, dashboard.md, development.md (this file), sess
 
 ```
 skills/factory/  SKILL.md (the coordinator), reference.md (agent inputs, artifact templates)
-agents/          factory-spec-writer, factory-spec-challenger, factory-builder, factory-reviewer-{security,correctness,
-                 code-quality,ui-design,ux,accessibility,web-platform}, factory-approver
+agents/          factory-spec-writer, factory-spec-challenger, factory-builder, factory-simplifier,
+                 factory-reviewer-{security,correctness,code-quality,ui-design,ux,accessibility,
+                 web-platform}, factory-approver
 ```
 
 ## Install and develop

@@ -15,7 +15,7 @@ import { verificationStatus } from '../src/ops/verify.ts';
 import { worktreeOf } from '../src/ops/tree.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { recordCi, releaseJob } from '../src/storage/jobs.ts';
-import { add, deliverPr, go, head, passRound, start, toCi, verify } from './drive.ts';
+import { add, deliverPr, go, head, passRound, simplify, start, toCi, verify } from './drive.ts';
 import { commitFile, fixture, gitIn } from './helpers.ts';
 import {
   store,
@@ -81,6 +81,7 @@ describe('ci stage: failing checks and the repair cycle', () => {
     add(store, c, 'build.md', fixture('build.md'), true);
     go(store, c, 'complete');
     expect(job(c).round).toBe(2);
+    simplify(store, c);
     passRound(store, c);
     // The earlier approval describes the old commit and is not evidence for the repaired one.
     go(store, c, 'start');
