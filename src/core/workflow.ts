@@ -12,6 +12,7 @@ import type { Artifact, Job, Review } from '../storage/schema.ts';
 export const STAGES = [
   'spec',
   'build',
+  'simplify',
   'review',
   'approve',
   'pr',
@@ -70,6 +71,8 @@ export function requiredArtifact(stage: Stage, round: number): string | undefine
       return 'spec.md';
     case 'build':
       return 'build.md';
+    case 'simplify':
+      return simplifyArtifact(round);
     case 'review':
       return `round-${String(round)}/consolidated.md`;
     case 'approve':
@@ -79,6 +82,16 @@ export function requiredArtifact(stage: Stage, round: number): string | undefine
     default:
       return undefined;
   }
+}
+
+/** The builder's record of applied and declined simplify findings for a round. */
+export function simplifyArtifact(round: number): string {
+  return `round-${String(round)}/simplify.md`;
+}
+
+/** The simplifier's over-engineering findings for a round. */
+export function simplifyReviewArtifact(round: number): string {
+  return `round-${String(round)}/simplify-review.md`;
 }
 
 export function reviewArtifact(round: number, reviewer: string): string {
@@ -169,7 +182,7 @@ export interface Next {
   stage: Stage;
   status: Status;
   requiredArtifacts: string[];
-  /** Present when the stage is review. */
+  /** Present when the stage is simplify or review. */
   round?: number;
 }
 
@@ -180,7 +193,8 @@ export function describeNext(job: Pick<Job, 'stage' | 'status' | 'round'>): Next
     status: job.status,
     requiredArtifacts: required ? [required] : [],
   };
-  if (job.stage === 'review') next.round = job.round;
+  if (job.stage === 'simplify') next.requiredArtifacts.unshift(simplifyReviewArtifact(job.round));
+  if (job.stage === 'simplify' || job.stage === 'review') next.round = job.round;
   return next;
 }
 
@@ -239,6 +253,13 @@ export function transition(
       if (status !== 'running') reject('stage is not running');
       // Reviewer completeness is reported before the consolidated artifact, since it comes first.
       if (stage === 'review') verifyReviewers(currentReviews(job, ctx.reviews));
+      // The simplifier's findings come before the builder's record of what was applied.
+      if (stage === 'simplify') {
+        const findings = simplifyReviewArtifact(job.round);
+        if (!ctx.artifacts.some((a) => a.path === findings)) {
+          reject(`missing required artifact ${findings}`);
+        }
+      }
       const required = requiredArtifact(stage, job.round);
       const artifact = required ? ctx.artifacts.find((a) => a.path === required) : undefined;
       if (required && !artifact) reject(`missing required artifact ${required}`);
@@ -251,10 +272,13 @@ export function transition(
           return { patch: { stage: 'build', status: 'pending' }, events: [completed] };
         }
         case 'build':
+          // Every build opens the next review round; its simplify pass belongs to that round.
           return {
-            patch: { stage: 'review', status: 'pending', round: job.round + 1 },
+            patch: { stage: 'simplify', status: 'pending', round: job.round + 1 },
             events: [completed],
           };
+        case 'simplify':
+          return { patch: { stage: 'review', status: 'pending' }, events: [completed] };
         case 'review':
           return completeReview(job, ctx, blocking, completed);
         case 'approve': {
@@ -332,14 +356,14 @@ export function transition(
           const refused = specChallengeRefusal(ctx.artifacts, true);
           if (refused) reject(refused);
         }
-        // A review requested from needs-human is a fresh round, as after a build: earlier
-        // verdicts stay as that round's history instead of being shown or overwritten.
+        // A simplify or review requested from needs-human is a fresh round, as after a build:
+        // earlier verdicts stay as that round's history instead of being shown or overwritten.
         return {
           patch: {
             stage: to,
             status: 'pending',
             returnStage: null,
-            ...(to === 'review' ? { round: job.round + 1 } : {}),
+            ...(to === 'review' || to === 'simplify' ? { round: job.round + 1 } : {}),
           },
           events: [{ type: 'job.resumed', payload: { to } }],
         };

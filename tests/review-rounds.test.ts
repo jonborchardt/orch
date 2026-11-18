@@ -14,6 +14,7 @@ import {
   go,
   makePolicyRepo,
   passRound,
+  simplify,
   start,
   toReview,
   verdict,
@@ -57,6 +58,7 @@ describe('review rounds on the dashboard', () => {
     verify(store, c);
     add(store, c, 'build.md', fixture('build.md'), true);
     go(store, c, 'complete');
+    simplify(store, c);
 
     // Round 2 is open and nobody has recorded: no round-1 verdicts, no round-1 blocking chip.
     expect(getJob(store.db, c.id).round).toBe(2);

@@ -340,7 +340,7 @@ function verifyOnDisk(dir: string, stage: Stage, round: number, artifacts: Artif
   for (const a of artifacts) {
     const relevant =
       a.path === required ||
-      (stage === 'review' && a.path.startsWith(prefix)) ||
+      ((stage === 'review' || stage === 'simplify') && a.path.startsWith(prefix)) ||
       (stage === 'spec' && isSpecChallenge(a.path)) ||
       (stage === 'pr' && a.path === 'decision.md');
     if (!relevant) continue;
@@ -418,7 +418,7 @@ export function registerArtifact(
     const artifact = upsertArtifact(tx, {
       jobId: id,
       stage: job.stage,
-      round: job.stage === 'review' ? job.round : null,
+      round: job.stage === 'review' || job.stage === 'simplify' ? job.round : null,
       path: checked.path,
       bytes: checked.bytes,
       sha256: checked.sha256,

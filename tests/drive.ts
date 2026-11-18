@@ -111,7 +111,16 @@ export function passSpec(store: Store, c: Ctx): void {
   go(store, c, 'complete');
 }
 
-/** spec done; one commit; verified; build.md registered; build completed: review pending. */
+/** A simplify pass that changes nothing: findings and record registered, completed: review pending. */
+export function simplify(store: Store, c: Ctx): void {
+  const round = String(getJob(store.db, c.id).round);
+  go(store, c, 'start');
+  add(store, c, `round-${round}/simplify-review.md`);
+  add(store, c, `round-${round}/simplify.md`);
+  go(store, c, 'complete');
+}
+
+/** spec done; one commit; verified; build.md registered; build and simplify completed: review pending. */
 export function toReview(store: Store, c: Ctx, file = 'src/export.ts'): void {
   passSpec(store, c);
   go(store, c, 'start');
@@ -119,6 +128,7 @@ export function toReview(store: Store, c: Ctx, file = 'src/export.ts'): void {
   verify(store, c);
   add(store, c, 'build.md');
   go(store, c, 'complete');
+  simplify(store, c);
 }
 
 /** One round where every always-on reviewer passes; `blocking` is the consolidated count. */

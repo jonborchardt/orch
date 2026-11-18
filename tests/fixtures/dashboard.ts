@@ -13,6 +13,7 @@ import type { Store } from '../../src/storage/client.ts';
 import {
   claimJob,
   createJob,
+  getJob,
   recordCi,
   recordPr,
   recordReview,
@@ -159,6 +160,28 @@ AC2 needs a deployment to verify and an unrequested change is in the diff; a hum
 DECISION: ESCALATE
 `;
 
+const SIMPLIFY_REVIEW = `# Simplify review
+
+## Findings
+
+None.
+`;
+
+const SIMPLIFY = `# Simplify
+
+## Applied
+
+none
+
+## Declined
+
+none
+
+## Validation
+
+Same verified HEAD as the build.
+`;
+
 const PR = `# Export reports as CSV
 
 ## Summary
@@ -220,6 +243,14 @@ export function seedDashboard(
     write(jobArtifactDir(id, store.paths), rel, body);
     registerArtifact(store, id, rel, { token, replace });
   };
+  // A simplify pass that changed nothing, as every build is followed by one.
+  const simplify = (id: string, token: string) => {
+    const round = String(getJob(store.db, id).round);
+    run(id, token, 'start');
+    art(id, token, `round-${round}/simplify-review.md`, SIMPLIFY_REVIEW);
+    art(id, token, `round-${round}/simplify.md`, SIMPLIFY);
+    run(id, token, 'complete');
+  };
 
   // 1. Completed (required checks passed for the delivered head); CI later observed failing.
   const completed = mk('Export reports as CSV', 'github.com/acme/alpha', repos.alpha, {
@@ -236,6 +267,7 @@ export function seedDashboard(
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD);
     run(id, token, 'complete');
+    simplify(id, token);
     run(id, token, 'start');
     for (const [r, v] of [
       ['security', 'CHANGES'],
@@ -250,6 +282,7 @@ export function seedDashboard(
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD.replace('round 1', 'round 2'), true);
     run(id, token, 'complete');
+    simplify(id, token);
     run(id, token, 'start');
     for (const r of ['security', 'correctness', 'code-quality'] as const) {
       art(id, token, `round-2/review-${r}.md`, review(r, 'PASS', 2));
@@ -296,6 +329,7 @@ export function seedDashboard(
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD);
     run(id, token, 'complete');
+    simplify(id, token);
     run(id, token, 'start');
     for (const [r, v] of [
       ['security', 'PASS'],
@@ -310,6 +344,7 @@ export function seedDashboard(
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD.replace('round 1', 'round 2'), true);
     run(id, token, 'complete');
+    simplify(id, token);
     run(id, token, 'start');
     art(id, token, 'round-2/review-security.md', review('security', 'PASS', 2));
     recordReview(store, id, { token, reviewer: 'security', verdict: 'pass' });
@@ -355,6 +390,7 @@ export function seedDashboard(
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD);
     run(id, token, 'complete');
+    simplify(id, token);
     run(id, token, 'start');
     for (const r of ['security', 'correctness', 'code-quality'] as const) {
       art(id, token, `round-1/review-${r}.md`, review(r, 'PASS', 1));
@@ -413,6 +449,7 @@ export function seedDashboard(
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD);
     run(id, token, 'complete');
+    simplify(id, token);
     run(id, token, 'start');
     for (const r of ['security', 'correctness', 'code-quality'] as const) {
       art(id, token, `round-1/review-${r}.md`, review(r, 'PASS', 1));
@@ -515,6 +552,7 @@ export function seedDashboard(
     run(id, token, 'start');
     art(id, token, 'build.md', BUILD.replace('round 1', 'CI repair 1'), true);
     run(id, token, 'complete');
+    simplify(id, token);
     run(id, token, 'start');
     for (const r of ['security', 'correctness', 'code-quality'] as const) {
       art(id, token, `round-2/review-${r}.md`, review(r, 'PASS', 2));

@@ -13,6 +13,7 @@ import {
   go,
   head,
   passRound,
+  simplify,
   start,
   toReview,
   verdict,
@@ -36,6 +37,7 @@ describe('review budget: maxRounds counts rejected reviews, not passes through b
     verify(store, c);
     add(store, c, 'build.md', fixture('build.md'), true);
     go(store, c, 'complete');
+    simplify(store, c);
   }
 
   it('a CI repair does not spend a rejection: CHANGES, PASS, CI failure, CHANGES goes back to build', () => {
@@ -91,6 +93,7 @@ describe('review budget: maxRounds counts rejected reviews, not passes through b
     verify(store, c);
     add(store, c, 'build.md', fixture('build.md'), true);
     go(store, c, 'complete');
+    simplify(store, c);
     changesRound(c);
     expect(job(c)).toMatchObject({ stage: 'build', round: 3, ciRepairs: 0 });
   });

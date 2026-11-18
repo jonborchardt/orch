@@ -48,6 +48,10 @@ describe('jobUsage', () => {
     art('build.md');
     go('complete');
     go('start');
+    art('round-1/simplify-review.md');
+    art('round-1/simplify.md');
+    go('complete');
+    go('start');
     for (const r of ['security', 'correctness', 'code-quality']) {
       recordReview(store, job.id, { token, reviewer: r }); // launched, no verdict yet
     }
@@ -62,11 +66,12 @@ describe('jobUsage', () => {
     expect(u.stages.map((v) => [v.stage, v.round, v.endedBy])).toEqual([
       ['spec', 0, 'stage.completed'],
       ['build', 0, 'stage.completed'],
+      ['simplify', 1, 'stage.completed'],
       ['review', 1, null],
     ]);
     expect(u.stages[0]?.durationMs).toBeGreaterThanOrEqual(0);
-    expect(u.stages[2]?.durationMs).toBeNull();
-    expect(Object.keys(u.stageMs).sort()).toEqual(['build', 'spec']);
+    expect(u.stages[3]?.durationMs).toBeNull();
+    expect(Object.keys(u.stageMs).sort()).toEqual(['build', 'simplify', 'spec']);
     expect(u.reviews.map((r) => [r.reviewer, r.verdict, r.durationMs === null])).toEqual([
       ['security', 'pass', false],
       ['correctness', 'pass', false],
@@ -90,7 +95,7 @@ describe('jobUsage', () => {
     const cli = json<{ stages: unknown[]; tokens: { measured: boolean } }>(
       orch(store.home, store.home, ['--json', 'job', 'usage', job.id]),
     );
-    expect(cli.stages).toHaveLength(3);
+    expect(cli.stages).toHaveLength(4);
     expect(cli.tokens.measured).toBe(false);
     expect(orch(store.home, store.home, ['job', 'usage']).code).toBe(2);
     expect(orch(store.home, store.home, ['job', 'usage', 'job-00000000']).code).toBe(3);

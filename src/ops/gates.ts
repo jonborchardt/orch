@@ -1,7 +1,7 @@
 /**
- * Git-aware gates in front of storage mutations. Evidence about code (build.md, review verdicts,
- * decision.md) is accepted only from a clean worktree and is recorded with the HEAD it describes;
- * a stage completes only while HEAD is still that commit. Storage alone cannot know Git, so the
+ * Git-aware gates in front of storage mutations. Evidence about code (build.md, simplify.md,
+ * review verdicts, decision.md) is accepted only from a clean worktree and is recorded with the
+ * HEAD it describes; a stage completes only while HEAD is still that commit. Storage alone cannot know Git, so the
  * CLI routes these three mutations through here.
  */
 import { readFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ import { baseRef } from '../git/repo.ts';
 import { tryGit } from '../git/run.ts';
 import { containsRef, editedMerges } from '../git/worktree.ts';
 import { sensitiveSummary } from '../core/sensitive.ts';
-import { type Action, requiredArtifact } from '../core/workflow.ts';
+import { type Action, requiredArtifact, simplifyArtifact } from '../core/workflow.ts';
 import { findArtifact, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import {
@@ -32,7 +32,7 @@ import { effectivePolicy, sensitiveReport, verificationStatus } from './verify.t
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
 
 /** Artifacts that describe the code and therefore need a committed, clean worktree. */
-const CODE_EVIDENCE = /^(build\.md|decision\.md)$/;
+const CODE_EVIDENCE = /^(build\.md|decision\.md|round-\d+\/simplify\.md)$/;
 /** Artifacts that must name every sensitive change in the diff. */
 const SUMMARIES = /^(round-\d+\/consolidated\.md|pr\.md)$/;
 
@@ -143,6 +143,7 @@ function evidenceHead(
   const required = requiredArtifact(job.stage, job.round);
   switch (job.stage) {
     case 'build':
+    case 'simplify':
     case 'approve': {
       const a = artifacts.find((x) => x.path === required);
       return a ? { what: a.path, head: a.head } : undefined;
@@ -269,18 +270,22 @@ export function transitionGuarded(
         );
       }
       if (job.stage === 'review') {
-        // Reviewers judge the commit the builder built; a commit made since then was never built
-        // against the spec, even when every verdict was recorded against it.
-        const built = findArtifact(store.db, id, 'build.md')?.head ?? null;
+        // Reviewers judge the commit this round's simplify pass left (or, when the round skipped
+        // simplify, the one the builder built); a later commit was never built against the spec.
+        const source =
+          findArtifact(store.db, id, simplifyArtifact(job.round)) ??
+          findArtifact(store.db, id, 'build.md');
+        const what = source?.path ?? 'build.md';
+        const built = source?.head ?? null;
         if (built !== evidence.head) {
           throw new ValidationError(
-            `round ${String(job.round)} verdicts describe ${evidence.head.slice(0, 7)} but build.md ` +
+            `round ${String(job.round)} verdicts describe ${evidence.head.slice(0, 7)} but ${what} ` +
               `describes ${built?.slice(0, 7) ?? 'no commit'}; the code changed after the build. ` +
               'Return the job to build and review again.',
           );
         }
       }
-      if (job.stage === 'build' || job.stage === 'approve') {
+      if (job.stage === 'build' || job.stage === 'simplify' || job.stage === 'approve') {
         requireVerified(store, job, info, `completing ${job.stage}`);
       }
       if (job.stage === 'approve') requireAuthorizedPolicy(job, info, 'completing approve');
