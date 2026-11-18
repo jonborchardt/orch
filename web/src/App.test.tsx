@@ -1296,6 +1296,48 @@ BLOCKING: ${String(marker)}
       screen.queryAllByRole('alert').filter((a) => a.textContent.startsWith('Blocked:')),
     ).toHaveLength(0);
   });
+
+  it('shows a run queued for the machine-wide verify lock on the Verification tab', async () => {
+    mockFetch();
+    data.detail = detail({
+      plan: {
+        step: 'run-agent',
+        reason: 'build',
+        agents: [],
+        artifacts: [],
+        worktree: null,
+        verification: {
+          configured: true,
+          policy: {
+            source: 'baseline',
+            head: 'abc1234567',
+            fingerprint: 'fp',
+            checks: ['check'],
+            authorization: 'not-needed',
+            candidateError: null,
+          },
+          run: null,
+          valid: false,
+          reason: 'no verification run recorded',
+          queue: {
+            state: 'queued',
+            since: '2026-11-18T01:00:00.000Z',
+            holderJobId: 'job-0000000a',
+            ahead: 1,
+          },
+        },
+        sensitive: null,
+        integration: null,
+      } as unknown as JobDetailView['plan'],
+      planError: null,
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Verification' }));
+    expect(await screen.findByTestId('verify-queue')).toHaveTextContent(
+      /Queued for verification behind job-0000000a since .+ \(1 ahead\)/,
+    );
+  });
 });
 
 describe('Archive', () => {

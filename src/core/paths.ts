@@ -106,6 +106,11 @@ export function verifyLockPath(paths: RuntimePaths = runtimePaths()): string {
   return join(paths.data, 'verify.lock');
 }
 
+/** Queue entries of `orch verify` runs waiting for the verify lock, one file per waiter. */
+export function verifyQueueDir(paths: RuntimePaths = runtimePaths()): string {
+  return join(paths.data, 'verify-queue');
+}
+
 /** The opt-in recovery worker's PID file, last-pass status, and log (`orch recover`). */
 export function recoveryPaths(paths: RuntimePaths = runtimePaths()): {
   pid: string;
