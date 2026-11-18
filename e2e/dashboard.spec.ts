@@ -38,11 +38,19 @@ test('job board shows every repository and job with honest liveness', async ({ p
   // round's only, so round 2 under review does not wear round 1's `2 blocking`.
   await expect(table.getByText('1/3, 2 pending')).toBeVisible();
   await expect(table.getByText('2 blocking')).toHaveCount(0);
-  // CI chips always name the commit the verdict was read for; repairs show their budget.
+  // CI chips always name the commit the verdict was read for; the repairs budget is a round count,
+  // so it sits in the Round column, never in PR / CI.
   await expect(table.getByText('CI failing @f1e2d3c')).toBeVisible();
   await expect(table.getByText('CI pending @a1b2c3d')).toBeVisible();
   await expect(table.getByText('CI none @b2c3d4e')).toBeVisible();
-  await expect(table.getByText('repairs 1/1')).toBeVisible();
+  const headers = await table.getByRole('columnheader').allTextContents();
+  const repaired = table.getByRole('row').filter({ hasText: 'repairs 1/1' });
+  await expect(repaired).toHaveCount(1);
+  const cell = (label: string) =>
+    repaired.getByRole('cell').nth(headers.findIndex((h) => h.startsWith(label)));
+  await expect(cell('Round')).toContainText('repairs 1/1');
+  await expect(cell('PR / CI')).toContainText('CI failing @d4e5f60');
+  await expect(cell('PR / CI')).not.toContainText('repairs');
   await expect(table.getByText(/CI still failing after 1 of 1 repair cycles/)).toBeVisible();
   await expect(table.getByText(/GitHub reports no checks for the PR head/)).toBeVisible();
   // Why a job stopped is on the board, and cancelled is never dressed as a success.
@@ -344,9 +352,10 @@ test('CI escalations: close-out is offered only where the workflow allows it', a
   await page.getByRole('tab', { name: 'PR' }).click();
   const panel = page.getByTestId('ci-panel');
   await expect(panel).toContainText('CI failing @d4e5f60');
-  // The budget is in the CI line and the chip's caption, not repeated as a sentence.
+  // The budget is stated once, in the CI line; the CI chip carries no round count.
   await expect(panel).not.toContainText('Repairs used:');
-  await expect(panel.getByText('repairs 1/1')).toBeVisible();
+  await expect(panel).not.toContainText('repairs 1/1');
+  await expect(panel).toContainText('CI still failing for d4e5f60; 1 of 1 repairs used.');
   await expect(panel.getByRole('link', { name: 'GitHub log' })).toHaveAttribute(
     'href',
     'https://github.com/acme/alpha/actions/runs/9/job/901',
