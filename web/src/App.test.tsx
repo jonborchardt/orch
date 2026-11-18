@@ -868,6 +868,114 @@ describe('Job detail', () => {
   });
 });
 
+describe('Job detail: controls state their effect', () => {
+  /** Hover a control and return its tooltip text, which describes (never names) the button. */
+  async function described(name: string) {
+    const button = screen.getByRole('button', { name });
+    fireEvent.mouseOver(button);
+    const tip = await screen.findByRole('tooltip');
+    expect(button).toHaveAccessibleName(name);
+    expect(button).toHaveAccessibleDescription(tip.textContent);
+    const text = tip.textContent;
+    fireEvent.mouseLeave(button);
+    await waitFor(() => {
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    });
+    return text;
+  }
+  async function dialogEffect(name: string) {
+    fireEvent.click(screen.getByRole('button', { name }));
+    const dialog = await screen.findByRole('dialog');
+    return { dialog, effect: within(dialog).getByTestId('action-effect').textContent };
+  }
+  async function closeDialog() {
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  }
+
+  it('describes Resume, rework, review, and cancel with the next round, in tooltip and dialog', async () => {
+    mockFetch();
+    data.detail = detail({ job: { ...detail().job, round: 2, maxRounds: 3 } });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+
+    const resume = await described('Resume at approve');
+    expect(resume).toContain('Moves the job to approve as pending');
+    expect(resume).toContain('fixes nothing and starts no session');
+    expect(resume).not.toContain('round');
+    const rework = await described('Request rework');
+    expect(rework).toContain('builder runs again from build');
+    expect(rework).toContain('round 3 of 3');
+    const review = await described('Request review round');
+    expect(review).toContain('reviewers run again on the current build');
+    expect(review).toContain('round 3 of 3');
+    const cancel = await described('Cancel job');
+    expect(cancel).toContain('Ends the job as cancelled: it cannot be resumed');
+    expect(cancel).toContain('worktree and branch are kept');
+
+    // The dialog repeats the effect; Resume's follows the selected stage.
+    let { dialog, effect } = await dialogEffect('Resume at approve');
+    expect(effect).toBe(resume);
+    fireEvent.mouseDown(within(dialog).getByRole('combobox', { name: 'Resume at stage' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'simplify' }));
+    expect(within(dialog).getByTestId('action-effect')).toHaveTextContent(
+      'Moves the job to simplify as pending, opening review round 3 of 3',
+    );
+    await closeDialog();
+
+    ({ effect } = await dialogEffect('Request rework'));
+    expect(effect).toBe(rework);
+    await closeDialog();
+
+    ({ dialog, effect } = await dialogEffect('Cancel job'));
+    expect(effect).toBe(cancel);
+    expect(dialog).not.toHaveTextContent('returns the job to a pending stage');
+    expect(dialog).toHaveTextContent('cannot be undone');
+  });
+
+  it('keeps Resume at CI outlined beside the caution on a CI-blocked job', async () => {
+    mockFetch();
+    data.detail = detail({
+      job: { ...detail().job, returnStage: 'ci', ciHead: 'd4e5f60718293041' },
+      blocker: { kind: 'ci', summary: 'CI still failing after 1 of 1 repair cycles', detail: null },
+      actions: ['approve', 'request-review', 'request-rework', 'accept-delivery', 'cancel'],
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    const approve = screen.getByRole('button', { name: 'Resume at CI' });
+    expect(approve.className).toContain('MuiButton-outlined');
+    expect(approve.className).not.toContain('MuiButton-contained');
+    expect(screen.getByTestId('approve-caution')).toHaveTextContent('not waiting for an approval');
+    expect(await described('Resume at CI')).toContain('Moves the job to ci as pending');
+    expect(await described('Accept delivery')).toContain(
+      'Completes the job without a CI verdict, with your reason recorded as the human close-out; nothing is merged or marked ready.',
+    );
+  });
+
+  it('describes Merge and Archive as their server messages do', async () => {
+    mockFetch();
+    data.detail = detail({
+      job: { ...detail().job, stage: 'completed', status: 'completed', prState: 'ready' },
+      ci: noCi({ head: 'abcdef0123456789' }),
+      blocker: null,
+      actions: ['merge', 'refresh-pr', 'archive'],
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(await described('Merge')).toContain('Merges the PR at abcdef0 as a merge commit');
+    expect(await described('Archive')).toContain(
+      'Hides the job from the board unless Show is set to archived',
+    );
+    const { effect } = await dialogEffect('Archive');
+    expect(effect).toContain('Hides the job from the board');
+  });
+});
+
 describe('Job detail: execution session', () => {
   const link = 'agent-host-session://ahp-session/17b6e18f-4046-422b-8336-cb43a130967f';
   const uuid = '565e2b23-152d-4533-b6b3-e1d4981c7297';

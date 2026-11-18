@@ -10,9 +10,10 @@ import {
   MenuItem,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
-import { useState } from 'react';
+import { type ReactElement, useState } from 'react';
 
 import type { DashboardAction } from '../../src/ops/actions.ts';
 import type { ActionResponse, JobDetailView } from '../../src/server/types.ts';
@@ -37,6 +38,50 @@ const STAGES = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci'] as
 /** `approve` resumes the job at a stage; label it by that stage (`ci` and `pr` in capitals). */
 const resumeAt = (stage: string) =>
   `Resume at ${stage === 'ci' || stage === 'pr' ? stage.toUpperCase() : stage}`;
+
+/**
+ * The review round a rework, a review request, or a resume at review/simplify leads to. `maxRounds`
+ * limits rejected rounds, not round numbers, so "round 4 of 3" after a human rework is real.
+ */
+const nextRound = (job: JobDetailView['job']) =>
+  `review round ${String(job.round + 1)} of ${String(job.maxRounds)}`;
+
+/**
+ * What a control does, as one sentence: its tooltip and the first line of its dialog. Each one
+ * mirrors what `dashboardAction` in src/ops/actions.ts does and the `message` it returns; keep
+ * them in step. `to` is the stage Resume sends the job to.
+ */
+function effect(a: DashboardAction, d: JobDetailView, to: string): string {
+  const { job } = d;
+  switch (a) {
+    case 'approve':
+      return (
+        `Moves the job to ${to} as pending` +
+        (to === 'review' || to === 'simplify' ? `, opening ${nextRound(job)}` : '') +
+        '. It fixes nothing and starts no session; resume the job from a Claude Code session.'
+      );
+    case 'request-rework':
+      return `The builder runs again from build; the next review is ${nextRound(job)}. The job waits in build as pending and no session starts.`;
+    case 'request-review':
+      return `The reviewers run again on the current build as ${nextRound(job)}. The job waits in review as pending and no session starts.`;
+    case 'accept-policy':
+      return "Adopts factory.json at the worktree's HEAD as this job's verification policy. Earlier verification runs become stale; the next orch verify uses the accepted checks.";
+    case 'accept-delivery':
+      return 'Completes the job without a CI verdict, with your reason recorded as the human close-out; nothing is merged or marked ready.';
+    case 'cancel':
+      return 'Ends the job as cancelled: it cannot be resumed. Its worktree and branch are kept.';
+    case 'merge':
+      return `Merges the PR at ${d.ci.head?.slice(0, 7) ?? '?'} as a merge commit; refused if the head moved. The branch is kept.`;
+    case 'remove-worktree':
+      return `Removes the worktree from disk; the branch ${job.branch ?? ''} is kept.`;
+    case 'archive':
+      return 'Hides the job from the board unless Show is set to archived.';
+    case 'unarchive':
+      return 'Puts the job back in the board views.';
+    case 'refresh-pr':
+      return '';
+  }
+}
 
 /**
  * Human controls. Every action goes through the API, which applies the same validated workflow
@@ -72,6 +117,14 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     detail.job.ownerSession !== 'dashboard' &&
     detail.job.leaseExpiresAt !== null &&
     Date.parse(detail.job.leaseExpiresAt) > Date.now();
+
+  // describeChild puts the effect in aria-describedby, so the button keeps its name. A disabled
+  // button gets no tooltip (MUI cannot attach one).
+  const tip = (a: DashboardAction, button: ReactElement) => (
+    <Tooltip describeChild title={busy ? '' : effect(a, detail, resumeStage)}>
+      {button}
+    </Tooltip>
+  );
 
   const start = (a: DashboardAction) => {
     setReason('');
@@ -133,117 +186,137 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         </Typography>
       )}
       <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-        {allowed.has('merge') && (
-          <Button
-            variant="contained"
-            color="success"
-            onClick={() => {
-              start('merge');
-            }}
-            disabled={busy}
-          >
-            Merge
-          </Button>
-        )}
+        {allowed.has('merge') &&
+          tip(
+            'merge',
+            <Button
+              variant="contained"
+              color="success"
+              onClick={() => {
+                start('merge');
+              }}
+              disabled={busy}
+            >
+              Merge
+            </Button>,
+          )}
         {allowed.has('refresh-pr') && (
           <Button variant="outlined" onClick={refresh} disabled={busy}>
             Refresh PR
           </Button>
         )}
-        {allowed.has('approve') && (
-          <Button
-            variant={approvalGate ? 'contained' : 'outlined'}
-            color={approvalGate ? 'success' : 'inherit'}
-            onClick={() => {
-              start('approve');
-            }}
-          >
-            {resumeAt(resumeStage)}
-          </Button>
-        )}
-        {allowed.has('request-rework') && (
-          <Button
-            variant={reworkPrimary ? 'contained' : 'outlined'}
-            onClick={() => {
-              start('request-rework');
-            }}
-          >
-            Request rework
-          </Button>
-        )}
-        {allowed.has('request-review') && (
-          <Button
-            variant="outlined"
-            onClick={() => {
-              start('request-review');
-            }}
-          >
-            Request review round
-          </Button>
-        )}
-        {allowed.has('accept-policy') && (
-          <Button
-            variant="outlined"
-            color="warning"
-            onClick={() => {
-              start('accept-policy');
-            }}
-          >
-            Accept verification policy
-          </Button>
-        )}
-        {closeOut && (
-          <Button
-            variant="outlined"
-            color="warning"
-            onClick={() => {
-              start('accept-delivery');
-            }}
-          >
-            Accept delivery
-          </Button>
-        )}
-        {allowed.has('cancel') && (
-          <Button
-            variant="outlined"
-            color="error"
-            onClick={() => {
-              start('cancel');
-            }}
-          >
-            Cancel job
-          </Button>
-        )}
-        {allowed.has('remove-worktree') && (
-          <Button
-            variant="outlined"
-            onClick={() => {
-              start('remove-worktree');
-            }}
-          >
-            Remove worktree
-          </Button>
-        )}
-        {allowed.has('archive') && (
-          <Button
-            variant="outlined"
-            onClick={() => {
-              start('archive');
-            }}
-          >
-            Archive
-          </Button>
-        )}
-        {allowed.has('unarchive') && (
-          <Button
-            variant="outlined"
-            onClick={() => {
-              start('unarchive');
-            }}
-          >
-            Unarchive
-          </Button>
-        )}
+        {allowed.has('approve') &&
+          tip(
+            'approve',
+            <Button
+              variant={approvalGate ? 'contained' : 'outlined'}
+              color={approvalGate ? 'success' : 'inherit'}
+              onClick={() => {
+                start('approve');
+              }}
+            >
+              {resumeAt(resumeStage)}
+            </Button>,
+          )}
+        {allowed.has('request-rework') &&
+          tip(
+            'request-rework',
+            <Button
+              variant={reworkPrimary ? 'contained' : 'outlined'}
+              onClick={() => {
+                start('request-rework');
+              }}
+            >
+              Request rework
+            </Button>,
+          )}
+        {allowed.has('request-review') &&
+          tip(
+            'request-review',
+            <Button
+              variant="outlined"
+              onClick={() => {
+                start('request-review');
+              }}
+            >
+              Request review round
+            </Button>,
+          )}
+        {allowed.has('accept-policy') &&
+          tip(
+            'accept-policy',
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={() => {
+                start('accept-policy');
+              }}
+            >
+              Accept verification policy
+            </Button>,
+          )}
+        {closeOut &&
+          tip(
+            'accept-delivery',
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={() => {
+                start('accept-delivery');
+              }}
+            >
+              Accept delivery
+            </Button>,
+          )}
+        {allowed.has('cancel') &&
+          tip(
+            'cancel',
+            <Button
+              variant="outlined"
+              color="error"
+              onClick={() => {
+                start('cancel');
+              }}
+            >
+              Cancel job
+            </Button>,
+          )}
+        {allowed.has('remove-worktree') &&
+          tip(
+            'remove-worktree',
+            <Button
+              variant="outlined"
+              onClick={() => {
+                start('remove-worktree');
+              }}
+            >
+              Remove worktree
+            </Button>,
+          )}
+        {allowed.has('archive') &&
+          tip(
+            'archive',
+            <Button
+              variant="outlined"
+              onClick={() => {
+                start('archive');
+              }}
+            >
+              Archive
+            </Button>,
+          )}
+        {allowed.has('unarchive') &&
+          tip(
+            'unarchive',
+            <Button
+              variant="outlined"
+              onClick={() => {
+                start('unarchive');
+              }}
+            >
+              Unarchive
+            </Button>,
+          )}
       </Stack>
 
       {open === null && error && <Alert severity="error">{error}</Alert>}
@@ -317,30 +390,32 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                     : ''}
         </DialogTitle>
         {plain ? (
-          (open === 'merge' || removal || error) && (
-            <DialogContent>
-              <Stack spacing={2}>
-                {removal && (
-                  <Typography data-testid="remove-worktree-confirm">
-                    Delete <code>{detail.job.worktreePath}</code> from disk. Its PR is merged; the
-                    branch <code>{detail.job.branch}</code> and its commits are kept. Refused if the
-                    worktree has uncommitted changes.
-                  </Typography>
-                )}
-                {open === 'merge' && (
-                  <Typography data-testid="merge-confirm">
-                    Merge <b>{detail.job.prUrl}</b> at <code>{detail.ci.head?.slice(0, 7)}</code> as
-                    a merge commit. GitHub is checked first; the merge is refused if the head moved.
-                    The branch is not deleted.
-                  </Typography>
-                )}
-                {error && <Alert severity="error">{error}</Alert>}
-              </Stack>
-            </DialogContent>
-          )
+          <DialogContent>
+            <Stack spacing={2}>
+              <Typography data-testid="action-effect">{effect(open, detail, to)}</Typography>
+              {removal && (
+                <Typography data-testid="remove-worktree-confirm">
+                  Delete <code>{detail.job.worktreePath}</code> from disk. Its PR is merged; the
+                  branch <code>{detail.job.branch}</code> and its commits are kept. Refused if the
+                  worktree has uncommitted changes.
+                </Typography>
+              )}
+              {open === 'merge' && (
+                <Typography data-testid="merge-confirm">
+                  Merge <b>{detail.job.prUrl}</b> at <code>{detail.ci.head?.slice(0, 7)}</code> as a
+                  merge commit. GitHub is checked first; the merge is refused if the head moved. The
+                  branch is not deleted.
+                </Typography>
+              )}
+              {error && <Alert severity="error">{error}</Alert>}
+            </Stack>
+          </DialogContent>
         ) : (
           <DialogContent>
             <Stack spacing={2} sx={{ mt: 1 }}>
+              {open && (
+                <Typography data-testid="action-effect">{effect(open, detail, to)}</Typography>
+              )}
               {open === 'approve' && (
                 <TextField
                   select
@@ -391,10 +466,16 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                   This completes the job without a passing CI verdict and records your reason as the
                   human close-out. It does not merge or mark the PR ready.
                 </Alert>
+              ) : open === 'cancel' ? (
+                <Alert severity="warning" variant="outlined">
+                  This cannot be undone: a cancelled job is never resumed.
+                </Alert>
               ) : (
                 <Alert severity="warning" variant="outlined">
-                  This records the decision and returns the job to a pending stage. It does not
-                  start or wake any Claude session; resume the job from a session afterwards.
+                  This records the decision
+                  {open === 'accept-policy' ? '' : ' and returns the job to a pending stage'}. It
+                  does not start or wake any Claude session; resume the job from a session
+                  afterwards.
                 </Alert>
               )}
               {error && <Alert severity="error">{error}</Alert>}

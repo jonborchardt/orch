@@ -123,7 +123,10 @@ with no verdict recorded at all.
 **Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
 short-lived `dashboard` session and then releases the job. The detail API lists the actions the
 workflow allows in the current state (`allowedActions`) and the client renders only those; the
-server re-checks every request. `Resume at <stage>` (the `approve` action, labelled by the stage
+server re-checks every request. Each control except Refresh PR states its effect in one sentence,
+as a hover/focus tooltip and again in its confirm dialog: Resume says it moves the job without
+fixing anything, Request rework and Request review round name the next review round (`round + 1`
+of `maxRounds`), and Cancel says the job ends for good with its worktree and branch kept. `Resume at <stage>` (the `approve` action, labelled by the stage
 it sends the job to) is the primary control only when the approver escalated (`decision.md` says
 ESCALATE); for any other blocker it is demoted behind a warning, because resuming moves the job
 without fixing anything. Request rework is primary only when reviewers
