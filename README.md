@@ -194,7 +194,8 @@ MAIL_SUBJECT_PREFIX=[orch]    # default [orch]
 The file holds a password in plain text: keep it out of every repository and readable only by
 you. With it set, every `orch` command that changes a job's state (and each dashboard action and
 recovery pass) sends one mail summarising those changes: the job's stage, status, PR, each event
-with its reason, and `orch factory status <id>`. Reported events are job creation, stage start,
+with its reason, and `orch factory status <id>`. When the job needs something, the mail leads with
+it: why it stopped, the recorded reason, and the next command or dashboard decision. Reported events are job creation, stage start,
 completion, and failure, blocking, resume, rework, cancellation, completion, interruption, and
 failed recovery attempts; CI polls, pushes, and verification runs are not mailed. All mails of a
 job share one subject (`[orch] <id>: <title>`) and reply to the previous one, so a mail client

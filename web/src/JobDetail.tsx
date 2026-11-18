@@ -27,6 +27,7 @@ import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
 import { CiChip, CiPanel, PrPhaseChip } from './Ci.tsx';
 import { Markdown, blockingLines, section } from './Markdown.tsx';
+import { ProgressSection, ProgressStrip, RoundIndicator } from './Progress.tsx';
 import {
   BlockerNotes,
   BlockerText,
@@ -158,7 +159,7 @@ export function JobDetail({
           {job.title}
         </Typography>
         <Typography color="text.secondary">{job.id}</Typography>
-        <Chip label={`stage: ${job.stage}`} variant="outlined" />
+        <ProgressStrip progress={detail.progress} />
         <StatusChip state={detail.liveness} />
         {job.archivedAt !== null && (
           <Tooltip title={`Archived ${job.archivedAt}; shown on the board under Show: archived`}>
@@ -167,7 +168,7 @@ export function JobDetail({
         )}
         {detail.ci.completion === 'human' && <CiChip ci={detail.ci} compact />}
         {job.prUrl && <PrPhaseChip phase={detail.prPhase} />}
-        <Chip label={`round ${String(job.round)}/${String(job.maxRounds)}`} />
+        <RoundIndicator round={job.round} maxRounds={job.maxRounds} chip />
         {error && <Chip label={`refresh failed: ${error}`} color="warning" />}
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
@@ -330,6 +331,8 @@ export function JobDetail({
                   .join('; ')}
               </Alert>
             )}
+            <Divider />
+            <ProgressSection progress={detail.progress} timeline={detail.timeline} />
           </Stack>
         )}
         {tab === 'Spec' && content('spec.md')}
@@ -681,6 +684,14 @@ function Verification({ detail }: { detail: JobDetailView }) {
             <Alert severity="warning" sx={{ mt: 1 }} data-testid="policy-drift">
               The worktree changes the verification policy. Accept it below or have it reverted.
               {v.policy.candidateError ? ` (${v.policy.candidateError})` : ''}
+            </Alert>
+          )}
+          {v.queue && (
+            <Alert severity="info" sx={{ mt: 1 }} data-testid="verify-queue">
+              {v.queue.state === 'running'
+                ? `Verification running since ${new Date(v.queue.since).toLocaleString()}.`
+                : `Queued for verification behind ${v.queue.holderJobId ?? 'another run'} since ` +
+                  `${new Date(v.queue.since).toLocaleString()} (${String(v.queue.ahead)} ahead).`}
             </Alert>
           )}
           <Typography variant="body2" sx={{ mt: 1 }}>

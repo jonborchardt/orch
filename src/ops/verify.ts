@@ -10,7 +10,7 @@ import path from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { spawnCommand, type ToolResult } from '../core/exec.ts';
-import { canonicalPath, jobArtifactDir, verifyLockPath } from '../core/paths.ts';
+import { canonicalPath, jobArtifactDir, verifyLockPath, verifyQueueDir } from '../core/paths.ts';
 import {
   buildReport,
   classifyPath,
@@ -44,7 +44,7 @@ import {
   startRun,
 } from '../storage/verification.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
-import { acquireVerifyLock } from './verify-lock.ts';
+import { acquireVerifyLock, type VerifyQueueState, verifyQueueState } from './verify-lock.ts';
 
 export interface EffectivePolicy {
   policy: VerificationPolicy;
@@ -132,6 +132,8 @@ export interface VerificationStatus {
   /** Whether that run is evidence for the current HEAD and policy. */
   valid: boolean;
   reason: string | null;
+  /** A run of this job waiting for, or holding, the machine-wide verify lock. Never affects `valid`. */
+  queue: VerifyQueueState | null;
 }
 
 /** Evaluate the latest run against the worktree as it is now. Read-only. */
@@ -172,6 +174,7 @@ export function verificationStatus(
     run: latest ? { ...latest.run, checks: latest.checks } : null,
     valid: configured && latest !== undefined && reason === null,
     reason,
+    queue: verifyQueueState(verifyLockPath(store.paths), verifyQueueDir(store.paths), job.id),
   };
 }
 
@@ -350,11 +353,16 @@ export function verifyJob(
   let owner = renewLease(store, id, auth);
   let renewedAt = Date.now();
   const release = acquireVerifyLock(verifyLockPath(store.paths), {
+    jobId: id,
+    queueDir: verifyQueueDir(store.paths),
     pollMs: opts.pollMs,
     onWait: (holder) =>
       opts.onWait?.(
         'orch verify: waiting for another verification to finish' +
-          `${holder ? ` (pid ${String(holder.pid)})` : ''}; checks run one at a time.`,
+          (holder
+            ? ` (${holder.jobId ? `job ${holder.jobId}, ` : ''}pid ${String(holder.pid)})`
+            : '') +
+          '; checks run one at a time.',
       ),
     onPoll: () => {
       if (Date.now() - renewedAt < RENEW_EVERY_MS) return;

@@ -391,9 +391,15 @@ and is marked truncated). All expected checks are rowed before anything runs, so
 is visibly incomplete; starting a new run marks any still-`running` one `interrupted`.
 
 **One at a time.** Checks run for one `orch verify` at a time per runtime home (a lock file,
-`verify.lock` in the data directory, holding the holder's PID). Another `orch verify` waits inside
-its own command, prints `orch verify: waiting ...` to stderr once, and polls; a lock whose holder
-is no longer running is taken over. A job without a policy (`configuration-required`) never waits.
+`verify.lock` in the data directory, holding the holder's PID and job id). Another `orch verify`
+waits inside its own command, prints `orch verify: waiting ...` (naming the holder's job) to stderr
+once, and polls; a lock whose holder is no longer running is taken over. While it waits it keeps a
+queue entry in `verify-queue/` in the data directory, removed once it holds the lock or exits.
+`orch verify show`, `plan.verification`, and the dashboard's Verification tab carry the job's
+`queue` state: `running` (it holds the lock) or `queued` (since when, behind which job, and how
+many live waiters started earlier, a hint since waiters are not served in order), or `null`. Dead
+PIDs are ignored, and the state never affects validity. A job without a policy
+(`configuration-required`) never waits.
 Under the lock the worktree and policy are checked again, since either may have moved meanwhile.
 
 **Validity.** A run is evidence only while HEAD and its tree are unchanged, the worktree is clean,

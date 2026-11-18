@@ -17,13 +17,12 @@ import {
   ValidationError,
   WorkflowError,
 } from '../core/errors.ts';
-import { webDistDir } from '../core/paths.ts';
+import { DEFAULT_PORT, webDistDir } from '../core/paths.ts';
 import { mailWatermark, reportJobMail } from '../ops/mail.ts';
 import type { Store } from '../storage/client.ts';
 import { act, artifactContent, assertJobId, board, detail, repos } from './api.ts';
 import type { ApiError, SessionInfo } from './types.ts';
 
-export const DEFAULT_PORT = 4777;
 const HOST = '127.0.0.1';
 const BODY_LIMIT = 64 * 1024;
 

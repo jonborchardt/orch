@@ -24,7 +24,7 @@ import {
   toReview,
   verify,
 } from './drive.ts';
-import { fixture, gitIn } from './helpers.ts';
+import { commitFile, fixture, gitIn } from './helpers.ts';
 import { store, clone, bare, shim, advanceBase, deliver } from './integration-fixture.ts';
 
 describe('clean and no-op integration', () => {
@@ -159,6 +159,24 @@ describe('conflicts and material edits', () => {
     const r = integrateBase(store, c.id, { token: c.token });
     expect(r.integration.status).toBe('up-to-date');
     expect(() => pushBranch(store, c.id, { token: c.token })).toThrow(/match neither parent/);
+  });
+
+  it('an edited merge that is already on the base branch does not block delivery', () => {
+    const c = start(store, clone);
+    toPr(store, c);
+    // Another PR landed on main through a merge commit that resolved a conflict by hand.
+    gitIn(clone, 'checkout', '-q', '-b', 'side');
+    commitFile(clone, 'docs/side.md', 'side\n', 'side');
+    gitIn(clone, 'checkout', '-q', 'main');
+    commitFile(clone, 'docs/main.md', 'main\n', 'main');
+    gitIn(clone, 'merge', '--no-commit', '--no-ff', 'side');
+    writeFileSync(join(clone, 'docs', 'resolved.md'), 'resolved\n');
+    gitIn(clone, 'add', '-A');
+    gitIn(clone, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'merge side');
+    gitIn(clone, 'push', '-q', 'origin', 'main');
+    expect(integrateBase(store, c.id, { token: c.token }).integration.status).toBe('merged');
+    expect(verify(store, c).status).toBe('passed');
+    deliver(c);
   });
 
   it('outside the pr stage a conflict is an error and the worktree is left untouched', () => {
