@@ -15,7 +15,11 @@ ORCH_HOME=/tmp/demo npm run ui:seed && ORCH_HOME=/tmp/demo orch ui   # represent
 ```
 
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
-worktree, review round, reviews, elapsed time, last update, PR link and CI rollup. The Reviews
+worktree, review round, reviews, elapsed time, last update, PR link and CI rollup. When the rows
+shown come from more than one repository, the caption under each title adds a short repository
+label after the id (the identity's last segment, or a longer trailing path such as `acme/alpha`
+when two repositories share a basename; hovering it shows the full identity), whether or not the
+Repository column is shown; narrowing the board to one repository drops it. The Reviews
 column is one rollup chip for the current round: `n/n pass` (green) when every reviewer passed,
 `p/n, k pending` (neutral) while some are pending and none requested changes, `c changes` (amber)
 when any did, and nothing before the round has reviews; hovering or focusing it lists each reviewer

@@ -28,7 +28,7 @@ import type { BoardRow } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
 import { CiChip, PrPhaseChip } from './Ci.tsx';
 import { BlockerText, CopyResume, StatusChip, Supersession } from './Status.tsx';
-import { ago, byAttention, elapsed, reviewRollup } from './format.ts';
+import { ago, byAttention, elapsed, repoLabels, reviewRollup } from './format.ts';
 
 function openJob(id: string): void {
   window.location.hash = `#/jobs/${id}`;
@@ -50,7 +50,8 @@ interface Column {
   align?: 'center' | 'right';
   sortValue?: (r: BoardRow) => string | number;
   sx?: object;
-  cell: (r: BoardRow, now: number) => ReactNode;
+  /** `repoLabel` is set only when the board spans several repositories. */
+  cell: (r: BoardRow, now: number, repoLabel: string | undefined) => ReactNode;
 }
 
 const COLUMNS: Column[] = [
@@ -72,13 +73,23 @@ const COLUMNS: Column[] = [
     hideable: false,
     sortValue: (r) => r.title.toLowerCase(),
     sx: { minWidth: 220 },
-    cell: (r) => (
+    cell: (r, _now, repoLabel) => (
       <>
         <Link href={`#/jobs/${r.id}`} underline="hover" sx={{ fontWeight: 600 }}>
           {r.title}
         </Link>
         <Typography component="div" variant="caption" color="text.secondary">
           {r.id}
+          {repoLabel !== undefined && (
+            // Own span so the id stays the caption's only direct text (tests and selection).
+            <span>
+              {' · '}
+              {/* Hover and accessible name: the full repository identity. */}
+              <Tooltip title={r.repo}>
+                <span data-repo-label>{repoLabel}</span>
+              </Tooltip>
+            </span>
+          )}
         </Typography>
         <Supersession supersededBy={r.supersededBy} supersedes={r.supersedes} />
       </>
@@ -305,6 +316,7 @@ export function JobBoard({
     setRefocus(false);
   }, [refocus]);
   const ordered = useMemo(() => sorted(rows, sort), [rows, sort]);
+  const labels = useMemo(() => repoLabels(rows.map((r) => r.repo)), [rows]);
 
   if (total === 0) {
     return (
@@ -429,7 +441,7 @@ export function JobBoard({
                 >
                   {columns.map((c) => (
                     <TableCell key={c.id} align={c.align} sx={c.sx}>
-                      {c.cell(r, now)}
+                      {c.cell(r, now, labels.get(r.repo))}
                     </TableCell>
                   ))}
                   <TableCell>
