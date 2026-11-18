@@ -107,7 +107,9 @@ for a commit that is no longer HEAD is marked as not current), GitHub's reason
 from the last `orch gh ci` reconciliation, each failed required check with its GitHub log link and
 the log saved under the artifact directory, and one line of guidance. The repair budget is stated
 once, in the CI line (`n of m repairs used`) and the chip's `repairs n/m` caption; the detail's
-status panel uses the CI line as its summary and the guidance as its next line. Everything comes from
+status panel uses the CI line as its summary and the guidance as its next line. The chip is
+informational (blue) while checks are pending, green when passing, red when failing, and warning
+(amber) only when GitHub reported no checks for the PR head. Everything comes from
 persisted fields (`src/server/status.ts` `ciView`): the rollup columns, the newest `ci.observed`
 event, and the `job.completed` event. A ci-stage escalation gets its own blocker (`CI stopped`)
 naming the cause from the recorded reason code and outcome: repair budget spent, no checks for the

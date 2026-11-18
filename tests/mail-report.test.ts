@@ -73,6 +73,7 @@ describe('reportBody stage section', () => {
     expect(stages(reportBody(job('review', 'running'), []))).toEqual([
       [OK, 'spec', 'done'],
       [OK, 'build', 'done'],
+      [OK, 'simplify', 'done'],
       [RUN, 'review', 'current'],
       [PEND, 'approve', 'pending'],
       [PEND, 'pr', 'pending'],
