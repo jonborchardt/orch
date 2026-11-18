@@ -91,14 +91,30 @@ function describe(e: Event): string {
   return `${eventEmoji(e.type)} ${e.createdAt}  ${e.type}${detail ? ` (${detail})` : ''}${reason}`;
 }
 
-/** Body of one status mail: an outcome headline, every stage, then each reported event in order. */
+/** What a stopped job needs from the reader, derived by the caller (`ops/mail.ts`). */
+export interface Needed {
+  summary: string;
+  /** The recorded reason, verbatim. */
+  detail: string | null;
+  /** The next command or dashboard action, one per line. */
+  next: readonly string[];
+}
+
+/**
+ * Body of one status mail: an outcome headline, what the job needs (when it needs anything),
+ * every stage, then each reported event in order.
+ */
 export function reportBody(
   job: Pick<Job, 'id' | 'title' | 'repo' | 'stage' | 'status' | 'prUrl'>,
   events: readonly Event[],
+  needed: Needed | null = null,
 ): string {
   return [
     `${outcomeEmoji(job)} ${job.status} at ${job.stage}`,
     '',
+    ...(needed
+      ? [needed.summary, ...(needed.detail ? [`Reason: ${needed.detail}`] : []), ...needed.next, '']
+      : []),
     `Job:    ${job.id}`,
     `Title:  ${job.title}`,
     `Repo:   ${job.repo}`,
