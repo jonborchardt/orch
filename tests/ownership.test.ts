@@ -6,6 +6,7 @@ import {
   decideClaim,
   leaseExpired,
   leaseUntil,
+  newSessionId,
   newToken,
 } from '../src/core/ownership.ts';
 
@@ -68,5 +69,12 @@ describe('assertOwner', () => {
     const a = newToken();
     expect(a).toMatch(/^[0-9a-f]{32}$/);
     expect(a).not.toBe(newToken());
+  });
+
+  it('generated session ids are valid --session names and unique', () => {
+    const s = newSessionId();
+    expect(s).toMatch(/^orch-[0-9a-f]{16}$/);
+    expect(s).toMatch(/^[\w.:-]{1,64}$/);
+    expect(s).not.toBe(newSessionId());
   });
 });

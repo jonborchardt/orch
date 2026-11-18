@@ -293,7 +293,8 @@ describe('orch factory CLI', () => {
     extra.push(home);
     const env = { ...shim.env, ORCH_SESSION: 'cli-session' };
     expect(orch(home, clone, ['factory']).code).toBe(2);
-    expect(orch(home, clone, ['factory', 'start']).code).toBe(2); // no --session
+    // No --session: one is generated, so the missing title is what fails (and creates nothing).
+    expect(orch(home, clone, ['factory', 'start']).code).toBe(1);
     expect(orch(home, clone, ['factory', 'start', '--session', 'bad session!']).code).toBe(2);
     const noTitle = orch(home, clone, ['factory', 'start', '--session', 's']);
     expect(noTitle.code).toBe(1);
@@ -372,7 +373,8 @@ describe('orch factory CLI', () => {
     expect(cfg.file).toBe(join(home, 'factory.json'));
     expect(cfg.maxRounds).toBe(3);
 
-    expect(orch(home, tmpdir(), ['factory', 'resume', id]).code).toBe(2);
+    // No --session: a generated one meets cli-session's live lease.
+    expect(orch(home, tmpdir(), ['factory', 'resume', id]).code).toBe(4);
     expect(
       orch(home, tmpdir(), ['factory', 'resume', id, '--session', 'x', '--to', 'nope']).code,
     ).toBe(2);
