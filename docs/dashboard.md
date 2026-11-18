@@ -101,15 +101,17 @@ The `BLOCKING:` marker is authoritative, so a round recorded as 0 says "no block
 when tagged lines remain in the file.
 
 **CI state** is shown with the commit it was read for, never on its own: the board's chip reads
-`CI <rollup> @<sha7>` (plus `repairs n/m` once a repair happened) and the detail's PR tab carries
+`CI <rollup> @<sha7>` and the detail's PR tab carries
 the full head, when it was observed, whether it is still the worktree HEAD (an old green verdict
 for a commit that is no longer HEAD is marked as not current), GitHub's reason
 from the last `orch gh ci` reconciliation, each failed required check with its GitHub log link and
-the log saved under the artifact directory, and one line of guidance. The repair budget is stated
-once, in the CI line (`n of m repairs used`) and the chip's `repairs n/m` caption; the detail's
-status panel uses the CI line as its summary and the guidance as its next line. The chip is
-informational (blue) while checks are pending, green when passing, red when failing, and warning
-(amber) only when GitHub reported no checks for the PR head. Everything comes from
+the log saved under the artifact directory, and one line of guidance. The CI chip says only what CI
+is doing. Repairs are rounds, so the board's Round column carries a `repairs n/m` caption under
+`round/max` once a repair happened or CI is failing; in the detail the budget is stated in the CI
+line (`n of m repairs used`). The detail's status panel uses the CI line as its summary and the
+guidance as its next line. The chip is informational (blue) while checks are pending, green when
+passing, red when failing, and warning (amber) only when GitHub reported no checks for the PR head.
+Everything comes from
 persisted fields (`src/server/status.ts` `ciView`): the rollup columns, the newest `ci.observed`
 event, and the `job.completed` event. A ci-stage escalation gets its own blocker (`CI stopped`)
 naming the cause from the recorded reason code and outcome: repair budget spent, no checks for the

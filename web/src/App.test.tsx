@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BoardRow, CiView, JobDetailView } from '../../src/server/types.ts';
 import { App } from './App.tsx';
+import { CiChip } from './Ci.tsx';
 import { byAttention, ciColor, repoLabels, reviewRollup } from './format.ts';
 import { Markdown } from './Markdown.tsx';
 import { RESUME_NOTE } from './Status.tsx';
@@ -294,7 +295,20 @@ describe('App board', () => {
     expect(within(table).getByText('2 blocking')).toBeInTheDocument();
     expect(within(table).queryByText('correctness: pending')).not.toBeInTheDocument();
     expect(within(table).getByText('CI failing @abcdef0')).toBeInTheDocument();
-    expect(within(table).getByText('repairs 1/2')).toBeInTheDocument();
+    // The repairs count describes rounds, so it sits in the Round column, never under the CI chip.
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent);
+    const cellOf = (id: string, label: string) => {
+      const index = headers.findIndex((h) => h.startsWith(label));
+      expect(index).toBeGreaterThanOrEqual(0);
+      const tr = must(table.querySelector<HTMLElement>(`tr[data-job-id="${id}"]`));
+      return must(tr.querySelectorAll<HTMLElement>('td')[index]);
+    };
+    expect(cellOf('job-00000003', 'Round')).toHaveTextContent('repairs 1/2');
+    expect(cellOf('job-00000003', 'PR / CI')).toHaveTextContent('CI failing @abcdef0');
+    expect(cellOf('job-00000003', 'PR / CI')).not.toHaveTextContent('repairs');
+    expect(cellOf('job-00000001', 'Round')).toHaveTextContent(/^0\/3$/);
     // Repository is hidden by default (Columns menu); the job ids still identify each row.
     expect(within(table).queryByText('github.com/acme/beta')).not.toBeInTheDocument();
     expect(within(table).getByText('job-00000002')).toBeInTheDocument();
@@ -807,10 +821,31 @@ describe('Job detail', () => {
     openDetails();
     expect(await screen.findByText('Recorded reason: CI failed: test')).toBeVisible();
     fireEvent.click(screen.getByRole('tab', { name: 'PR' }));
-    // The budget is in the CI line and the chip's caption, not repeated as a sentence.
+    // The budget is stated once, in the CI line; the CI chip carries no round count.
     expect(screen.getByTestId('ci-panel')).not.toHaveTextContent('Repairs used:');
-    expect(within(screen.getByTestId('ci-panel')).getByText('repairs 1/1')).toBeInTheDocument();
+    expect(screen.getByTestId('ci-panel')).not.toHaveTextContent('repairs 1/1');
+    expect(screen.getByTestId('ci-panel')).toHaveTextContent(
+      'CI still failing for d4e5f60; 1 of 1 repairs used.',
+    );
     expect(screen.getByTestId('ci-panel')).toHaveTextContent('CI failing @d4e5f60');
+  });
+
+  it('the CI chip says only what CI is doing: no repairs count, still flags a stale head', () => {
+    render(
+      <CiChip
+        ci={noCi({
+          status: 'failing',
+          head: 'abcdef0123456789',
+          outcome: 'failing',
+          repairs: 1,
+          current: false,
+        })}
+        compact
+      />,
+    );
+    expect(screen.getByText('CI failing @abcdef0')).toBeInTheDocument();
+    expect(screen.getByText('not current HEAD')).toBeInTheDocument();
+    expect(screen.queryByText(/repairs/)).not.toBeInTheDocument();
   });
 
   it('Markdown renders headings, lists, code, markers, and never HTML', () => {
