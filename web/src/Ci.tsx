@@ -85,11 +85,6 @@ export function CiChip({ ci, compact }: { ci: CiView; compact?: boolean }) {
         data-ci={ci.status ?? 'unobserved'}
         data-completion={ci.completion ?? ''}
       />
-      {(ci.repairs > 0 || ci.outcome === 'failing') && (
-        <Typography variant="caption" color="text.secondary">
-          repairs {ci.repairs}/{ci.maxRepairs}
-        </Typography>
-      )}
       {ci.current === false && (
         <Typography variant="caption" color="warning.main">
           not current HEAD

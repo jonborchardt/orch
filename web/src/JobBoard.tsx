@@ -181,7 +181,16 @@ const COLUMNS: Column[] = [
     hideable: true,
     align: 'center',
     sortValue: (r) => r.round,
-    cell: (r) => `${String(r.round)}/${String(r.maxRounds)}`,
+    cell: (r) => (
+      <>
+        {`${String(r.round)}/${String(r.maxRounds)}`}
+        {(r.ci.repairs > 0 || r.ci.outcome === 'failing') && (
+          <Typography component="div" variant="caption" color="text.secondary">
+            repairs {r.ci.repairs}/{r.ci.maxRepairs}
+          </Typography>
+        )}
+      </>
+    ),
   },
   {
     id: 'reviews',
