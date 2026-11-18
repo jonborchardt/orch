@@ -192,7 +192,7 @@ function requireApproved(store: Store, job: Job, tree: Tree, what: string): void
         `only base integration merges may follow an approval, so ${what} is refused. Return the job to review.`,
     );
   }
-  const edited = editedMerges(path, decision.head, head);
+  const edited = editedMerges(path, decision.head, head, base);
   if (edited.length > 0) {
     const list = edited.map((m) => `${m.sha.slice(0, 7)}: ${m.files.join(', ')}`).join('; ');
     throw new ValidationError(
