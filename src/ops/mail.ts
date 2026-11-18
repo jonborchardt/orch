@@ -5,8 +5,8 @@
  * or rolls back the operation: `reportJobMail` never throws.
  */
 import { type Needed, REPORTED_EVENTS, reportBody, reportSubject } from '../core/mail-report.ts';
+import { DEFAULT_PORT } from '../core/paths.ts';
 import { type MailConfig, mailConfig, sendReport } from '../integrations/mail.ts';
-import { DEFAULT_PORT } from '../server/http.ts';
 import { BLOCKER_EVENTS, blockerOf, ciView, liveness, resumeOf } from '../server/status.ts';
 import { listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
