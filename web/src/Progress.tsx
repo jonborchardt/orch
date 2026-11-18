@@ -15,12 +15,25 @@ import type { Progress, StepState, Timeline } from '../../src/server/types.ts';
 import { ago } from './format.ts';
 
 /** Glyph and words per step state, so colour is never the only cue. */
-const STEP: Record<StepState, { glyph: string; words: string; color: string }> = {
-  done: { glyph: '✓', words: 'done', color: 'success.main' },
-  current: { glyph: '▶', words: 'current', color: 'primary.main' },
-  stopped: { glyph: '■', words: 'stopped', color: 'error.main' },
-  'not-started': { glyph: '○', words: 'not started', color: 'text.secondary' },
+const STEP: Record<StepState, { glyph: string; words: string }> = {
+  done: { glyph: '✓', words: 'done' },
+  current: { glyph: '▶', words: 'current' },
+  stopped: { glyph: '■', words: 'stopped' },
+  'not-started': { glyph: '○', words: 'not started' },
 };
+
+/** Step colours as CSS variables that follow the active light or dark scheme. */
+function useStepColor(): Record<StepState, string> {
+  // `theme.palette` is the light scheme only; `theme.vars` holds the scheme-following variables.
+  const theme = useTheme();
+  const palette = (theme.vars ?? theme).palette;
+  return {
+    done: palette.success.main,
+    current: palette.primary.main,
+    stopped: palette.error.main,
+    'not-started': palette.text.secondary,
+  };
+}
 
 /** Visually hidden, still read by assistive technology. */
 const HIDDEN = {
@@ -42,15 +55,7 @@ const stepText = (s: Progress['steps'][number]) => `${s.label}: ${STEP[s.state].
  * Focusable, with every step's state in its accessible name and its tooltip.
  */
 export function ProgressStrip({ progress }: { progress: Progress }) {
-  // CSS variables follow the active light or dark scheme; `theme.palette` is the light one only.
-  const theme = useTheme();
-  const palette = (theme.vars ?? theme).palette;
-  const color: Record<StepState, string> = {
-    done: palette.success.main,
-    current: palette.primary.main,
-    stopped: palette.error.main,
-    'not-started': palette.text.secondary,
-  };
+  const color = useStepColor();
   // Plain spans, not one styled component per glyph: the board renders a strip on every row.
   return (
     <Tooltip
@@ -141,6 +146,7 @@ export function ProgressSection({
   progress: Progress;
   timeline: Timeline;
 }) {
+  const color = useStepColor();
   const last = (id: string, kind: string) =>
     timeline.entries.findLast((e) => e.step === id && e.kind === kind)?.at;
   return (
@@ -160,7 +166,7 @@ export function ProgressSection({
                 : ['started', started];
           return (
             <li key={s.id} data-step={s.id} data-step-state={s.state}>
-              <Box component="span" aria-hidden sx={{ color: STEP[s.state].color, mr: 0.5 }}>
+              <Box component="span" aria-hidden sx={{ color: color[s.state], mr: 0.5 }}>
                 {STEP[s.state].glyph}
               </Box>
               {stepText(s)}

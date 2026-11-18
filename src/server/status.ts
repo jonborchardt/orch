@@ -446,7 +446,7 @@ const asStep = (stage: unknown): StepId | null => STEPS[stepIndex(stage)]?.id ??
  * Stage entries and exits in event order (oldest first). A step entered again after going back
  * (changes requested, rework, resume to an earlier stage) is a new entry, never an edit.
  */
-export function timelineOf(events: readonly Event[], limit = TIMELINE_EVENTS): Timeline {
+export function timelineOf(events: readonly Event[]): Timeline {
   const entries: TimelineEntry[] = [];
   // The step the job was last seen in, for events that do not name one (job.interrupted).
   let at: StepId | null = null;
@@ -511,5 +511,5 @@ export function timelineOf(events: readonly Event[], limit = TIMELINE_EVENTS): T
         break;
     }
   }
-  return { entries, truncated: events.length >= limit };
+  return { entries, truncated: events.length >= TIMELINE_EVENTS };
 }
