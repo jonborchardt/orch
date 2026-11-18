@@ -4,13 +4,28 @@ import { ThemeProvider } from '@mui/material';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { BoardRow, CiView, JobDetailView } from '../../src/server/types.ts';
+import type { BoardRow, CiView, JobDetailView, Progress } from '../../src/server/types.ts';
 import { App } from './App.tsx';
 import { CiChip } from './Ci.tsx';
 import { byAttention, ciColor, repoLabels, reviewRollup } from './format.ts';
 import { Markdown } from './Markdown.tsx';
 import { RESUME_NOTE } from './Status.tsx';
 import { theme } from './main.tsx';
+
+const STEP_IDS = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci', 'done'] as const;
+const STEP_LABELS = ['Spec', 'Build', 'Simplify', 'Review', 'Approve', 'PR', 'CI', 'Done'];
+/** A progress model as the server builds it: steps before `position` done, after it not started. */
+function progress(position: number, at: 'current' | 'stopped', label: string): Progress {
+  return {
+    steps: STEP_IDS.map((id, i) => ({
+      id,
+      label: STEP_LABELS[i] ?? id,
+      state: i < position ? 'done' : i === position ? at : 'not-started',
+    })),
+    position,
+    label,
+  };
+}
 
 function row(over: Partial<BoardRow>): BoardRow {
   return {
@@ -37,6 +52,7 @@ function row(over: Partial<BoardRow>): BoardRow {
     supersedes: [],
     archivedAt: null,
     ci: noCi(),
+    progress: progress(1, 'current', 'Build'),
     ...over,
   };
 }
@@ -79,6 +95,8 @@ const rows: BoardRow[] = [
       detail: null,
     },
     resume: { command: '/factory resume job-00000002', heldBy: null },
+    stage: 'review',
+    progress: progress(3, 'current', 'Review'),
   }),
   row({
     id: 'job-00000003',
@@ -95,6 +113,7 @@ const rows: BoardRow[] = [
     resume: { command: '/factory resume job-00000003', heldBy: null },
     pr: { url: 'https://github.com/x/y/pull/1', state: 'draft', phase: 'ci-failing' },
     ci: noCi({ status: 'failing', head: 'abcdef0123456789', outcome: 'failing', repairs: 1 }),
+    progress: progress(6, 'stopped', 'CI, needs human'),
   }),
   row({
     id: 'job-00000004',
@@ -104,6 +123,7 @@ const rows: BoardRow[] = [
     status: 'cancelled',
     liveness: 'cancelled',
     owner: null,
+    progress: progress(1, 'stopped', 'Build, cancelled'),
     blocker: {
       kind: 'cancelled',
       summary: 'Cancelled during build by dashboard',
@@ -172,6 +192,8 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       detail: 'AC2 needs deployment verification',
     },
     ci: noCi(),
+    progress: progress(4, 'stopped', 'Approve, needs human'),
+    timeline: { entries: [], truncated: false },
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null },
@@ -189,6 +211,8 @@ function must<T>(x: T | null | undefined): T {
   if (x === null || x === undefined) throw new Error('expected an element');
   return x;
 }
+const boardRowOf = (id: string) =>
+  must(document.querySelector<HTMLElement>(`[data-job-id="${id}"]`));
 /** Expands the detail status panel's Details (collapsed by default, unmounted while closed). */
 function openDetails() {
   fireEvent.click(screen.getByRole('button', { name: 'Details' }));
@@ -289,7 +313,8 @@ describe('App board', () => {
       expect(staleTip).not.toContain(claim);
       expect(must(RESUME_NOTE.stale)).not.toContain(claim);
     }
-    expect(within(table).getByText(/needs human/)).toBeInTheDocument();
+    // Exact status-chip text: the progress strip's label ("CI, needs human") also says it.
+    expect(within(table).getByText('⚠ needs human')).toBeInTheDocument();
     // One verdict rollup per row, with the blocking count folded in; reviewers only in its tooltip.
     expect(within(table).getByText('1/2, 1 pending')).toBeInTheDocument();
     expect(within(table).getByText('2 blocking')).toBeInTheDocument();
@@ -308,7 +333,10 @@ describe('App board', () => {
     expect(cellOf('job-00000003', 'Round')).toHaveTextContent('repairs 1/2');
     expect(cellOf('job-00000003', 'PR / CI')).toHaveTextContent('CI failing @abcdef0');
     expect(cellOf('job-00000003', 'PR / CI')).not.toHaveTextContent('repairs');
-    expect(cellOf('job-00000001', 'Round')).toHaveTextContent(/^0\/3$/);
+    // Before the first round the indicator reads `-` (AC7), and no repairs caption without a repair.
+    expect(cellOf('job-00000001', 'Round')).toHaveTextContent(
+      /^-No review round yet \(at most 3\)$/,
+    );
     // Repository is hidden by default (Columns menu); the job ids still identify each row.
     expect(within(table).queryByText('github.com/acme/beta')).not.toBeInTheDocument();
     expect(within(table).getByText('job-00000002')).toBeInTheDocument();
@@ -325,8 +353,8 @@ describe('App board', () => {
     expect(chip).toHaveTextContent('cancelled');
     expect(chip.className).toContain('MuiChip-colorDefault');
     expect(chip.className).not.toContain('MuiChip-colorSuccess');
-    // The workflow stage it stopped in is still shown, as a stage, next to the cancelled status.
-    expect(within(cancelled).getByText('build')).toBeInTheDocument();
+    // The workflow step it stopped at is still shown, as a step, next to the cancelled status.
+    expect(within(cancelled).getByText('Build, cancelled')).toBeInTheDocument();
     expect(within(cancelled).getByText(/superseded by job-00000005/)).toBeInTheDocument();
     // A cancelled job cannot be resumed, so no resume control is offered.
     expect(
@@ -395,6 +423,144 @@ describe('App board', () => {
     });
     line.focus();
     expect(await screen.findByRole('tooltip')).toHaveTextContent(full);
+  });
+
+  it('shows workflow progress in the Stage cell: where it stopped, with glyphs and a focus tooltip', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    const gamma = boardRowOf('job-00000003');
+    const strip = within(gamma).getByRole('img', { name: /^Progress: CI, needs human\./ });
+    expect(strip).toHaveTextContent('needs human');
+    // The internal stage name never appears; the step and why it stopped do.
+    expect(gamma).not.toHaveTextContent('needs-human');
+    expect(strip).toHaveAccessibleName(
+      'Progress: CI, needs human. Spec: done, Build: done, Simplify: done, Review: done, Approve: done, PR: done, CI: stopped, Done: not started',
+    );
+    // Not colour alone: each step carries a glyph for its state.
+    const glyphs = [...strip.querySelectorAll<HTMLElement>('[data-step]')];
+    expect(glyphs.map((g) => `${g.dataset['step'] ?? ''}:${g.textContent}`)).toEqual([
+      'spec:✓',
+      'build:✓',
+      'simplify:✓',
+      'review:✓',
+      'approve:✓',
+      'pr:✓',
+      'ci:■',
+      'done:○',
+    ]);
+    // Colours follow the active light or dark scheme (CSS variables), never fixed light values.
+    expect(glyphs.map((g) => g.style.color)).toEqual([
+      ...Array<string>(6).fill('var(--mui-palette-success-main)'),
+      'var(--mui-palette-error-main)',
+      'var(--mui-palette-text-secondary)',
+    ]);
+    expect(strip).toHaveAttribute('tabindex', '0');
+    strip.focus();
+    const tip = await screen.findByRole('tooltip');
+    const lines = [...tip.querySelectorAll('div')].filter((d) => d.children.length === 0);
+    expect(lines.map((d) => d.textContent)).toEqual([
+      '✓ Spec: done',
+      '✓ Build: done',
+      '✓ Simplify: done',
+      '✓ Review: done',
+      '✓ Approve: done',
+      '✓ PR: done',
+      '■ CI: stopped',
+      '○ Done: not started',
+    ]);
+  });
+
+  it('shows the review round as "-" before the first round and "N / M" after, with a tooltip', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    // Visible text is hidden from assistive technology; the words are read instead, as text
+    // (aria-label is prohibited on a generic span).
+    const visible = (el: HTMLElement) => el.querySelector('[aria-hidden]')?.textContent;
+    const zero = within(boardRowOf('job-00000001')).getByTestId('round');
+    expect(visible(zero)).toBe('-');
+    expect(zero).toHaveTextContent('-No review round yet (at most 3)');
+    expect(zero).not.toHaveAttribute('aria-label');
+    expect(zero).toHaveAttribute('tabindex', '0');
+    data.rows = [row({ id: 'job-00000001', round: 2 })];
+    await waitFor(() => {
+      expect(visible(within(boardRowOf('job-00000001')).getByTestId('round'))).toBe('2 / 3');
+    });
+    const two = within(boardRowOf('job-00000001')).getByTestId('round');
+    expect(two).toHaveTextContent('Review round 2 of at most 3');
+    two.focus();
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Review round 2 of at most 3');
+    cleanup();
+    data.detail = detail({ job: { ...detail().job, round: 0 } });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    // The chip's read text starts with its visible text (label in name).
+    const chip = await screen.findByTestId('round');
+    expect(chip).toHaveTextContent(/^Round: none\. No review round yet \(at most 3\)$/);
+    expect(chip).not.toHaveAttribute('aria-label');
+    data.detail = detail({ job: { ...detail().job, round: 2 } });
+    await waitFor(() => {
+      expect(screen.getByTestId('round')).toHaveTextContent(
+        /^Round 2 \/ 3\. Review round 2 of at most 3$/,
+      );
+    });
+  });
+
+  it('puts the strip in the detail header and the steps and timeline in Overview', async () => {
+    mockFetch();
+    const at = (m: number) => `2026-11-13T08:${String(m).padStart(2, '0')}:00.000Z`;
+    data.detail = detail({
+      job: { ...detail().job, stage: 'build', status: 'pending', returnStage: null },
+      liveness: 'idle',
+      blocker: null,
+      progress: progress(1, 'current', 'Build'),
+      timeline: {
+        truncated: true,
+        entries: [
+          { at: at(1), step: 'build', kind: 'started', label: 'Build started' },
+          { at: at(2), step: 'build', kind: 'completed', label: 'Build completed' },
+          { at: at(3), step: 'ci', kind: 'started', label: 'CI started' },
+          { at: at(4), step: 'ci', kind: 'back', label: 'Rework from CI: back to Build' },
+          { at: at(5), step: 'build', kind: 'started', label: 'Build started' },
+        ],
+      },
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    const strip = screen.getByRole('img', { name: /^Progress: Build\./ });
+    expect(strip).toHaveAccessibleName(
+      'Progress: Build. Spec: done, Build: current, Simplify: not started, Review: not started, Approve: not started, PR: not started, CI: not started, Done: not started',
+    );
+    expect(screen.queryByText(/stage:/)).not.toBeInTheDocument();
+    const section = screen.getByTestId('progress-section');
+    const steps = within(section).getByRole('list', { name: 'Workflow steps' });
+    // The same states as the strip, in order.
+    expect(
+      within(steps)
+        .getAllByRole('listitem')
+        .map((li) => li.getAttribute('data-step-state')),
+    ).toEqual(['done', 'current', ...Array<string>(6).fill('not-started')]);
+    // Times read as elsewhere on the dashboard ("… ago"); the exact timestamp stays in the markup.
+    const build = within(steps).getAllByRole('listitem')[1];
+    expect(build).toHaveTextContent(/started .* ago/);
+    expect(build?.querySelector('time')).toHaveAttribute('datetime', at(5));
+    expect(build?.querySelector('time')).toHaveAttribute('title', at(5));
+    const timeline = within(section).getByRole('table', { name: 'Timeline' });
+    const timelineRows = within(timeline).getAllByRole<HTMLTableRowElement>('row');
+    expect(timelineRows.map((r) => r.querySelector('time')?.getAttribute('datetime'))).toEqual(
+      [1, 2, 3, 4, 5].map(at),
+    );
+    expect(timelineRows.map((r) => r.cells[1]?.textContent)).toEqual([
+      'Build started',
+      'Build completed',
+      'CI started',
+      'Rework from CI: back to Build',
+      'Build started',
+    ]);
+    expect(timelineRows[0]?.cells[0]).toHaveTextContent(/ ago$/);
+    expect(within(section).getByText(/Earlier history not shown/)).toBeInTheDocument();
   });
 
   it('filters cancelled jobs separately from finished ones', async () => {
@@ -559,7 +725,9 @@ describe('Job detail', () => {
       'href',
       'vscode://file//g',
     );
-    expect(screen.getByText(/stage: needs-human/)).toBeInTheDocument();
+    // The header names the step it stopped at, never the internal stage string.
+    expect(screen.getByRole('img', { name: /^Progress: Approve, needs human\./ })).toBeVisible();
+    expect(screen.queryByText(/needs-human/)).not.toBeInTheDocument();
   });
 
   it('demotes Resume and admits an unknown reason when the escalation is not a decision', async () => {
@@ -1326,6 +1494,12 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     expect(ids()).toEqual(['job-00000001', 'job-00000002', 'job-00000004', 'job-00000003']);
     fireEvent.click(screen.getByRole('button', { name: 'Job' }));
     expect(ids()).toEqual(['job-00000003', 'job-00000004', 'job-00000002', 'job-00000001']);
+    // Stage sorts by workflow position (Build, Build, Review, CI), not by the stage string.
+    fireEvent.click(screen.getByRole('button', { name: 'Stage' }));
+    expect(ids()).toEqual(['job-00000001', 'job-00000004', 'job-00000002', 'job-00000003']);
+    fireEvent.click(screen.getByRole('button', { name: 'Stage' }));
+    expect(ids()).toEqual(['job-00000003', 'job-00000002', 'job-00000001', 'job-00000004']);
+    fireEvent.click(screen.getByRole('button', { name: 'Job' }));
     for (const name of ['Stage', 'Status', 'Round', 'Elapsed', 'Updated']) {
       fireEvent.click(screen.getByRole('button', { name }));
       expect(header(name)).toHaveAttribute('aria-sort', 'ascending');
@@ -1536,7 +1710,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
       'href',
       '#/jobs/job-00000003',
     );
-    fireEvent.click(within(boardRow('job-00000003')).getByText('needs-human'));
+    fireEvent.click(within(boardRow('job-00000003')).getByText('30m'));
     expect(window.location.hash).toBe('#/jobs/job-00000003');
     await screen.findByRole('heading', { name: 'Gamma blocked' });
 

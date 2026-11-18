@@ -31,7 +31,16 @@ import {
 } from '../storage/jobs.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 import { latestRun, latestRunsByJob } from '../storage/verification.ts';
-import { BLOCKER_EVENTS, blockerOf, ciView, liveness, resumeOf } from './status.ts';
+import {
+  BLOCKER_EVENTS,
+  blockerOf,
+  ciView,
+  liveness,
+  progressOf,
+  resumeOf,
+  TIMELINE_EVENTS,
+  timelineOf,
+} from './status.ts';
 import type {
   ActionRequest,
   ActionResponse,
@@ -117,6 +126,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       archivedAt: job.archivedAt,
       supersedes: predecessors.get(job.id) ?? [],
       ci,
+      progress: progressOf(job, evidence.events),
     };
   });
 }
@@ -184,7 +194,7 @@ export function detail(store: Store, id: string): JobDetailView {
   const job = getJob(store.db, id);
   const artifacts = listArtifacts(store.db, id);
   const reviews = listReviews(store.db, id);
-  const events = listEvents(store.db, id, 500);
+  const events = listEvents(store.db, id, TIMELINE_EVENTS);
   const contents: Record<string, string> = {};
   for (const a of artifacts) {
     if (a.bytes > INLINE_LIMIT) continue;
@@ -220,6 +230,8 @@ export function detail(store: Store, id: string): JobDetailView {
     planError,
     blocker: blockerOf(job, state, evidence),
     ci,
+    progress: progressOf(job, evidence.events),
+    timeline: timelineOf(events),
     prPhase: prPhase(job, ci.completion),
     actions: allowedActions(
       job,
