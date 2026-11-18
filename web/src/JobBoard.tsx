@@ -27,6 +27,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardRow } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
 import { CiChip, PrPhaseChip } from './Ci.tsx';
+import { ProgressStrip, RoundIndicator } from './Progress.tsx';
 import { BlockerText, CopyResume, StatusChip, Supersession } from './Status.tsx';
 import { ago, byAttention, elapsed, reviewRollup } from './format.ts';
 
@@ -88,8 +89,10 @@ const COLUMNS: Column[] = [
     id: 'stage',
     label: 'Stage',
     hideable: true,
-    sortValue: (r) => r.stage,
-    cell: (r) => <Chip label={r.stage} variant="outlined" />,
+    // Workflow order: a job with no known step first, completed jobs last.
+    sortValue: (r) => r.progress.position,
+    sx: { whiteSpace: 'nowrap' },
+    cell: (r) => <ProgressStrip progress={r.progress} />,
   },
   {
     id: 'status',
@@ -170,7 +173,7 @@ const COLUMNS: Column[] = [
     hideable: true,
     align: 'center',
     sortValue: (r) => r.round,
-    cell: (r) => `${String(r.round)}/${String(r.maxRounds)}`,
+    cell: (r) => <RoundIndicator round={r.round} maxRounds={r.maxRounds} />,
   },
   {
     id: 'reviews',

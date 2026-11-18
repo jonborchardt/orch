@@ -82,6 +82,37 @@ export interface CiView {
   guidance: string;
 }
 
+/** The seven presentation steps, in workflow order; `needs-human` and `completed` are never steps. */
+export type StepId = 'spec' | 'build' | 'review' | 'approve' | 'pr' | 'ci' | 'done';
+export type StepState = 'done' | 'current' | 'stopped' | 'not-started';
+
+/**
+ * Where a job is in the workflow, for people who do not know orch's stage names. At most one step
+ * is current or stopped; steps before it are done and steps after it not started, even when an
+ * earlier pass reached them (the timeline shows that pass).
+ */
+export interface Progress {
+  steps: { id: StepId; label: string; state: StepState }[];
+  /** Index of the current or stopped step; -1 when none is known; 7 when the job completed. */
+  position: number;
+  /** Short text for the position, e.g. "Build", "CI, needs human", "Done", "Needs human". */
+  label: string;
+}
+
+/** One stage entry or exit from the job's events, oldest first; going back is a new entry. */
+export interface TimelineEntry {
+  at: string;
+  step: StepId | null;
+  kind: 'started' | 'completed' | 'back' | 'stopped' | 'resumed';
+  label: string;
+}
+
+export interface Timeline {
+  entries: TimelineEntry[];
+  /** The events cap was reached, so earlier history is not shown. */
+  truncated: boolean;
+}
+
 export interface BoardRow {
   id: string;
   title: string;
@@ -111,6 +142,7 @@ export interface BoardRow {
   /** When a human archived this finished job; archived rows are hidden from the default views. */
   archivedAt: string | null;
   ci: CiView;
+  progress: Progress;
 }
 
 /**
@@ -145,6 +177,8 @@ export interface JobDetailView {
   planError: string | null;
   blocker: Blocker | null;
   ci: CiView;
+  progress: Progress;
+  timeline: Timeline;
   /** Where the PR stands in delivery, from recorded fields (`prPhase`). */
   prPhase: PrPhase;
   /** Dashboard actions the workflow allows in this state (the server re-checks on POST). */
