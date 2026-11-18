@@ -149,6 +149,7 @@ export function ciColor(v: string | null): ChipColor {
     case 'failing':
       return 'error';
     case 'pending':
+      return 'info';
     case 'none':
       return 'warning';
     default:

@@ -108,8 +108,10 @@ from the last `orch gh ci` reconciliation, each failed required check with its G
 the log saved under the artifact directory, and one line of guidance. The CI chip says only what CI
 is doing. Repairs are rounds, so the board's Round column carries a `repairs n/m` caption under
 `round/max` once a repair happened or CI is failing; in the detail the budget is stated in the CI
-line (`n of m repairs used`). The detail's
-status panel uses the CI line as its summary and the guidance as its next line. Everything comes from
+line (`n of m repairs used`). The detail's status panel uses the CI line as its summary and the
+guidance as its next line. The chip is informational (blue) while checks are pending, green when
+passing, red when failing, and warning (amber) only when GitHub reported no checks for the PR head.
+Everything comes from
 persisted fields (`src/server/status.ts` `ciView`): the rollup columns, the newest `ci.observed`
 event, and the `job.completed` event. A ci-stage escalation gets its own blocker (`CI stopped`)
 naming the cause from the recorded reason code and outcome: repair budget spent, no checks for the

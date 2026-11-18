@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BoardRow, CiView, JobDetailView } from '../../src/server/types.ts';
 import { App } from './App.tsx';
 import { CiChip } from './Ci.tsx';
-import { byAttention, repoLabels, reviewRollup } from './format.ts';
+import { byAttention, ciColor, repoLabels, reviewRollup } from './format.ts';
 import { Markdown } from './Markdown.tsx';
 import { RESUME_NOTE } from './Status.tsx';
 import { theme } from './main.tsx';
@@ -1963,6 +1963,16 @@ describe('Board attention order, summary chips, review rollup', () => {
       label: '1 changes',
       color: 'warning',
     });
+  });
+
+  it('colours pending CI as information and missing CI as a warning', () => {
+    expect(ciColor('pending')).toBe('info');
+    expect(ciColor('none')).toBe('warning');
+    expect(ciColor('passing')).toBe('success');
+    expect(ciColor('failing')).toBe('error');
+    expect(ciColor(null)).toBe('default');
+    const colours = ['pending', 'none', 'passing', 'failing', null].map(ciColor);
+    expect(new Set(colours).size).toBe(5);
   });
 
   it('shows the rollup with every reviewer in its tooltip and folds in the blocking count', async () => {
