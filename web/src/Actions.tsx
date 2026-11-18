@@ -389,99 +389,96 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                     ? LABEL[open]
                     : ''}
         </DialogTitle>
-        {plain ? (
-          <DialogContent>
-            <Stack spacing={2}>
+        <DialogContent>
+          <Stack spacing={2} sx={plain ? undefined : { mt: 1 }}>
+            {open && (
               <Typography data-testid="action-effect">{effect(open, detail, to)}</Typography>
-              {removal && (
-                <Typography data-testid="remove-worktree-confirm">
-                  Delete <code>{detail.job.worktreePath}</code> from disk. Its PR is merged; the
-                  branch <code>{detail.job.branch}</code> and its commits are kept. Refused if the
-                  worktree has uncommitted changes.
-                </Typography>
-              )}
-              {open === 'merge' && (
-                <Typography data-testid="merge-confirm">
-                  Merge <b>{detail.job.prUrl}</b> at <code>{detail.ci.head?.slice(0, 7)}</code> as a
-                  merge commit. GitHub is checked first; the merge is refused if the head moved. The
-                  branch is not deleted.
-                </Typography>
-              )}
-              {error && <Alert severity="error">{error}</Alert>}
-            </Stack>
-          </DialogContent>
-        ) : (
-          <DialogContent>
-            <Stack spacing={2} sx={{ mt: 1 }}>
-              {open && (
-                <Typography data-testid="action-effect">{effect(open, detail, to)}</Typography>
-              )}
-              {open === 'approve' && (
+            )}
+            {plain ? (
+              <>
+                {removal && (
+                  <Typography data-testid="remove-worktree-confirm">
+                    Path <code>{detail.job.worktreePath}</code>, branch{' '}
+                    <code>{detail.job.branch}</code>. Refused if the worktree has uncommitted
+                    changes.
+                  </Typography>
+                )}
+                {open === 'merge' && (
+                  <Typography data-testid="merge-confirm">
+                    PR <b>{detail.job.prUrl}</b> at <code>{detail.ci.head?.slice(0, 7)}</code>;
+                    GitHub is checked first.
+                  </Typography>
+                )}
+              </>
+            ) : (
+              <>
+                {open === 'approve' && (
+                  <TextField
+                    select
+                    label="Resume at stage"
+                    value={to}
+                    onChange={(e) => {
+                      setTo(e.target.value);
+                    }}
+                  >
+                    {STAGES.map((s) => (
+                      <MenuItem key={s} value={s}>
+                        {s}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                )}
                 <TextField
-                  select
-                  label="Resume at stage"
-                  value={to}
-                  onChange={(e) => {
-                    setTo(e.target.value);
-                  }}
-                >
-                  {STAGES.map((s) => (
-                    <MenuItem key={s} value={s}>
-                      {s}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              )}
-              <TextField
-                label={
-                  open === 'accept-delivery'
-                    ? 'Reason (required; recorded as the human close-out)'
-                    : "Reason (recorded in the job's events)"
-                }
-                required={open === 'accept-delivery'}
-                value={reason}
-                onChange={(e) => {
-                  setReason(e.target.value);
-                }}
-                multiline
-                minRows={2}
-                slotProps={{ htmlInput: { maxLength: 500 } }}
-                autoFocus
-              />
-              {liveOwner && (
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={force}
-                      onChange={(e) => {
-                        setForce(e.target.checked);
-                      }}
-                    />
+                  label={
+                    open === 'accept-delivery'
+                      ? 'Reason (required; recorded as the human close-out)'
+                      : "Reason (recorded in the job's events)"
                   }
-                  label={`Take the job from session ${detail.job.ownerSession ?? ''} (its token stops working)`}
+                  required={open === 'accept-delivery'}
+                  value={reason}
+                  onChange={(e) => {
+                    setReason(e.target.value);
+                  }}
+                  multiline
+                  minRows={2}
+                  slotProps={{ htmlInput: { maxLength: 500 } }}
+                  autoFocus
                 />
-              )}
-              {open === 'accept-delivery' ? (
-                <Alert severity="warning" variant="outlined">
-                  This completes the job without a passing CI verdict and records your reason as the
-                  human close-out. It does not merge or mark the PR ready.
-                </Alert>
-              ) : open === 'cancel' ? (
-                <Alert severity="warning" variant="outlined">
-                  This cannot be undone: a cancelled job is never resumed.
-                </Alert>
-              ) : (
-                <Alert severity="warning" variant="outlined">
-                  This records the decision
-                  {open === 'accept-policy' ? '' : ' and returns the job to a pending stage'}. It
-                  does not start or wake any Claude session; resume the job from a session
-                  afterwards.
-                </Alert>
-              )}
-              {error && <Alert severity="error">{error}</Alert>}
-            </Stack>
-          </DialogContent>
-        )}
+                {liveOwner && (
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={force}
+                        onChange={(e) => {
+                          setForce(e.target.checked);
+                        }}
+                      />
+                    }
+                    label={`Take the job from session ${detail.job.ownerSession ?? ''} (its token stops working)`}
+                  />
+                )}
+                {open === 'accept-delivery' ? (
+                  <Alert severity="warning" variant="outlined">
+                    This completes the job without a passing CI verdict and records your reason as
+                    the human close-out. It does not merge or mark the PR ready.
+                  </Alert>
+                ) : open === 'cancel' ? (
+                  <Alert severity="warning" variant="outlined">
+                    This cannot be undone: a cancelled job is never resumed.
+                  </Alert>
+                ) : (
+                  <Alert severity="warning" variant="outlined">
+                    This records the decision
+                    {open === 'accept-policy' ? '' : ' and returns the job to a pending stage'}. It
+                    does not start or wake any Claude session; resume the job from a session
+                    afterwards.
+                  </Alert>
+                )}
+              </>
+            )}
+            {error && <Alert severity="error">{error}</Alert>}
+          </Stack>
+        </DialogContent>
         <DialogActions>
           <Button
             onClick={() => {
