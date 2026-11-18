@@ -179,13 +179,18 @@ export function mergeEdits(path: string, sha: string): string[] {
   return [...files].sort();
 }
 
-/** Merge commits between `from` (exclusive) and `to` with edits that match neither parent. */
+/**
+ * Merge commits between `from` (exclusive) and `to` with edits that match neither parent. Merges
+ * already reachable from `base` came in with the base branch and are not this branch's code.
+ */
 export function editedMerges(
   path: string,
   from: string,
   to: string,
+  base?: string,
 ): { sha: string; files: string[] }[] {
-  const list = tryGit(path, 'rev-list', '--merges', `${from}..${to}`) ?? '';
+  const range = [`${from}..${to}`, ...(base ? [`^${base}`] : [])];
+  const list = tryGit(path, 'rev-list', '--merges', ...range) ?? '';
   return list
     .split(/\r?\n/)
     .filter(Boolean)

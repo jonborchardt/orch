@@ -2,8 +2,8 @@
 import { spawn } from 'node:child_process';
 
 import { UsageError } from '../core/errors.ts';
-import { webDistDir } from '../core/paths.ts';
-import { DEFAULT_PORT, startServer } from '../server/http.ts';
+import { DEFAULT_PORT, webDistDir } from '../core/paths.ts';
+import { startServer } from '../server/http.ts';
 import { openStore } from '../storage/client.ts';
 
 export interface UiOptions {

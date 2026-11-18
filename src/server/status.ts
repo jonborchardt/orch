@@ -14,7 +14,17 @@ import {
   type PrPhase,
 } from '../core/workflow.ts';
 import type { Artifact, Event, Job, VerificationRun } from '../storage/schema.ts';
-import type { Blocker, CiView, Liveness, Resume } from './types.ts';
+import type {
+  Blocker,
+  CiView,
+  Liveness,
+  Progress,
+  Resume,
+  StepId,
+  StepState,
+  Timeline,
+  TimelineEntry,
+} from './types.ts';
 
 type Lease = Pick<Job, 'status' | 'stage' | 'leaseExpiresAt' | 'ownerSession'>;
 
@@ -366,4 +376,140 @@ export function resumeOf(job: Lease & Pick<Job, 'id'>, state: Liveness): Resume 
     };
   }
   return { command: `/factory resume ${job.id}`, heldBy: null };
+}
+
+const STEPS: { id: StepId; label: string }[] = [
+  { id: 'spec', label: 'Spec' },
+  { id: 'build', label: 'Build' },
+  { id: 'simplify', label: 'Simplify' },
+  { id: 'review', label: 'Review' },
+  { id: 'approve', label: 'Approve' },
+  { id: 'pr', label: 'PR' },
+  { id: 'ci', label: 'CI' },
+  { id: 'done', label: 'Done' },
+];
+
+/** Step index of a delivery stage; -1 for anything else (needs-human, completed, null). */
+function stepIndex(stage: unknown): number {
+  return stage === 'done' ? -1 : STEPS.findIndex((s) => s.id === stage);
+}
+
+const STOPPED: Partial<Record<Job['status'], string>> = {
+  interrupted: 'interrupted',
+  failed: 'failed',
+  cancelled: 'cancelled',
+};
+
+/**
+ * Where the job is, from its row and the newest `job.blocked` event (in the BLOCKER_EVENTS map the
+ * board already loads). An escalated job is stopped at the stage it escalated from, which for an
+ * exhausted CI repair budget is `ci` even though `returnStage` says build.
+ */
+export function progressOf(
+  job: Pick<Job, 'stage' | 'status' | 'returnStage'>,
+  events: Map<string, Event>,
+): Progress {
+  const steps = (position: number, at: StepState): Progress['steps'] =>
+    STEPS.map((s, i) => ({
+      ...s,
+      state: i < position ? 'done' : i === position ? at : 'not-started',
+    }));
+  if (job.status === 'completed' || job.stage === 'completed') {
+    return { steps: steps(STEPS.length, 'done'), position: STEPS.length, label: 'Done' };
+  }
+  let position = stepIndex(job.stage);
+  if (job.stage === 'needs-human') {
+    position = stepIndex(text(events.get('job.blocked'), 'from'));
+    if (position < 0) position = stepIndex(job.returnStage);
+  }
+  const reason = job.stage === 'needs-human' ? 'needs human' : STOPPED[job.status];
+  if (position < 0) {
+    const label = reason ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : 'Unknown';
+    return { steps: steps(-1, 'current'), position: -1, label };
+  }
+  const name = STEPS[position]?.label ?? '';
+  return {
+    steps: steps(position, reason ? 'stopped' : 'current'),
+    position,
+    label: reason ? `${name}, ${reason}` : name,
+  };
+}
+
+/** The detail view loads at most this many newest events; the timeline says when it hit the cap. */
+export const TIMELINE_EVENTS = 500;
+
+const stepName = (stage: unknown): string =>
+  STEPS.find((s) => s.id === stage)?.label ?? (typeof stage === 'string' ? stage : '?');
+const asStep = (stage: unknown): StepId | null => STEPS[stepIndex(stage)]?.id ?? null;
+
+/**
+ * Stage entries and exits in event order (oldest first). A step entered again after going back
+ * (changes requested, rework, resume to an earlier stage) is a new entry, never an edit.
+ */
+export function timelineOf(events: readonly Event[]): Timeline {
+  const entries: TimelineEntry[] = [];
+  // The step the job was last seen in, for events that do not name one (job.interrupted).
+  let at: StepId | null = null;
+  const add = (e: Event, step: StepId | null, kind: TimelineEntry['kind'], label: string) => {
+    entries.push({ at: e.createdAt, step, kind, label });
+  };
+  for (const [i, e] of events.entries()) {
+    const p = e.payload;
+    switch (e.type) {
+      case 'stage.started':
+        at = asStep(p['stage']);
+        add(e, at, 'started', `${stepName(p['stage'])} started`);
+        break;
+      case 'stage.completed': {
+        const step = asStep(p['stage']);
+        const changes = p['changesRequestedBy'];
+        const back =
+          step === 'review' &&
+          ((Array.isArray(changes) && changes.length > 0) || Number(p['blocking'] ?? 0) > 0);
+        const n = p['round'];
+        const round = `Review round ${typeof n === 'number' ? String(n) : '?'}`;
+        // The last allowed round escalates in the same transition instead of returning to Build.
+        const escalated = back && events[i + 1]?.type === 'job.blocked';
+        const label =
+          step !== 'review'
+            ? `${stepName(p['stage'])} completed`
+            : escalated
+              ? `${round}: changes requested`
+              : back
+                ? `${round}: changes requested, back to Build`
+                : `${round} passed`;
+        add(e, step, back && !escalated ? 'back' : 'completed', label);
+        break;
+      }
+      case 'stage.failed':
+        add(e, asStep(p['stage']), 'stopped', `${stepName(p['stage'])} failed`);
+        break;
+      case 'job.blocked':
+        at = asStep(p['from']) ?? at;
+        add(e, asStep(p['from']), 'stopped', `${stepName(p['from'])}: needs human`);
+        break;
+      case 'job.resumed': {
+        const to = p['to'] ?? p['stage'];
+        if (to === 'completed') add(e, 'done', 'resumed', 'Delivery accepted by a human');
+        else add(e, asStep(to), 'resumed', `Resumed at ${stepName(to)}`);
+        break;
+      }
+      case 'job.reworked':
+        add(e, asStep(p['from']), 'back', `Rework from ${stepName(p['from'])}: back to Build`);
+        break;
+      case 'job.interrupted':
+        add(e, at, 'stopped', at ? `${stepName(at)} interrupted` : 'Interrupted');
+        break;
+      case 'job.cancelled': {
+        // A job cancelled while escalated records stage needs-human, which is not a step.
+        const step = asStep(p['stage']);
+        add(e, step ?? at, 'stopped', step ? `Cancelled during ${stepName(step)}` : 'Cancelled');
+        break;
+      }
+      case 'job.completed':
+        add(e, 'done', 'completed', 'Done');
+        break;
+    }
+  }
+  return { entries, truncated: events.length >= TIMELINE_EVENTS };
 }

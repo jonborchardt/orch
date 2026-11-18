@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 export const APP_NAME = 'orch';
 /** Set this to redirect all runtime state (dev, tests, side-by-side installs). */
 export const HOME_ENV = 'ORCH_HOME';
+/** `orch ui`'s loopback port unless `--port` overrides it. */
+export const DEFAULT_PORT = 4777;
 
 export interface RuntimePaths {
   /** User-editable configuration. */
@@ -104,6 +106,11 @@ export function databasePath(paths: RuntimePaths = runtimePaths()): string {
 /** Lock held by the one `orch verify` running checks for this runtime home. */
 export function verifyLockPath(paths: RuntimePaths = runtimePaths()): string {
   return join(paths.data, 'verify.lock');
+}
+
+/** Queue entries of `orch verify` runs waiting for the verify lock, one file per waiter. */
+export function verifyQueueDir(paths: RuntimePaths = runtimePaths()): string {
+  return join(paths.data, 'verify-queue');
 }
 
 /** The opt-in recovery worker's PID file, last-pass status, and log (`orch recover`). */

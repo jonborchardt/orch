@@ -222,6 +222,45 @@ describe('seeded board and detail', () => {
     expect(pending.actions).not.toContain('accept-delivery');
   });
 
+  it('carries workflow progress on board rows and the detail, and a timeline on the detail', async () => {
+    const rows = (await (await api('/api/jobs')).json()) as BoardRow[];
+    const by = (id: string) => rows.find((r) => r.id === id) ?? ({} as BoardRow);
+    const states = (p: BoardRow['progress']) => p.steps.map((s) => s.state);
+    // Escalated after the repair budget was spent: stopped at CI, though it would return to build.
+    expect(by(ids.ciExhausted).progress.label).toBe('CI, needs human');
+    expect(states(by(ids.ciExhausted).progress)).toEqual([
+      ...Array<string>(6).fill('done'),
+      'stopped',
+      'not-started',
+    ]);
+    expect(by(ids.blocked).progress.label).toBe('Approve, needs human');
+    expect(by(ids.completed).progress.label).toBe('Done');
+    expect(states(by(ids.completed).progress).every((s) => s === 'done')).toBe(true);
+    expect(by(ids.failed).progress.label).toBe('Build, failed');
+    expect(by(ids.reviewing).progress.label).toBe('Review');
+    for (const r of rows) {
+      expect(r.progress.steps.map((s) => s.id)).toEqual([
+        'spec',
+        'build',
+        'simplify',
+        'review',
+        'approve',
+        'pr',
+        'ci',
+        'done',
+      ]);
+    }
+    const d = (await (await api(`/api/jobs/${ids.ciExhausted}`)).json()) as JobDetailView;
+    // The detail's step states equal the board's.
+    expect(d.progress).toEqual(by(ids.ciExhausted).progress);
+    expect(d.timeline.truncated).toBe(false);
+    const labels = d.timeline.entries.map((e) => e.label);
+    const rework = labels.indexOf('Rework from CI: back to Build');
+    expect(rework).toBeGreaterThan(labels.indexOf('CI started'));
+    expect(labels.indexOf('Build started', rework)).toBeGreaterThan(rework);
+    expect(labels.at(-1)).toBe('CI: needs human');
+  });
+
   it('reading the board or a detail never mutates a job', async () => {
     const snapshot = () => JSON.stringify(board(store).map((r) => [r.id, r.status, r.updatedAt]));
     const before = snapshot();

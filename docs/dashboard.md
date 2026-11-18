@@ -26,8 +26,29 @@ when any did, and nothing before the round has reviews; hovering or focusing it 
 and its verdict. Beside it, `n blocking` (red) shows the blocking-finding count from the current
 round's consolidation when it is above zero; there is no separate Blocking column. Both are
 current-round only: while a new round is open, earlier rounds' verdicts and blocking counts are
-not shown on the board (they stay in the detail view's Reviews and Findings tabs). The stage column is the
-workflow position; the status column is the execution state, kept separate so a job stopped in
+not shown on the board (they stay in the detail view's Reviews and Findings tabs). The Round column
+reads `-` before the first review round and `N / M` from round 1 on (round N of at most M); its
+tooltip says so in words ("Review round 2 of at most 3", "No review round yet (at most 3)"), and
+the same words are the text assistive technology reads.
+
+The Stage column is the workflow position, shown as a **progress strip**: eight steps in order,
+Spec, Build, Simplify, Review, Approve, PR, CI, Done, each drawn with a glyph for its state (`✓` done, `▶`
+current, `■` stopped, `○` not started; colour, from the active light or dark scheme, is only a
+second cue), followed by a short label such
+as `Build`, `CI, needs human`, `Build, interrupted`, `Review, cancelled`, or `Done`. The strip is in
+the Tab order; hovering or focusing it lists every step with its state, and its accessible name
+states all eight. The model is computed on the server (`progressOf` in `src/server/status.ts`) from
+the job row and the newest `job.blocked` event the board already loads, and shipped on each row as
+`progress`. Exactly one step is current or stopped; steps before it are done and steps after it are
+not started, even when an earlier pass reached them (a job reworked from CI back to Build shows
+Spec done, Build current, the rest not started). A pending or running job (including a stale one)
+is current at its stage; an interrupted, failed, or cancelled job is stopped at its stage; an
+escalated job (`needs-human`, never itself a step) is stopped at the `from` stage of its newest
+`job.blocked` event, else at its `returnStage`, so a CI escalation after the repair budget is spent
+reads `CI, needs human` though it would return to build; when neither names a delivery stage no
+step is marked and the label is `Needs human`. A completed job has all eight done; a cancelled job
+never shows Done. Sorting the column orders by that workflow position. The status column is the
+execution state, kept separate so a job stopped in
 `build` never reads as done. Its states (each with a glyph and label, never colour alone):
 `running` means the status is `running` and a session renewed its lease recently (a live lease, not
 proof that a process is alive now); `stale` means the status is still `running` but the lease lapsed
@@ -76,7 +97,19 @@ and summary; expand it for the full review text), consolidated
 findings per round, the approval decision, registered artifacts (size, marker, hash), the event
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
 the PR with its CI state. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
-GitHub. A status panel above the controls reads as one summary line, one **Next:** line, and a
+GitHub. The header carries the same progress strip as the board (in place of a raw stage chip)
+and the round as `Round: none` or `Round N / M`, with the same tooltip. The Overview tab ends with a
+**Progress** section: every step in order with the same state as the strip and the times the
+timeline knows (`started …`, `completed …`, or `completed earlier …` for a step the current pass
+has not redone), then the **Timeline**. Times read relatively (`5m ago`), with the exact timestamp
+in the tooltip. The timeline is built by `timelineOf` in `src/server/status.ts` from
+`stage.started`, `stage.completed` (with the review round and whether it requested changes),
+`stage.failed`, `job.blocked`, `job.resumed`, `job.reworked`, `job.interrupted`, `job.cancelled`,
+and `job.completed`, oldest first, each with its time and a plain label. Going back (changes
+requested, rework from PR or CI, resume to an earlier stage) is a new entry, never an edit to an
+earlier one. The detail loads the newest 500 events; when it reaches that cap the timeline says
+"Earlier history not shown", and the step states, which never read the timeline, are unaffected.
+A status panel above the controls reads as one summary line, one **Next:** line, and a
 collapsed **Details** expander. The summary is the bold blocker label and one sentence: for a
 `CI stopped` job the CI line (head and repair budget), otherwise the blocker summary with the
 recorded reason, or the completion line or state description when nothing blocks. The next line
@@ -107,8 +140,8 @@ for a commit that is no longer HEAD is marked as not current), GitHub's reason
 from the last `orch gh ci` reconciliation, each failed required check with its GitHub log link and
 the log saved under the artifact directory, and one line of guidance. The CI chip says only what CI
 is doing. Repairs are rounds, so the board's Round column carries a `repairs n/m` caption under
-`round/max` once a repair happened or CI is failing; in the detail the budget is stated in the CI
-line (`n of m repairs used`). The detail's status panel uses the CI line as its summary and the
+the round indicator once a repair happened or CI is failing; in the detail the budget is stated in
+the CI line (`n of m repairs used`). The detail's status panel uses the CI line as its summary and the
 guidance as its next line. The chip is informational (blue) while checks are pending, green when
 passing, red when failing, and warning (amber) only when GitHub reported no checks for the PR head.
 Everything comes from
