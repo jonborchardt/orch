@@ -10,6 +10,7 @@ import {
   latestChallenge,
   requiredArtifact,
   type Stage,
+  STAGES,
   type Status,
   transition,
   type TransitionContext,
@@ -59,6 +60,13 @@ const passedSpec = (): Artifact[] => [
   art('spec-review-1.md', 'pass', { specSha256: 's1' }),
 ];
 
+function simplified(round: number): Artifact[] {
+  return [
+    art(`round-${String(round)}/simplify-review.md`),
+    art(`round-${String(round)}/simplify.md`),
+  ];
+}
+
 function review(round: number, reviewer: string, verdict: Review['verdict']): Review {
   return {
     id: 1,
@@ -89,7 +97,7 @@ const step = (j: JobState, action: Action, ctx = none): JobState => ({
 });
 
 describe('transition: happy path', () => {
-  it('walks spec -> build -> review -> approve -> pr -> ci -> completed', () => {
+  it('walks spec -> build -> simplify -> review -> approve -> pr -> ci -> completed', () => {
     let j = job('spec', 'pending');
     j = step(j, 'start');
     expect(j.status).toBe('running');
@@ -97,6 +105,9 @@ describe('transition: happy path', () => {
     expect([j.stage, j.status]).toEqual(['build', 'pending']);
     j = step(j, 'start');
     j = step(j, 'complete', { artifacts: [art('build.md')], reviews: [] });
+    expect([j.stage, j.status, j.round]).toEqual(['simplify', 'pending', 1]);
+    j = step(j, 'start');
+    j = step(j, 'complete', { artifacts: simplified(1), reviews: [] });
     expect([j.stage, j.status, j.round]).toEqual(['review', 'pending', 1]);
     j = step(j, 'start');
     const r = run(j, 'complete', {
@@ -211,6 +222,45 @@ describe('transition: CI repair cycle', () => {
     expect(to(blocked({ ciStatus: 'failing', prState: 'merged' })).patch.stage).toBe('completed');
     // The ordinary resume keeps working and never completes anything.
     expect(run(blocked({ ciStatus: 'none' }), 'resume', none).patch.stage).toBe('ci');
+  });
+});
+
+describe('transition: simplify', () => {
+  it('lists simplify between build and review and requires its round-N record', () => {
+    expect(STAGES.slice(1, 4)).toEqual(['build', 'simplify', 'review']);
+    expect(requiredArtifact('simplify', 2)).toBe('round-2/simplify.md');
+    expect(describeNext(job('simplify', 'pending', { round: 2 })).requiredArtifacts).toEqual([
+      'round-2/simplify-review.md',
+      'round-2/simplify.md',
+    ]);
+  });
+
+  it('build completes to simplify with the next round; simplify keeps it and enters review', () => {
+    const built = run(job('build', 'running', { round: 1 }), 'complete', {
+      artifacts: [art('build.md')],
+      reviews: [],
+    });
+    expect(built.patch).toEqual({ stage: 'simplify', status: 'pending', round: 2 });
+    const done = run(job('simplify', 'running', { round: 2 }), 'complete', {
+      artifacts: simplified(2),
+      reviews: [],
+    });
+    expect(done.patch).toEqual({ stage: 'review', status: 'pending' });
+  });
+
+  it('refuses completion without the findings or without the record of this round', () => {
+    const j = job('simplify', 'running', { round: 2 });
+    const findings = simplified(2).slice(0, 1);
+    const record = simplified(2).slice(1);
+    expect(() => run(j, 'complete', { artifacts: record, reviews: [] })).toThrow(
+      /missing required artifact round-2\/simplify-review.md/,
+    );
+    expect(() => run(j, 'complete', { artifacts: findings, reviews: [] })).toThrow(
+      /missing required artifact round-2\/simplify.md/,
+    );
+    expect(() => run(j, 'complete', { artifacts: simplified(1), reviews: [] })).toThrow(
+      WorkflowError,
+    );
   });
 });
 
@@ -480,6 +530,13 @@ describe('transition: escalation, resume, cancel', () => {
     // Escalated mid-review: the default return to review is a fresh round too.
     const midReview = job('needs-human', 'blocked', { round: 2, returnStage: 'review' });
     expect(run(midReview, 'resume').patch.round).toBe(3);
+    // A simplify requested from needs-human opens a new round too: its files belong to that round.
+    expect(run(blocked, 'resume', { ...none, to: 'simplify' }).patch).toEqual({
+      stage: 'simplify',
+      status: 'pending',
+      returnStage: null,
+      round: 3,
+    });
     // Any other target keeps the round.
     expect(run(blocked, 'resume', { ...none, to: 'build' }).patch.round).toBeUndefined();
     // An interrupted or failed review resumes in its own round.

@@ -47,21 +47,24 @@ orch ui (optional, 127.0.0.1)                  the same database, read-only plus
 orch recover start (optional)                  continues ci-stage jobs after a network outage
 ```
 
-A job moves `spec → build → review → approve → pr → ci → completed`. Any stage can escalate to
+A job moves `spec → build → simplify → review → approve → pr → ci → completed`. Any stage can escalate to
 `needs-human`; review rounds and CI repair cycles are bounded; `rework` sends a failed CI run or a
 conflicting base integration back to `build`, where the fix is reviewed and approved again.
 
-| Stage     | Who                                                   | Produces                                  | `orch` requires before the next stage                                                                 |
-| --------- | ----------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `spec`    | `factory-spec-writer`, then `factory-spec-challenger` | `spec.md`, `spec-review-N.md`             | Goal, Scope, Acceptance criteria; the latest challenge says `VERDICT: PASS` for the current `spec.md` |
-| `build`   | `factory-builder`                                     | commits, an `orch verify` run, `build.md` | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD          |
-| `review`  | 3 reviewers (7 for UI changes)                        | `round-N/review-*.md`, `consolidated.md`  | all three always-on verdicts recorded against the HEAD `build.md` describes; `BLOCKING: 0` to advance |
-| `approve` | `factory-approver`                                    | `decision.md`                             | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid              |
-| `pr`      | the coordinator                                       | base integrated, pushed branch, draft PR  | only clean base-integration merges since the approval; verified HEAD; policy unchanged                |
-| `ci`      | the coordinator + `orch gh ci`                        | GitHub's verdict for the PR head          | the job's own PR; checks passed for that commit, still the approved one (plus clean base merges)      |
+| Stage      | Who                                                   | Produces                                                   | `orch` requires before the next stage                                                                                                  |
+| ---------- | ----------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`     | `factory-spec-writer`, then `factory-spec-challenger` | `spec.md`, `spec-review-N.md`                              | Goal, Scope, Acceptance criteria; the latest challenge says `VERDICT: PASS` for the current `spec.md`                                  |
+| `build`    | `factory-builder`                                     | commits, an `orch verify` run, `build.md`                  | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD                                           |
+| `simplify` | `factory-simplifier`, then `factory-builder`          | `round-N/simplify-review.md`, fixes, `round-N/simplify.md` | both files registered; `simplify.md` against a clean, verified HEAD                                                                    |
+| `review`   | 3 reviewers (7 for UI changes)                        | `round-N/review-*.md`, `consolidated.md`                   | all three always-on verdicts recorded against the HEAD `simplify.md` (or, without one, `build.md`) describes; `BLOCKING: 0` to advance |
+| `approve`  | `factory-approver`                                    | `decision.md`                                              | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid                                               |
+| `pr`       | the coordinator                                       | base integrated, pushed branch, draft PR                   | only clean base-integration merges since the approval; verified HEAD; policy unchanged                                                 |
+| `ci`       | the coordinator + `orch gh ci`                        | GitHub's verdict for the PR head                           | the job's own PR; checks passed for that commit, still the approved one (plus clean base merges)                                       |
 
 An independent spec challenger (Sonnet) reviews `spec.md` before anything is built; the writer
-revises once on CHANGES, and a second CHANGES escalates. Reviewers are security (Opus),
+revises once on CHANGES, and a second CHANGES escalates. After every build, a read-only
+simplifier (Sonnet) lists over-engineering in the diff and the builder applies the findings that
+make sense, recording each declined one with its reason. Reviewers are security (Opus),
 correctness, and code quality (Sonnet); ui-design, ux,
 accessibility, and web-platform join when the diff touches rendered UI. Models per role are
 configurable. The full rules, artifact formats, event list, and CI decision table are in

@@ -112,7 +112,7 @@ describe('invariant 6: registered artifacts must still match the disk at the gat
     rmSync(join(c.dir, 'build.md'));
     expect(() => go(c, 'complete')).toThrow(/no longer verifies/);
     add(c, 'build.md', fixture('build.md') + '\nround 1 final\n', true);
-    expect(go(c, 'complete').stage).toBe('review');
+    expect(go(c, 'complete').stage).toBe('simplify');
   });
 
   it('a review file rewritten after its verdict was recorded blocks the round', () => {
@@ -173,13 +173,15 @@ describe('invariant 6: registered artifacts must still match the disk at the gat
     const outside = tempDir('orch-outside-');
     extra.push(outside);
     writeFileSync(join(outside, 'review-security.md'), fixture('round-1/review-security.md'));
+    toReview(c);
+    // The simplify pass wrote round-1/ for real; replace it with the link before the review.
+    rmSync(join(c.dir, 'round-1'), { recursive: true, force: true });
     try {
       symlinkSync(outside, join(c.dir, 'round-1'), 'junction');
     } catch {
       return; // no link support here; nothing to prove
     }
     try {
-      toReview(c);
       go(c, 'start');
       expect(() =>
         recordVerdict(store, c.id, { token: c.token, reviewer: 'security', verdict: 'pass' }),
@@ -284,7 +286,7 @@ describe('invariant 15: the code never force-pushes; only the gh wrapper marks r
 });
 
 describe('a review round is the required reviewers judging the built commit', () => {
-  it('verdicts all given against a commit made after build.md cannot complete the round', () => {
+  it('verdicts all given against a commit made after simplify.md cannot complete the round', () => {
     const c = start();
     toReview(c);
     go(c, 'start');
@@ -295,7 +297,7 @@ describe('a review round is the required reviewers judging the built commit', ()
     add(c, 'round-1/consolidated.md', drive.consolidated(store, c));
     expect(head(c.wt)).not.toBe(built);
     expect(() => go(c, 'complete')).toThrow(
-      /build.md describes .* the code changed after the build/,
+      /simplify.md describes .* the code changed after the build/,
     );
     expect(getJob(store.db, c.id).stage).toBe('review');
   });

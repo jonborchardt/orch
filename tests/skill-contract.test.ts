@@ -77,6 +77,14 @@ describe('agents', () => {
     expect(tools('factory-spec-challenger')).toContain('Write'); // spec-review-N.md only
     expect(challenger).toContain('VERDICT');
     expect(challenger).toContain('The review file is the deliverable');
+    // The simplifier only reports over-engineering; the builder applies what makes sense.
+    expect(ROLES.find((x) => x.name === 'simplifier')?.agent).toBe('factory-simplifier');
+    expect(tools('factory-simplifier')).not.toContain('Edit');
+    expect(tools('factory-simplifier')).toContain('Write'); // round-N/simplify-review.md only
+    expect(readFileSync(join(agentsDir, 'factory-simplifier.md'), 'utf8')).toContain(
+      'The review file is the deliverable',
+    );
+    expect(readFileSync(join(agentsDir, 'factory-builder.md'), 'utf8')).toContain('simplify.md');
     expect(tools('factory-builder')).toContain('Edit');
     expect(tools('factory-spec-writer')).not.toContain('Edit');
   });
@@ -124,6 +132,10 @@ describe('skill', () => {
     expect(checkArtifact('spec.md', template('spec.md'))).toBeNull();
     expect(checkArtifact('spec-review-1.md', template('spec-review-N.md'))).toBe('pass');
     expect(checkArtifact('build.md', template('build.md'))).toBeNull();
+    expect(
+      checkArtifact('round-1/simplify-review.md', template('round-N/simplify-review.md')),
+    ).toBeNull();
+    expect(checkArtifact('round-1/simplify.md', template('round-N/simplify.md'))).toBeNull();
     expect(checkArtifact('round-1/review-ux.md', template('round-N/review-<reviewer>.md'))).toBe(
       'pass',
     );

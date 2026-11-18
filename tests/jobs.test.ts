@@ -387,6 +387,15 @@ describe('jobs: full workflow through storage', () => {
       writeArtifact(dir, 'spec-review-1.md');
       registerArtifact(store, id, 'spec-review-1.md', { token });
     }
+    const done = go(id, token, 'complete');
+    if (artifact !== 'build.md') return done;
+    // Every build is followed by a simplify pass: findings, then the builder's record.
+    go(id, token, 'start');
+    for (const f of ['simplify-review.md', 'simplify.md']) {
+      const rel = `round-${String(done.round)}/${f}`;
+      writeArtifact(dir, rel);
+      registerArtifact(store, id, rel, { token });
+    }
     return go(id, token, 'complete');
   }
 
@@ -494,10 +503,14 @@ describe('jobs: full workflow through storage', () => {
       'round-1/review-code-quality.md',
       'round-1/review-correctness.md',
       'round-1/review-security.md',
+      'round-1/simplify-review.md',
+      'round-1/simplify.md',
       'round-2/consolidated.md',
       'round-2/review-code-quality.md',
       'round-2/review-correctness.md',
       'round-2/review-security.md',
+      'round-2/simplify-review.md',
+      'round-2/simplify.md',
       'spec-review-1.md',
       'spec.md',
     ]);

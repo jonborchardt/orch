@@ -62,7 +62,7 @@ describe('orch verify: runs and records', () => {
     expect(planJob(store, c.id).commands).toContain(`orch verify ${c.id} --token <token>`);
     // Build can now complete with the run as evidence.
     add(store, c, 'build.md');
-    expect(go(store, c, 'complete').stage).toBe('review');
+    expect(go(store, c, 'complete').stage).toBe('simplify');
   });
 
   it('stops at the first failed required check, leaves the rest pending, and blocks the gate', () => {
@@ -133,7 +133,7 @@ describe('orch verify: runs and records', () => {
     expect(r2.status).toBe('passed');
     expect(r2.policy.source).toBe('authorized');
     add(store, c2, 'build.md', undefined, true);
-    expect(go(store, c2, 'complete').stage).toBe('review');
+    expect(go(store, c2, 'complete').stage).toBe('simplify');
   });
 
   it('records timeouts, launch failures, bad working directories, and truncated output', () => {

@@ -202,6 +202,17 @@ Launch `factory-spec-challenger` as its own fresh subagent, never the spec write
 yourself, and give it the request, not your summary of the spec. `orch` refuses to leave `spec`
 without a `VERDICT: PASS` bound to the registered `spec.md`.
 
+### Simplify stage
+
+Every completed build (first build, review rework, CI repair, base-integration rework) goes
+through `simplify` before review. Launch `factory-simplifier` first, as its own fresh subagent; it
+reads the diff and writes `round-N/simplify-review.md` without touching code. Register it, then
+launch `factory-builder` with that file: it applies the findings that make sense, commits if
+anything changed, runs `orch verify`, and writes `round-N/simplify.md` listing what it applied and
+each declined finding with its reason. A simplify that changes nothing is valid. `orch` refuses to
+complete the stage without both files, and the review round judges the commit `simplify.md` was
+registered against.
+
 ### Review rounds
 
 Follow `plan.commands`; the coordinator adds:

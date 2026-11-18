@@ -17,6 +17,7 @@ import {
   go,
   makePolicyRepo,
   passRound,
+  simplify,
   verify,
 } from './drive.ts';
 import {
@@ -93,6 +94,7 @@ export function repair(c: Ctx, file: string): string {
   verify(store, c);
   add(store, c, 'build.md', fixture('build.md'), true);
   go(store, c, 'complete');
+  simplify(store, c);
   passRound(store, c);
   approve(store, c, true);
   go(store, c, 'start');

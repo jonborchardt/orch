@@ -90,6 +90,20 @@ export function runStage(c: Ctx, artifact: string, body = fixture(artifact), rep
     writeArtifact(c.dir, 'spec-review-1.md');
     addArtifact(store, c.id, 'spec-review-1.md', { token: c.token, replace });
   }
+  const done = go(c, 'complete');
+  // Every build is followed by a simplify pass; this one changes nothing.
+  return artifact === 'build.md' ? simplifyStage(c) : done;
+}
+
+/** Fixture simplify pass with no changes: findings, the builder's record, complete. */
+export function simplifyStage(c: Ctx) {
+  const plan = next(c.id);
+  expect(plan.stage).toBe('simplify');
+  go(c, 'start');
+  for (const a of plan.agents) {
+    writeArtifact(c.dir, a.artifact);
+    addArtifact(store, c.id, a.artifact, { token: c.token });
+  }
   return go(c, 'complete');
 }
 
