@@ -452,7 +452,7 @@ export function timelineOf(events: readonly Event[], limit = TIMELINE_EVENTS): T
   const add = (e: Event, step: StepId | null, kind: TimelineEntry['kind'], label: string) => {
     entries.push({ at: e.createdAt, step, kind, label });
   };
-  for (const e of events) {
+  for (const [i, e] of events.entries()) {
     const p = e.payload;
     switch (e.type) {
       case 'stage.started':
@@ -467,13 +467,17 @@ export function timelineOf(events: readonly Event[], limit = TIMELINE_EVENTS): T
           ((Array.isArray(changes) && changes.length > 0) || Number(p['blocking'] ?? 0) > 0);
         const n = p['round'];
         const round = `Review round ${typeof n === 'number' ? String(n) : '?'}`;
+        // The last allowed round escalates in the same transition instead of returning to Build.
+        const escalated = back && events[i + 1]?.type === 'job.blocked';
         const label =
           step !== 'review'
             ? `${stepName(p['stage'])} completed`
-            : back
-              ? `${round}: changes requested, back to Build`
-              : `${round} passed`;
-        add(e, step, back ? 'back' : 'completed', label);
+            : escalated
+              ? `${round}: changes requested`
+              : back
+                ? `${round}: changes requested, back to Build`
+                : `${round} passed`;
+        add(e, step, back && !escalated ? 'back' : 'completed', label);
         break;
       }
       case 'stage.failed':
@@ -495,9 +499,12 @@ export function timelineOf(events: readonly Event[], limit = TIMELINE_EVENTS): T
       case 'job.interrupted':
         add(e, at, 'stopped', at ? `${stepName(at)} interrupted` : 'Interrupted');
         break;
-      case 'job.cancelled':
-        add(e, asStep(p['stage']) ?? at, 'stopped', `Cancelled during ${stepName(p['stage'])}`);
+      case 'job.cancelled': {
+        // A job cancelled while escalated records stage needs-human, which is not a step.
+        const step = asStep(p['stage']);
+        add(e, step ?? at, 'stopped', step ? `Cancelled during ${stepName(step)}` : 'Cancelled');
         break;
+      }
       case 'job.completed':
         add(e, 'done', 'completed', 'Done');
         break;

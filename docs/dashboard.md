@@ -24,11 +24,13 @@ round's consolidation when it is above zero; there is no separate Blocking colum
 current-round only: while a new round is open, earlier rounds' verdicts and blocking counts are
 not shown on the board (they stay in the detail view's Reviews and Findings tabs). The Round column
 reads `-` before the first review round and `N / M` from round 1 on (round N of at most M); its
-tooltip says so in words ("Review round 2 of at most 3", "No review round yet (at most 3)").
+tooltip says so in words ("Review round 2 of at most 3", "No review round yet (at most 3)"), and
+the same words are the text assistive technology reads.
 
 The Stage column is the workflow position, shown as a **progress strip**: seven steps in order,
 Spec, Build, Review, Approve, PR, CI, Done, each drawn with a glyph for its state (`✓` done, `▶`
-current, `■` stopped, `○` not started; colour is only a second cue), followed by a short label such
+current, `■` stopped, `○` not started; colour, from the active light or dark scheme, is only a
+second cue), followed by a short label such
 as `Build`, `CI, needs human`, `Build, interrupted`, `Review, cancelled`, or `Done`. The strip is in
 the Tab order; hovering or focusing it lists every step with its state, and its accessible name
 states all seven. The model is computed on the server (`progressOf` in `src/server/status.ts`) from
@@ -90,10 +92,11 @@ findings per round, the approval decision, registered artifacts (size, marker, h
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
 the PR with its CI state. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
 GitHub. The header carries the same progress strip as the board (in place of a raw stage chip)
-and the round as `Round -` or `Round N / M`, with the same tooltip. The Overview tab ends with a
+and the round as `Round: none` or `Round N / M`, with the same tooltip. The Overview tab ends with a
 **Progress** section: every step in order with the same state as the strip and the times the
-timeline knows (`started …`, `completed …`, or `completed earlier at …` for a step the current pass
-has not redone), then the **Timeline**, built by `timelineOf` in `src/server/status.ts` from
+timeline knows (`started …`, `completed …`, or `completed earlier …` for a step the current pass
+has not redone), then the **Timeline**. Times read relatively (`5m ago`), with the exact timestamp
+in the tooltip. The timeline is built by `timelineOf` in `src/server/status.ts` from
 `stage.started`, `stage.completed` (with the review round and whether it requested changes),
 `stage.failed`, `job.blocked`, `job.resumed`, `job.reworked`, `job.interrupted`, `job.cancelled`,
 and `job.completed`, oldest first, each with its time and a plain label. Going back (changes

@@ -105,6 +105,27 @@ describe('progressOf and timelineOf', () => {
     expect(t.truncated).toBe(false);
   });
 
+  it('labels a last-round escalation and a cancel outside any step without inventing a step', () => {
+    const t = timelineOf([
+      ev('stage.started', { stage: 'review' }),
+      ev('stage.completed', { stage: 'review', round: 3, changesRequestedBy: ['security'] }),
+      ev('job.blocked', { from: 'review', reason: 'max review rounds reached' }),
+      ev('job.cancelled', { stage: 'needs-human', reason: null }),
+      ev('job.cancelled', {}),
+    ]);
+    expect(t.entries.map((x) => `${x.kind}:${x.label}`)).toEqual([
+      'started:Review started',
+      // Escalated in the same transition: it did not go back to Build.
+      'completed:Review round 3: changes requested',
+      'stopped:Review: needs human',
+      'stopped:Cancelled',
+      'stopped:Cancelled',
+    ]);
+    expect(timelineOf([ev('job.cancelled', { stage: 'pr' })]).entries[0]?.label).toBe(
+      'Cancelled during PR',
+    );
+  });
+
   it('(i) an escalation with no recorded stage marks no step and says "Needs human"', () => {
     const p = progressOf(row('needs-human', 'blocked', null), new Map());
     expect(p.position).toBe(-1);

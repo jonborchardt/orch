@@ -12,14 +12,28 @@ import {
 } from '@mui/material';
 
 import type { Progress, StepState, Timeline } from '../../src/server/types.ts';
+import { ago } from './format.ts';
 
 /** Glyph and words per step state, so colour is never the only cue. */
 const STEP: Record<StepState, { glyph: string; words: string; color: string }> = {
   done: { glyph: '✓', words: 'done', color: 'success.main' },
   current: { glyph: '▶', words: 'current', color: 'primary.main' },
   stopped: { glyph: '■', words: 'stopped', color: 'error.main' },
-  'not-started': { glyph: '○', words: 'not started', color: 'text.disabled' },
+  'not-started': { glyph: '○', words: 'not started', color: 'text.secondary' },
 };
+
+/** Visually hidden, still read by assistive technology. */
+const HIDDEN = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+} as const;
 
 const stepText = (s: Progress['steps'][number]) => `${s.label}: ${STEP[s.state].words}`;
 
@@ -28,12 +42,14 @@ const stepText = (s: Progress['steps'][number]) => `${s.label}: ${STEP[s.state].
  * Focusable, with every step's state in its accessible name and its tooltip.
  */
 export function ProgressStrip({ progress }: { progress: Progress }) {
+  // CSS variables follow the active light or dark scheme; `theme.palette` is the light one only.
   const theme = useTheme();
+  const palette = (theme.vars ?? theme).palette;
   const color: Record<StepState, string> = {
-    done: theme.palette.success.main,
-    current: theme.palette.primary.main,
-    stopped: theme.palette.error.main,
-    'not-started': theme.palette.text.disabled,
+    done: palette.success.main,
+    current: palette.primary.main,
+    stopped: palette.error.main,
+    'not-started': palette.text.secondary,
   };
   // Plain spans, not one styled component per glyph: the board renders a strip on every row.
   return (
@@ -79,21 +95,41 @@ export function RoundIndicator({
   maxRounds: number;
   chip?: boolean;
 }) {
-  const text = round === 0 ? '-' : `${String(round)} / ${String(maxRounds)}`;
+  const count = `${String(round)} / ${String(maxRounds)}`;
   const title =
     round === 0
       ? `No review round yet (at most ${String(maxRounds)})`
       : `Review round ${String(round)} of at most ${String(maxRounds)}`;
+  // The words are hidden text, not aria-label (prohibited on a generic span or a plain chip).
   return (
-    <Tooltip title={title}>
+    <Tooltip title={title} describeChild>
       {chip ? (
-        <Chip label={`Round ${text}`} tabIndex={0} aria-label={title} />
+        <Chip
+          tabIndex={0}
+          data-testid="round"
+          label={
+            <>
+              {round === 0 ? 'Round: none' : `Round ${count}`}
+              <span style={HIDDEN}>. {title}</span>
+            </>
+          }
+        />
       ) : (
-        <span tabIndex={0} aria-label={title}>
-          {text}
+        <span tabIndex={0} data-testid="round">
+          <span aria-hidden>{round === 0 ? '-' : count}</span>
+          <span style={HIDDEN}>{title}</span>
         </span>
       )}
     </Tooltip>
+  );
+}
+
+/** Relative time like the rest of the dashboard, with the exact timestamp kept in the markup. */
+function When({ iso }: { iso: string }) {
+  return (
+    <time dateTime={iso} title={iso}>
+      {ago(iso)}
+    </time>
   );
 }
 
@@ -116,12 +152,12 @@ export function ProgressSection({
         {progress.steps.map((s) => {
           const started = last(s.id, 'started');
           const completed = last(s.id, 'completed');
-          const times =
+          const [verb, iso] =
             s.state === 'not-started'
-              ? completed && `completed earlier at ${completed}`
+              ? ['completed earlier', completed]
               : s.state === 'done'
-                ? completed && `completed ${completed}`
-                : started && `started ${started}`;
+                ? ['completed', completed]
+                : ['started', started];
           return (
             <li key={s.id} data-step={s.id} data-step-state={s.state}>
               <Box component="span" aria-hidden sx={{ color: STEP[s.state].color, mr: 0.5 }}>
@@ -129,10 +165,10 @@ export function ProgressSection({
               </Box>
               {stepText(s)}
               {s.state === 'stopped' && ` (${progress.label})`}
-              {times && (
+              {iso && (
                 <Typography component="span" variant="body2" color="text.secondary">
                   {' '}
-                  — {times}
+                  — {verb} <When iso={iso} />
                 </Typography>
               )}
             </li>
@@ -156,7 +192,9 @@ export function ProgressSection({
           <TableBody>
             {timeline.entries.map((e, i) => (
               <TableRow key={i} data-kind={e.kind}>
-                <TableCell sx={{ whiteSpace: 'nowrap', width: '1%' }}>{e.at}</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap', width: '1%' }}>
+                  <When iso={e.at} />
+                </TableCell>
                 <TableCell>{e.label}</TableCell>
               </TableRow>
             ))}

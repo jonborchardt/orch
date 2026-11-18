@@ -410,6 +410,12 @@ describe('App board', () => {
       'ci:■',
       'done:○',
     ]);
+    // Colours follow the active light or dark scheme (CSS variables), never fixed light values.
+    expect(glyphs.map((g) => g.style.color)).toEqual([
+      ...Array<string>(5).fill('var(--mui-palette-success-main)'),
+      'var(--mui-palette-error-main)',
+      'var(--mui-palette-text-secondary)',
+    ]);
     expect(strip).toHaveAttribute('tabindex', '0');
     strip.focus();
     const tip = await screen.findByRole('tooltip');
@@ -429,25 +435,36 @@ describe('App board', () => {
     mockFetch();
     mount();
     await screen.findByRole('table', { name: 'Factory jobs' });
-    const zero = within(boardRowOf('job-00000001')).getByLabelText(
-      'No review round yet (at most 3)',
-    );
-    expect(zero).toHaveTextContent(/^-$/);
+    // Visible text is hidden from assistive technology; the words are read instead, as text
+    // (aria-label is prohibited on a generic span).
+    const visible = (el: HTMLElement) => el.querySelector('[aria-hidden]')?.textContent;
+    const zero = within(boardRowOf('job-00000001')).getByTestId('round');
+    expect(visible(zero)).toBe('-');
+    expect(zero).toHaveTextContent('-No review round yet (at most 3)');
+    expect(zero).not.toHaveAttribute('aria-label');
+    expect(zero).toHaveAttribute('tabindex', '0');
     data.rows = [row({ id: 'job-00000001', round: 2 })];
-    const two = await screen.findByLabelText('Review round 2 of at most 3');
-    expect(two).toHaveTextContent(/^2 \/ 3$/);
-    fireEvent.mouseOver(two);
+    await waitFor(() => {
+      expect(visible(within(boardRowOf('job-00000001')).getByTestId('round'))).toBe('2 / 3');
+    });
+    const two = within(boardRowOf('job-00000001')).getByTestId('round');
+    expect(two).toHaveTextContent('Review round 2 of at most 3');
+    two.focus();
     expect(await screen.findByRole('tooltip')).toHaveTextContent('Review round 2 of at most 3');
     cleanup();
     data.detail = detail({ job: { ...detail().job, round: 0 } });
     window.location.hash = '#/jobs/job-00000003';
     mount();
-    const chip = await screen.findByLabelText('No review round yet (at most 3)');
-    expect(chip).toHaveTextContent('Round -');
+    // The chip's read text starts with its visible text (label in name).
+    const chip = await screen.findByTestId('round');
+    expect(chip).toHaveTextContent(/^Round: none\. No review round yet \(at most 3\)$/);
+    expect(chip).not.toHaveAttribute('aria-label');
     data.detail = detail({ job: { ...detail().job, round: 2 } });
-    expect(await screen.findByLabelText('Review round 2 of at most 3')).toHaveTextContent(
-      'Round 2 / 3',
-    );
+    await waitFor(() => {
+      expect(screen.getByTestId('round')).toHaveTextContent(
+        /^Round 2 \/ 3\. Review round 2 of at most 3$/,
+      );
+    });
   });
 
   it('puts the strip in the detail header and the steps and timeline in Overview', async () => {
@@ -485,19 +502,24 @@ describe('App board', () => {
         .getAllByRole('listitem')
         .map((li) => li.getAttribute('data-step-state')),
     ).toEqual(['done', 'current', ...Array<string>(5).fill('not-started')]);
-    expect(within(steps).getByText(/started 2026-11-13T08:05/)).toBeInTheDocument();
+    // Times read as elsewhere on the dashboard ("… ago"); the exact timestamp stays in the markup.
+    const build = within(steps).getAllByRole('listitem')[1];
+    expect(build).toHaveTextContent(/started .* ago/);
+    expect(build?.querySelector('time')).toHaveAttribute('datetime', at(5));
+    expect(build?.querySelector('time')).toHaveAttribute('title', at(5));
     const timeline = within(section).getByRole('table', { name: 'Timeline' });
-    expect(
-      within(timeline)
-        .getAllByRole('row')
-        .map((r) => r.textContent),
-    ).toEqual([
-      `${at(1)}Build started`,
-      `${at(2)}Build completed`,
-      `${at(3)}CI started`,
-      `${at(4)}Rework from CI: back to Build`,
-      `${at(5)}Build started`,
+    const timelineRows = within(timeline).getAllByRole<HTMLTableRowElement>('row');
+    expect(timelineRows.map((r) => r.querySelector('time')?.getAttribute('datetime'))).toEqual(
+      [1, 2, 3, 4, 5].map(at),
+    );
+    expect(timelineRows.map((r) => r.cells[1]?.textContent)).toEqual([
+      'Build started',
+      'Build completed',
+      'CI started',
+      'Rework from CI: back to Build',
+      'Build started',
     ]);
+    expect(timelineRows[0]?.cells[0]).toHaveTextContent(/ ago$/);
     expect(within(section).getByText(/Earlier history not shown/)).toBeInTheDocument();
   });
 
