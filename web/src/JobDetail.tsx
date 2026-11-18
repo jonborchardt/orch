@@ -686,6 +686,14 @@ function Verification({ detail }: { detail: JobDetailView }) {
               {v.policy.candidateError ? ` (${v.policy.candidateError})` : ''}
             </Alert>
           )}
+          {v.queue && (
+            <Alert severity="info" sx={{ mt: 1 }} data-testid="verify-queue">
+              {v.queue.state === 'running'
+                ? `Verification running since ${new Date(v.queue.since).toLocaleString()}.`
+                : `Queued for verification behind ${v.queue.holderJobId ?? 'another run'} since ` +
+                  `${new Date(v.queue.since).toLocaleString()} (${String(v.queue.ahead)} ahead).`}
+            </Alert>
+          )}
           <Typography variant="body2" sx={{ mt: 1 }}>
             Latest run:{' '}
             {v.run ? (
