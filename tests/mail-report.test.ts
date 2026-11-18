@@ -146,6 +146,42 @@ describe('reportBody events', () => {
   });
 });
 
+describe('reportBody needed block', () => {
+  const needed = {
+    summary: 'Approver escalated: a human must decide',
+    detail: 'origin/main conflicts in web/src/JobBoard.tsx',
+    next: ['Decide on the dashboard: approve, cancel', 'Dashboard: run orch ui'],
+  };
+
+  it('puts summary, verbatim reason, and next steps between the headline and Job:', () => {
+    const lines = reportBody(job('needs-human', 'blocked'), [], needed).split('\n');
+    const end = lines.indexOf('Job:    job-1');
+    expect(lines.slice(1, end)).toEqual([
+      '',
+      needed.summary,
+      `Reason: ${needed.detail}`,
+      ...needed.next,
+      '',
+    ]);
+  });
+
+  it('omits the reason line when there is no detail', () => {
+    const body = reportBody(job('build', 'failed'), [], { ...needed, detail: null, next: [] });
+    expect(body.split('\n').slice(0, 4)).toEqual([
+      `${FAIL} failed at build`,
+      '',
+      needed.summary,
+      '',
+    ]);
+  });
+
+  it('renders exactly as before without a needed value', () => {
+    const plain = reportBody(job('build', 'running'), [event('stage.started')]);
+    expect(reportBody(job('build', 'running'), [event('stage.started')], null)).toBe(plain);
+    expect(plain.split('\n').slice(0, 3)).toEqual([`${RUN} running at build`, '', 'Job:    job-1']);
+  });
+});
+
 describe('reportSubject', () => {
   it('carries no emoji', () => {
     expect(reportSubject(job('build', 'failed'))).toBe('job-1: Mail me');
