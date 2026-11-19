@@ -272,10 +272,12 @@ const COLUMNS: Column[] = [
           {r.pr.phase !== 'ci-running' && r.pr.phase !== 'ci-failing' && (
             <PrPhaseChip phase={r.pr.phase} />
           )}
-          {/* A completed job's outcome is the headline; a merged PR's passing CI adds nothing. */}
-          {!(r.outcome?.kind === 'merged' && r.ci.status === 'passing') && (
-            <CiChip ci={r.ci} compact secondary={r.outcome !== null} />
-          )}
+          {/* A completed job's outcome is the headline; a merged PR's passing CI adds nothing,
+              and neither do the checks a human merged it before (never "CI pending"). */}
+          {!(
+            r.outcome?.kind === 'merged' &&
+            (r.ci.status === 'passing' || r.ci.completion === 'merged')
+          ) && <CiChip ci={r.ci} compact secondary={r.outcome !== null} />}
         </Stack>
       ) : (
         <Typography variant="caption" color="text.secondary">

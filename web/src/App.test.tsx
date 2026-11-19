@@ -2234,6 +2234,12 @@ describe('PR phase, Merge, and Refresh PR', () => {
         pr: { url: pr, state: 'merged', phase: 'merged' },
         ci: noCi({ status: 'failing', head, completion: 'ci' }),
       }),
+      // Merged by a human before CI finished: the merge is the headline, never "CI pending".
+      done('job-00000017', {
+        outcome: { kind: 'merged', label: 'completed: merged' },
+        pr: { url: pr, state: 'merged', phase: 'merged' },
+        ci: noCi({ status: 'pending', head, completion: 'merged' }),
+      }),
       row({
         id: 'job-00000016',
         title: 'Still running',
@@ -2250,6 +2256,7 @@ describe('PR phase, Merge, and Refresh PR', () => {
       ['job-00000012', 'ready', '✓ completed: PR ready, checks passed'],
       ['job-00000013', 'human', '✓ completed: human close-out'],
       ['job-00000014', 'completed', '✓ completed'],
+      ['job-00000017', 'merged', '✓ completed: merged'],
     ];
     for (const [id, kind, label] of expected) {
       const chip = status(id);
@@ -2260,6 +2267,9 @@ describe('PR phase, Merge, and Refresh PR', () => {
     }
     // Merged with passing CI: the outcome says it all, so the board shows no CI chip.
     expect(ciChip('job-00000011')).toBeNull();
+    // Merged before CI finished: no CI chip and no "CI pending" text in the row.
+    expect(ciChip('job-00000017')).toBeNull();
+    expect(boardRowOf('job-00000017').textContent).not.toContain('CI pending');
     // Any other completed row keeps its CI evidence, outlined as secondary.
     for (const id of ['job-00000012', 'job-00000013', 'job-00000014', 'job-00000015']) {
       expect(must(ciChip(id)).className).toContain('MuiChip-outlined');

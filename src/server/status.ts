@@ -93,6 +93,7 @@ function ciBlocker(
   const summaries: Record<string, string> = {
     closed: 'PR was closed without merging',
     outdated: 'PR head moved outside the job',
+    merged: 'PR merged by a human, but delivery was refused',
     none: 'GitHub reports no checks for the PR head',
     infrastructure: 'Required checks did not reach a verdict',
   };
@@ -227,6 +228,14 @@ export function ciSummary(
       guidance:
         'A human accepted the delivery without a passing CI verdict (the reason is in the events). ' +
         'This is not an automated verification result.',
+    };
+  }
+  if (ci.completion === 'merged') {
+    return {
+      line: `PR merged by a human before CI finished; CI was ${ci.status ?? 'not observed'} ${at}.`,
+      guidance:
+        'Completed: a human merged the PR at the verified, approved HEAD before the checks reached ' +
+        'a verdict. Check the base branch on GitHub if the checks matter.',
     };
   }
   if (ci.completion === 'legacy') {

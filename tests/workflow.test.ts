@@ -6,6 +6,7 @@ import {
   cannotAcceptDelivery,
   challengeSlot,
   challengeSpecHash,
+  completionOf,
   describeNext,
   latestChallenge,
   MAX_ROUNDS_REASON,
@@ -155,6 +156,44 @@ describe('transition: happy path', () => {
     expect(done.patch.completedAt).toBeTruthy();
     expect(done.events.map((e) => e.type)).toEqual(['stage.completed', 'job.completed']);
     expect(done.events[1]?.payload).toEqual({ prUrl: 'https://x/pr/1', head: 'abc' });
+  });
+});
+
+describe('transition: a PR merged by a human completes ci', () => {
+  const ci = (extra: Partial<JobState>) =>
+    job('ci', 'running', { prUrl: 'https://x/pr/1', ciHead: 'abc', ...extra });
+  const merged: TransitionContext = { ...none, mergedByHuman: true };
+
+  it('completes with the flag on a merged PR whatever the checks say', () => {
+    for (const ciStatus of ['pending', 'failing', 'none', 'passing'] as const) {
+      const r = run(ci({ prState: 'merged', ciStatus }), 'complete', merged);
+      expect(r.patch).toMatchObject({ stage: 'completed', status: 'completed' });
+      expect(r.events[1]?.payload).toEqual({
+        prUrl: 'https://x/pr/1',
+        head: 'abc',
+        ciStatus,
+        mergedByHuman: true,
+        reason: 'merged by a human before CI finished',
+      });
+      expect(completionOf('completed', r.events[1]?.payload)).toBe('merged');
+    }
+  });
+
+  it('never completes on a stored merge alone, nor with the flag on an unmerged PR or no head', () => {
+    for (const ciStatus of ['pending', 'failing'] as const) {
+      expect(() => run(ci({ prState: 'merged', ciStatus }), 'complete')).toThrow(
+        new RegExp(`required checks are ${ciStatus}`),
+      );
+    }
+    expect(() => run(ci({ prState: 'ready', ciStatus: 'pending' }), 'complete', merged)).toThrow(
+      /not recorded as merged/,
+    );
+    expect(() =>
+      run(ci({ prState: 'merged', ciStatus: 'pending', ciHead: null }), 'complete', merged),
+    ).toThrow(/no CI verdict has been read/);
+    // A passing completion without the flag keeps its plain payload and completion.
+    const plain = run(ci({ prState: 'merged', ciStatus: 'passing' }), 'complete');
+    expect(completionOf('completed', plain.events[1]?.payload)).toBe('ci');
   });
 });
 

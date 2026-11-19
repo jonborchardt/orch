@@ -107,7 +107,15 @@ export function formatPlan(plan: Plan): string {
   };
   const round = plan.round > 0 ? ` (round ${String(plan.round)} of ${String(plan.maxRounds)})` : '';
   const pr = prNumber(plan.pr.url);
-  const ci = pr !== '-' && plan.pr.ciStatus ? ` (CI ${plan.pr.ciStatus})` : '';
+  // A merged PR is the headline; the checks it was merged with are in the reason.
+  const ci =
+    pr === '-'
+      ? ''
+      : plan.pr.state === 'merged'
+        ? ' (merged)'
+        : plan.pr.ciStatus
+          ? ` (CI ${plan.pr.ciStatus})`
+          : '';
   const next: [string, string][] = [
     ['Next', NEXT_LABEL[plan.step]],
     ['Reason', plan.reason],

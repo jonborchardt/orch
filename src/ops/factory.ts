@@ -312,12 +312,16 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         ? 'PR phase ready-to-merge: Humans merge (Merge on the dashboard, or on GitHub).'
         : `PR phase ${phase}. Humans merge.`;
     plan.reason =
-      done?.payload['acceptedByHuman'] === true
-        ? `Delivery accepted by a human (${job.prUrl ?? 'no URL'}): required checks were ` +
-          `${job.ciStatus ?? 'unobserved'} for ${job.ciHead?.slice(0, 7) ?? 'no commit'}; this is a ` +
-          `manual close-out, not a CI verdict; the PR was not marked ready. ${merge}`
-        : `PR delivered (${job.prUrl ?? 'no URL'}) with required checks ${job.ciStatus ?? 'unobserved'} ` +
-          `for ${job.ciHead?.slice(0, 7) ?? 'no commit'}. ${readyLine(detail.events)} ${merge}`;
+      done?.payload['mergedByHuman'] === true
+        ? `PR merged by a human before CI finished (${job.prUrl ?? 'no URL'}): required checks were ` +
+          `${job.ciStatus ?? 'unobserved'} for ${job.ciHead?.slice(0, 7) ?? 'no commit'}, ` +
+          'the verified, approved HEAD. Nothing to do.'
+        : done?.payload['acceptedByHuman'] === true
+          ? `Delivery accepted by a human (${job.prUrl ?? 'no URL'}): required checks were ` +
+            `${job.ciStatus ?? 'unobserved'} for ${job.ciHead?.slice(0, 7) ?? 'no commit'}; this is a ` +
+            `manual close-out, not a CI verdict; the PR was not marked ready. ${merge}`
+          : `PR delivered (${job.prUrl ?? 'no URL'}) with required checks ${job.ciStatus ?? 'unobserved'} ` +
+            `for ${job.ciHead?.slice(0, 7) ?? 'no commit'}. ${readyLine(detail.events)} ${merge}`;
     plan.commands = [`orch gh pr status ${id}`];
     return plan;
   }

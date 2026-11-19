@@ -228,10 +228,22 @@ export function requireDeliverable(
   requireAuthorizedPolicy(job, tree, what, eff);
 }
 
+/** `requireDeliverable`'s refusal as text, or null when delivery is allowed. */
+export function deliverableRefusal(store: Store, job: Job, tree: Tree): string | null {
+  try {
+    requireDeliverable(store, job, tree);
+    return null;
+  } catch (err) {
+    if (err instanceof ValidationError) return err.message;
+    throw err;
+  }
+}
+
 /**
  * Complete the ci stage. Only `orch gh ci` calls this, in the same run that read GitHub for the
  * PR head, so a stored verdict is never reused after the PR moved, was closed, or its checks were
- * rerun (decision 53).
+ * rerun (decision 53). `mergedByHuman` is passed only when that run saw the job's own PR merged at
+ * the worktree HEAD before CI passed.
  */
 export function completeCi(store: Store, id: string, auth: TransitionOptions): Job {
   const job = authorize(store, id, auth);
