@@ -116,6 +116,18 @@ export interface Timeline {
   truncated: boolean;
 }
 
+/**
+ * How a completed job ended, from recorded fields only: a merged PR (recorded `prState`), a ready
+ * PR on a passing CI verdict, a human close-out, or plain `completed` when the record is not enough.
+ * Workflow completion is not a merge: only `merged` says the PR was merged.
+ */
+export type OutcomeKind = 'merged' | 'ready' | 'human' | 'completed';
+export interface Outcome {
+  kind: OutcomeKind;
+  /** Status chip text after the glyph, e.g. "completed: merged". */
+  label: string;
+}
+
 export interface BoardRow {
   id: string;
   title: string;
@@ -124,6 +136,8 @@ export interface BoardRow {
   stage: Job['stage'];
   status: Job['status'];
   liveness: Liveness;
+  /** Null unless the job completed. */
+  outcome: Outcome | null;
   round: number;
   maxRounds: number;
   owner: { session: string; leaseExpiresAt: string | null; live: boolean } | null;
@@ -177,6 +191,8 @@ export interface RoundView {
 export interface JobDetailView {
   job: SafeJob;
   liveness: Liveness;
+  /** Null unless the job completed. */
+  outcome: Outcome | null;
   artifacts: Artifact[];
   /** Markdown content of registered artifacts, keyed by relative path (size-capped). */
   contents: Record<string, string>;

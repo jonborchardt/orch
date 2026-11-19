@@ -38,6 +38,7 @@ import {
   blockerOf,
   ciView,
   liveness,
+  outcomeOf,
   progressOf,
   resumeOf,
   TIMELINE_EVENTS,
@@ -111,6 +112,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       stage: job.stage,
       status: job.status,
       liveness: state,
+      outcome: outcomeOf(state, job, ci.completion),
       round: job.round,
       maxRounds: job.maxRounds,
       owner,
@@ -240,6 +242,7 @@ export function detail(store: Store, id: string): JobDetailView {
   return {
     job: safeJob(job),
     liveness: state,
+    outcome: outcomeOf(state, job, ci.completion),
     artifacts,
     contents,
     rounds: rounds(reviews, artifacts),

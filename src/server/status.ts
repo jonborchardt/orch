@@ -18,6 +18,8 @@ import type {
   Blocker,
   CiView,
   Liveness,
+  Outcome,
+  OutcomeKind,
   Progress,
   Resume,
   StepId,
@@ -359,6 +361,35 @@ export function ciView(
     completion,
   };
   return { ...view, ...ciSummary(view, job) };
+}
+
+const OUTCOME_LABEL: Record<OutcomeKind, string> = {
+  merged: 'completed: merged',
+  ready: 'completed: PR ready, checks passed',
+  human: 'completed: human close-out',
+  completed: 'completed',
+};
+
+/**
+ * How a completed job ended, null for any other job. A recorded merge wins over how the workflow
+ * completed; a ready PR counts only while the recorded CI still passes; anything the record cannot
+ * vouch for (legacy, draft or closed PR, CI later failing) is plain `completed`, never a guess.
+ */
+export function outcomeOf(
+  state: Liveness,
+  job: Pick<Job, 'prUrl' | 'prState' | 'ciStatus'>,
+  completion: CiView['completion'],
+): Outcome | null {
+  if (state !== 'completed') return null;
+  const kind: OutcomeKind =
+    job.prState === 'merged'
+      ? 'merged'
+      : completion === 'ci' && prPhase(job, completion) === 'ready-to-merge'
+        ? 'ready'
+        : completion === 'human'
+          ? 'human'
+          : 'completed';
+  return { kind, label: OUTCOME_LABEL[kind] };
 }
 
 /**

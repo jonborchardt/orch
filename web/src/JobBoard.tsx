@@ -135,7 +135,7 @@ const COLUMNS: Column[] = [
           useFlexGap
           sx={{ alignItems: 'center', flexWrap: 'wrap' }}
         >
-          <StatusChip state={r.liveness} />
+          <StatusChip state={r.liveness} outcome={r.outcome} />
           {r.archivedAt !== null && <Chip label="archived" size="small" />}
           {r.resume?.command && (
             <CopyResume id={r.id} command={r.resume.command} checkout={r.repoPath} compact />
@@ -272,7 +272,10 @@ const COLUMNS: Column[] = [
           {r.pr.phase !== 'ci-running' && r.pr.phase !== 'ci-failing' && (
             <PrPhaseChip phase={r.pr.phase} />
           )}
-          <CiChip ci={r.ci} compact />
+          {/* A completed job's outcome is the headline; a merged PR's passing CI adds nothing. */}
+          {!(r.outcome?.kind === 'merged' && r.ci.status === 'passing') && (
+            <CiChip ci={r.ci} compact secondary={r.outcome !== null} />
+          )}
         </Stack>
       ) : (
         <Typography variant="caption" color="text.secondary">
