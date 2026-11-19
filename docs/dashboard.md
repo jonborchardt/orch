@@ -77,6 +77,9 @@ the first response arrives. The page refreshes every few seconds while visible. 
 the board or a job's detail shows a progress bar; after that a thin `Refreshing` bar in a fixed slot
 under the app bar shows while a poll is in flight. Archived jobs (see **Archive** below) are left
 out of every filter except `archived`, which shows only them, each marked with an `archived` chip.
+The Filter, Repository, and Show controls appear only on the board (`#/`), wrapping together as one
+group; a job's detail page has no board to filter, so they are not rendered there, and their values
+are kept for the return to the board. The summary chips stay on every page.
 
 The board is a plain MUI table (`web/src/JobBoard.tsx`, no data-grid package). Clicking a row, or
 focusing it and pressing Enter, opens the job; the buttons, links, and chips inside a row act on
@@ -87,7 +90,13 @@ running (stale), failed or interrupted, running, idle, then completed and cancel
 updated first within each group; `GET /api/jobs` keeps its own order (newest created first). The
 **Columns** menu shows or hides every column except Job, Status, and Actions; Repository, Session,
 and Branch / worktree start hidden. The choice is a per-browser view preference in `localStorage`
-(`orch.board.hiddenColumns`), not job state. The Actions column holds **Archive** on each finished,
+(`orch.board.hiddenColumns`), not job state. On a narrow display the board also hides columns by
+width, in CSS on top of that choice (a column the menu hides stays hidden; one it shows may still
+be hidden by width, and the menu does not say so): below 1024px it hides Repository, Session,
+Branch / worktree, Elapsed, Updated, Round, and Reviews, and below 900px also Stage. Job, Status,
+PR / CI, and Actions are never hidden by width; the Status cell wraps, and below 1024px the PR /
+CI cell wraps too and Job narrows, so they and every Archive, Copy resume, and PR control stay on screen at 800px.
+The table still scrolls sideways if real content is wider. The Actions column holds **Archive** on each finished,
 unarchived row and **Unarchive** on each archived row (so under Show: archived). Either opens a
 plain Cancel / Archive (or Unarchive) confirm. Only finished jobs qualify; finishing releases a job,
 but a session may have claimed it again (to observe CI), so the board always sends `force` to take
