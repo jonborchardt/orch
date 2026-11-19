@@ -1087,10 +1087,11 @@ describe('Job detail: controls state their effect', () => {
     expect(resume).not.toContain('round');
     const rework = await described('Request rework');
     expect(rework).toContain('builder runs again from build');
-    expect(rework).toContain('round 3 of 3');
+    // The human's resume raises maxRounds by one, so the maximum shown is the raised one.
+    expect(rework).toContain('review round 3 of 4');
     const review = await described('Request review round');
     expect(review).toContain('reviewers run again on the current build');
-    expect(review).toContain('round 3 of 3');
+    expect(review).toContain('review round 3 of 4');
     const cancel = await described('Cancel job');
     expect(cancel).toContain('Ends the job as cancelled: it cannot be resumed');
     expect(cancel).toContain('worktree and branch are kept');
@@ -1101,7 +1102,7 @@ describe('Job detail: controls state their effect', () => {
     fireEvent.mouseDown(within(dialog).getByRole('combobox', { name: 'Resume at stage' }));
     fireEvent.click(await screen.findByRole('option', { name: 'simplify' }));
     expect(within(dialog).getByTestId('action-effect')).toHaveTextContent(
-      'Moves the job to simplify as pending, opening review round 3 of 3',
+      'Moves the job to simplify as pending, opening review round 3 of 4',
     );
     await closeDialog();
 

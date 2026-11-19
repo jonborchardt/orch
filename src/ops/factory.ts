@@ -27,7 +27,6 @@ import {
   latestChallenge,
   now,
   prPhase,
-  rejectedBefore,
   requiredArtifact,
   RESUMABLE_STATUSES,
   reviewArtifact,
@@ -473,7 +472,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         .filter((r) => !current.some((c) => c.reviewer === r.name && c.verdict !== null))
         .map((r) => r.name);
       plan.reason =
-        `Review round ${String(job.round)} (${String(rejectedBefore(job.round, detail.reviews, detail.artifacts))} of ${String(job.maxRounds)} rejections used): run ${String(reviewers.length)} reviewers` +
+        `Review round ${String(job.round)} of ${String(job.maxRounds)}: run ${String(reviewers.length)} reviewers` +
         `${ui ? ' (UI reviewers included)' : ''} concurrently, record verdicts, consolidate.` +
         (pending.length ? ` Pending: ${pending.join(', ')}.` : ' All verdicts recorded.');
       plan.commands = [

@@ -40,11 +40,11 @@ const resumeAt = (stage: string) =>
   `Resume at ${stage === 'ci' || stage === 'pr' ? stage.toUpperCase() : stage}`;
 
 /**
- * The review round a rework, a review request, or a resume at review/simplify leads to. `maxRounds`
- * limits rejected rounds, not round numbers, so "round 4 of 3" after a human rework is real.
+ * The review round a rework, a review request, or a resume at review/simplify leads to. The human's
+ * resume grants that round by raising `maxRounds` by one, so the maximum shown is the raised one.
  */
 const nextRound = (job: JobDetailView['job']) =>
-  `review round ${String(job.round + 1)} of ${String(job.maxRounds)}`;
+  `review round ${String(job.round + 1)} of ${String(job.maxRounds + 1)}`;
 
 /**
  * What a control does, as one sentence: its tooltip and the first line of its dialog. Each one

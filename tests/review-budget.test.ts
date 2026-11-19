@@ -1,5 +1,6 @@
 /**
- * maxRounds counts rejected review rounds: CI repairs and base-integration rework spend none.
+ * maxRounds is the review-round budget: CI repairs, base-integration rework, and human resumes
+ * raise it by one for the round they open, so only review-driven rounds spend it.
  */
 import { describe, expect, it } from 'vitest';
 import { planJob } from '../src/ops/factory.ts';
@@ -22,7 +23,7 @@ import {
 import { commitFile, fixture, gitIn } from './helpers.ts';
 import { store, clone, run, checks, reconcile, job } from './ci-fixture.ts';
 
-describe('review budget: maxRounds counts rejected reviews, not passes through build', () => {
+describe('review budget: only review-driven rounds spend maxRounds', () => {
   function changesRound(c: Ctx): void {
     go(store, c, 'start');
     verdict(store, c, 'security');
@@ -52,14 +53,15 @@ describe('review budget: maxRounds counts rejected reviews, not passes through b
     go(store, c, 'start');
     checks(head(c.wt), [run('test', 'failure')]);
     expect(reconcile(c).action).toBe('rework');
+    expect(job(c)).toMatchObject({ stage: 'build', round: 2, ciRepairs: 1, maxRounds: 4 });
     rebuild(c, 'src/fix.ts');
     changesRound(c); // rejection 2, in round 3
-    expect(job(c)).toMatchObject({ stage: 'build', round: 3, ciRepairs: 1, maxRounds: 3 });
+    expect(job(c)).toMatchObject({ stage: 'build', round: 3, ciRepairs: 1, maxRounds: 4 });
     expect(planJob(store, c.id).stage).toBe('build');
     rebuild(c, 'src/fix2.ts');
-    expect(planJob(store, c.id).reason).toContain('2 of 3 rejections used');
+    expect(planJob(store, c.id).reason).toContain('Review round 4 of 4');
     changesRound(c); // rejection 3: the budget is spent
-    expect(job(c)).toMatchObject({ stage: 'needs-human', round: 4 });
+    expect(job(c)).toMatchObject({ stage: 'needs-human', round: 4, maxRounds: 4 });
     expect(planJob(store, c.id).blockedReason).toBe('max review rounds reached');
   });
 
@@ -76,6 +78,7 @@ describe('review budget: maxRounds counts rejected reviews, not passes through b
     gitIn(clone, 'push', '-q', 'origin', 'main');
     const r = integrateBase(store, c.id, { token: c.token });
     expect(r.next).toBe('rework');
+    expect(job(c)).toMatchObject({ stage: 'build', round: 2, maxRounds: 4 });
     go(store, c, 'start');
     gitIn(
       c.wt,
@@ -95,6 +98,29 @@ describe('review budget: maxRounds counts rejected reviews, not passes through b
     go(store, c, 'complete');
     simplify(store, c);
     changesRound(c);
-    expect(job(c)).toMatchObject({ stage: 'build', round: 3, ciRepairs: 0 });
+    expect(job(c)).toMatchObject({ stage: 'build', round: 3, ciRepairs: 0, maxRounds: 4 });
+  });
+
+  it('a human resume after the last allowed round grants exactly one more round', () => {
+    const c = start(store, clone);
+    const within = () => {
+      expect(job(c).round).toBeLessThanOrEqual(job(c).maxRounds);
+    };
+    toReview(store, c);
+    for (const file of ['src/r2.ts', 'src/r3.ts']) {
+      changesRound(c);
+      within();
+      rebuild(c, file);
+      within();
+    }
+    changesRound(c); // round 3 of 3 rejects: escalate
+    expect(job(c)).toMatchObject({ stage: 'needs-human', round: 3, maxRounds: 3 });
+    go(store, c, 'resume'); // back to build, the human grants one round
+    expect(job(c)).toMatchObject({ stage: 'build', round: 3, maxRounds: 4 });
+    rebuild(c, 'src/r4.ts');
+    within();
+    changesRound(c); // round 4 of 4 rejects: escalate again
+    expect(job(c)).toMatchObject({ stage: 'needs-human', round: 4, maxRounds: 4 });
+    expect(planJob(store, c.id).blockedReason).toBe('max review rounds reached');
   });
 });

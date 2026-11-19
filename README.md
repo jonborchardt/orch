@@ -216,7 +216,9 @@ command. Unset, nothing is sent and nothing changes.
   recomputed from HEAD, tree, and policy fingerprint at every gate.
 - Review rounds: security, correctness, and code-quality must all report, against the commit
   `build.md` describes; reviewers are read-only (fingerprint-checked); blocking findings or
-  `CHANGES` return the job to build, until the `maxRounds`-th such rejection escalates.
+  `CHANGES` return the job to build, until a rejection in round `maxRounds` escalates. Base-integration
+  rework, CI repairs, and a human's resume to build, simplify, or review raise `maxRounds` by one
+  instead of using it up.
 - Delivery: only an approved commit (plus clean base merges) is pushed or counts as delivered; the
   draft PR is created or reused, never duplicated; the job completes only inside `orch gh ci` after
   GitHub reports passing required checks for that exact head on the job's own PR; failed checks

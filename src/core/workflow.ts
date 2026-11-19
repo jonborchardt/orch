@@ -358,14 +358,20 @@ export function transition(
         }
         // A simplify or review requested from needs-human is a fresh round, as after a build:
         // earlier verdicts stay as that round's history instead of being shown or overwritten.
+        const opensRound = to === 'review' || to === 'simplify';
+        // A human sending the job to build, simplify, or review grants the round it leads to:
+        // recorded as a raised maxRounds, so `round / maxRounds` stays truthful.
+        const grants = opensRound || to === 'build';
+        const maxRounds = grants ? { maxRounds: job.maxRounds + 1 } : {};
         return {
           patch: {
             stage: to,
             status: 'pending',
             returnStage: null,
-            ...(to === 'review' || to === 'simplify' ? { round: job.round + 1 } : {}),
+            ...(opensRound ? { round: job.round + 1 } : {}),
+            ...maxRounds,
           },
-          events: [{ type: 'job.resumed', payload: { to } }],
+          events: [{ type: 'job.resumed', payload: { to, ...maxRounds } }],
         };
       }
       if (!RESUMABLE_STATUSES.includes(status)) reject('nothing to resume');
@@ -378,14 +384,16 @@ export function transition(
     case 'rework': {
       // Base integration needed the builder (conflicts or edits inside the merge), or CI failed on
       // the delivered commit: the result is new code, so it goes through build, review, and
-      // approval again, then is pushed to the same PR. CI repairs are bounded per job.
+      // approval again, then is pushed to the same PR. CI repairs are bounded per job. Neither is
+      // review-driven, so the round it opens raises maxRounds instead of spending it.
       if (stage !== 'pr' && stage !== 'ci') reject('rework is only for the pr and ci stages');
+      const maxRounds = job.maxRounds + 1;
       const reworked = {
         type: 'job.reworked',
-        payload: { from: stage, reason: ctx.reason ?? null, ciRepairs: job.ciRepairs },
+        payload: { from: stage, reason: ctx.reason ?? null, ciRepairs: job.ciRepairs, maxRounds },
       };
       if (stage !== 'ci')
-        return { patch: { stage: 'build', status: 'pending' }, events: [reworked] };
+        return { patch: { stage: 'build', status: 'pending', maxRounds }, events: [reworked] };
       if (job.ciRepairs >= job.maxCiRepairs) {
         return {
           patch: { stage: 'needs-human', status: 'blocked', returnStage: 'build' },
@@ -398,7 +406,7 @@ export function transition(
         };
       }
       return {
-        patch: { stage: 'build', status: 'pending', ciRepairs: job.ciRepairs + 1 },
+        patch: { stage: 'build', status: 'pending', ciRepairs: job.ciRepairs + 1, maxRounds },
         events: [{ ...reworked, payload: { ...reworked.payload, ciRepairs: job.ciRepairs + 1 } }],
       };
     }
@@ -568,20 +576,6 @@ export function blockingCount(artifacts: Artifact[], round: number): number {
   return Number.isInteger(n) && n > 0 ? n : 0;
 }
 
-/**
- * Review rounds before this one that sent the job back: a CHANGES verdict or a consolidation
- * counting blocking findings. Rounds that passed (a CI repair or a base-integration rework
- * follows them) spend nothing, so `maxRounds` limits rejections, as documented.
- */
-export function rejectedBefore(round: number, reviews: Review[], artifacts: Artifact[]): number {
-  let n = 0;
-  for (let r = 1; r < round; r++) {
-    const changes = reviews.some((x) => x.round === r && x.verdict === 'changes');
-    if (changes || blockingCount(artifacts, r) > 0) n++;
-  }
-  return n;
-}
-
 function completeReview(
   job: JobState,
   ctx: TransitionContext,
@@ -595,8 +589,10 @@ function completeReview(
   if (changes.length === 0 && blocking === 0) {
     return { patch: { stage: 'approve', status: 'pending' }, events: [{ ...completed, payload }] };
   }
-  // This rejection is the maxRounds-th one: escalate instead of building again.
-  if (rejectedBefore(job.round, ctx.reviews, ctx.artifacts) + 1 >= job.maxRounds) {
+  // The last allowed round rejected: escalate instead of building again. CI repairs, base
+  // rework, and human resumes raised maxRounds for the rounds they opened, so this counts
+  // review-driven rounds only.
+  if (job.round >= job.maxRounds) {
     return {
       patch: { stage: 'needs-human', status: 'blocked', returnStage: 'build' },
       events: [

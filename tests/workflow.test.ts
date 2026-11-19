@@ -8,6 +8,7 @@ import {
   challengeSpecHash,
   describeNext,
   latestChallenge,
+  MAX_ROUNDS_REASON,
   requiredArtifact,
   type Stage,
   STAGES,
@@ -168,13 +169,18 @@ describe('transition: CI repair cycle', () => {
     });
 
   it('rework from ci counts a repair and returns to build; pr rework does not count', () => {
+    // Neither is review-driven: both raise maxRounds for the round they open.
     const r = run(ci(), 'rework', { ...none, reason: 'CI failed: test' });
-    expect(r.patch).toEqual({ stage: 'build', status: 'pending', ciRepairs: 1 });
+    expect(r.patch).toEqual({ stage: 'build', status: 'pending', ciRepairs: 1, maxRounds: 4 });
     expect(r.events).toEqual([
-      { type: 'job.reworked', payload: { from: 'ci', reason: 'CI failed: test', ciRepairs: 1 } },
+      {
+        type: 'job.reworked',
+        payload: { from: 'ci', reason: 'CI failed: test', ciRepairs: 1, maxRounds: 4 },
+      },
     ]);
     const pr = run(job('pr', 'running', { ciRepairs: 1 }), 'rework');
-    expect(pr.patch).toEqual({ stage: 'build', status: 'pending' });
+    expect(pr.patch).toEqual({ stage: 'build', status: 'pending', maxRounds: 4 });
+    expect(pr.events[0]?.payload).toMatchObject({ from: 'pr', maxRounds: 4 });
     expect(() => run(job('build', 'running'), 'rework')).toThrow(/pr and ci stages/);
   });
 
@@ -392,31 +398,26 @@ describe('transition: review loop', () => {
     expect(blocked.patch.stage).toBe('needs-human');
   });
 
-  it('rounds that passed (followed by a CI repair or base rework) spend no rejection', () => {
-    // Round 1 CHANGES, round 2 PASS (then CI failed and was repaired), round 3 CHANGES.
-    const r = run(inReview(3), 'complete', {
-      artifacts: [consolidated(1), consolidated(2), consolidated(3)],
-      reviews: [...trio(1, 'correctness'), ...trio(2), ...trio(3, 'security')],
+  it('a rejection escalates exactly when round >= maxRounds, whatever earlier rounds said', () => {
+    const reject = (round: number, maxRounds: number) =>
+      run(inReview(round, maxRounds), 'complete', {
+        artifacts: [consolidated(round)],
+        reviews: trio(round, 'security'),
+      });
+    // A CI repair or base rework raised maxRounds to 4: round 3 still goes back to build.
+    expect(reject(3, 4).patch).toEqual({ stage: 'build', status: 'pending' });
+    expect(reject(2, 3).patch.stage).toBe('build');
+    const last = reject(4, 4);
+    expect(last.patch.stage).toBe('needs-human');
+    expect(last.events[1]?.payload['reason']).toBe(MAX_ROUNDS_REASON);
+    // Rounds already past the maximum (jobs from before raises were recorded) escalate too.
+    expect(reject(5, 3).patch.stage).toBe('needs-human');
+    // A passing review never escalates, even past the maximum.
+    const passed = run(inReview(5, 3), 'complete', {
+      artifacts: [consolidated(5)],
+      reviews: trio(5),
     });
-    expect(r.patch).toEqual({ stage: 'build', status: 'pending' });
-    // A round-3 rejection after two passing rounds is only the first rejection.
-    const first = run(inReview(3), 'complete', {
-      artifacts: [consolidated(1), consolidated(2), consolidated(3)],
-      reviews: [...trio(1), ...trio(2), ...trio(3, 'security')],
-    });
-    expect(first.patch.stage).toBe('build');
-    // The third rejection still escalates, however many passing rounds came between.
-    const third = run(inReview(5), 'complete', {
-      artifacts: [1, 2, 3, 4, 5].map(consolidated),
-      reviews: [
-        ...trio(1, 'security'),
-        ...trio(2),
-        ...trio(3, 'correctness'),
-        ...trio(4),
-        ...trio(5, 'code-quality'),
-      ],
-    });
-    expect(third.patch.stage).toBe('needs-human');
+    expect(passed.patch.stage).toBe('approve');
   });
 
   it('maxRounds 1 escalates on the first rejection', () => {
@@ -499,12 +500,18 @@ describe('transition: escalation, resume, cancel', () => {
     const e = run(job('build', 'running'), 'escalate', { ...none, reason: 'unclear spec' });
     expect(e.patch).toEqual({ stage: 'needs-human', status: 'blocked', returnStage: 'build' });
     const blocked = job('needs-human', 'blocked', { returnStage: 'build' });
+    // The human's resume to build grants the round it leads to.
     expect(run(blocked, 'resume').patch).toEqual({
       stage: 'build',
       status: 'pending',
       returnStage: null,
+      maxRounds: 4,
     });
-    expect(run(blocked, 'resume', { ...none, to: 'spec' }).patch.stage).toBe('spec');
+    expect(run(blocked, 'resume', { ...none, to: 'spec' }).patch).toEqual({
+      stage: 'spec',
+      status: 'pending',
+      returnStage: null,
+    });
     // Closing out is reserved for CI escalations with nothing to verify (see the CI tests).
     expect(() => run(blocked, 'resume', { ...none, to: 'completed' })).toThrow(
       /escalated from the ci stage/,
@@ -521,12 +528,17 @@ describe('transition: escalation, resume, cancel', () => {
 
   it('resume from needs-human into review opens a new round; resuming a review stage keeps it', () => {
     const blocked = job('needs-human', 'blocked', { round: 2, returnStage: 'approve' });
-    expect(run(blocked, 'resume', { ...none, to: 'review' }).patch).toEqual({
+    const toReview = run(blocked, 'resume', { ...none, to: 'review' });
+    expect(toReview.patch).toEqual({
       stage: 'review',
       status: 'pending',
       returnStage: null,
       round: 3,
+      maxRounds: 4,
     });
+    expect(toReview.events).toEqual([
+      { type: 'job.resumed', payload: { to: 'review', maxRounds: 4 } },
+    ]);
     // Escalated mid-review: the default return to review is a fresh round too.
     const midReview = job('needs-human', 'blocked', { round: 2, returnStage: 'review' });
     expect(run(midReview, 'resume').patch.round).toBe(3);
@@ -536,6 +548,7 @@ describe('transition: escalation, resume, cancel', () => {
       status: 'pending',
       returnStage: null,
       round: 3,
+      maxRounds: 4,
     });
     // Any other target keeps the round.
     expect(run(blocked, 'resume', { ...none, to: 'build' }).patch.round).toBeUndefined();
@@ -543,6 +556,31 @@ describe('transition: escalation, resume, cancel', () => {
     for (const s of ['interrupted', 'failed'] as const) {
       expect(run(job('review', s, { round: 2 }), 'resume').patch).toEqual({ status: 'pending' });
     }
+  });
+
+  it('only a resume to build, simplify, or review raises maxRounds', () => {
+    const blocked = job('needs-human', 'blocked', { round: 2, returnStage: 'build' });
+    for (const to of ['build', 'simplify', 'review'] as const) {
+      expect(run(blocked, 'resume', { ...none, to }).patch.maxRounds).toBe(4);
+    }
+    for (const to of ['spec', 'approve', 'pr', 'ci'] as const) {
+      const r = run(blocked, 'resume', { ...none, to });
+      expect(r.patch.maxRounds).toBeUndefined();
+      expect(r.events[0]?.payload).toEqual({ to });
+    }
+    const closeOut = job('needs-human', 'blocked', {
+      returnStage: 'ci',
+      prUrl: 'https://x/pr/1',
+      ciHead: 'abc',
+      ciStatus: 'none',
+    });
+    expect(run(closeOut, 'resume', { ...none, to: 'completed' }).patch.maxRounds).toBeUndefined();
+    for (const s of ['interrupted', 'failed'] as const) {
+      expect(run(job('build', s), 'resume').patch.maxRounds).toBeUndefined();
+    }
+    // An exhausted CI repair escalates and raises nothing.
+    const spent = job('ci', 'running', { prUrl: 'https://x/pr/1', ciRepairs: 2 });
+    expect(run(spent, 'rework').patch.maxRounds).toBeUndefined();
   });
 
   it('cancel works from any live state and stamps completedAt', () => {
