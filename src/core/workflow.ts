@@ -378,8 +378,10 @@ export function transition(
     case 'rework': {
       // Base integration needed the builder (conflicts or edits inside the merge), or CI failed on
       // the delivered commit: the result is new code, so it goes through build, review, and
-      // approval again, then is pushed to the same PR. CI repairs are bounded per job.
-      if (stage !== 'pr' && stage !== 'ci') reject('rework is only for the pr and ci stages');
+      // approval again, then is pushed to the same PR. Approve joins pr because the base often
+      // moves during approval. CI repairs are bounded per job.
+      if (stage !== 'approve' && stage !== 'pr' && stage !== 'ci')
+        reject('rework is only for the approve, pr and ci stages');
       const reworked = {
         type: 'job.reworked',
         payload: { from: stage, reason: ctx.reason ?? null, ciRepairs: job.ciRepairs },

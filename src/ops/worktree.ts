@@ -217,8 +217,13 @@ export interface IntegrateResult extends WorktreeResult {
   merge: MergeResult;
   fetched: boolean;
   integration: Integration;
-  /** What must happen next: nothing, verification, or (pr stage) the builder. */
+  /** What must happen next: nothing, verification, or (approve and pr stages) the builder. */
   next: 'verify' | 'rework' | 'none';
+}
+
+/** Stages where a conflicting or materially edited base merge sends the job back to build. */
+function reworksOnIntegration(stage: string): boolean {
+  return stage === 'approve' || stage === 'pr';
 }
 
 function mergeOutcome(wt: string, fromHead: string, resultHead: string) {
@@ -270,9 +275,9 @@ function reconcile(store: Store, id: string, auth: Auth, wt: string, open: Integ
 /**
  * Bring base-branch changes into the job branch with a merge commit, recording the inputs before
  * Git runs and the outcome after. Fetches origin first when there is one. Refused on a dirty
- * worktree. Conflicts abort the merge; in the pr stage the job then goes back to build (the
- * builder resolves, and the result is verified, reviewed, and approved again), elsewhere the
- * conflict is raised as an error. A completed merge still needs fresh verification.
+ * worktree. Conflicts abort the merge; in the approve and pr stages the job then goes back to
+ * build (the builder resolves, and the result is verified, reviewed, and approved again),
+ * elsewhere the conflict is raised as an error. A completed merge still needs fresh verification.
  */
 export function integrateBase(store: Store, id: string, auth: Auth): IntegrateResult {
   const checked = jobCheckout(store, authorize(store, id, auth), auth);
@@ -332,7 +337,7 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
       changedFiles: [],
       material: [],
     });
-    if (job.stage !== 'pr') throw err;
+    if (!reworksOnIntegration(job.stage)) throw err;
     const reworked = transitionJob(store, id, 'rework', {
       token: auth.token,
       reason: `base integration of ${ref} conflicts in ${files.join(', ') || 'unknown files'}`,
@@ -353,7 +358,7 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
   });
   let next: IntegrateResult['next'] = 'verify';
   let updated = getJob(store.db, id);
-  if (outcome.material.length > 0 && job.stage === 'pr') {
+  if (outcome.material.length > 0 && reworksOnIntegration(job.stage)) {
     updated = transitionJob(store, id, 'rework', {
       token: auth.token,
       reason: `merge ${merge.head.slice(0, 7)} edited ${outcome.material.join(', ')} beyond either parent`,

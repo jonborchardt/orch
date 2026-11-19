@@ -493,8 +493,12 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const r = role('approve');
       if (r)
         plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'decision.md' }];
+      const behind = worktree.behind ?? 0;
       plan.reason =
-        'Independent final approval: spec, build.md, git diff, review artifacts, outstanding findings.';
+        'Independent final approval: spec, build.md, git diff, review artifacts, outstanding findings.' +
+        (behind > 0
+          ? ` Base advanced by ${String(behind)} commit(s): if the approver escalates for that, run orch worktree integrate ${id} instead; a conflict sends the job back to build as rework.`
+          : '');
       plan.commands = [
         ...start,
         ...verifyIfStale,
