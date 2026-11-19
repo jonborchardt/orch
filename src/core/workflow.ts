@@ -361,8 +361,7 @@ export function transition(
         const opensRound = to === 'review' || to === 'simplify';
         // A human sending the job to build, simplify, or review grants the round it leads to:
         // recorded as a raised maxRounds, so `round / maxRounds` stays truthful.
-        const grants = opensRound || to === 'build';
-        const maxRounds = grants ? { maxRounds: job.maxRounds + 1 } : {};
+        const maxRounds = opensRound || to === 'build' ? { maxRounds: job.maxRounds + 1 } : {};
         return {
           patch: {
             stage: to,
