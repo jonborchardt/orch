@@ -444,12 +444,11 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                     ))}
                   </TextField>
                 )}
-                {open === 'fix-conflicts' && (
+                {open === 'fix-conflicts' ? (
                   <Typography data-testid="fix-conflicts-files">
                     Conflicting files: <code>{(detail.conflicts ?? []).join(', ')}</code>
                   </Typography>
-                )}
-                {open !== 'fix-conflicts' && (
+                ) : (
                   <TextField
                     label={
                       open === 'accept-delivery'

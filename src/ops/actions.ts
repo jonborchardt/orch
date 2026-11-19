@@ -343,6 +343,8 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
   return { job: withoutToken(getJob(store.db, before.id)), message };
 }
 
+const resumeCommand = (id: string): string => `orch factory resume ${id} --session <name>`;
+
 /**
  * Integrate the base into a job whose branch conflicts with it (approve and pr stages only). A
  * conflicting merge is aborted and recorded, and the job goes back to build for the builder to
@@ -360,7 +362,7 @@ function fixConflicts(store: Store, before: Job, force: boolean | undefined): Ac
     integrateBase(store, before.id, { token }),
   );
   const job = getJob(store.db, before.id);
-  const resume = `orch factory resume ${before.id} --session <name>`;
+  const resume = resumeCommand(before.id);
   const ref = r.integration.baseRef;
   const conflicts = r.integration.conflicts ?? [];
   let message: string;
@@ -468,7 +470,7 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   });
   const job = getJob(store.db, id);
   const safe = withoutToken(job);
-  const resume = `orch factory resume ${id} --session <name>`;
+  const resume = resumeCommand(id);
   if (input.action === 'accept-delivery') {
     return {
       job: safe,
