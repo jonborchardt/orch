@@ -6,6 +6,7 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 
 import { NotFoundError, ValidationError } from '../core/errors.ts';
+import { type Flake, FLAKY_EVENT } from '../core/flake.ts';
 
 import type {
   CheckStatus,
@@ -18,6 +19,7 @@ import type {
 import type { Db, Store } from './client.ts';
 import { type Auth, mutate, mutateReturning } from './jobs.ts';
 import {
+  events,
   type Integration,
   integrations,
   type Job,
@@ -185,6 +187,31 @@ export function finishRun(
           .get(),
         `verification run ${String(runId)}`,
       ),
+    };
+  });
+}
+
+/**
+ * Label a failed run as a likely flake. A label only: the run row is untouched. A run is flagged
+ * at most once; the job's existing `verification.flaky` events decide, read in this transaction.
+ */
+export function markFlaky(
+  store: Store,
+  id: string,
+  auth: Auth,
+  flake: Omit<Flake, 'at'> & { tree: string },
+): boolean {
+  return mutateReturning(store, id, auth, (_job, tx) => {
+    const done = tx
+      .select({ payload: events.payload })
+      .from(events)
+      .where(and(eq(events.jobId, id), eq(events.type, FLAKY_EVENT)))
+      .all()
+      .some((e) => e.payload['runId'] === flake.runId);
+    return {
+      patch: {},
+      events: done ? [] : [{ type: FLAKY_EVENT, payload: { ...flake } }],
+      value: !done,
     };
   });
 }

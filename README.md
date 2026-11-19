@@ -197,7 +197,8 @@ recovery pass) sends one mail summarising those changes: the job's stage, status
 with its reason, and `orch factory status <id>`. When the job needs something, the mail leads with
 it: why it stopped, the recorded reason, and the next command or dashboard decision. Reported events are job creation, stage start,
 completion, and failure, blocking, resume, rework, cancellation, completion, interruption, and
-failed recovery attempts; CI polls, pushes, and verification runs are not mailed. All mails of a
+failed recovery attempts, and likely flaky verification failures (naming the test); CI polls,
+pushes, and verification runs themselves are not mailed. All mails of a
 job share one subject (`[orch] <id>: <title>`) and reply to the previous one, so a mail client
 shows them as one conversation. `orch mail report "<subject>" (--text "<body>" | --text-file <file>) [--reply-to <id>]`
 sends any text the same way and prints `SENT <message-id>`.

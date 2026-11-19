@@ -28,7 +28,7 @@ import type { BoardRow } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
 import { CiChip, PrPhaseChip } from './Ci.tsx';
 import { ProgressStrip, RoundIndicator } from './Progress.tsx';
-import { BlockerText, CopyResume, StatusChip, Supersession } from './Status.tsx';
+import { BlockerText, CopyResume, FlakeText, StatusChip, Supersession } from './Status.tsx';
 import { ago, byAttention, elapsed, repoLabels, reviewRollup } from './format.ts';
 
 function openJob(id: string): void {
@@ -126,6 +126,7 @@ const COLUMNS: Column[] = [
             Resume unavailable: session {r.resume.heldBy.session} holds a live lease
           </Typography>
         )}
+        {r.flake && <FlakeText flake={r.flake} compact />}
       </>
     ),
   },

@@ -62,7 +62,11 @@ consolidation's BLOCKING count, and the newest verification run. When the state 
 escalation the line says so (`Escalated from build`) rather than guessing. The line wraps to two
 lines before its ellipsis and is dotted-underlined; hovering or focusing it (it is in the Tab order)
 shows the full text, prefixed with the blocker label, in a tooltip. Jobs a session may resume
-get a **Copy resume** control. Filter by repository and by **Show**: `current` (the default, every
+get a **Copy resume** control. A live job whose verification recently failed in a way that looks
+flaky (`flake` on the row, from the newest `verification.flaky` event; see `docs/workflow.md`)
+shows a **Likely flaky test** line naming the test, on the board and in the detail's status panel.
+It is history, not state: it names its run and head, never blocks, and is hidden once the job
+finishes. Filter by repository and by **Show**: `current` (the default, every
 unarchived job), `active`, `needs human`, `running`, `stale`, `failed` (failed or interrupted),
 `idle`, `finished`, `cancelled`, or `archived`, each labelled with its count; plus a free-text
 **Filter** box matching title, id, repository, stage, status, session, or branch. The app bar's

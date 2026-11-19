@@ -57,7 +57,10 @@ export function stageLines(job: { stage: Stage; status: Status }): string[] {
   );
 }
 
-/** State changes and errors. Anything else (CI polls, pushes, verification runs) is not mailed. */
+/**
+ * State changes, errors, and likely-flaky verification failures. Anything else (CI polls, pushes,
+ * verification runs) is not mailed.
+ */
 export const REPORTED_EVENTS: readonly string[] = [
   'job.created',
   'stage.started',
@@ -70,6 +73,7 @@ export const REPORTED_EVENTS: readonly string[] = [
   'job.completed',
   'job.interrupted',
   'recovery.failed',
+  'verification.flaky',
 ];
 
 /** The thread's subject without the configured prefix, which `sendReport` adds. */

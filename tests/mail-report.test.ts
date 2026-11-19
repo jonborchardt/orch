@@ -3,6 +3,7 @@ import {
   EMOJI,
   eventEmoji,
   outcomeEmoji,
+  REPORTED_EVENTS,
   reportBody,
   reportSubject,
   stageLines,
@@ -143,6 +144,20 @@ describe('reportBody events', () => {
     const i = lines.findIndex((l) => l.includes(type));
     expect(lines[i]).toBe(`${emoji} 2026-11-17T00:00:00.000Z  ${type} (build)`);
     expect(lines[i + 1]).toBe('    reason: because');
+  });
+});
+
+describe('likely flaky verification failures', () => {
+  it('are reported, with the reason naming the test', () => {
+    expect(REPORTED_EVENTS).toContain('verification.flaky');
+    const reason =
+      'web/src/App.test.tsx > Loading and refresh progress > shows Refreshing under the app bar only while a board poll is in flight failed in run 12 at abc1234; the job did not change web/src/App.test.tsx';
+    const lines = reportBody(job('build', 'running'), [
+      event('verification.flaky', { runId: 12, rule: 'unchanged-file', reason }),
+    ]).split('\n');
+    const i = lines.findIndex((l) => l.includes('verification.flaky'));
+    expect(lines[i]).toBe(`${RUN} 2026-11-17T00:00:00.000Z  verification.flaky`);
+    expect(lines[i + 1]).toBe(`    reason: ${reason}`);
   });
 });
 

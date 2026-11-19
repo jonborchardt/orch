@@ -64,6 +64,7 @@ function row(over: Partial<BoardRow>): BoardRow {
     archivedAt: null,
     ci: noCi(),
     progress: progress(1, 'current', 'Build'),
+    flake: null,
     ...over,
   };
 }
@@ -212,6 +213,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     resume: { command: '/factory resume job-00000003', heldBy: null },
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
     supersedes: [],
+    flake: null,
     ...over,
   };
 }
@@ -2520,5 +2522,48 @@ describe('Loading and refresh progress', () => {
     await waitFor(() => {
       expect(refreshing()).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('Likely flaky test', () => {
+  const reason =
+    'web/src/App.test.tsx > Loading and refresh progress > shows Refreshing under the app bar only while a board poll is in flight failed in run 12 at abc1234; the job did not change web/src/App.test.tsx';
+  const flake = {
+    runId: 12,
+    head: 'abc1234def',
+    check: 'check',
+    tests: [
+      {
+        file: 'web/src/App.test.tsx',
+        name: 'Loading and refresh progress > shows Refreshing under the app bar only while a board poll is in flight',
+      },
+    ],
+    rule: 'unchanged-file' as const,
+    reason,
+    at: '2026-11-18T00:00:00.000Z',
+  };
+
+  it('names the test on the board row only when the server flags one', async () => {
+    mockFetch();
+    data.rows = [row({ id: 'job-00000001', title: 'Flaky', flake }), row({ id: 'job-00000002' })];
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(
+      within(boardRowOf('job-00000001')).getByText(`Likely flaky test: ${reason}`),
+    ).toBeVisible();
+    expect(boardRowOf('job-00000002').querySelector('[data-flake]')).toBeNull();
+  });
+
+  it('names the test in the job detail status panel, and nothing without a flag', async () => {
+    mockFetch();
+    data.detail = detail({ flake });
+    window.location.hash = '#/jobs/job-00000003';
+    const { unmount } = mount();
+    expect(await screen.findByText(`Likely flaky test: ${reason}`)).toBeVisible();
+    unmount();
+    data.detail = detail();
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(document.querySelector('[data-flake]')).toBeNull();
   });
 });

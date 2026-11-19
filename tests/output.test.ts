@@ -123,6 +123,7 @@ function plan(over: Partial<Plan>): Plan {
     checkoutDirty: ['stray-file.txt'],
     verification: null,
     sensitive: null,
+    flake: null,
     integration: null,
     ui: false,
     agents: [],
@@ -182,6 +183,26 @@ describe('formatPlan', () => {
       expect(out).not.toContain(hidden);
     }
     expect(out).not.toContain('Blocked:');
+    expect(out).not.toContain('Flaky:');
+  });
+
+  it('names a likely flaky test with its reason', () => {
+    const reason =
+      'web/src/App.test.tsx > Loading > shows Refreshing failed in run 12 at abc1234; the job did not change web/src/App.test.tsx';
+    const out = formatPlan(
+      plan({
+        flake: {
+          runId: 12,
+          head: 'abc1234def',
+          check: 'check',
+          tests: [{ file: 'web/src/App.test.tsx', name: 'Loading > shows Refreshing' }],
+          rule: 'unchanged-file',
+          reason,
+          at: '2026-11-18T00:00:00.000Z',
+        },
+      }),
+    );
+    expect(out).toContain(`Flaky:   likely flaky test: ${reason}`);
   });
 
   it('shows (none), no PR, no agents, and the block reason for a human step', () => {

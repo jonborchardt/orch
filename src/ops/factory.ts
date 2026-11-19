@@ -9,6 +9,7 @@ import { join } from 'node:path';
 
 import { CI_MAX_SESSION_POLLS, waitSeconds } from '../core/ci.ts';
 import { ValidationError } from '../core/errors.ts';
+import { type Flake, FLAKY_EVENT, flakeView } from '../core/flake.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import type { SensitiveReport } from '../core/sensitive.ts';
@@ -39,6 +40,7 @@ import { dirtyFiles } from '../git/repo.ts';
 import type { WorktreeInfo } from '../git/worktree.ts';
 import { validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
+import { latestEventsByJob } from '../storage/events.ts';
 import { claimJob, createJob, getJob, jobDetail, resumeJob } from '../storage/jobs.ts';
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
 import { listIntegrations } from '../storage/verification.ts';
@@ -115,6 +117,8 @@ export interface Plan {
   verification: VerificationStatus | null;
   /** Sensitive paths in the job's diff, disabled tests, and policy drift; null without a diff. */
   sensitive: SensitiveReport | null;
+  /** Newest likely-flaky verification failure; null for finished jobs. A label only. */
+  flake: Flake | null;
   /** Most recent base integration attempt, if any. */
   integration: Integration | null;
   /** Rendered UI touched (decides whether UI reviewers run). */
@@ -269,6 +273,10 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     checkoutDirty: existsSync(job.repoPath) ? (tryDirty(job.repoPath) ?? null) : null,
     verification,
     sensitive,
+    flake: flakeView(
+      job,
+      latestEventsByJob(store.db, [id], [FLAKY_EVENT]).get(id)?.get(FLAKY_EVENT),
+    ),
     integration,
     ui,
     agents: [],
