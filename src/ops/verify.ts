@@ -12,11 +12,17 @@ import { ValidationError } from '../core/errors.ts';
 import { spawnCommand, type ToolResult } from '../core/exec.ts';
 import {
   type FailedTest,
+  type Flake,
+  flakeKey,
   flakeReason,
   type FlakeRule,
+  flakeView,
+  FLAKY_EVENT,
+  integrateFirstAdvice,
   normalisePath,
   parseFailures,
   passedOnRerun,
+  shareFlakes,
   unchangedFile,
 } from '../core/flake.ts';
 import { canonicalPath, jobArtifactDir, verifyLockPath, verifyQueueDir } from '../core/paths.ts';
@@ -39,15 +45,17 @@ import {
   type VerificationCheckSpec,
   type VerificationPolicy,
 } from '../core/verification.ts';
-import { now } from '../core/workflow.ts';
+import { now, TERMINAL_STATUSES } from '../core/workflow.ts';
 import { git, tryGit } from '../git/run.ts';
 import type { Store } from '../storage/client.ts';
-import { type Auth, authorize, getJob, renewLease } from '../storage/jobs.ts';
+import { latestEventsByJob } from '../storage/events.ts';
+import { type Auth, authorize, getJob, listJobs, renewLease } from '../storage/jobs.ts';
 import type { Job, VerificationCheck, VerificationRun } from '../storage/schema.ts';
 import {
   type CheckResult,
   finishRun,
   latestRun,
+  latestRunsByJob,
   listChecks,
   listRuns,
   markFlaky,
@@ -443,8 +451,13 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
     if (spec.required && result.status !== 'passed') failed = true;
   }
   const finished = finishRun(store, id, auth, run.run.id, failed ? 'failed' : 'passed');
-  flagFlakes(store, id, auth, wt, finished, checks);
+  const unchanged = flagFlakes(store, id, auth, wt, finished, checks);
   const first = checks.find((c) => c.required && c.status !== 'passed' && c.status !== 'pending');
+  const behind = wt.behind ?? 0;
+  const next =
+    unchanged && behind > 0
+      ? integrateFirstAdvice(id, behind)
+      : 'Fix, commit, and run orch verify again.';
   return {
     jobId: id,
     status: finished.status === 'passed' ? 'passed' : 'failed',
@@ -453,7 +466,7 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
     policy: status.policy,
     checks,
     hint: first
-      ? `Required check ${first.checkId} ${first.status} (exit ${String(first.exitCode)}); see ${first.outputPath ?? ''}. Fix, commit, and run orch verify again.`
+      ? `Required check ${first.checkId} ${first.status} (exit ${String(first.exitCode)}); see ${first.outputPath ?? ''}. ${next}`
       : null,
     reused: false,
   };
@@ -462,6 +475,7 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
 /**
  * Label likely flakes after a run finishes: a failed run whose failing tests are all in files the
  * job did not change, or earlier failed runs at the tree this run just passed. Labels only.
+ * Returns whether this failed run is an unchanged-file flake (the caller's integrate-first hint).
  */
 function flagFlakes(
   store: Store,
@@ -470,7 +484,7 @@ function flagFlakes(
   wt: Tree,
   finished: VerificationRun,
   checks: VerificationCheck[],
-): void {
+): boolean {
   const artifactDir = jobArtifactDir(id, store.paths);
   const failure = (cs: VerificationCheck[]) => {
     const c = cs.find((x) => x.required && x.status !== 'passed' && x.status !== 'pending');
@@ -505,16 +519,41 @@ function flagFlakes(
   if (finished.status === 'failed') {
     const f = failure(checks);
     const changed = wt.changes.map((c) => c.path);
-    if (!unchangedFile(f.tests, f.cwd, changed)) return;
+    if (!unchangedFile(f.tests, f.cwd, changed)) return false;
     const file = normalisePath(f.cwd, f.tests[0]?.file ?? '') ?? '';
-    flag(finished, f, 'unchanged-file', `the job did not change ${file}`);
-    return;
+    const key = flakeKey(f);
+    const others = [...currentFlakes(store)]
+      .filter(([j, x]) => j !== id && flakeKey(x) === key)
+      .map(([j]) => j);
+    const shared = others.length
+      ? `; the same test also failed in ${others.join(', ')}, likely machine-wide`
+      : '';
+    flag(finished, f, 'unchanged-file', `the job did not change ${file}${shared}`);
+    return true;
   }
   for (const r of listRuns(store.db, id)) {
     if (!passedOnRerun(r, finished)) continue;
     const why = `run ${String(finished.id)} passed at the same tree`;
     flag(r, failure(listChecks(store.db, r.id)), 'passed-on-rerun', why);
   }
+  return false;
+}
+
+/**
+ * Every unfinished job's shown flag (none once a newer run passed), with `sharedWith` filled
+ * across jobs so one test failing in several jobs reads as one machine-wide cause.
+ */
+export function currentFlakes(store: Store): Map<string, Flake> {
+  const live = listJobs(store.db).filter((j) => !TERMINAL_STATUSES.includes(j.status));
+  const ids = live.map((j) => j.id);
+  const flags = latestEventsByJob(store.db, ids, [FLAKY_EVENT]);
+  const passed = latestRunsByJob(store.db, ids, 'passed');
+  const out = new Map<string, Flake>();
+  for (const j of live) {
+    const view = flakeView(j, flags.get(j.id)?.get(FLAKY_EVENT), passed.get(j.id)?.id ?? null);
+    if (view) out.set(j.id, view);
+  }
+  return shareFlakes(out);
 }
 
 /** Read-only view for `orch verify show` and the plan. */

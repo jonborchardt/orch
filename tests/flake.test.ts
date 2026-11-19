@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  type Flake,
+  flakeLabel,
   flakeReason,
   flakeView,
+  integrateFirst,
   normalisePath,
   parseFailures,
   passedOnRerun,
+  shareFlakes,
   unchangedFile,
 } from '../src/core/flake.ts';
 import type { Event } from '../src/storage/schema.ts';
@@ -151,7 +155,12 @@ describe('flakeReason and flakeView', () => {
       rule: 'passed-on-rerun',
       reason: 'r',
       at: '2026-11-18T00:00:00.000Z',
+      sharedWith: [],
     });
+    // Dismissed once a newer run passed; an older pass does not dismiss it.
+    expect(flakeView({ status: 'running' }, e, 4)).toBeNull();
+    expect(flakeView({ status: 'running' }, e, 3)?.runId).toBe(3);
+    expect(flakeView({ status: 'running' }, e, 2)?.runId).toBe(3);
     expect(flakeView({ status: 'running' }, undefined)).toBeNull();
     expect(flakeView({ status: 'completed' }, e)).toBeNull();
     expect(flakeView({ status: 'cancelled' }, e)).toBeNull();
@@ -161,5 +170,59 @@ describe('flakeReason and flakeView', () => {
     }));
     const view = flakeView({ status: 'running' }, { ...e, payload: { ...e.payload, tests: many } });
     expect(view?.tests).toEqual(many.slice(0, 5));
+  });
+});
+
+const flag = (over: Partial<Flake> = {}): Flake => ({
+  runId: 7,
+  head: 'h1',
+  check: 'check',
+  tests: [{ file: 'web/src/App.test.tsx', name: REFRESHING }],
+  rule: 'unchanged-file',
+  reason: 'r',
+  at: '2026-11-19T00:00:00.000Z',
+  sharedWith: [],
+  ...over,
+});
+
+describe('integrateFirst', () => {
+  const latest = { id: 7, status: 'failed', head: 'h1' };
+  it('fires for an unchanged-file flag on the latest failed run at HEAD with a moved base', () => {
+    expect(integrateFirst(flag(), latest, 'h1', 2)).toBe(true);
+  });
+  it('does not fire otherwise', () => {
+    expect(integrateFirst(flag(), latest, 'h1', 0)).toBe(false);
+    expect(integrateFirst(flag(), latest, 'h1', null)).toBe(false);
+    expect(integrateFirst(null, latest, 'h1', 2)).toBe(false);
+    expect(integrateFirst(flag({ rule: 'passed-on-rerun' }), latest, 'h1', 2)).toBe(false);
+    expect(integrateFirst(flag(), { ...latest, id: 8 }, 'h1', 2)).toBe(false);
+    expect(integrateFirst(flag(), { ...latest, status: 'passed' }, 'h1', 2)).toBe(false);
+    expect(integrateFirst(flag(), latest, 'h2', 2)).toBe(false);
+    expect(integrateFirst(flag(), undefined, 'h1', 2)).toBe(false);
+  });
+});
+
+describe('shareFlakes and flakeLabel', () => {
+  it('names the other jobs whose flag names the same first test', () => {
+    const out = shareFlakes(
+      new Map([
+        ['job-a', flag()],
+        ['job-b', flag({ reason: 'b' })],
+        ['job-c', flag({ tests: [{ file: 'web/src/App.test.tsx', name: 'other' }] })],
+        ['job-d', flag({ tests: [] })],
+      ]),
+    );
+    expect([...out].map(([id, f]) => [id, f.sharedWith])).toEqual([
+      ['job-a', ['job-b']],
+      ['job-b', ['job-a']],
+      ['job-c', []],
+      ['job-d', []],
+    ]);
+    expect(flakeLabel(out.get('job-a') ?? flag())).toBe(
+      'likely machine-wide flaky test (also failing in job-b): r',
+    );
+    expect(flakeLabel(out.get('job-c') ?? flag({ sharedWith: ['x'] }))).toBe(
+      'likely flaky test: r',
+    );
   });
 });
