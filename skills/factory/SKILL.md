@@ -48,17 +48,21 @@ orch doctor
 `orch` must be on PATH (the user ran `npm link` in the orchestrator repo) and Git must be OK.
 `gh` is needed only for the final stage. If `orch` is missing, stop and say how to install it.
 
-Pick a session name once and reuse it for the whole job: `claude-<YYYYMMDD-HHMM>-<4 hex>`.
+Do not make up a session name. The first `orch factory start`, `resume`, `dispatch`, or `cancel`
+of this conversation runs without `--session` (shown as `[--session <s>]` below): `orch` generates
+a unique id and returns it as `session` in the output. Capture that `session` as `<s>` and pass
+`--session <s>` on every later command, for this job and any other this conversation touches. A
+later call without it gets a new id, and a resume under a new id against your own live lease exits 4.
 
 ## 1. Parse the argument
 
-| Argument                        | Action                                                                   |
-| ------------------------------- | ------------------------------------------------------------------------ |
-| `status <job-id>`               | `orch factory status <id> --json`; summarize; stop.                      |
-| `resume <job-id>` or `<job-id>` | `orch factory resume <id> --session <s> --json`; go to step 3            |
-| `cancel <job-id>`               | `orch factory cancel <id> --reason "<why>" --session <s> --json`; report |
-| `dispatch <targets>`            | step 2b: one job per target, each in its own session                     |
-| anything else (a request)       | step 2                                                                   |
+| Argument                        | Action                                                                     |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `status <job-id>`               | `orch factory status <id> --json`; summarize; stop.                        |
+| `resume <job-id>` or `<job-id>` | `orch factory resume <id> [--session <s>] --json`; go to step 3            |
+| `cancel <job-id>`               | `orch factory cancel <id> --reason "<why>" [--session <s>] --json`; report |
+| `dispatch <targets>`            | step 2b: one job per target, each in its own session                       |
+| anything else (a request)       | step 2                                                                     |
 
 Job ids look like `job-1a2b3c4d`.
 
@@ -69,15 +73,15 @@ if the session is not inside a Git repository, stop and ask the user to open one
 
 ```sh
 orch factory start --title "<concise title>" --description "<the user's request, verbatim>" \
-  --session <s> --json
+  [--session <s>] --json
 ```
 
 A job needs its request: `--description` is required unless `--issue <#N|url>` is given, and a
 missing or blank description is refused (exit 2, nothing created). Use `--issue` when the request
 names an issue (the title is fetched when `--title` is omitted, the description, the issue's URL
 and body, when `--description` is omitted); `--base <branch>` if the target branch is not the
-current one. The output contains `token` (keep it; it is the only credential for this job),
-`job.worktreePath`, `job.branch`, and `plan`. Tell the user the job id, worktree, and branch in one line, then continue.
+current one. The output contains `session` (keep it as `<s>`), `token` (keep it; it is the only
+credential for this job), `job.worktreePath`, `job.branch`, and `plan`. Tell the user the job id, worktree, and branch in one line, then continue.
 
 ## 2b. Dispatch jobs to other repositories, or several at once
 
@@ -92,7 +96,7 @@ For each target, in order, continuing with the next target when one fails:
    repository") and prepare the job:
 
    ```sh
-   orch factory dispatch --repo <path> --issue <#N|url> [--title <t>] [--description <d>] [--base <b>] --session <s> --json
+   orch factory dispatch --repo <path> --issue <#N|url> [--title <t>] [--description <d>] [--base <b>] [--session <s>] --json
    ```
 
    Without an issue, pass `--title <t> --description "<the request for that target, verbatim>"`

@@ -1,5 +1,6 @@
 /** `orch factory ...` handlers: the skill-facing commands. */
 import { UsageError } from '../core/errors.ts';
+import { newSessionId } from '../core/ownership.ts';
 import { type Stage, STAGES } from '../core/workflow.ts';
 import { cancelJob } from '../ops/actions.ts';
 import { dispatchJob, listFactory } from '../ops/dispatch.ts';
@@ -34,12 +35,12 @@ export interface FactoryOptions {
 export const FACTORY_HELP = `Usage: orch factory <command> [options]
 
   start   (--title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>])
-          [--repo <path>] [--base <branch>] [--max-rounds <n>] --session <name> [--ui|--no-ui]
+          [--repo <path>] [--base <branch>] [--max-rounds <n>] [--session <name>] [--ui|--no-ui]
                               Create, claim, and give a worktree to a new job; print the plan + token.
                               A job needs a non-blank description: --description, or one fetched
                               from --issue (its URL and body) when --description is omitted
   dispatch (--title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>])
-          [--repo <path>] [--base <branch>] [--max-rounds <n>] --session <name>
+          [--repo <path>] [--base <branch>] [--max-rounds <n>] [--session <name>]
                               Create a job for another (or this) repository that an independent
                               session will run; print what that session needs (workspace, prompt).
                               Refused unless the repository's factory.json is ready. Nothing is
@@ -49,18 +50,20 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
                               PR, age, title; --json adds owner, session, resume command
   next <id> [--ui|--no-ui]    What to do now (read-only): step, agents (with models), artifacts,
                               exact commands. status <id> is an alias of next with the same options
-  resume <id> --session <name> [--to <stage>] [--force] [--ui|--no-ui] [--adopt <worktree>]
+  resume <id> [--session <name>] [--to <stage>] [--force] [--ui|--no-ui] [--adopt <worktree>]
                               Adopt an interrupted or orphaned job from persisted state; --adopt
                               records an existing worktree of the repository (the one this session
                               runs in) when the job has none yet
-  cancel <id> --reason <r> --session <name> [--force]
+  cancel <id> --reason <r> [--session <name>] [--force]
                               Cancel the job in one short episode as this session; exit 4 when
                               another session holds a live lease, unless --force takes it over
   check-readonly <id> --fingerprint <f>
                               Exit 1 if the worktree changed since the plan was taken
   config                      Effective role -> model configuration and its file location
 
---session defaults to $ORCH_SESSION. The plan's commands carry --token <token> explicitly.
+--session defaults to $ORCH_SESSION, else to a newly generated unique id. start, dispatch, resume,
+and cancel print the session they ran as; pass it back as --session on later commands.
+The plan's commands carry --token <token> explicitly.
 `;
 
 export function runFactory(
@@ -70,61 +73,75 @@ export function runFactory(
   env = process.env,
 ): unknown {
   const [cmd, id] = args;
-  const session = o.session ?? env['ORCH_SESSION'];
+  // An empty --session or $ORCH_SESSION counts as absent.
+  const given = [o.session, env['ORCH_SESSION']].find((s) => s !== undefined && s !== '');
   const ui = o.ui ? true : o['no-ui'] ? false : undefined;
   const needId = () => need(id, '<job-id>', FACTORY_HELP);
   const needSession = (): string => {
-    if (!session) throw new UsageError('Missing required --session <name> (or $ORCH_SESSION)');
-    if (!/^[\w.:-]{1,64}$/.test(session)) {
+    if (!given) return newSessionId();
+    if (!/^[\w.:-]{1,64}$/.test(given)) {
       throw new UsageError('--session may contain letters, digits, . _ : - (max 64)');
     }
-    return session;
+    return given;
   };
   const maxRounds = () => int(o['max-rounds'], '--max-rounds', 1);
   switch (cmd) {
-    case 'start':
-      return startJob(store, {
+    // start, dispatch, resume, and cancel return the session they ran as, so a caller that let it
+    // be generated can pass it back on later commands.
+    case 'start': {
+      const session = needSession();
+      const started = startJob(store, {
         title: o.title,
         description: o.description,
         issue: o.issue,
         repo: o.repo,
         base: o.base,
         maxRounds: maxRounds(),
-        session: needSession(),
+        session,
         cwd: process.cwd(),
         ui,
       });
-    case 'dispatch':
+      return { session, ...started };
+    }
+    case 'dispatch': {
       if (!o.title && !o.issue) throw new UsageError('dispatch needs --title <t> or --issue <ref>');
-      return dispatchJob(store, {
+      const session = needSession();
+      const dispatched = dispatchJob(store, {
         title: o.title,
         description: o.description,
         issue: o.issue,
         repo: o.repo,
         base: o.base,
         maxRounds: maxRounds(),
-        session: needSession(),
+        session,
         cwd: process.cwd(),
       });
+      return { session, ...dispatched };
+    }
     case 'list':
       return listFactory(store, { repo: o.repo });
     case 'next':
     case 'status':
       return planJob(store, needId(), { ui });
-    case 'resume':
-      return resumeFactoryJob(store, needId(), {
-        session: needSession(),
+    case 'resume': {
+      const jobId = needId();
+      const session = needSession();
+      const resumed = resumeFactoryJob(store, jobId, {
+        session,
         to: oneOf<Stage>(o.to, STAGES, '--to'),
         force: o.force,
         ui,
         adopt: o.adopt,
       });
+      return { session, ...resumed };
+    }
     case 'cancel': {
       const jobId = needId();
       if (o.reason === undefined || o.reason.trim() === '') {
         throw new UsageError('cancel needs --reason "<why>"; it is recorded with the job');
       }
-      return cancelJob(store, jobId, { session: needSession(), reason: o.reason, force: o.force });
+      const session = needSession();
+      return { session, ...cancelJob(store, jobId, { session, reason: o.reason, force: o.force }) };
     }
     case 'check-readonly':
       return checkReadonly(store, needId(), need(o.fingerprint, '--fingerprint <f>'));

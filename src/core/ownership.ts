@@ -56,3 +56,8 @@ export function assertOwner(job: Lease, token: string | undefined): void {
 export function newToken(): string {
   return randomBytes(16).toString('hex');
 }
+
+/** An owner session name for a caller that gave none: a label, not a credential (the token is). */
+export function newSessionId(): string {
+  return `orch-${randomBytes(8).toString('hex')}`;
+}

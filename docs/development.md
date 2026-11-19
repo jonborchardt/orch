@@ -197,14 +197,14 @@ orch verify show <id>                  # latest run and validity for HEAD
 orch mail report "<subject>" (--text "<body>" | --text-file <f>) [--reply-to <message-id>]   # to MAIL_TO; no database
 
 orch factory start  --title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>]
-                    [--repo <path>] [--base <b>] [--max-rounds <n>] --session <name> [--ui|--no-ui]
+                    [--repo <path>] [--base <b>] [--max-rounds <n>] [--session <name>] [--ui|--no-ui]
 orch factory dispatch --title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>]
                     [--repo <path>] [--base <b>]
-                    [--max-rounds <n>] --session <name>   # job for another repo; an independent session runs it
+                    [--max-rounds <n>] [--session <name>]   # job for another repo; an independent session runs it
 orch factory list   [--repo <path|identity>]              # one row per job: stage, status, action, PR, title
 orch factory next|status <id> [--ui|--no-ui]          # where, what blocks, next step, numbered commands; --json for the full plan
-orch factory resume <id> --session <name> [--to <stage>] [--force] [--adopt <worktree>]
-orch factory cancel <id> --reason <r> --session <name> [--force]   # exit 4 if another session holds a live lease
+orch factory resume <id> [--session <name>] [--to <stage>] [--force] [--adopt <worktree>]
+orch factory cancel <id> --reason <r> [--session <name>] [--force]   # exit 4 if another session holds a live lease
 orch factory check-readonly <id> --fingerprint <f>
 orch factory config
 orch job session attach <id> --provider vscode-agents|claude-code --ref <link|uuid> [--cwd <dir>] [--token <t>]

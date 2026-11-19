@@ -146,7 +146,7 @@ describe('orch factory cancel (CLI)', () => {
   const run = (args: string[]) => orch(store.home, store.home, args);
 
   it('is listed in orch factory --help', () => {
-    expect(FACTORY_HELP).toContain('cancel <id> --reason <r> --session <name> [--force]');
+    expect(FACTORY_HELP).toContain('cancel <id> --reason <r> [--session <name>] [--force]');
   });
 
   it('cancels as the session and prints the job without its token', () => {
@@ -171,7 +171,7 @@ describe('orch factory cancel (CLI)', () => {
       ['factory', 'cancel', id, '--session', 's1'],
       ['factory', 'cancel', id, '--reason', '  ', '--session', 's1'],
       ['factory', 'cancel', '--reason', 'why', '--session', 's1'],
-      ['factory', 'cancel', id, '--reason', 'why'],
+      ['factory', 'cancel', id, '--reason', 'why', '--session', 'bad session!'],
     ]) {
       expect(run(args).code, args.join(' ')).toBe(2);
     }
