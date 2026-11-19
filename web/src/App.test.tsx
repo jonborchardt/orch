@@ -588,6 +588,31 @@ describe('App board', () => {
     expect(screen.getByText('Delta cancelled')).toBeInTheDocument();
   });
 
+  it('renders Filter, Repository, and Show only on the board, keeping their values', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter' }), {
+      target: { value: 'delta' },
+    });
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'cancelled (1)' }));
+    window.location.hash = '#/jobs/job-00000003';
+    fireEvent(window, new HashChangeEvent('hashchange'));
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByRole('searchbox', { name: 'Filter' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Repository' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Show' })).not.toBeInTheDocument();
+    // The summary chips stay on every route.
+    expect(screen.getByLabelText('Summary')).toBeInTheDocument();
+    window.location.hash = '#/';
+    fireEvent(window, new HashChangeEvent('hashchange'));
+    expect(await screen.findByRole('searchbox', { name: 'Filter' })).toHaveValue('delta');
+    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent('cancelled (1)');
+    expect(screen.getByRole('combobox', { name: 'Repository' })).toBeInTheDocument();
+    expect(await screen.findByText('Delta cancelled')).toBeInTheDocument();
+  });
+
   it('refreshes while state changes underneath it', async () => {
     const f = mockFetch();
     mount();
