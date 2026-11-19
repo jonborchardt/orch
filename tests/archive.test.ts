@@ -184,6 +184,24 @@ describe('allowedActions', () => {
     }
   });
 
+  it('offers fix-conflicts only in approve or pr, unfinished, with conflicting files', () => {
+    const files = ['src/app.ts'];
+    for (const stage of ['approve', 'pr'] as const) {
+      const job = { ...base, stage, status: 'pending' as const };
+      expect(allowedActions(job, false, null, files)).toContain('fix-conflicts');
+      expect(allowedActions(job, false, null, [])).not.toContain('fix-conflicts');
+      expect(allowedActions(job, false, null, null)).not.toContain('fix-conflicts');
+      expect(allowedActions({ ...job, status: 'completed' }, false, null, files)).not.toContain(
+        'fix-conflicts',
+      );
+    }
+    for (const stage of ['spec', 'build', 'review', 'ci', 'needs-human'] as const) {
+      expect(
+        allowedActions({ ...base, stage, status: 'pending' }, false, null, files),
+      ).not.toContain('fix-conflicts');
+    }
+  });
+
   it('never offers either for a non-terminal job', () => {
     for (const status of ['pending', 'running', 'blocked', 'interrupted', 'failed'] as const) {
       const out = allowedActions({ ...base, status }, false);

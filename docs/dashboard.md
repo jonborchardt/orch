@@ -199,19 +199,25 @@ still requested changes at the last allowed round, which is where the workflow i
 back to `build`; for interruptions, verification failures, and unclassified escalations every
 control stays neutral, since the right transition is a human call.
 
-| Action                     | Allowed when                                                                                                                       | Effect                                                 |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `Resume at <stage>`        | stage `needs-human`                                                                                                                | `resume --to <stage>` (default: where it came from)    |
-| Request review round       | round ≥ 1, not finished                                                                                                            | `escalate` + `resume --to review` (opens a new round)  |
-| Request rework             | not finished                                                                                                                       | `escalate` + `resume --to build`                       |
-| Accept verification policy | worktree `factory.json` differs                                                                                                    | snapshot it as the job's policy (`jobs.policy`)        |
-| Accept delivery            | `needs-human` from `ci`, PR head observed, and GitHub reported no checks at all or the PR was merged by hand; a reason is required | `resume --to completed`, recorded as a human close-out |
-| Cancel job                 | not finished                                                                                                                       | `cancel`                                               |
-| Archive                    | status `completed` or `cancelled`, not archived                                                                                    | sets `jobs.archivedAt`; event `job.archived`           |
-| Unarchive                  | status `completed` or `cancelled`, archived                                                                                        | clears `jobs.archivedAt`; event `job.unarchived`       |
-| Merge                      | completed on GitHub's verdict, `prState` `ready`, `ciStatus` `passing`, `ciHead` set                                               | `gh pr merge --merge --match-head-commit <ciHead>`     |
-| Refresh PR                 | PR recorded and not merged; the job is finished or in `needs-human`                                                                | re-reads the PR; records `prState` (`pr.observed`)     |
-| Remove worktree            | status `completed` or `cancelled`, `prState` `merged`, worktree recorded                                                           | `orch worktree remove`: refused if dirty; branch kept  |
+| Action                     | Allowed when                                                                                                                               | Effect                                                                        |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `Resume at <stage>`        | stage `needs-human`                                                                                                                        | `resume --to <stage>` (default: where it came from)                           |
+| Request review round       | round ≥ 1, not finished                                                                                                                    | `escalate` + `resume --to review` (opens a new round)                         |
+| Request rework             | not finished                                                                                                                               | `escalate` + `resume --to build`                                              |
+| Accept verification policy | worktree `factory.json` differs                                                                                                            | snapshot it as the job's policy (`jobs.policy`)                               |
+| Accept delivery            | `needs-human` from `ci`, PR head observed, and GitHub reported no checks at all or the PR was merged by hand; a reason is required         | `resume --to completed`, recorded as a human close-out                        |
+| Cancel job                 | not finished                                                                                                                               | `cancel`                                                                      |
+| Archive                    | status `completed` or `cancelled`, not archived                                                                                            | sets `jobs.archivedAt`; event `job.archived`                                  |
+| Unarchive                  | status `completed` or `cancelled`, archived                                                                                                | clears `jobs.archivedAt`; event `job.unarchived`                              |
+| Merge                      | completed on GitHub's verdict, `prState` `ready`, `ciStatus` `passing`, `ciHead` set                                                       | `gh pr merge --merge --match-head-commit <ciHead>`                            |
+| Refresh PR                 | PR recorded and not merged; the job is finished or in `needs-human`                                                                        | re-reads the PR; records `prState` (`pr.observed`)                            |
+| Remove worktree            | status `completed` or `cancelled`, `prState` `merged`, worktree recorded                                                                   | `orch worktree remove`: refused if dirty; branch kept                         |
+| Fix merge conflicts        | stage `approve` or `pr`, not finished, worktree behind its base, and `git merge-tree` against the local base ref reports conflicting files | `orch worktree integrate`: conflict aborted and recorded, `rework` to `build` |
+
+**Fix merge conflicts** integrates the base as the `dashboard` session; a conflicting merge is
+aborted and recorded and the job goes back to `build` as pending, where a resumed builder resolves
+it. orch resolves nothing and starts no session; a merge that came out clean after the fetch needs
+fresh verification instead (`docs/decisions/2026-11-19-dashboard-fixes-base-conflicts-as-rework.md`).
 
 Accept delivery is the only control that completes a job by hand. It is listed by the same rule the
 transition applies (`cannotAcceptDelivery` in `src/core/workflow.ts`), so it never appears while

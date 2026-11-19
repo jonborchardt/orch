@@ -6,6 +6,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { MergeConflictError, ToolError } from '../core/errors.ts';
+import { spawnTool } from '../core/exec.ts';
 import { canonicalPath } from '../core/paths.ts';
 import { baseRef, commonGitDir, dirtyFiles, refExists } from './repo.ts';
 import { git, tryGit } from './run.ts';
@@ -274,6 +275,22 @@ export function mergeInto(path: string, ref: string): MergeResult {
   }
   const after = git(path, 'rev-parse', 'HEAD');
   return { merged: after !== before, upToDate: after === before, head: after };
+}
+
+/**
+ * Files that would conflict if `ref` were merged into the worktree's HEAD, or [] for a clean
+ * merge. Read-only: `git merge-tree --write-tree` (Git 2.38+) touches no worktree, index, or ref;
+ * it only adds unreferenced objects. Exit 1 means conflicts; anything else non-zero is an error.
+ */
+export function mergeConflicts(path: string, ref: string): string[] {
+  const args = ['merge-tree', '--write-tree', '--name-only', '--no-messages', 'HEAD', ref];
+  const r = spawnTool('git', args, { cwd: path });
+  if (r.status === 0) return [];
+  if (r.status !== 1) {
+    throw new ToolError(`git merge-tree failed in ${path}: ${(r.stderr || r.stdout).trim()}`);
+  }
+  // First line is the tree id; the conflicted paths follow.
+  return [...new Set(r.stdout.split(/\r?\n/).slice(1).filter(Boolean))];
 }
 
 /** Commits reachable from `ref` and merged into the base. */

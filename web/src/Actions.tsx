@@ -31,6 +31,7 @@ const LABEL: Record<DashboardAction, string> = {
   merge: 'Merge the PR',
   'refresh-pr': 'Refresh the PR state from GitHub',
   'remove-worktree': 'Remove the worktree (the branch is kept)',
+  'fix-conflicts': 'Fix merge conflicts with the base',
 };
 
 const STAGES = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci'] as const;
@@ -78,6 +79,8 @@ function effect(a: DashboardAction, d: JobDetailView, to: string): string {
       return 'Hides the job from the board unless Show is set to archived.';
     case 'unarchive':
       return 'Puts the job back in the board views.';
+    case 'fix-conflicts':
+      return `Merges ${d.plan?.worktree?.baseRef ?? 'the base'} into the branch. It conflicts in ${(d.conflicts ?? []).join(', ')}, so the merge is aborted and recorded, and the job returns to build as pending for the builder to resolve them. No session is started; resume the job from a Claude Code session.`;
     case 'refresh-pr':
       return '';
   }
@@ -216,6 +219,19 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
               }}
             >
               {resumeAt(resumeStage)}
+            </Button>,
+          )}
+        {allowed.has('fix-conflicts') &&
+          tip(
+            'fix-conflicts',
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={() => {
+                start('fix-conflicts');
+              }}
+            >
+              Fix merge conflicts
             </Button>,
           )}
         {allowed.has('request-rework') &&
@@ -428,22 +444,29 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                     ))}
                   </TextField>
                 )}
-                <TextField
-                  label={
-                    open === 'accept-delivery'
-                      ? 'Reason (required; recorded as the human close-out)'
-                      : "Reason (recorded in the job's events)"
-                  }
-                  required={open === 'accept-delivery'}
-                  value={reason}
-                  onChange={(e) => {
-                    setReason(e.target.value);
-                  }}
-                  multiline
-                  minRows={2}
-                  slotProps={{ htmlInput: { maxLength: 500 } }}
-                  autoFocus
-                />
+                {open === 'fix-conflicts' && (
+                  <Typography data-testid="fix-conflicts-files">
+                    Conflicting files: <code>{(detail.conflicts ?? []).join(', ')}</code>
+                  </Typography>
+                )}
+                {open !== 'fix-conflicts' && (
+                  <TextField
+                    label={
+                      open === 'accept-delivery'
+                        ? 'Reason (required; recorded as the human close-out)'
+                        : "Reason (recorded in the job's events)"
+                    }
+                    required={open === 'accept-delivery'}
+                    value={reason}
+                    onChange={(e) => {
+                      setReason(e.target.value);
+                    }}
+                    multiline
+                    minRows={2}
+                    slotProps={{ htmlInput: { maxLength: 500 } }}
+                    autoFocus
+                  />
+                )}
                 {liveOwner && (
                   <FormControlLabel
                     control={

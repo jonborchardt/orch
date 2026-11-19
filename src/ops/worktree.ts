@@ -7,11 +7,13 @@ import { resolve, sep } from 'node:path';
 
 import { MergeConflictError, ValidationError } from '../core/errors.ts';
 import { canonicalPath, jobWorktreeDir } from '../core/paths.ts';
+import { TERMINAL_STATUSES } from '../core/workflow.ts';
 import { baseRef, remoteExists } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
 import {
   addWorktree,
   inspectWorktree,
+  mergeConflicts,
   mergeEdits,
   mergeInto,
   pruneWorktrees,
@@ -222,8 +224,24 @@ export interface IntegrateResult extends WorktreeResult {
 }
 
 /** Stages where a conflicting or materially edited base merge sends the job back to build. */
-function reworksOnIntegration(stage: string): boolean {
+export function reworksOnIntegration(stage: string): boolean {
   return stage === 'approve' || stage === 'pr';
+}
+
+/**
+ * Files that conflict between the job's branch and its local base ref (no fetch), or null when
+ * that question does not apply: a finished job, a stage where integration does not rework, no
+ * usable worktree, not behind, or a probe error. `tree` is the already-inspected worktree, if any.
+ */
+export function baseConflicts(job: Job, tree?: WorktreeInfo | null): string[] | null {
+  if (TERMINAL_STATUSES.includes(job.status) || !reworksOnIntegration(job.stage)) return null;
+  try {
+    const t = tree === undefined ? worktreeOf(job) : tree;
+    if (!t?.head || !t.baseRef || !t.behind) return null;
+    return mergeConflicts(t.path, t.baseRef);
+  } catch {
+    return null;
+  }
 }
 
 function mergeOutcome(wt: string, fromHead: string, resultHead: string) {

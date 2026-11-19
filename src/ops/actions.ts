@@ -34,7 +34,7 @@ import { authorizePolicy } from '../storage/verification.ts';
 import { ghCwd } from './github.ts';
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
-import { dropWorktree } from './worktree.ts';
+import { baseConflicts, dropWorktree, integrateBase, reworksOnIntegration } from './worktree.ts';
 
 export const DASHBOARD_ACTIONS = [
   'approve',
@@ -48,6 +48,7 @@ export const DASHBOARD_ACTIONS = [
   'merge',
   'refresh-pr',
   'remove-worktree',
+  'fix-conflicts',
 ] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 export const DASHBOARD_SESSION = 'dashboard';
@@ -88,6 +89,8 @@ export function allowedActions(
   >,
   policyDrift: boolean,
   completion: Completion = null,
+  /** `baseConflicts` for the job: files its branch conflicts in with the base, or null. */
+  conflicts: string[] | null = null,
 ): DashboardAction[] {
   const pr: DashboardAction[] = [];
   if (cannotMerge(job, completion) === null) pr.push('merge');
@@ -100,6 +103,7 @@ export function allowedActions(
   }
   const out: DashboardAction[] = [...pr];
   if (job.stage === 'needs-human') out.push('approve');
+  if (reworksOnIntegration(job.stage) && (conflicts?.length ?? 0) > 0) out.push('fix-conflicts');
   if (job.round > 0) out.push('request-review');
   out.push('request-rework');
   if (policyDrift) out.push('accept-policy');
@@ -339,6 +343,47 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
   return { job: withoutToken(getJob(store.db, before.id)), message };
 }
 
+/**
+ * Integrate the base into a job whose branch conflicts with it (approve and pr stages only). A
+ * conflicting merge is aborted and recorded, and the job goes back to build for the builder to
+ * resolve; orch resolves nothing and starts no session.
+ */
+function fixConflicts(store: Store, before: Job, force: boolean | undefined): ActionResult {
+  const files = baseConflicts(before);
+  if (!files || files.length === 0) {
+    throw new ValidationError(
+      'No merge conflicts with the base to fix: only a job in approve or pr whose branch is ' +
+        'behind its base and conflicts with it qualifies.',
+    );
+  }
+  const r = withLease(store, before, DASHBOARD_SESSION, force, (token) =>
+    integrateBase(store, before.id, { token }),
+  );
+  const job = getJob(store.db, before.id);
+  const resume = `orch factory resume ${before.id} --session <name>`;
+  const ref = r.integration.baseRef;
+  const conflicts = r.integration.conflicts ?? [];
+  let message: string;
+  if (r.integration.status === 'conflict') {
+    message =
+      `Merging ${ref} conflicts in ${conflicts.join(', ') || 'unknown files'}: the merge was aborted ` +
+      `and the job returned to ${job.stage} (pending) so the builder resolves them.`;
+  } else if (r.next === 'rework') {
+    message = `Merged ${ref}, but the merge needs the builder: the job returned to ${job.stage} (pending).`;
+  } else if (r.integration.status === 'up-to-date') {
+    message = `Nothing to merge: the branch already contains ${ref}.`;
+  } else {
+    message =
+      `Merged ${ref} cleanly at ${r.merge.head.slice(0, 7)} (the base changed since the check); ` +
+      'the merge needs fresh verification.';
+  }
+  return {
+    job: withoutToken(job),
+    message: `${message} No session is running it; resume it from a Claude Code session with: ${resume}`,
+    resumeCommand: resume,
+  };
+}
+
 export function dashboardAction(store: Store, id: string, input: ActionInput): ActionResult {
   const before = getJob(store.db, id);
   if (input.action === 'merge' || input.action === 'refresh-pr') {
@@ -377,6 +422,7 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   if (TERMINAL_STATUSES.includes(before.status)) {
     throw new ValidationError(`Job is already ${before.status}.`);
   }
+  if (input.action === 'fix-conflicts') return fixConflicts(store, before, input.force);
   if (input.action === 'approve' && before.stage !== 'needs-human') {
     throw new ValidationError('Only a job waiting in needs-human can be approved from here.');
   }

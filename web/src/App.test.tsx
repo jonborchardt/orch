@@ -210,6 +210,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     timeline: { entries: [], truncated: false },
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
+    conflicts: null,
     links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null },
     session: null,
     resume: { command: '/factory resume job-00000003', heldBy: null },
@@ -2365,6 +2366,43 @@ describe('PR phase, Merge, and Refresh PR', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Removed the worktree');
     });
     expect(posts(f)).toEqual([{ action: 'remove-worktree', force: true }]);
+  });
+
+  it('Fix merge conflicts shows only when listed and its confirm names the files', async () => {
+    const f = mockFetch();
+    data.detail = detail({ actions: ['request-rework', 'cancel'] });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByRole('button', { name: 'Fix merge conflicts' })).not.toBeInTheDocument();
+    cleanup();
+
+    const job = { ...detail().job, stage: 'approve' as const, status: 'pending' as const };
+    data.detail = detail({
+      job,
+      actions: ['fix-conflicts', 'request-rework', 'cancel'],
+      conflicts: ['src/app.ts', 'README.md'],
+    });
+    data.actionBody = {
+      job: { ...job, stage: 'build' },
+      message: 'Merging origin/main conflicts in src/app.ts, README.md: the job returned to build.',
+      resumeCommand: 'orch factory resume job-00000003 --session <name>',
+    };
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('button', { name: 'Fix merge conflicts' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByTestId('fix-conflicts-files')).toHaveTextContent(
+      'src/app.ts, README.md',
+    );
+    const effect = within(dialog).getByTestId('action-effect');
+    expect(effect).toHaveTextContent('returns to build');
+    expect(effect).toHaveTextContent('No session is started');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('returned to build');
+    });
+    expect(posts(f)).toEqual([{ action: 'fix-conflicts' }]);
   });
 
   it('Refresh PR posts at once and shows a refused merge error', async () => {

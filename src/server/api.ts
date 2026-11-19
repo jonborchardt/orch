@@ -20,6 +20,7 @@ import {
 import { planJob } from '../ops/factory.ts';
 import { mergeView } from '../ops/merge-view.ts';
 import { currentFlakes } from '../ops/verify.ts';
+import { baseConflicts } from '../ops/worktree.ts';
 import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob, listEvents } from '../storage/events.ts';
@@ -238,6 +239,7 @@ export function detail(store: Store, id: string): JobDetailView {
   };
   // Without a readable worktree HEAD there is nothing to compare the verdict against.
   const ci = ciView(job, evidence.events, plan?.worktree?.head ?? undefined);
+  const conflicts = baseConflicts(job, plan?.worktree ?? null);
   return {
     job: safeJob(job),
     liveness: state,
@@ -258,7 +260,9 @@ export function detail(store: Store, id: string): JobDetailView {
       job,
       plan?.verification?.policy.authorization === 'required',
       ci.completion,
+      conflicts,
     ),
+    conflicts,
     links: {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,
       checkout: vscodeLink(job.repoPath),
