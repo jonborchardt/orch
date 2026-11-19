@@ -15,7 +15,11 @@ ORCH_HOME=/tmp/demo npm run ui:seed && ORCH_HOME=/tmp/demo orch ui   # represent
 ```
 
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
-worktree, review round, reviews, elapsed time, last update, PR link and CI rollup. When the rows
+worktree, review round, reviews, elapsed time, last update, PR link and CI rollup. Elapsed is
+wall-clock time from job creation until it completed or was cancelled (until now while active),
+blocked and waiting time included; a finished job's value stops at its terminal transition
+(`completedAt`, else its newest `job.completed` / `job.cancelled` event) and shows `Unknown` when
+neither is recorded, and a span under a second shows `<1s`. When the rows
 shown come from more than one repository, the caption under each title adds a short repository
 label after the id (the identity's last segment, or a longer trailing path such as `acme/alpha`
 when two repositories share a basename; hovering it shows the full identity), whether or not the
