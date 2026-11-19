@@ -19,6 +19,7 @@ import {
   withoutToken,
 } from '../ops/actions.ts';
 import { planJob } from '../ops/factory.ts';
+import { mergeView } from '../ops/merge-view.ts';
 import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob, listEvents } from '../storage/events.ts';
@@ -252,6 +253,7 @@ export function detail(store: Store, id: string): JobDetailView {
     resume: resumeOf(job, state),
     resumeCommand: `orch factory resume ${id} --session <name>`,
     supersedes: predecessorsOf(store.db, id).map((j) => j.id),
+    merge: mergeView(store, job, plan?.worktree ?? null),
   };
 }
 

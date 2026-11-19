@@ -214,6 +214,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
     supersedes: [],
     flake: null,
+    merge: null,
     ...over,
   };
 }
@@ -2451,6 +2452,145 @@ describe('Board attention order, summary chips, review rollup', () => {
       'cancelled (1)',
       'archived (1)',
     ]);
+  });
+});
+
+describe('Job detail: Git tab', () => {
+  const pr = 'https://github.com/x/y/pull/9';
+  const mergedHead = 'abcdef0123456789abcdef0123456789abcdef01';
+  const branchCommit = { sha: '1111111122222222', subject: 'Add the export button' };
+  type Worktree = NonNullable<NonNullable<JobDetailView['plan']>['worktree']>;
+  type Merge = NonNullable<JobDetailView['merge']>;
+  function worktree(over: Partial<Worktree> = {}): Worktree {
+    return {
+      path: '/wt/g',
+      exists: true,
+      isWorktree: true,
+      branch: 'factory/job-00000003-gamma',
+      head: '9999999988888888',
+      dirty: [],
+      baseRef: 'origin/main',
+      ahead: 0,
+      behind: 6,
+      commits: [],
+      changedFiles: [],
+      changes: [],
+      fingerprint: 'fp',
+      ...over,
+    };
+  }
+  function merge(over: Partial<Merge> = {}): Merge {
+    return {
+      base: 'main',
+      prUrl: pr,
+      head: mergedHead,
+      historyKnown: false,
+      commits: [],
+      changedFiles: [],
+      outstanding: [],
+      ...over,
+    };
+  }
+  function show(wt: Worktree | null, m: Merge | null) {
+    mockFetch();
+    const base = detail();
+    data.detail = detail({
+      job: { ...base.job, prUrl: m ? pr : null, prState: m ? 'merged' : null },
+      plan: (wt
+        ? { step: 'done', reason: '', agents: [], artifacts: [], worktree: wt }
+        : null) as unknown as JobDetailView['plan'],
+      planError: null,
+      merge: m,
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+  }
+  async function gitTab(): Promise<HTMLElement> {
+    fireEvent.click(await screen.findByRole('tab', { name: 'Git' }));
+    return must(screen.getByText(/^Worktree|^No worktree on disk/).parentElement);
+  }
+
+  it('says Merged into the base with the PR and merged head, and nothing outstanding (AC1, AC2)', async () => {
+    show(worktree(), merge());
+    const tab = await gitTab();
+    expect(tab).toHaveTextContent(/Merged into main/);
+    expect(within(tab).getByRole('link', { name: pr })).toHaveAttribute('href', pr);
+    expect(tab).toHaveTextContent('abcdef01');
+    expect(tab).not.toHaveTextContent(/ahead|behind/);
+    expect(tab).toHaveTextContent('Nothing outstanding since the merge.');
+    expect(tab).not.toHaveTextContent(/None yet|Commits on the branch|Changed files vs base/);
+    expect(tab).not.toHaveTextContent(/Commits merged|Files changed/);
+  });
+
+  it('lists recorded history when known, and hides its headings when not (AC3)', async () => {
+    show(
+      worktree(),
+      merge({ historyKnown: true, commits: [branchCommit], changedFiles: ['src/export.ts'] }),
+    );
+    const tab = await gitTab();
+    expect(within(tab).getByText('Commits merged')).toBeInTheDocument();
+    expect(tab).toHaveTextContent('11111111 Add the export button');
+    expect(within(tab).getByText('Files changed')).toBeInTheDocument();
+    expect(within(tab).getByText('src/export.ts')).toBeInTheDocument();
+  });
+
+  it('keeps ahead/behind, commits, and files for an unmerged branch; hides empty headings (AC6)', async () => {
+    show(
+      worktree({ ahead: 1, behind: 2, commits: [branchCommit], changedFiles: ['src/export.ts'] }),
+      null,
+    );
+    let tab = await gitTab();
+    expect(tab).toHaveTextContent('1 ahead / 2 behind origin/main');
+    expect(within(tab).getByText('Commits on the branch')).toBeInTheDocument();
+    expect(tab).toHaveTextContent('11111111 Add the export button');
+    expect(within(tab).getByText('Changed files vs base')).toBeInTheDocument();
+    expect(tab).not.toHaveTextContent(/Merged into/);
+    cleanup();
+    show(worktree({ behind: 0 }), null);
+    tab = await gitTab();
+    expect(tab).toHaveTextContent('0 ahead / 0 behind origin/main');
+    expect(tab).not.toHaveTextContent(/None yet|Commits on the branch|Changed files vs base/);
+  });
+
+  it('shows the merged summary when the worktree was removed after the merge (AC7, AC8)', async () => {
+    show(null, merge({ outstanding: null }));
+    const tab = await gitTab();
+    expect(tab).toHaveTextContent(/Merged into main/);
+    expect(within(tab).getByRole('link', { name: pr })).toBeInTheDocument();
+    expect(tab).toHaveTextContent(/No worktree on disk/);
+    expect(tab).not.toHaveTextContent(/Nothing outstanding/);
+  });
+
+  it('still warns about uncommitted files on a merged job (AC8)', async () => {
+    show(worktree({ dirty: ['notes.txt'] }), merge());
+    const tab = await gitTab();
+    expect(within(tab).getByText('Uncommitted: notes.txt')).toBeInTheDocument();
+    expect(tab).not.toHaveTextContent(/Nothing outstanding/);
+  });
+
+  it('after a squash merge, ignores the branch comparison and lists only outstanding commits (AC10)', async () => {
+    const wt = worktree({ ahead: 2, behind: 1, commits: [branchCommit] });
+    show(wt, merge());
+    let tab = await gitTab();
+    expect(tab).not.toHaveTextContent(/ahead|behind/);
+    expect(tab).not.toHaveTextContent('Add the export button');
+    expect(tab).toHaveTextContent('Nothing outstanding since the merge.');
+    cleanup();
+    const later = { sha: '3333333344444444', subject: 'Follow-up fix' };
+    show(wt, merge({ outstanding: [later] }));
+    tab = await gitTab();
+    expect(within(tab).getByText('Commits since the merge')).toBeInTheDocument();
+    expect(tab).toHaveTextContent('33333333 Follow-up fix');
+    expect(tab).not.toHaveTextContent(/Nothing outstanding|Add the export button/);
+  });
+
+  it('with an unknown merged head, shows only the merge and uncommitted files (AC11)', async () => {
+    const wt = worktree({ ahead: 2, commits: [branchCommit], dirty: ['notes.txt'] });
+    show(wt, merge({ head: null, outstanding: null }));
+    const tab = await gitTab();
+    expect(tab).toHaveTextContent(/Merged into main/);
+    expect(within(tab).getByText('Uncommitted: notes.txt')).toBeInTheDocument();
+    expect(tab).not.toHaveTextContent(/Nothing outstanding|ahead|behind|Add the export button/);
   });
 });
 
