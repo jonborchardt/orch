@@ -52,17 +52,30 @@ export function fetchSession(): Promise<SessionInfo> {
   return session;
 }
 
-export async function postAction(id: string, body: ActionRequest): Promise<ActionResponse> {
+export async function postAction(
+  id: string,
+  body: ActionRequest,
+  retry = true,
+): Promise<ActionResponse> {
   const { csrf } = await fetchSession();
-  return parse<ActionResponse>(
-    await fetch(`/api/jobs/${id}/actions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        'X-Orch-Csrf': csrf,
-      },
-      body: JSON.stringify(body),
-    }),
-  );
+  const res = await fetch(`/api/jobs/${id}/actions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'X-Orch-Csrf': csrf,
+    },
+    body: JSON.stringify(body),
+  });
+  try {
+    return await parse<ActionResponse>(res);
+  } catch (err) {
+    // The token is per `orch ui` process: a page left open across a restart holds a dead one.
+    // The server refused before acting, so fetching the new token and resending once is safe.
+    if (retry && err instanceof ApiFailure && err.message === 'Invalid CSRF token') {
+      session = undefined;
+      return postAction(id, body, false);
+    }
+    throw err;
+  }
 }
