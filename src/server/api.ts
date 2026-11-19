@@ -10,7 +10,7 @@ import { FLAKY_EVENT, flakeView } from '../core/flake.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { SESSION_EVENT, sessionLinks } from '../core/session.ts';
-import { now, prPhase, STAGES, type Stage } from '../core/workflow.ts';
+import { now, prPhase, STAGES, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
 import {
   allowedActions,
   DASHBOARD_ACTIONS,
@@ -100,7 +100,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
           live: !leaseExpired(job, ts),
         }
       : null;
-    const end = job.completedAt ?? ts;
+    const end = TERMINAL_STATUSES.includes(job.status) ? terminalAt(job, evidence.events) : ts;
     // The board does not inspect worktrees (one Git call per job); the detail view does.
     const ci = ciView(job, evidence.events, undefined);
     return {
@@ -122,7 +122,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       blocker: blockerOf(job, state, evidence),
       resume: resumeOf(job, state),
       updatedAt: job.updatedAt,
-      elapsedMs: Math.max(0, Date.parse(end) - Date.parse(job.createdAt)),
+      elapsedMs: span(job.createdAt, end),
       pr: { url: job.prUrl, state: job.prState, phase: prPhase(job, ci.completion) },
       supersededBy: job.supersededBy,
       archivedAt: job.archivedAt,
@@ -132,6 +132,19 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       flake: flakeView(job, evidence.events.get(FLAKY_EVENT)),
     };
   });
+}
+
+/** When a finished job finished: `completedAt`, else its newest terminal event, never the poll time. */
+function terminalAt(job: Job, events: Map<string, Event>): string | null {
+  if (job.completedAt) return job.completedAt;
+  const times = ['job.completed', 'job.cancelled'].flatMap((t) => events.get(t)?.createdAt ?? []);
+  return times.sort().at(-1) ?? null;
+}
+
+/** Wall-clock milliseconds, or null when the end is unknown or the span is unparseable or negative. */
+function span(from: string, to: string | null): number | null {
+  const ms = to === null ? NaN : Date.parse(to) - Date.parse(from);
+  return Number.isNaN(ms) || ms < 0 ? null : ms;
 }
 
 export function repos(store: Store): string[] {

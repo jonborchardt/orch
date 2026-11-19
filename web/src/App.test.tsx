@@ -485,6 +485,33 @@ describe('App board', () => {
     ]);
   });
 
+  it('shows Elapsed as Unknown, <1s, or a duration, and defines it in a header tooltip', async () => {
+    data.rows = [
+      row({ id: 'job-00000001', elapsedMs: null }),
+      row({ id: 'job-00000002', elapsedMs: 400 }),
+      row({ id: 'job-00000003', elapsedMs: 1_800_000 }),
+    ];
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(within(boardRowOf('job-00000001')).getByText('Unknown')).toBeInTheDocument();
+    const short = boardRowOf('job-00000002');
+    expect(within(short).getByText('<1s')).toBeInTheDocument();
+    expect(within(short).queryByText('0s')).toBeNull();
+    expect(within(boardRowOf('job-00000003')).getByText('30m')).toBeInTheDocument();
+    const sort = screen.getByRole('button', { name: 'Elapsed' });
+    sort.focus();
+    const tip = await screen.findByRole('tooltip');
+    expect(tip).toHaveTextContent(/wall-clock/i);
+    expect(tip).toHaveTextContent(/creation/);
+    expect(tip).toHaveTextContent(/completed or was cancelled/);
+    // Unknown sorts after every known span, not among the short ones.
+    fireEvent.click(sort);
+    expect(
+      [...document.querySelectorAll('[data-job-id]')].map((e) => e.getAttribute('data-job-id')),
+    ).toEqual(['job-00000002', 'job-00000003', 'job-00000001']);
+  });
+
   it('shows the review round as "-" before the first round and "N / M" after, with a tooltip', async () => {
     mockFetch();
     mount();

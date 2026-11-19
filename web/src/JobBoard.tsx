@@ -29,7 +29,7 @@ import { ApiFailure, postAction } from './api.ts';
 import { CiChip, PrPhaseChip } from './Ci.tsx';
 import { ProgressStrip, RoundIndicator } from './Progress.tsx';
 import { BlockerText, CopyResume, FlakeText, StatusChip, Supersession } from './Status.tsx';
-import { ago, byAttention, elapsed, repoLabels, reviewRollup } from './format.ts';
+import { ago, byAttention, elapsedCell, repoLabels, reviewRollup } from './format.ts';
 
 function openJob(id: string): void {
   window.location.hash = `#/jobs/${id}`;
@@ -57,6 +57,8 @@ interface Column {
   hideable: boolean;
   align?: 'center' | 'right';
   sortValue?: (r: BoardRow) => string | number;
+  /** Header tooltip defining the column; the sort button keeps `label` as its name. */
+  hint?: string;
   sx?: object;
   /**
    * Viewport width (px) below which the column is not rendered, on top of the Columns menu, so
@@ -231,11 +233,13 @@ const COLUMNS: Column[] = [
   {
     id: 'elapsed',
     label: 'Elapsed',
+    hint: 'Wall-clock time from job creation until it completed or was cancelled (until now while active). Includes blocked and waiting time.',
     hideable: true,
     hideBelow: COMPACT,
     align: 'right',
-    sortValue: (r) => r.elapsedMs,
-    cell: (r) => elapsed(r.elapsedMs),
+    // Unknown spans sort together, after every known one when ascending.
+    sortValue: (r) => r.elapsedMs ?? Infinity,
+    cell: (r) => elapsedCell(r.elapsedMs),
   },
   {
     id: 'updated',
@@ -450,18 +454,20 @@ export function JobBoard({
                       }
                     >
                       {c.sortValue ? (
-                        <TableSortLabel
-                          active={active}
-                          direction={active ? sort.dir : 'asc'}
-                          onClick={() => {
-                            setSort({
-                              id: c.id,
-                              dir: active && sort.dir === 'asc' ? 'desc' : 'asc',
-                            });
-                          }}
-                        >
-                          {c.label}
-                        </TableSortLabel>
+                        <Tooltip title={c.hint ?? ''} describeChild>
+                          <TableSortLabel
+                            active={active}
+                            direction={active ? sort.dir : 'asc'}
+                            onClick={() => {
+                              setSort({
+                                id: c.id,
+                                dir: active && sort.dir === 'asc' ? 'desc' : 'asc',
+                              });
+                            }}
+                          >
+                            {c.label}
+                          </TableSortLabel>
+                        </Tooltip>
                       ) : (
                         c.label
                       )}

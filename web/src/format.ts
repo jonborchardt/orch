@@ -10,6 +10,12 @@ export function elapsed(ms: number): string {
   return `${String(Math.floor(h / 24))}d`;
 }
 
+/** The board's Elapsed cell: `Unknown` for an unknown span, `<1s` rather than `0s` under a second. */
+export function elapsedCell(ms: number | null): string {
+  if (ms === null) return 'Unknown';
+  return ms < 1000 ? '<1s' : elapsed(ms);
+}
+
 export function ago(iso: string | null, now = Date.now()): string {
   if (!iso) return '—';
   const diff = now - Date.parse(iso);

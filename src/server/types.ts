@@ -136,7 +136,11 @@ export interface BoardRow {
   /** Null for finished jobs; otherwise whether and how a session may resume it. */
   resume: Resume | null;
   updatedAt: string;
-  elapsedMs: number;
+  /**
+   * Wall-clock time from creation to completion or cancellation (to now while active), blocked
+   * and waiting time included. Null when a finished job's end time cannot be established.
+   */
+  elapsedMs: number | null;
   /** `phase` is orch's recorded view (`prPhase`); GitHub is asked again only on Merge or Refresh PR. */
   pr: { url: string | null; state: string | null; phase: PrPhase };
   /** Job that replaced this one, and jobs this one replaced (`orch job supersede`). */

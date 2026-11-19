@@ -2,6 +2,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { MAX_CI_REPAIRS_REASON, MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
@@ -12,7 +13,9 @@ import { blockerOf, ciView, type Evidence, resumeOf } from '../src/server/status
 import type { Artifact, Event, VerificationRun } from '../src/storage/schema.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
 import type { ActionResponse, BoardRow, JobDetailView, SessionInfo } from '../src/server/types.ts';
-import { getJob } from '../src/storage/jobs.ts';
+import { listEvents } from '../src/storage/events.ts';
+import { claimJob, createJob, getJob, transitionJob } from '../src/storage/jobs.ts';
+import { jobs } from '../src/storage/schema.ts';
 import { seedDashboard, type SeededJobs } from './fixtures/dashboard.ts';
 import { orchAsync, tempDir, type TempStore, tempStore } from './helpers.ts';
 
@@ -144,7 +147,7 @@ describe('seeded board and detail', () => {
       command: `/factory resume ${ids.failed}`,
       heldBy: null,
     });
-    expect(rows.every((r) => r.elapsedMs >= 0)).toBe(true);
+    expect(rows.every((r) => (r.elapsedMs ?? -1) >= 0)).toBe(true);
     expect(await (await api('/api/repos')).json()).toEqual([
       'gamma',
       'github.com/acme/alpha',
@@ -354,6 +357,59 @@ describe('seeded board and detail', () => {
     expect((await api('/%E0%A4%A')).status).toBe(400);
     expect((await api(`/api/jobs/${ids.completed}/artifacts/%zz.md`)).status).toBe(400);
     expect((await api('/', { method: 'POST' })).status).toBe(405);
+  });
+
+  it('measures Elapsed to the terminal transition for finished jobs and to now for active ones', async () => {
+    const span = (j: { createdAt: string; completedAt: string | null }) =>
+      Date.parse(j.completedAt ?? '') - Date.parse(j.createdAt);
+    const elapsedOf = (id: string) => board(store).find((r) => r.id === id)?.elapsedMs;
+    const first = [ids.completed, ids.cancelled].map(elapsedOf);
+    const before = Date.now();
+    await new Promise((r) => setTimeout(r, 30));
+    expect([ids.completed, ids.cancelled].map(elapsedOf)).toEqual(first);
+    for (const id of [ids.completed, ids.cancelled]) {
+      const job = getJob(store.db, id);
+      expect(job.completedAt).not.toBeNull();
+      expect(elapsedOf(id)).toBe(span(job));
+    }
+    const active = getJob(store.db, ids.fresh);
+    expect(active.completedAt).toBeNull();
+    expect(elapsedOf(ids.fresh)).toBeGreaterThanOrEqual(before + 30 - Date.parse(active.createdAt));
+  });
+});
+
+describe('elapsed time without completedAt', () => {
+  let own: TempStore;
+  beforeAll(() => {
+    own = tempStore();
+  });
+  afterAll(() => {
+    own.cleanup();
+  });
+
+  it('falls back to the terminal event, then to null, never to the poll time', () => {
+    const repoPath = tempDir('elapsed-');
+    dirs.push(repoPath);
+    const mk = (title: string) =>
+      createJob(own, { title, description: title, repo: 'r', repoPath, baseBranch: 'main' });
+    const unset = (id: string, set: Partial<typeof jobs.$inferInsert>) =>
+      own.db
+        .update(jobs)
+        .set({ completedAt: null, ...set })
+        .where(eq(jobs.id, id))
+        .run();
+    const cancelled = mk('Cancelled, completedAt lost');
+    const { token } = claimJob(own, cancelled.id, { session: 'claude-elapsed' });
+    transitionJob(own, cancelled.id, 'cancel', { token, reason: 'test' });
+    unset(cancelled.id, {});
+    const event = listEvents(own.db, cancelled.id).find((e) => e.type === 'job.cancelled');
+    expect(event).toBeDefined();
+    const bare = mk('Completed with no record of when');
+    unset(bare.id, { status: 'completed' });
+    const elapsedOf = (id: string) => board(own).find((r) => r.id === id)?.elapsedMs;
+    const expected = Date.parse(event?.createdAt ?? '') - Date.parse(cancelled.createdAt);
+    expect(elapsedOf(cancelled.id)).toBe(expected);
+    expect(elapsedOf(bare.id)).toBeNull();
   });
 });
 
