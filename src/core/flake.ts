@@ -25,6 +25,8 @@ export interface Flake {
   rule: FlakeRule;
   reason: string;
   at: string;
+  /** Other unfinished jobs whose shown flag names the same first test: one machine-wide cause. */
+  sharedWith: string[];
 }
 
 // OSC (`ESC ] ... BEL` or `ESC ] ... ESC \`), CSI, then every other control character except tab
@@ -123,13 +125,22 @@ export function flakeReason(
   return `${what}${more} failed in run ${String(run.id)} at ${run.head.slice(0, 7)}; ${why}`;
 }
 
-/** The flag to show: the newest `verification.flaky` event, while the job is not finished. */
-export function flakeView(job: Pick<Job, 'status'>, e: Event | undefined): Flake | null {
+/**
+ * The flag to show: the newest `verification.flaky` event, while the job is not finished and no
+ * run newer than the flagged one passed (`passedRunId`, the job's newest passed run).
+ */
+export function flakeView(
+  job: Pick<Job, 'status'>,
+  e: Event | undefined,
+  passedRunId: number | null = null,
+): Flake | null {
   if (!e || TERMINAL_STATUSES.includes(job.status)) return null;
   const p = e.payload;
+  const runId = Number(p['runId']);
+  if (passedRunId !== null && passedRunId > runId) return null;
   const str = (k: string): string => (typeof p[k] === 'string' ? p[k] : '');
   return {
-    runId: Number(p['runId']),
+    runId,
     head: str('head'),
     check: str('check'),
     // Capped: the views render only `reason`, which already counts the rest.
@@ -137,5 +148,61 @@ export function flakeView(job: Pick<Job, 'status'>, e: Event | undefined): Flake
     rule: p['rule'] === 'passed-on-rerun' ? 'passed-on-rerun' : 'unchanged-file',
     reason: str('reason'),
     at: e.createdAt,
+    sharedWith: [],
   };
+}
+
+/** The first test a flag names, as a comparable key; null when it names none. */
+export function flakeKey(f: Pick<Flake, 'tests'>): string | null {
+  const t = f.tests[0];
+  return t ? `${t.file}\0${t.name ?? ''}` : null;
+}
+
+/** Fill each flag's `sharedWith` with the other jobs whose flag names the same first test. */
+export function shareFlakes(flakes: Map<string, Flake>): Map<string, Flake> {
+  const byKey = new Map<string, string[]>();
+  for (const [id, f] of flakes) {
+    const k = flakeKey(f);
+    if (k !== null) byKey.set(k, [...(byKey.get(k) ?? []), id]);
+  }
+  for (const [id, f] of flakes) {
+    const k = flakeKey(f);
+    f.sharedWith = k === null ? [] : (byKey.get(k) ?? []).filter((x) => x !== id);
+  }
+  return flakes;
+}
+
+/**
+ * Integrate base before anything else: the latest run failed at HEAD only in files the job did
+ * not change (its flag is rule (b) on that run) and the base branch has moved since the merge base.
+ */
+export function integrateFirst(
+  flake: Flake | null,
+  latest: { id: number; status: string; head: string } | null | undefined,
+  head: string | null,
+  behind: number | null,
+): boolean {
+  return (
+    flake?.rule === 'unchanged-file' &&
+    latest?.id === flake.runId &&
+    latest.status === 'failed' &&
+    latest.head === head &&
+    (behind ?? 0) > 0
+  );
+}
+
+/** The advice shared by the plan and the `orch verify` hint. */
+export function integrateFirstAdvice(id: string, behind: number): string {
+  return (
+    `The latest verify run failed only in files the job did not change and the base branch moved ` +
+    `${String(behind)} commit(s) since the merge base: integrate base (orch worktree integrate ${id}), ` +
+    `then verify again; do not rework someone else's test.`
+  );
+}
+
+/** The label line: today's wording, or one machine-wide cause naming the other jobs. */
+export function flakeLabel(f: Pick<Flake, 'reason' | 'sharedWith'>): string {
+  return f.sharedWith.length > 0
+    ? `likely machine-wide flaky test (also failing in ${f.sharedWith.join(', ')}): ${f.reason}`
+    : `likely flaky test: ${f.reason}`;
 }

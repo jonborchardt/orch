@@ -76,7 +76,8 @@ get a **Copy resume** control. A live job whose verification recently failed in 
 flaky (`flake` on the row, from the newest `verification.flaky` event; see `docs/workflow.md`)
 shows a **Likely flaky test** line naming the test, on the board and in the detail's status panel.
 It is history, not state: it names its run and head, never blocks, and is hidden once the job
-finishes. Filter by repository and by **Show**: `current` (the default, every
+finishes or a newer run passes. When other live jobs fail the same test (`flake.sharedWith`), the
+line reads **Likely machine-wide flaky test (also failing in ...)**, naming them. Filter by repository and by **Show**: `current` (the default, every
 unarchived job), `active`, `needs human`, `running`, `stale`, `failed` (failed or interrupted),
 `idle`, `finished`, `cancelled`, or `archived`, each labelled with its count; plus a free-text
 **Filter** box matching title, id, repository, stage, status, session, or branch. The app bar's

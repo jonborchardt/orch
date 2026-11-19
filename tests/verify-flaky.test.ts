@@ -85,7 +85,7 @@ describe('verify flags likely flakes', () => {
     expect(after.out).not.toContain('Flaky:');
   });
 
-  it('labels a failure that passes on a rerun at the same tree, and keeps it visible', () => {
+  it('labels a failure that passes on a rerun at the same tree, dismissed by that pass', () => {
     failThenPass(null, 1);
     const c = start(store, clone);
     const r1 = verify(store, c);
@@ -103,7 +103,9 @@ describe('verify flags likely flakes', () => {
       }),
     ]);
     expect(showVerification(store, c.id)?.valid).toBe(true);
-    expect(detail(store, c.id).flake?.runId).toBe(r1.runId);
+    // Decision 2026-11-19: a newer passing run dismisses the flag; the event stays in the timeline.
+    expect(detail(store, c.id).flake).toBeNull();
+    expect(detail(store, c.id).events.some((e) => e.type === 'verification.flaky')).toBe(true);
     verify(store, c); // another pass does not flag again
     expect(flakes(c)).toHaveLength(1);
   });

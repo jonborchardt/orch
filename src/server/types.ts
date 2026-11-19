@@ -164,7 +164,10 @@ export interface BoardRow {
   archivedAt: string | null;
   ci: CiView;
   progress: Progress;
-  /** Newest likely-flaky verification failure; null for finished jobs. A label, never a blocker. */
+  /**
+   * Newest likely-flaky verification failure; null for finished jobs and once a newer run passed.
+   * `sharedWith` names other jobs failing the same test. A label, never a blocker.
+   */
   flake: Flake | null;
 }
 
@@ -204,7 +207,10 @@ export interface JobDetailView {
   ci: CiView;
   progress: Progress;
   timeline: Timeline;
-  /** Newest likely-flaky verification failure; null for finished jobs. A label, never a blocker. */
+  /**
+   * Newest likely-flaky verification failure; null for finished jobs and once a newer run passed.
+   * `sharedWith` names other jobs failing the same test. A label, never a blocker.
+   */
   flake: Flake | null;
   /** Where the PR stands in delivery, from recorded fields (`prPhase`). */
   prPhase: PrPhase;
