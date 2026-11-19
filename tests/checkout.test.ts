@@ -229,6 +229,10 @@ describe('the Claude Code hook', () => {
       'ignored',
     );
     expect(hookCheckout(paths(), {}).action).toBe('ignored');
+    // A file Git ignores is in no commit: B may write it while A holds the checkout.
+    writeFileSync(join(repo, '.gitignore'), '/todo/\n');
+    expect(hookCheckout(paths(), pre('B', join(repo, 'todo', 'x.md'))).action).toBe('ignored');
+    expect(hookCheckout(paths(), pre('B', join(repo, 'b.ts'))).exitCode).toBe(2);
     expect(checkoutStatus(paths(), repo).owner?.session).toBe('A');
   });
 
