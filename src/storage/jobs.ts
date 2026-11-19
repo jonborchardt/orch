@@ -298,6 +298,8 @@ export function releaseJob(store: Store, id: string, auth: Auth): Job {
 export interface TransitionOptions extends Auth {
   to?: Stage | undefined;
   reason?: string | undefined;
+  /** See `TransitionContext.mergedByHuman`; only `completeCi` sets it. */
+  mergedByHuman?: boolean | undefined;
 }
 
 export function transitionJob(
@@ -325,6 +327,7 @@ export function transitionJob(
       reviews: listReviews(tx, id),
       to: opts.to,
       reason: opts.reason,
+      mergedByHuman: opts.mergedByHuman,
     });
   });
 }

@@ -69,15 +69,16 @@ export interface CiView {
   checkedAt: string | null;
   repairs: number;
   maxRepairs: number;
-  /** Newest reconciliation outcome for `head` (pending, passing, failing, infrastructure, none, outdated, closed). */
+  /** Newest reconciliation outcome for `head` (pending, passing, failing, infrastructure, none, outdated, closed, merged). */
   outcome: string | null;
   /** GitHub's reason from that reconciliation, verbatim. */
   reason: string | null;
   /** Required checks that failed in that reconciliation, with GitHub's URL and the saved log path. */
   failures: { name: string; conclusion: string; url: string | null; log: string | null }[];
   /**
-   * How a completed job finished: GitHub's verdict for `head`, a human close-out (recorded with
-   * its reason), or a job completed before the ci stage existed, which carries no verdict at all.
+   * How a completed job finished: GitHub's verdict for `head`, a human merge of the PR at `head`
+   * before CI finished (`merged`), a human close-out (recorded with its reason), or a job
+   * completed before the ci stage existed, which carries no verdict at all.
    */
   completion: Completion;
   /** What the CI state means for the reader, and what happens or may be done next. */

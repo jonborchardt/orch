@@ -77,10 +77,13 @@ export function CiChip({
   /** Outlined: evidence beside a completed job's outcome, not a headline. */
   secondary?: boolean;
 }) {
+  const at = ci.head ? ` @${sha7(ci.head)}` : '';
   const label =
     ci.completion === 'human'
       ? 'human close-out'
-      : `CI ${ci.status ?? 'not observed'}${ci.head ? ` @${sha7(ci.head)}` : ''}`;
+      : ci.completion === 'merged'
+        ? `merged before CI (was ${ci.status ?? 'not observed'})${at}`
+        : `CI ${ci.status ?? 'not observed'}${at}`;
   const color = ci.completion === 'human' ? 'warning' : ciColor(ci.status);
   return (
     <Stack

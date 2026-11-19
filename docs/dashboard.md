@@ -176,11 +176,14 @@ persisted fields (`src/server/status.ts` `ciView`): the rollup columns, the newe
 event, and the `job.completed` event. A ci-stage escalation gets its own blocker (`CI stopped`)
 naming the cause from the recorded reason code and outcome: repair budget spent, no checks for the
 PR head, checks that never reached a verdict, a PR closed without merging, or a head that moved
-outside the job. A completed job says how it completed: on GitHub's verdict, by a human close-out
-(chip `human close-out`, with the reason in the events), or, for jobs older than the ci stage,
-with no verdict recorded at all. On the board, a completed row's CI chip is secondary (outlined)
-beside its status label, and is hidden when the outcome is `merged` and CI is passing; the detail's
-PR tab keeps the CI chip and line either way.
+outside the job, or a PR merged by a human whose head the delivery gate refused. A completed job
+says how it completed: on GitHub's verdict, by a human merging the PR at the verified head before
+CI finished (line "PR merged by a human before CI finished; CI was <status> for <sha7>.", chip
+`merged before CI`, outcome `completed: merged`), by a human close-out (chip `human close-out`,
+with the reason in the events), or, for jobs older than the ci stage, with no verdict recorded at
+all. On the board, a completed row's CI chip is secondary (outlined) beside its status label, and
+is hidden when the outcome is `merged` and CI is passing or the merge came before CI finished; the
+detail's PR tab keeps the CI chip and line either way.
 
 **Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
 short-lived `dashboard` session and then releases the job. The detail API lists the actions the

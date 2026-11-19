@@ -204,7 +204,15 @@ export interface TransitionContext {
   /** Target stage when resuming from needs-human. */
   to?: Stage | undefined;
   reason?: string | undefined;
+  /**
+   * `ci` complete only: GitHub reported the job's own PR merged at the worktree HEAD in the same
+   * `orch gh ci` call. Only `completeCi` passes it; a stored `prState: merged` never implies it.
+   */
+  mergedByHuman?: boolean | undefined;
 }
+
+/** Recorded on `job.completed` when a human merged the PR before CI reached a verdict. */
+export const MERGED_BY_HUMAN_REASON = 'merged by a human before CI finished';
 
 export interface TransitionResult {
   patch: Partial<Job>;
@@ -311,6 +319,26 @@ export function transition(
           if (!job.ciHead) {
             // `pr create` and `pr status` record the rollup without a head: not a verdict.
             reject('no CI verdict has been read for the PR head; run orch gh ci');
+          }
+          if (ctx.mergedByHuman === true) {
+            // A human merged the PR at the verified, approved HEAD before the checks finished.
+            if (job.prState !== 'merged') reject('the PR is not recorded as merged');
+            return {
+              patch: { stage: 'completed', status: 'completed', completedAt: now() },
+              events: [
+                completed,
+                {
+                  type: 'job.completed',
+                  payload: {
+                    prUrl: job.prUrl,
+                    head: job.ciHead,
+                    ciStatus: job.ciStatus,
+                    mergedByHuman: true,
+                    reason: MERGED_BY_HUMAN_REASON,
+                  },
+                },
+              ],
+            };
           }
           if (job.ciStatus !== 'passing') {
             reject(
@@ -446,10 +474,11 @@ export function cannotAcceptDelivery(
 
 /**
  * How a completed job finished, from its `job.completed` event payload: GitHub's verdict for a
- * head (`ci`), a human close-out (`human`), or before the ci stage existed (`legacy`). Null while
- * the job is not completed.
+ * head (`ci`), a human merge of the PR at the verified head before CI finished (`merged`), a
+ * human close-out (`human`), or before the ci stage existed (`legacy`). Null while the job is not
+ * completed.
  */
-export type Completion = 'ci' | 'human' | 'legacy' | null;
+export type Completion = 'ci' | 'merged' | 'human' | 'legacy' | null;
 
 export function completionOf(
   stage: Stage,
@@ -457,6 +486,7 @@ export function completionOf(
 ): Completion {
   if (stage !== 'completed') return null;
   if (completed?.['acceptedByHuman'] === true) return 'human';
+  if (completed?.['mergedByHuman'] === true) return 'merged';
   return typeof completed?.['head'] === 'string' ? 'ci' : 'legacy';
 }
 

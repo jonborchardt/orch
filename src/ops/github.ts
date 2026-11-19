@@ -54,7 +54,7 @@ import {
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
-import { completeCi, requireDeliverable } from './gates.ts';
+import { completeCi, deliverableRefusal, requireDeliverable } from './gates.ts';
 import { type Tree, worktreeOf } from './tree.ts';
 import { cap } from './verify.ts';
 
@@ -224,6 +224,11 @@ export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): Pr
     );
     return { job: updated, pr, ciStatus, prState: state, recorded: true };
   }
+  if (auth.token && state === 'merged' && job.stage === 'ci' && job.status === 'running') {
+    // One completion path: the merge is reconciled exactly as orch gh ci would.
+    const r = reconcileCi(store, id, { token: auth.token, expectRevision: auth.expectRevision });
+    return { job: r.job, pr: r.pr, ciStatus: r.ciStatus, prState: state, recorded: true };
+  }
   if (auth.token) {
     const updated = recordCi(store, id, {
       token: auth.token,
@@ -255,7 +260,7 @@ export interface CiReconcileResult {
   head: string;
   /** True when that commit is the worktree HEAD and origin/<branch>. */
   current: boolean;
-  outcome: CiEvaluation['outcome'] | 'outdated' | 'closed';
+  outcome: CiEvaluation['outcome'] | 'outdated' | 'closed' | 'merged';
   ciStatus: CiStatus;
   evaluation: CiEvaluation;
   failures: CiFailure[];
@@ -407,8 +412,27 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
   const reruns = rerunsFor(store, id, head);
   let rerun: { runs: number[]; checks: CiCheck[]; error: string | null } | null = null;
   const after = reruns.requested > 0 ? ` (after ${String(reruns.requested)} re-run)` : '';
+  // A human merged the job's own PR at the worktree HEAD (origin/<branch> may be deleted by now).
+  const mergedHere = pr.state === 'MERGED' && foreign === null && head === tree.head;
+  let mergedByHuman = false;
 
-  if (pr.state === 'CLOSED') {
+  if (mergedHere) {
+    // Decided before any re-run, rework, or escalation, whatever the checks say. The delivery
+    // gate is evaluated for this PR head first, so the job never stays running after a merge.
+    const refused = deliverableRefusal(store, { ...job, ciHead: head }, tree);
+    const passing = evaluation.outcome === 'passing';
+    outcome = passing && refused === null ? 'passing' : 'merged';
+    if (refused !== null) {
+      action = 'escalate';
+      reason = `PR merged by a human at ${head.slice(0, 7)}, but ${refused}`;
+    } else {
+      action = 'complete';
+      mergedByHuman = !passing;
+      if (mergedByHuman) {
+        reason = `PR merged by a human at ${head.slice(0, 7)} before CI finished; CI was ${ciStatusOf(evaluation.outcome)}`;
+      }
+    }
+  } else if (pr.state === 'CLOSED') {
     outcome = 'closed';
     action = 'escalate';
     reason = `${pr.url} was closed without merging; a human reopens it (then resume --to ci) or cancels the job`;
@@ -479,9 +503,12 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     }
     if (rerun?.error) reason += ` Re-run could not be requested: ${rerun.error}.`;
   }
-  // The persisted rollup describes the checks; a closed or outdated PR still records what they said.
+  // The persisted rollup describes the checks; a closed, outdated, or merged PR still records what
+  // they said.
   const ciStatus = ciStatusOf(
-    outcome === 'closed' || outcome === 'outdated' ? evaluation.outcome : outcome,
+    outcome === 'closed' || outcome === 'outdated' || outcome === 'merged'
+      ? evaluation.outcome
+      : outcome,
   );
 
   recordCi(store, id, {
@@ -521,7 +548,7 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
   } else if (action === 'complete') {
     // The read and the completion are one operation: no stored verdict is ever reused.
     // A draft still needs its ready write, so the lease is held for it; that write releases it.
-    updated = completeCi(store, id, { ...tok, holdLease: prState === 'draft' });
+    updated = completeCi(store, id, { ...tok, holdLease: prState === 'draft', mergedByHuman });
     // Strictly after the verdict commits: a failed or interrupted ready never undoes it, and is
     // not retried (a human runs gh pr ready; the board still shows the PR as draft).
     if (prState === 'draft') {

@@ -109,8 +109,11 @@ export function allowedActions(
   return out;
 }
 
-/** Why the dashboard will not remove the job's worktree, or null: only after its PR merged. */
-function cannotRemoveWorktree(
+/**
+ * Why a worktree may not be removed without the owner token (dashboard, tokenless
+ * `orch worktree remove`), or null: only on a finished job after its PR merged.
+ */
+export function cannotRemoveWorktree(
   job: Pick<Job, 'status' | 'prState' | 'worktreePath'>,
 ): string | null {
   if (!TERMINAL_STATUSES.includes(job.status)) return `the job is still ${job.status}`;
@@ -226,6 +229,42 @@ export function cancelJob(store: Store, id: string, input: CancelInput): ActionR
   return { job: withoutToken(getJob(store.db, id)), message: `Job cancelled (${input.reason}).` };
 }
 
+export interface RemoveWorktreeInput {
+  session: string;
+  force?: boolean | undefined;
+  /** Defaults to `session` (a CLI caller); the dashboard passes `dashboard`. */
+  mode?: LeaseMode | undefined;
+  repo?: string | undefined;
+}
+
+/**
+ * Remove a finished job's worktree once its PR merged, in one short episode as `session`. The
+ * dashboard's Remove worktree and a tokenless `orch worktree remove` both come here. dropWorktree
+ * refuses uncommitted changes and keeps the branch.
+ */
+export function removeMergedWorktree(
+  store: Store,
+  id: string,
+  input: RemoveWorktreeInput,
+): ActionResult {
+  const before = getJob(store.db, id);
+  const refused = cannotRemoveWorktree(before);
+  if (refused) throw new ValidationError(`Cannot remove the worktree: ${refused}.`);
+  const path = before.worktreePath ?? '';
+  withLease(
+    store,
+    before,
+    input.session,
+    input.force,
+    (token) => dropWorktree(store, id, { token }, { repo: input.repo }),
+    input.mode ?? 'session',
+  );
+  return {
+    job: withoutToken(getJob(store.db, id)),
+    message: `Removed the worktree ${path}. The branch ${before.branch ?? ''} is kept.`,
+  };
+}
+
 export interface SupersedeInput {
   /** The replacement job. */
   by: string;
@@ -306,17 +345,11 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
     return prAction(store, before, input);
   }
   if (input.action === 'remove-worktree') {
-    const refused = cannotRemoveWorktree(before);
-    if (refused) throw new ValidationError(`Cannot remove the worktree: ${refused}.`);
-    const path = before.worktreePath ?? '';
-    // dropWorktree refuses uncommitted changes and keeps the branch.
-    withLease(store, before, DASHBOARD_SESSION, input.force, (token) =>
-      dropWorktree(store, id, { token }),
-    );
-    return {
-      job: withoutToken(getJob(store.db, id)),
-      message: `Removed the worktree ${path}. The branch ${before.branch ?? ''} is kept.`,
-    };
+    return removeMergedWorktree(store, id, {
+      session: DASHBOARD_SESSION,
+      force: input.force,
+      mode: 'dashboard',
+    });
   }
   if (input.action === 'archive' || input.action === 'unarchive') {
     const archive = input.action === 'archive';

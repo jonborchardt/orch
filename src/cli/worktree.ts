@@ -1,5 +1,9 @@
 /** `orch worktree ...` handlers. */
 import { UsageError } from '../core/errors.ts';
+import { newSessionId } from '../core/ownership.ts';
+import { TERMINAL_STATUSES } from '../core/workflow.ts';
+import { removeMergedWorktree } from '../ops/actions.ts';
+import { getJob } from '../storage/jobs.ts';
 import {
   adoptWorktree,
   createWorktree,
@@ -27,6 +31,8 @@ export const WORKTREE_HELP = `Usage: orch worktree <command> <job-id> [options]
   integrate <id>                      Merge the base branch into the job branch (aborts on conflict)
 
 Mutating commands need --token (or $ORCH_TOKEN); --revision <n> rejects stale state.
+remove without a token works on a finished job whose PR is merged, in a short episode of its own
+(exit 4 while another session holds a live lease).
 Worktrees live under <data>/worktrees/<repo>/<job-id>, never inside a project checkout.
 `;
 
@@ -48,6 +54,10 @@ export function runWorktree(
     case 'adopt':
       return adoptWorktree(store, id, auth, need(o.path, '--path <dir>'), { repo: o.repo });
     case 'remove':
+      // Without a token, a finished job whose PR merged is cleaned up in a short episode of its own.
+      if (!auth.token && TERMINAL_STATUSES.includes(getJob(store.db, id).status)) {
+        return removeMergedWorktree(store, id, { session: newSessionId(), repo: o.repo });
+      }
       return dropWorktree(store, id, auth, { repo: o.repo });
     case 'integrate':
       return integrateBase(store, id, auth);
