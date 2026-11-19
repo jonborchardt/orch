@@ -289,3 +289,7 @@ overrides and `maxRounds`/`maxCiRepairs` go in `<config>/factory.json` (`orch fa
 - [docs/session-launch.md](docs/session-launch.md) and
   [docs/phase3-validation.md](docs/phase3-validation.md): what VS Code can and cannot do about
   independent sessions, and the concurrent-job validation that exercised it.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

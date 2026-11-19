@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { expect, test } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 
 import { type E2eState, STATE_ENV } from './global-setup.ts';
 
@@ -177,7 +177,8 @@ test('a finished job can be archived, found under Show: archived, and unarchived
   await expect(table.getByText(title)).toBeVisible();
 });
 
-test('archives and unarchives from the board row', async ({ page }) => {
+/** Archive a finished job from its board row, find it under Show: archived, and unarchive it. */
+async function archiveFromRow(page: Page): Promise<void> {
   // A plain Cancel / Archive confirm; the board always takes over a finished job's lease.
   const title = 'Migrate to pnpm';
   await page.goto('/');
@@ -211,6 +212,175 @@ test('archives and unarchives from the board row', async ({ page }) => {
   await page.getByRole('option', { name: /^current/ }).click();
   await expect(table.getByRole('row')).toHaveCount(11);
   await expect(table.getByText(title)).toBeVisible();
+}
+
+test('archives and unarchives from the board row', async ({ page }) => {
+  await archiveFromRow(page);
+});
+
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+const must = (b: Box | null): Box => {
+  if (!b) throw new Error('element has no bounding box');
+  return b;
+};
+const union = (a: Box, b: Box): Box => {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return {
+    x,
+    y,
+    width: Math.max(a.x + a.width, b.x + b.width) - x,
+    height: Math.max(a.y + a.height, b.y + b.height) - y,
+  };
+};
+const overlaps = (a: Box, b: Box) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+const overlapsVertically = (a: Box, b: Box) => a.y < b.y + b.height && b.y < a.y + a.height;
+/** Fully inside the viewport horizontally (the page may scroll vertically). */
+async function withinWidth(page: Page, l: Locator): Promise<void> {
+  await l.scrollIntoViewIfNeeded();
+  const b = must(await l.boundingBox());
+  const width = page.viewportSize()?.width ?? 0;
+  expect(b.x, 'left edge inside the viewport').toBeGreaterThanOrEqual(0);
+  expect(b.x + b.width, 'right edge inside the viewport').toBeLessThanOrEqual(width);
+}
+
+const WIDTHS = [800, 1000, 1440];
+
+for (const width of WIDTHS) {
+  test(`app bar at ${String(width)}px: labels inside, controls apart`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await expect(page.getByRole('table', { name: 'Factory jobs' })).toBeVisible();
+    const bar = must(await page.locator('header').boundingBox());
+    // Field roots, in toolbar order, each with its shrunk label (which sits above the field).
+    const names = ['Filter', 'Repository', 'Show'];
+    const controls: Box[] = [];
+    for (const [i, name] of names.entries()) {
+      const label = must(
+        await page
+          .locator('header label')
+          .filter({ hasText: new RegExp(`^${name}$`) })
+          .boundingBox(),
+      );
+      expect(label.y, `${name} label top`).toBeGreaterThanOrEqual(Math.max(bar.y, 0));
+      expect(label.y + label.height, `${name} label bottom`).toBeLessThanOrEqual(
+        bar.y + bar.height,
+      );
+      expect(label.x + label.width, `${name} label right`).toBeLessThanOrEqual(width);
+      const field = must(await page.locator('header .MuiFormControl-root').nth(i).boundingBox());
+      controls.push(union(field, label));
+    }
+    const others = [
+      must(await page.getByRole('link', { name: 'orch factory' }).boundingBox()),
+      must(await page.getByLabel('Summary').boundingBox()),
+    ];
+    for (const [i, a] of controls.entries()) {
+      for (const b of [...controls.slice(i + 1), ...others]) {
+        expect(overlaps(a, b), `${String(names[i])} overlaps another app-bar element`).toBe(false);
+      }
+    }
+    if (width === 800) {
+      const show = must(await page.getByRole('combobox', { name: 'Show' }).boundingBox());
+      const filter = must(await page.getByRole('searchbox', { name: 'Filter' }).boundingBox());
+      const repo = must(await page.getByRole('combobox', { name: 'Repository' }).boundingBox());
+      expect(overlapsVertically(show, filter) || overlapsVertically(show, repo)).toBe(true);
+    }
+  });
+}
+
+for (const width of [800, 1000]) {
+  for (const optIn of [false, true]) {
+    test(`board at ${String(width)}px${optIn ? ' with opt-in columns' : ''} keeps PR / CI and Actions on screen`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      // Repository, Session, and Branch / worktree switched on: nothing hidden from the menu.
+      if (optIn)
+        await page.addInitScript({
+          content: `localStorage.setItem('orch.board.hiddenColumns', '[]');`,
+        });
+      await page.goto('/');
+      const table = page.getByRole('table', { name: 'Factory jobs' });
+      await expect(table.getByRole('row')).toHaveCount(11);
+      for (const name of ['Job', 'Status'])
+        await expect(table.getByRole('columnheader', { name })).toBeVisible();
+      for (const name of ['PR / CI', 'Actions']) {
+        const h = table.getByRole('columnheader', { name });
+        await expect(h).toBeVisible();
+        await withinWidth(page, h);
+      }
+      // The table's container (no DOM lib here, so the check is passed as an expression).
+      const overflow: unknown = await page.evaluate(
+        `(() => { const c = document.querySelector('table[aria-label="Factory jobs"]').parentElement;
+          return c.scrollWidth - c.clientWidth; })()`,
+      );
+      expect(overflow).toBe(0);
+    });
+  }
+}
+
+test('board at 1440px renders every default column', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  const table = page.getByRole('table', { name: 'Factory jobs' });
+  for (const name of [
+    'Job',
+    'Stage',
+    'Status',
+    'Round',
+    'Reviews',
+    'Elapsed',
+    'Updated',
+    'PR / CI',
+    'Actions',
+  ])
+    await expect(table.getByRole('columnheader', { name })).toBeVisible();
+  await withinWidth(page, table.getByRole('columnheader', { name: 'Actions' }));
+});
+
+test('every board action is reachable at 800px', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await page.goto('/');
+  const table = page.getByRole('table', { name: 'Factory jobs' });
+  await expect(table.getByRole('row')).toHaveCount(11);
+  await withinWidth(page, page.getByRole('button', { name: 'Columns' }));
+  const groups = [
+    table.getByRole('button', { name: /^(Archive|Unarchive) / }),
+    table.getByRole('button', { name: /Copy resume command/ }),
+    table.getByRole('link', { name: /^PR \(/ }),
+  ];
+  for (const group of groups) {
+    const n = await group.count();
+    expect(n).toBeGreaterThan(0);
+    for (let i = 0; i < n; i++) {
+      await expect(group.nth(i)).toBeVisible();
+      await withinWidth(page, group.nth(i));
+    }
+  }
+  await archiveFromRow(page);
+});
+
+test('board controls appear only on the board', async ({ page }) => {
+  const { ids } = state();
+  await page.goto('/');
+  const filter = page.getByRole('searchbox', { name: 'Filter' });
+  await filter.fill('pnpm');
+  // A hash change, not a reload: the filter state lives in the page.
+  const go = (hash: string) => page.evaluate(`location.hash = ${JSON.stringify(hash)}`);
+  await go(`#/jobs/${ids.completed}`);
+  await expect(page.getByRole('heading', { name: 'Export reports as CSV' })).toBeVisible();
+  await expect(filter).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Repository' })).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Show' })).toHaveCount(0);
+  await go('#/');
+  await expect(filter).toHaveValue('pnpm');
+  await expect(page.getByRole('combobox', { name: 'Show' })).toBeVisible();
 });
 
 test('filters by text and sorts by a header', async ({ page }) => {

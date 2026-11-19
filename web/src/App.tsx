@@ -160,7 +160,9 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
         elevation={0}
         sx={{ borderBottom: 1, borderColor: 'divider' }}
       >
-        <Toolbar variant="dense" sx={{ gap: 1.5, flexWrap: 'wrap' }}>
+        {/* Vertical padding and row gap leave room for the shrunk outlined labels, which sit
+            above their field; without it they clip at the app bar's top edge or a wrapped row. */}
+        <Toolbar variant="dense" sx={{ columnGap: 1.5, rowGap: 2, py: 1.5, flexWrap: 'wrap' }}>
           <Typography
             variant="subtitle1"
             component="a"
@@ -192,58 +194,62 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
               );
             })}
           </Stack>
-          <Box sx={{ flex: 1 }} />
-          <TextField
-            size="small"
-            type="search"
-            label="Filter"
-            placeholder="title, id, stage, branch…"
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-            }}
-            slotProps={{ inputLabel: { shrink: true } }}
-            sx={{ minWidth: 200 }}
-          />
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel id="repo-label" shrink>
-              Repository
-            </InputLabel>
-            <Select
-              labelId="repo-label"
-              label="Repository"
-              value={repo}
-              onChange={(e) => {
-                setRepo(e.target.value);
-              }}
-              displayEmpty
-              notched
-            >
-              <MenuItem value="">All repositories</MenuItem>
-              {repos.map((r) => (
-                <MenuItem key={r} value={r}>
-                  {r}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 140 }}>
-            <InputLabel id="status-label">Show</InputLabel>
-            <Select
-              labelId="status-label"
-              label="Show"
-              value={status}
-              onChange={(e) => {
-                setStatus(e.target.value);
-              }}
-            >
-              {STATUS_FILTERS.map((s) => (
-                <MenuItem key={s} value={s}>
-                  {counts ? `${s} (${String(counts[s])})` : s}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          {/* Board-only controls, wrapping as one group; detail routes have nothing to filter. */}
+          {!jobMatch && (
+            <Box sx={{ ml: 'auto', display: 'flex', flexWrap: 'wrap', columnGap: 1.5, rowGap: 2 }}>
+              <TextField
+                size="small"
+                type="search"
+                label="Filter"
+                placeholder="title, id, stage, branch…"
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value);
+                }}
+                slotProps={{ inputLabel: { shrink: true } }}
+                sx={{ minWidth: 200 }}
+              />
+              <FormControl size="small" sx={{ minWidth: 180 }}>
+                <InputLabel id="repo-label" shrink>
+                  Repository
+                </InputLabel>
+                <Select
+                  labelId="repo-label"
+                  label="Repository"
+                  value={repo}
+                  onChange={(e) => {
+                    setRepo(e.target.value);
+                  }}
+                  displayEmpty
+                  notched
+                >
+                  <MenuItem value="">All repositories</MenuItem>
+                  {repos.map((r) => (
+                    <MenuItem key={r} value={r}>
+                      {r}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl size="small" sx={{ minWidth: 140 }}>
+                <InputLabel id="status-label">Show</InputLabel>
+                <Select
+                  labelId="status-label"
+                  label="Show"
+                  value={status}
+                  onChange={(e) => {
+                    setStatus(e.target.value);
+                  }}
+                >
+                  {STATUS_FILTERS.map((s) => (
+                    <MenuItem key={s} value={s}>
+                      {counts ? `${s} (${String(counts[s])})` : s}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
+          )}
         </Toolbar>
         {/* Fixed-height slot so the page never shifts when a poll starts or ends. */}
         <Box sx={{ height: 4 }}>

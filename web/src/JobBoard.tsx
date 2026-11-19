@@ -43,6 +43,13 @@ function fromRowBody(e: { target: EventTarget; currentTarget: HTMLElement }): bo
   return control === null || control === e.currentTarget;
 }
 
+/**
+ * Below this viewport width the board is compact: low-value columns hide and the essential cells
+ * wrap. Kept at 1024 or less, the jsdom window width, so unit tests see the full board.
+ */
+const COMPACT = 1024;
+const below = (px: number) => `@media (max-width: ${String(px - 0.02)}px)`;
+
 interface Column {
   id: string;
   label: string;
@@ -51,6 +58,11 @@ interface Column {
   align?: 'center' | 'right';
   sortValue?: (r: BoardRow) => string | number;
   sx?: object;
+  /**
+   * Viewport width (px) below which the column is not rendered, on top of the Columns menu, so
+   * Job, Status, PR / CI, and Actions stay on screen on narrow displays. Never set on those four.
+   */
+  hideBelow?: number;
   /** `repoLabel` is set only when the board spans several repositories. */
   cell: (r: BoardRow, now: number, repoLabel: string | undefined) => ReactNode;
 }
@@ -60,6 +72,7 @@ const COLUMNS: Column[] = [
     id: 'repo',
     label: 'Repository',
     hideable: true,
+    hideBelow: COMPACT,
     sortValue: (r) => r.repo,
     sx: { whiteSpace: 'nowrap' },
     cell: (r) => (
@@ -73,7 +86,7 @@ const COLUMNS: Column[] = [
     label: 'Job',
     hideable: false,
     sortValue: (r) => r.title.toLowerCase(),
-    sx: { minWidth: 220 },
+    sx: { minWidth: 220, [below(COMPACT)]: { minWidth: 160 } },
     cell: (r, _now, repoLabel) => (
       <>
         <Link href={`#/jobs/${r.id}`} underline="hover" sx={{ fontWeight: 600 }}>
@@ -100,6 +113,7 @@ const COLUMNS: Column[] = [
     id: 'stage',
     label: 'Stage',
     hideable: true,
+    hideBelow: 900,
     // Workflow order: a job with no known step first, completed jobs last.
     sortValue: (r) => r.progress.position,
     sx: { whiteSpace: 'nowrap' },
@@ -110,10 +124,15 @@ const COLUMNS: Column[] = [
     label: 'Status',
     hideable: false,
     sortValue: (r) => r.liveness,
-    sx: { whiteSpace: 'nowrap' },
+    // Wraps at every width: a long "Resume unavailable" line must not push PR / CI off-screen.
     cell: (r) => (
       <>
-        <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+        <Stack
+          direction="row"
+          spacing={0.5}
+          useFlexGap
+          sx={{ alignItems: 'center', flexWrap: 'wrap' }}
+        >
           <StatusChip state={r.liveness} outcome={r.outcome} />
           {r.archivedAt !== null && <Chip label="archived" size="small" />}
           {r.resume?.command && (
@@ -134,6 +153,7 @@ const COLUMNS: Column[] = [
     id: 'session',
     label: 'Session',
     hideable: true,
+    hideBelow: COMPACT,
     sortValue: (r) => r.owner?.session ?? '',
     sx: { whiteSpace: 'nowrap' },
     cell: (r, now) =>
@@ -160,6 +180,7 @@ const COLUMNS: Column[] = [
     id: 'branch',
     label: 'Branch / worktree',
     hideable: true,
+    hideBelow: COMPACT,
     sortValue: (r) => r.branch ?? '',
     sx: { maxWidth: 260 },
     cell: (r) => (
@@ -183,6 +204,7 @@ const COLUMNS: Column[] = [
     id: 'round',
     label: 'Round',
     hideable: true,
+    hideBelow: COMPACT,
     align: 'center',
     sortValue: (r) => r.round,
     cell: (r) => (
@@ -200,6 +222,7 @@ const COLUMNS: Column[] = [
     id: 'reviews',
     label: 'Reviews',
     hideable: true,
+    hideBelow: COMPACT,
     // The blocking count folded into this column; sorting by it keeps that capability.
     sortValue: (r) => r.blocking ?? -1,
     sx: { whiteSpace: 'nowrap' },
@@ -209,6 +232,7 @@ const COLUMNS: Column[] = [
     id: 'elapsed',
     label: 'Elapsed',
     hideable: true,
+    hideBelow: COMPACT,
     align: 'right',
     sortValue: (r) => r.elapsedMs,
     cell: (r) => elapsed(r.elapsedMs),
@@ -217,6 +241,7 @@ const COLUMNS: Column[] = [
     id: 'updated',
     label: 'Updated',
     hideable: true,
+    hideBelow: COMPACT,
     sortValue: (r) => r.updatedAt,
     sx: { whiteSpace: 'nowrap' },
     cell: (r, now) => ago(r.updatedAt, now),
@@ -226,10 +251,16 @@ const COLUMNS: Column[] = [
     label: 'PR / CI',
     hideable: true,
     sortValue: (r) => r.pr.phase,
-    sx: { whiteSpace: 'nowrap' },
+    // Wraps only on a compact board; the chips stay on one line where there is room.
+    sx: { whiteSpace: 'nowrap', [below(COMPACT)]: { whiteSpace: 'normal' } },
     cell: (r) =>
       r.pr.url ? (
-        <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+        <Stack
+          direction="row"
+          spacing={0.5}
+          useFlexGap
+          sx={{ alignItems: 'center', flexWrap: 'wrap' }}
+        >
           <Link href={r.pr.url} target="_blank" rel="noreferrer noopener">
             PR ({r.pr.state})
           </Link>
@@ -249,6 +280,11 @@ const COLUMNS: Column[] = [
       ),
   },
 ];
+
+/** CSS-only width hiding for a column's header and body cells (see `Column.hideBelow`). */
+function narrow(c: Column): object | undefined {
+  return c.hideBelow === undefined ? undefined : { [below(c.hideBelow)]: { display: 'none' } };
+}
 
 /** One verdict rollup for the round, every reviewer in its tooltip, and any blocking count. */
 function ReviewsCell({ row }: { row: BoardRow }) {
@@ -410,6 +446,7 @@ export function JobBoard({
                     <TableCell
                       key={c.id}
                       align={c.align}
+                      sx={narrow(c)}
                       sortDirection={active ? sort.dir : false}
                       aria-sort={
                         active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined
@@ -456,7 +493,7 @@ export function JobBoard({
                   }}
                 >
                   {columns.map((c) => (
-                    <TableCell key={c.id} align={c.align} sx={c.sx}>
+                    <TableCell key={c.id} align={c.align} sx={{ ...c.sx, ...narrow(c) }}>
                       {c.cell(r, now, labels.get(r.repo))}
                     </TableCell>
                   ))}
