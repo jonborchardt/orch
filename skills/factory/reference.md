@@ -14,7 +14,7 @@ Every prompt starts with the header block from SKILL.md. Add:
 | `spec`     | `factory-spec-challenger` | The request; issue body if any; path to `spec.md`; for `spec-review-2.md` the path to `spec-review-1.md`; "read CLAUDE.md / AGENTS.md / README in the worktree first". For the writer's revision: the path to the latest `spec-review-N.md` and "answer its material findings, do not expand scope".                                                                                             |
 | `build`    | `factory-builder`         | Path to `spec.md`; round number; for rounds > 1 the path to `round-<N-1>/consolidated.md` and "address every blocking finding, do not expand scope"; validation commands. After a CI rework (`plan.reason` says "CI repair"): the failing check names and the saved log paths under `<artifactDir>/ci/<sha7>/`, and "fix the defect; never weaken checks, tests, CI workflows, or factory.json". |
 | `simplify` | `factory-simplifier`      | Paths to `spec.md` and `build.md`, the base ref (`plan.worktree.baseRef`) for `git diff <baseRef>...HEAD`, round number, and the artifact path `round-N/simplify-review.md`; "read only, never edit the worktree".                                                                                                                                                                               |
-| `simplify` | `factory-builder`         | Paths to `spec.md`, `build.md`, and `round-N/simplify-review.md`; "apply the findings that make sense, never widen scope, commit if anything changed, run orch verify, record each applied and declined finding with its reason"; the artifact path `round-N/simplify.md`.                                                                                                                       |
+| `simplify` | `factory-builder`         | Paths to `spec.md`, `build.md`, and `round-N/simplify-review.md`; "apply the findings that make sense, never widen scope, commit if anything changed, run orch verify (it returns the build's run when nothing changed), record each applied and declined finding with its reason"; the artifact path `round-N/simplify.md`.                                                                     |
 | `review`   | each `factory-reviewer-*` | Paths to `spec.md`, `build.md`, `round-N/simplify.md`, the evidence dir if one exists, `git diff <baseRef>...HEAD` hint, the base ref (`plan.worktree.baseRef`), round number, and the artifact path.                                                                                                                                                                                            |
 | `approve`  | `factory-approver`        | Paths to `spec.md`, `build.md`, every `round-*/review-*.md` and `consolidated.md`, the base ref for the diff, and the round count.                                                                                                                                                                                                                                                               |
 
@@ -148,7 +148,7 @@ and the spec stage completes only on a PASS for the current `spec.md`.
 ## Validation
 
 Verification run: `orch verify` run <id> at <HEAD sha>, status passed. With no commit this is the
-run from the build, still valid for the same HEAD.
+run from the build, still valid for the same HEAD, which `orch verify` returns as `reused`.
 ```
 
 `orch` registers `simplify.md` only from a clean worktree and records its HEAD; the review round

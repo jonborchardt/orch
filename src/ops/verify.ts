@@ -205,6 +205,8 @@ export interface VerifyResult {
   checks: VerificationCheck[];
   /** What the coordinator should do when the result is not `passed`. */
   hint: string | null;
+  /** The latest run was still valid for this clean HEAD and policy, so nothing ran. */
+  reused: boolean;
 }
 
 /** Keep the head and tail of a long stream; the middle is replaced by a marker. */
@@ -345,6 +347,21 @@ export function verifyJob(
             'a human can accept it from the dashboard (accept-policy), or add it to the base branch.'
           : `No verification policy: add a ${POLICY_FILE} to the repository base branch (orch init, ` +
             'review, commit, push), or propose one in the worktree for a human to accept.',
+      reused: false,
+    };
+  }
+  // Nothing changed since a passed run (same clean HEAD, tree, and policy): it is still the
+  // evidence every gate would accept, so return it without taking the lock or running again.
+  if (status.valid && status.run) {
+    return {
+      jobId: id,
+      status: 'passed',
+      runId: status.run.id,
+      head: wt.head,
+      policy: status.policy,
+      checks: status.run.checks,
+      hint: null,
+      reused: true,
     };
   }
   // A renewal bumps the revision; a caller pinning one follows it.
@@ -425,6 +442,7 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
     hint: first
       ? `Required check ${first.checkId} ${first.status} (exit ${String(first.exitCode)}); see ${first.outputPath ?? ''}. Fix, commit, and run orch verify again.`
       : null,
+    reused: false,
   };
 }
 

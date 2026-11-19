@@ -17,6 +17,8 @@ export const VERIFY_HELP = `Usage: orch verify <job-id> [--token <t>]
                   in order, stopping at the first failed required check. Records the run, each
                   check (command, cwd, exit code, duration, output log and hash), the commit, and
                   the policy fingerprint. Exit 1 when a required check fails or no policy exists.
+                  When the latest run passed and is still valid for this clean HEAD and policy,
+                  it is returned as is (reused: true) and nothing runs.
   show <job-id>   The latest run and whether it is still valid for HEAD (read-only).
 
 Verification never runs in the initiating checkout, never runs commands from job text, and

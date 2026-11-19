@@ -406,6 +406,13 @@ Under the lock the worktree and policy are checked again, since either may have 
 the policy fingerprint matches the effective policy, every currently required check passed in
 that run, and the run completed. Anything else is reported as the reason it is stale.
 
+**Reuse.** When the latest run is still valid for the clean HEAD under the effective policy,
+`orch verify` returns it (`reused: true`, same run id) without taking the lock or running anything,
+so a simplify that commits nothing costs seconds. Any new commit, tree, or policy change, or a
+latest run that failed, was interrupted, or is still running, starts a new run. A base integration
+that only brings in docs still reruns: the tree changed, and in this repository Markdown is
+checked too (decision 2026-11-18-verify-reuses-a-valid-run).
+
 **Sensitive changes.** The plan classifies the job's diff (`plan.sensitive`): application tests
 (added, modified, deleted), test or lint configuration, CI workflows, dependency manifests, and
 `factory.json`, for JavaScript, Python, Go, Rust, and Ruby layouts; the diff of changed test files

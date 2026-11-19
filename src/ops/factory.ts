@@ -451,8 +451,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       plan.reason =
         `Simplify round ${String(job.round)}: the simplifier reviews the job's diff for over-engineering and writes ` +
         `${findings} without touching code; the builder applies the findings that make sense (never widening ` +
-        `scope), commits if anything changed, runs orch verify, and writes ${record} listing what was applied ` +
-        'and each declined finding with its reason.';
+        `scope), commits if anything changed, runs orch verify (which returns the build's run when nothing ` +
+        `changed), and writes ${record} listing what was applied and each declined finding with its reason.`;
       plan.commands = [
         ...start,
         add(findings, has(findings)),
