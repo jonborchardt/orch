@@ -112,6 +112,7 @@ export function formatPlan(plan: Plan): string {
     ['Reason', plan.reason],
   ];
   if (plan.blockedReason) next.push(['Blocked', plan.blockedReason]);
+  if (plan.flake) next.push(['Flaky', `likely flaky test: ${plan.flake.reason}`]);
   const out = [
     ...lines([
       ['Job', plan.jobId],

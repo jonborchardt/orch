@@ -137,7 +137,7 @@ Every accepted change appends events (`job.created`, `job.claimed`, `job.release
 `review.recorded`, `job.blocked`, `job.resumed`, `job.interrupted`, `job.cancelled`,
 `job.completed`, `job.superseded`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
 `integration.started`, `integration.completed`, `verification.started`,
-`verification.completed`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
+`verification.completed`, `verification.flaky`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
 `ci.observed`, `pr.ready`) in the same transaction. A `ci.observed` event from `orch gh ci` carries the head,
 outcome, required-check list, every check's status and conclusion, and saved log paths.
 `orch job events <id>` lists them.
@@ -395,6 +395,17 @@ earlier required check already failed), exit code or signal, duration, and the l
 `<artifacts>/verification/<run>/<check>.log` with its SHA-256 (long output keeps its head and tail
 and is marked truncated). All expected checks are rowed before anything runs, so an interrupted run
 is visibly incomplete; starting a new run marks any still-`running` one `interrupted`.
+
+**Likely flakes.** After a run finishes, `orch verify` labels a failed run a likely flake with a
+`verification.flaky` event (run id, head, tree, check, failing tests, rule, one-line reason) when
+every failing test that the first failed required check's log names (Vitest ` FAIL  <file> > ...`
+lines, read by `src/core/flake.ts`) is in a file the job did not change (`unchanged-file`), or
+when a later run at the same tree and policy passes (`passed-on-rerun`). Paths are compared
+worktree-relative after joining the check's `cwd`; a path that is absolute or leaves the worktree
+counts as changed. A run is flagged at most once. The flag is a label for a human: it never
+changes the run's status, its validity, a gate, or a retry. The newest one shows as `Flaky:` in
+`orch factory status`, as `plan.flake`, on the dashboard, and in status mails, until the job
+finishes (decision 2026-11-18-flag-likely-flaky-verification-failures).
 
 **One at a time.** Checks run for one `orch verify` at a time per runtime home (a lock file,
 `verify.lock` in the data directory, holding the holder's PID and job id). Another `orch verify`

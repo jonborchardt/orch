@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
+import { FLAKY_EVENT, flakeView } from '../core/flake.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { SESSION_EVENT, sessionLinks } from '../core/session.ts';
@@ -73,7 +74,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
   // Five queries for the whole board rather than several per job: it is polled every few seconds.
   const reviewsOf = reviewsByJob(store.db, ids);
   const artifactsOf = artifactsByJob(store.db, ids);
-  const eventsOf = latestEventsByJob(store.db, ids, BLOCKER_EVENTS);
+  const eventsOf = latestEventsByJob(store.db, ids, [...BLOCKER_EVENTS, FLAKY_EVENT]);
   const runsOf = latestRunsByJob(store.db, ids);
   // Supersession stays within one repository, so the filtered list already holds both ends.
   const predecessors = new Map<string, string[]>();
@@ -127,6 +128,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       supersedes: predecessors.get(job.id) ?? [],
       ci,
       progress: progressOf(job, evidence.events),
+      flake: flakeView(job, evidence.events.get(FLAKY_EVENT)),
     };
   });
 }
@@ -213,7 +215,9 @@ export function detail(store: Store, id: string): JobDetailView {
   }
   const state = liveness(job);
   const evidence = {
-    events: latestEventsByJob(store.db, [id], BLOCKER_EVENTS).get(id) ?? new Map<string, Event>(),
+    events:
+      latestEventsByJob(store.db, [id], [...BLOCKER_EVENTS, FLAKY_EVENT]).get(id) ??
+      new Map<string, Event>(),
     artifacts,
     latestRun: latestRun(store.db, id)?.run ?? null,
   };
@@ -232,6 +236,7 @@ export function detail(store: Store, id: string): JobDetailView {
     ci,
     progress: progressOf(job, evidence.events),
     timeline: timelineOf(events),
+    flake: flakeView(job, evidence.events.get(FLAKY_EVENT)),
     prPhase: prPhase(job, ci.completion),
     actions: allowedActions(
       job,

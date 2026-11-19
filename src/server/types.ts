@@ -1,4 +1,5 @@
 /** Shapes shared by the API (src/server/api.ts) and the web client (web/src). Types only. */
+import type { Flake } from '../core/flake.ts';
 import type { SessionLinks, SessionRef } from '../core/session.ts';
 import type { Completion, PrPhase } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
@@ -6,6 +7,7 @@ import type { Plan } from '../ops/factory.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 
 export type SafeJob = Omit<Job, 'ownerToken'>;
+export type { Flake };
 
 /**
  * Execution state, distinct from the workflow stage. `running` means the status is running AND
@@ -143,6 +145,8 @@ export interface BoardRow {
   archivedAt: string | null;
   ci: CiView;
   progress: Progress;
+  /** Newest likely-flaky verification failure; null for finished jobs. A label, never a blocker. */
+  flake: Flake | null;
 }
 
 /**
@@ -179,6 +183,8 @@ export interface JobDetailView {
   ci: CiView;
   progress: Progress;
   timeline: Timeline;
+  /** Newest likely-flaky verification failure; null for finished jobs. A label, never a blocker. */
+  flake: Flake | null;
   /** Where the PR stands in delivery, from recorded fields (`prPhase`). */
   prPhase: PrPhase;
   /** Dashboard actions the workflow allows in this state (the server re-checks on POST). */

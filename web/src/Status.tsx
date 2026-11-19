@@ -1,7 +1,7 @@
 import { Button, Chip, Link, Snackbar, Stack, Tooltip, Typography } from '@mui/material';
 import { useState } from 'react';
 
-import type { Blocker, JobDetailView, Liveness, Resume } from '../../src/server/types.ts';
+import type { Blocker, Flake, JobDetailView, Liveness, Resume } from '../../src/server/types.ts';
 import { BLOCKER_LABEL, STATE } from './format.ts';
 
 /** Execution state chip: glyph plus label, never colour alone. Same look on board and detail. */
@@ -61,6 +61,43 @@ export function BlockerText({
   return (
     <Typography data-blocker={blocker.kind}>
       <b>{BLOCKER_LABEL[blocker.kind]}.</b> {sentence}
+    </Typography>
+  );
+}
+
+/** A likely flaky verification failure: a label naming the test, never a blocker. */
+export function FlakeText({ flake, compact }: { flake: Flake; compact?: boolean }) {
+  // text.secondary, not warning.main: small text needs 4.5:1; the prefix is the non-colour cue.
+  const text = `Likely flaky test: ${flake.reason}`;
+  if (compact) {
+    return (
+      <Tooltip title={text}>
+        <Typography
+          component="div"
+          variant="caption"
+          color="text.secondary"
+          data-flake={flake.rule}
+          tabIndex={0}
+          sx={{
+            maxWidth: 240,
+            whiteSpace: 'normal',
+            overflowWrap: 'anywhere',
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: 2,
+            cursor: 'help',
+            textDecoration: 'underline dotted',
+          }}
+        >
+          {text}
+        </Typography>
+      </Tooltip>
+    );
+  }
+  return (
+    <Typography component="div" variant="body2" color="text.secondary" data-flake={flake.rule}>
+      {text}
     </Typography>
   );
 }

@@ -5,11 +5,20 @@
  * human authorized the worktree's own factory.json through the dashboard.
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { spawnCommand, type ToolResult } from '../core/exec.ts';
+import {
+  type FailedTest,
+  flakeReason,
+  type FlakeRule,
+  normalisePath,
+  parseFailures,
+  passedOnRerun,
+  unchangedFile,
+} from '../core/flake.ts';
 import { canonicalPath, jobArtifactDir, verifyLockPath, verifyQueueDir } from '../core/paths.ts';
 import {
   buildReport,
@@ -39,6 +48,9 @@ import {
   type CheckResult,
   finishRun,
   latestRun,
+  listChecks,
+  listRuns,
+  markFlaky,
   recordCheck,
   type RunDetail,
   startRun,
@@ -431,6 +443,7 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
     if (spec.required && result.status !== 'passed') failed = true;
   }
   const finished = finishRun(store, id, auth, run.run.id, failed ? 'failed' : 'passed');
+  flagFlakes(store, id, auth, wt, finished, checks);
   const first = checks.find((c) => c.required && c.status !== 'passed' && c.status !== 'pending');
   return {
     jobId: id,
@@ -444,6 +457,64 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
       : null,
     reused: false,
   };
+}
+
+/**
+ * Label likely flakes after a run finishes: a failed run whose failing tests are all in files the
+ * job did not change, or earlier failed runs at the tree this run just passed. Labels only.
+ */
+function flagFlakes(
+  store: Store,
+  id: string,
+  auth: Auth,
+  wt: Tree,
+  finished: VerificationRun,
+  checks: VerificationCheck[],
+): void {
+  const artifactDir = jobArtifactDir(id, store.paths);
+  const failure = (cs: VerificationCheck[]) => {
+    const c = cs.find((x) => x.required && x.status !== 'passed' && x.status !== 'pending');
+    if (!c) return { check: '', tests: [] as FailedTest[], cwd: '.' };
+    let tests: FailedTest[] = [];
+    if (c.outputPath) {
+      try {
+        tests = parseFailures(
+          readFileSync(path.join(artifactDir, ...c.outputPath.split('/')), 'utf8'),
+        );
+      } catch {
+        /* no saved log: the label names the check */
+      }
+    }
+    return { check: c.checkId, tests, cwd: c.cwd };
+  };
+  const flag = (
+    run: VerificationRun,
+    f: ReturnType<typeof failure>,
+    rule: FlakeRule,
+    why: string,
+  ) =>
+    markFlaky(store, id, auth, {
+      runId: run.id,
+      head: run.head,
+      tree: run.tree,
+      check: f.check,
+      tests: f.tests,
+      rule,
+      reason: flakeReason(run, f.check, f.tests, why),
+    });
+  if (finished.status === 'failed') {
+    const f = failure(checks);
+    const changed = wt.changes.map((c) => c.path);
+    if (!unchangedFile(f.tests, f.cwd, changed)) return;
+    const file = normalisePath(f.cwd, f.tests[0]?.file ?? '') ?? '';
+    flag(finished, f, 'unchanged-file', `the job did not change ${file}`);
+    return;
+  }
+  for (const r of listRuns(store.db, id)) {
+    if (!passedOnRerun(r, finished)) continue;
+    const why = `run ${String(finished.id)} passed at the same tree`;
+    flag(r, failure(listChecks(store.db, r.id)), 'passed-on-rerun', why);
+  }
 }
 
 /** Read-only view for `orch verify show` and the plan. */

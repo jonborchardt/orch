@@ -32,6 +32,7 @@ import {
   BlockerNotes,
   BlockerText,
   CopyResume,
+  FlakeText,
   ResumeBox,
   StatusChip,
   Supersession,
@@ -231,6 +232,7 @@ export function JobDetail({
                   <b>Next:</b> {next}
                 </Typography>
               )}
+              {detail.flake && <FlakeText flake={detail.flake} />}
             </Box>
             {detail.resume?.command && (
               <CopyResume id={job.id} command={detail.resume.command} checkout={job.repoPath} />
