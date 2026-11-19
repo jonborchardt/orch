@@ -502,11 +502,6 @@ export function JobDetail({
   );
 }
 
-/**
- * At needs-human, what a human deciding needs beside the Controls: the approver's DECISION marker
- * with its Rationale verbatim, and the newest consolidated round's blocking findings. The
- * BLOCKING marker is authoritative; tagged lines are listed only when it is above zero.
- */
 type Commits = NonNullable<JobDetailView['merge']>['commits'];
 
 /** A heading with its items, or nothing at all when there are none. */
@@ -605,6 +600,11 @@ function GitTab({ detail }: { detail: JobDetailView }) {
   );
 }
 
+/**
+ * At needs-human, what a human deciding needs beside the Controls: the approver's DECISION marker
+ * with its Rationale verbatim, and the newest consolidated round's blocking findings. The
+ * BLOCKING marker is authoritative; tagged lines are listed only when it is above zero.
+ */
 function Escalation({ detail }: { detail: JobDetailView }) {
   const decision = detail.artifacts.find((a) => a.path === 'decision.md');
   const rationale = section(detail.contents['decision.md'] ?? '', 'Rationale');
