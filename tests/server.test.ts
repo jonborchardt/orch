@@ -116,6 +116,9 @@ describe('seeded board and detail', () => {
       phase: 'ready-mark-failed',
     });
     expect(by(ids.completed).ci.status).toBe('failing');
+    // A ci completion whose CI was later observed failing claims nothing beyond completed.
+    expect(by(ids.completed).outcome).toEqual({ kind: 'completed', label: 'completed' });
+    expect(by(ids.blocked).outcome).toBeNull();
     // Cancelled is its own state, never "finished" like a success, and carries its reason.
     expect(by(ids.cancelled).status).toBe('cancelled');
     expect(by(ids.cancelled).liveness).toBe('cancelled');
@@ -304,6 +307,7 @@ describe('seeded board and detail', () => {
     expect(d.links.checkout).toMatch(/^vscode:\/\/file\/.*alpha/);
     expect(d.resumeCommand).toContain(ids.completed);
     expect(d.liveness).toBe('completed');
+    expect(d.outcome).toEqual({ kind: 'completed', label: 'completed' });
     // A finished job can only be archived and have its PR re-read; merge needs a passing verdict.
     expect(d.actions).toEqual(['refresh-pr', 'archive']);
     expect(d.resume).toBeNull();

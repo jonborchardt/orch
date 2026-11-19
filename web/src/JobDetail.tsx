@@ -161,7 +161,7 @@ export function JobDetail({
         </Typography>
         <Typography color="text.secondary">{job.id}</Typography>
         <ProgressStrip progress={detail.progress} />
-        <StatusChip state={detail.liveness} />
+        <StatusChip state={detail.liveness} outcome={detail.outcome} />
         {job.archivedAt !== null && (
           <Tooltip title={`Archived ${job.archivedAt}; shown on the board under Show: archived`}>
             <Chip label="archived" />

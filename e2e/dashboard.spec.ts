@@ -60,6 +60,12 @@ test('job board shows every repository and job with honest liveness', async ({ p
   await expect(table.locator('[data-state="cancelled"]')).toHaveText(/cancelled/);
   await expect(table.locator('[data-state="cancelled"]')).not.toHaveClass(/colorSuccess/);
   await expect(table.locator('[data-state="completed"]')).toHaveClass(/colorSuccess/);
+  // Completed on GitHub's verdict, CI later failing: the label claims no outcome beyond completed.
+  await expect(table.locator('[data-state="completed"]')).toHaveAttribute(
+    'data-outcome',
+    'completed',
+  );
+  await expect(table.locator('[data-state="completed"]')).toHaveText('✓ completed');
   // Resume is offered for the stale (lapsed lease), failed (released), and unowned jobs only; the
   // blocked job's session still holds a live lease, so the board says so instead.
   await expect(table.getByRole('button', { name: /Copy resume command/ })).toHaveCount(5);
@@ -375,6 +381,7 @@ test('CI escalations: close-out is offered only where the workflow allows it', a
   await expect(status).toContainText('Delivery accepted by a human');
   await expect(status).toContainText('Nothing was merged or marked ready');
   await expect(page.locator('[data-state="completed"]')).toBeVisible();
+  await expect(page.locator('[data-state="completed"]')).toHaveAttribute('data-outcome', 'human');
   await expect(page.getByTestId('completion')).toContainText('Completed by human close-out');
   await expect(page.getByText('human close-out').first()).toBeVisible();
   await page.goto('/');

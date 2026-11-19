@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { prPhase } from '../src/core/workflow.ts';
-import { ciSummary, progressOf, timelineOf } from '../src/server/status.ts';
+import { ciSummary, outcomeOf, progressOf, timelineOf } from '../src/server/status.ts';
 import type { CiView, Progress } from '../src/server/types.ts';
 import type { Event, Job } from '../src/storage/schema.ts';
 
@@ -337,5 +337,53 @@ describe('prPhase', () => {
     expect(guide('merged')).toBe('Merged.');
     expect(guide('draft')).toContain('Ready marking failed: run gh pr ready');
     expect(guide('closed')).toContain('closed without merging');
+  });
+});
+
+describe('outcomeOf', () => {
+  type PrBits = Parameters<typeof outcomeOf>[1];
+  const pr = (over: Partial<PrBits> = {}): PrBits => ({
+    prUrl: 'https://github.com/x/y/pull/9',
+    prState: 'ready',
+    ciStatus: 'passing',
+    ...over,
+  });
+  const kind = (job: PrBits, completion: Parameters<typeof outcomeOf>[2]) =>
+    outcomeOf('completed', job, completion)?.kind;
+
+  it('names how a completed job ended, by precedence, from recorded fields only', () => {
+    expect(kind(pr({ prState: 'merged' }), 'ci')).toBe('merged');
+    // A human close-out whose PR was later merged: the merge is the headline.
+    expect(kind(pr({ prState: 'merged', ciStatus: 'failing' }), 'human')).toBe('merged');
+    // Ready PR on a passing verdict is ready, never merged (merged only from a recorded merge).
+    expect(kind(pr(), 'ci')).toBe('ready');
+    expect(kind(pr({ ciStatus: 'failing' }), 'human')).toBe('human');
+    expect(kind(pr(), 'human')).toBe('human');
+    // Not enough on record: a ci completion later observed failing, a draft or closed PR, legacy.
+    expect(kind(pr({ ciStatus: 'failing' }), 'ci')).toBe('completed');
+    expect(kind(pr({ prState: 'draft' }), 'ci')).toBe('completed');
+    expect(kind(pr({ prState: 'closed' }), 'ci')).toBe('completed');
+    expect(kind(pr({ prUrl: null, prState: null, ciStatus: null }), 'legacy')).toBe('completed');
+    expect(kind(pr(), 'legacy')).toBe('completed');
+  });
+
+  it('labels each kind and is null for any job that is not completed', () => {
+    expect(outcomeOf('completed', pr({ prState: 'merged' }), 'ci')?.label).toBe(
+      'completed: merged',
+    );
+    expect(outcomeOf('completed', pr(), 'ci')?.label).toBe('completed: PR ready, checks passed');
+    expect(outcomeOf('completed', pr(), 'human')?.label).toBe('completed: human close-out');
+    expect(outcomeOf('completed', pr(), 'legacy')?.label).toBe('completed');
+    for (const state of [
+      'running',
+      'stale',
+      'idle',
+      'interrupted',
+      'failed',
+      'blocked',
+      'cancelled',
+    ] as const) {
+      expect(outcomeOf(state, pr({ prState: 'merged' }), null)).toBeNull();
+    }
   });
 });

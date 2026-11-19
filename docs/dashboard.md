@@ -54,7 +54,13 @@ execution state, kept separate so a job stopped in
 proof that a process is alive now); `stale` means the status is still `running` but the lease lapsed
 without renewal, so the session may no longer be working or may only have missed a renewal;
 `interrupted`, `failed`, `needs human`, `idle` (pending), `completed`, and `cancelled`, which is grey
-and never styled like a success. A lapsed lease never reads as `running`; each chip's tooltip, and
+and never styled like a success. A completed job's label says how it ended, from recorded fields
+only (`outcomeOf` in `src/server/status.ts`, in this order): `completed: merged` when the recorded
+`prState` is `merged` (orch's record, updated by Merge or Refresh PR, not GitHub's live state);
+`completed: PR ready, checks passed` when it completed on GitHub's verdict and the PR is ready with
+CI still passing; `completed: human close-out`; otherwise plain `completed` (a legacy job, a draft or
+closed PR, or CI observed failing after completion), never a guess. Workflow completion is not a
+merge: only the first label says the PR was merged. A lapsed lease never reads as `running`; each chip's tooltip, and
 the detail view, carries the full meaning of its state. Under the chip, one line says why a stopped job stopped, derived from
 persisted fields only (`src/server/status.ts`): the latest `job.blocked`, `stage.failed`,
 `job.interrupted`, or `job.cancelled` event and its recorded reason, the `decision.md` marker, the
@@ -155,7 +161,9 @@ naming the cause from the recorded reason code and outcome: repair budget spent,
 PR head, checks that never reached a verdict, a PR closed without merging, or a head that moved
 outside the job. A completed job says how it completed: on GitHub's verdict, by a human close-out
 (chip `human close-out`, with the reason in the events), or, for jobs older than the ci stage,
-with no verdict recorded at all.
+with no verdict recorded at all. On the board, a completed row's CI chip is secondary (outlined)
+beside its status label, and is hidden when the outcome is `merged` and CI is passing; the detail's
+PR tab keeps the CI chip and line either way.
 
 **Controls** reuse `src/ops/actions.ts`, which runs the same validated transitions as the CLI as a
 short-lived `dashboard` session and then releases the job. The detail API lists the actions the

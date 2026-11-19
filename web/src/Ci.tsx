@@ -67,7 +67,16 @@ export function PrPhaseChip({ phase }: { phase: PrPhase }) {
 }
 
 /** The CI state as a chip plus one line, for the board and the detail header. */
-export function CiChip({ ci, compact }: { ci: CiView; compact?: boolean }) {
+export function CiChip({
+  ci,
+  compact,
+  secondary,
+}: {
+  ci: CiView;
+  compact?: boolean;
+  /** Outlined: evidence beside a completed job's outcome, not a headline. */
+  secondary?: boolean;
+}) {
   const label =
     ci.completion === 'human'
       ? 'human close-out'
@@ -82,6 +91,7 @@ export function CiChip({ ci, compact }: { ci: CiView; compact?: boolean }) {
       <Chip
         label={label}
         color={color}
+        variant={secondary ? 'outlined' : 'filled'}
         data-ci={ci.status ?? 'unobserved'}
         data-completion={ci.completion ?? ''}
       />

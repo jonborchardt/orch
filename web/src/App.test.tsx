@@ -47,6 +47,7 @@ function row(over: Partial<BoardRow>): BoardRow {
     stage: 'build',
     status: 'running',
     liveness: 'running',
+    outcome: null,
     round: 0,
     maxRounds: 3,
     owner: { session: 'claude-1', leaseExpiresAt: '2999-01-01T00:00:00.000Z', live: true },
@@ -190,6 +191,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       mailLastId: null,
     },
     liveness: 'blocked',
+    outcome: null,
     artifacts: [],
     contents: {
       'round-1/consolidated.md': `# C\n\n## Findings\n\n${longFindings}\n\nBLOCKING: 0\n`,
@@ -2140,6 +2142,105 @@ describe('PR phase, Merge, and Refresh PR', () => {
     expect(chip).toHaveTextContent('ready to merge');
     // The glyph repeats the label, so it is hidden from assistive technology.
     expect(must(chip.querySelector('[aria-hidden="true"]'))).toHaveTextContent('✓');
+  });
+
+  it('names how a completed job ended and keeps its CI chip secondary, hidden once merged and passing', async () => {
+    mockFetch();
+    const done = (id: string, over: Partial<BoardRow>) =>
+      row({
+        id,
+        title: `Done ${id}`,
+        stage: 'completed',
+        status: 'completed',
+        liveness: 'completed',
+        owner: null,
+        pr: { url: pr, state: 'ready', phase: 'ready-to-merge' },
+        ci: noCi({ status: 'passing', head, completion: 'ci' }),
+        ...over,
+      });
+    data.rows = [
+      done('job-00000011', {
+        outcome: { kind: 'merged', label: 'completed: merged' },
+        pr: { url: pr, state: 'merged', phase: 'merged' },
+      }),
+      done('job-00000012', {
+        outcome: { kind: 'ready', label: 'completed: PR ready, checks passed' },
+      }),
+      done('job-00000013', {
+        outcome: { kind: 'human', label: 'completed: human close-out' },
+        pr: { url: pr, state: 'draft', phase: 'ci-failing' },
+        ci: noCi({ status: 'failing', head, completion: 'human' }),
+      }),
+      done('job-00000014', {
+        outcome: { kind: 'completed', label: 'completed' },
+        pr: { url: pr, state: 'ready', phase: 'ci-failing' },
+        ci: noCi({ status: 'failing', head, completion: 'ci' }),
+      }),
+      done('job-00000015', {
+        outcome: { kind: 'merged', label: 'completed: merged' },
+        pr: { url: pr, state: 'merged', phase: 'merged' },
+        ci: noCi({ status: 'failing', head, completion: 'ci' }),
+      }),
+      row({
+        id: 'job-00000016',
+        title: 'Still running',
+        pr: { url: pr, state: 'draft', phase: 'ci-failing' },
+        ci: noCi({ status: 'failing', head }),
+      }),
+    ];
+    mount();
+    await screen.findByText('Still running');
+    const status = (id: string) => must(boardRowOf(id).querySelector<HTMLElement>('[data-state]'));
+    const ciChip = (id: string) => boardRowOf(id).querySelector<HTMLElement>('[data-ci]');
+    const expected: [string, string, string][] = [
+      ['job-00000011', 'merged', '✓ completed: merged'],
+      ['job-00000012', 'ready', '✓ completed: PR ready, checks passed'],
+      ['job-00000013', 'human', '✓ completed: human close-out'],
+      ['job-00000014', 'completed', '✓ completed'],
+    ];
+    for (const [id, kind, label] of expected) {
+      const chip = status(id);
+      expect(chip).toHaveAttribute('data-state', 'completed');
+      expect(chip).toHaveAttribute('data-outcome', kind);
+      expect(chip.textContent).toBe(label);
+      expect(chip.className).toContain('MuiChip-colorSuccess');
+    }
+    // Merged with passing CI: the outcome says it all, so the board shows no CI chip.
+    expect(ciChip('job-00000011')).toBeNull();
+    // Any other completed row keeps its CI evidence, outlined as secondary.
+    for (const id of ['job-00000012', 'job-00000013', 'job-00000014', 'job-00000015']) {
+      expect(must(ciChip(id)).className).toContain('MuiChip-outlined');
+    }
+    // A job that is not completed is unchanged: no outcome, a filled CI chip.
+    expect(status('job-00000016')).not.toHaveAttribute('data-outcome');
+    expect(must(ciChip('job-00000016')).className).toContain('MuiChip-filled');
+  });
+
+  it('shows the outcome in the detail header and keeps the CI chip and line in the PR tab', async () => {
+    mockFetch();
+    const base = readyDetail();
+    data.detail = readyDetail({
+      job: { ...base.job, prState: 'merged' },
+      outcome: { kind: 'merged', label: 'completed: merged' },
+      ci: noCi({
+        status: 'passing',
+        head,
+        completion: 'ci',
+        line: 'Completed: required checks passed for abcdef0.',
+      }),
+      prPhase: 'merged',
+      actions: ['archive'],
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    const chip = must(document.querySelector<HTMLElement>('[data-state="completed"]'));
+    expect(chip).toHaveAttribute('data-outcome', 'merged');
+    expect(chip.textContent).toBe('✓ completed: merged');
+    fireEvent.click(screen.getByRole('tab', { name: 'PR' }));
+    const panel = screen.getByTestId('ci-panel');
+    expect(panel).toHaveTextContent('CI passing @abcdef0');
+    expect(panel).toHaveTextContent('Completed: required checks passed for abcdef0.');
   });
 
   it('renders Merge and Refresh PR only when the server lists them', async () => {

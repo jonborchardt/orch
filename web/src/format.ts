@@ -80,7 +80,8 @@ export const STATE: Record<Liveness, StateStyle> = {
     color: 'success',
     variant: 'filled',
     glyph: '✓',
-    describe: 'The workflow finished: a draft PR was delivered with its required checks passing.',
+    describe:
+      'The workflow finished. The label says how, when the record shows it; completed is not merged unless it says so.',
   },
   cancelled: {
     label: 'cancelled',
