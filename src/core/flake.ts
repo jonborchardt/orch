@@ -53,11 +53,11 @@ export function parseFailures(log: string): FailedTest[] {
  * the worktree, which the caller must treat as "changed" (when unsure, no flag).
  */
 export function normalisePath(cwd: string, file: string): string | null {
-  const joined = `${cwd}/${file}`.replace(/\\/g, '/');
-  const abs = (p: string) => /^([A-Za-z]:)?\//.test(p.replace(/\\/g, '/'));
-  if (abs(cwd) || abs(file)) return null;
+  const c = cwd.replace(/\\/g, '/');
+  const f = file.replace(/\\/g, '/');
+  if (/^([A-Za-z]:)?\//.test(c) || /^([A-Za-z]:)?\//.test(f)) return null;
   const parts: string[] = [];
-  for (const seg of joined.split('/')) {
+  for (const seg of `${c}/${f}`.split('/')) {
     if (seg === '' || seg === '.') continue;
     if (seg === '..') return null;
     parts.push(seg);

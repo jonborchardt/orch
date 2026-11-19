@@ -458,11 +458,14 @@ function flagFlakes(
     const c = cs.find((x) => x.required && x.status !== 'passed' && x.status !== 'pending');
     if (!c) return { check: '', tests: [] as FailedTest[], cwd: '.' };
     let tests: FailedTest[] = [];
-    try {
-      const log = path.join(artifactDir, ...(c.outputPath ?? '').split('/'));
-      if (c.outputPath) tests = parseFailures(readFileSync(log, 'utf8'));
-    } catch {
-      /* no saved log: the label names the check */
+    if (c.outputPath) {
+      try {
+        tests = parseFailures(
+          readFileSync(path.join(artifactDir, ...c.outputPath.split('/')), 'utf8'),
+        );
+      } catch {
+        /* no saved log: the label names the check */
+      }
     }
     return { check: c.checkId, tests, cwd: c.cwd };
   };
