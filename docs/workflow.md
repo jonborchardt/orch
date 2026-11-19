@@ -488,7 +488,9 @@ the database, so the guard can run from any checkout without touching the shared
   `PreToolUse` on `Edit|Write|MultiEdit|NotebookEdit` claims the checkout that contains the file
   and exits 2 (the tool call is refused, with the holder and the recovery command as the reason)
   while another live session holds it; `SessionStart` only reports a live holder as context, so a
-  read-only session never claims anything; `SessionEnd` releases the session's claims. The claim
+  read-only session never claims anything; `SessionEnd` releases the session's claims. A write
+  to a file Git ignores (this repository's private `todo/` register) is in no commit, so it is
+  neither claimed nor refused. The claim
   records the session's transcript file (`transcript_path` in the hook payload), which Claude Code
   appends to on every turn and tool call, so the holder stays live for 30 minutes after its last
   activity, not its last write: a session that reads, reasons, or runs a long test suite without
@@ -528,7 +530,9 @@ the database, so the guard can run from any checkout without touching the shared
   `PreToolUse` on `Edit|Write|MultiEdit|NotebookEdit` claims the checkout that contains the file
   and exits 2 (the tool call is refused, with the holder and the recovery command as the reason)
   while another live session holds it; `SessionStart` only reports a live holder as context, so a
-  read-only session never claims anything; `SessionEnd` releases the session's claims. The claim
+  read-only session never claims anything; `SessionEnd` releases the session's claims. A write
+  to a file Git ignores (this repository's private `todo/` register) is in no commit, so it is
+  neither claimed nor refused. The claim
   records the session's transcript file (`transcript_path` in the hook payload), which Claude Code
   appends to on every turn and tool call, so the holder stays live for 30 minutes after its last
   activity, not its last write: a session that reads, reasons, or runs a long test suite without
