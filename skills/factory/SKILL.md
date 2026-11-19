@@ -213,7 +213,8 @@ through `simplify` before review. Launch `factory-simplifier` first, as its own 
 reads the diff and writes `round-N/simplify-review.md` without touching code. Register it, then
 launch `factory-builder` with that file: it applies the findings that make sense, commits if
 anything changed, runs `orch verify`, and writes `round-N/simplify.md` listing what it applied and
-each declined finding with its reason. A simplify that changes nothing is valid. `orch` refuses to
+each declined finding with its reason. A simplify that changes nothing is valid, and its
+`orch verify` returns the build's still-valid run (`reused: true`) instead of running again. `orch` refuses to
 complete the stage without both files, and the review round judges the commit `simplify.md` was
 registered against.
 

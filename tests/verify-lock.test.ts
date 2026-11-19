@@ -82,6 +82,20 @@ describe('verify lock', () => {
     expect(existsSync(lock)).toBe(false);
   });
 
+  it('reusing a still-valid run never waits for the lock', () => {
+    const c = start(store, clone);
+    const first = verifyJob(store, c.id, { token: c.token });
+    const held = acquireVerifyLock(verifyLockPath(store.paths), { jobId: 'job-holder' });
+    try {
+      const r = orch(store.home, tmpdir(), ['--json', 'verify', c.id, '--token', c.token]);
+      expect(r.code).toBe(0);
+      expect(r.err).not.toContain('waiting');
+      expect(json(r)).toMatchObject({ reused: true, runId: first.runId });
+    } finally {
+      held();
+    }
+  });
+
   it('releases the lock when a check fails or verification throws; no policy never takes it', () => {
     const c = start(store, clone);
     const lock = verifyLockPath(store.paths);
