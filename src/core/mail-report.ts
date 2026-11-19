@@ -91,7 +91,9 @@ function describe(e: Event): string {
   const to = str('to');
   const detail = [stage, from && `from ${from}`, to && `to ${to}`].filter(Boolean).join(', ');
   const why = str('reason');
-  const reason = why ? `\n    reason: ${why}` : '';
+  // A flake is a label, not a verdict: the same hedge as the dashboard and `orch factory status`.
+  const hedge = e.type === 'verification.flaky' ? 'likely flaky test: ' : '';
+  const reason = why ? `\n    reason: ${hedge}${why}` : '';
   return `${eventEmoji(e.type)} ${e.createdAt}  ${e.type}${detail ? ` (${detail})` : ''}${reason}`;
 }
 

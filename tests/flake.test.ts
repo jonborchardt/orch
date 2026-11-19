@@ -35,6 +35,21 @@ describe('parseFailures', () => {
     ]);
   });
 
+  it('strips OSC sequences and other control characters from test names', () => {
+    const log =
+      ' FAIL  a.test.ts > \u001b]0;title\u0007x\u001b]8;;http://e\u001b\\y\u0000\u0008\u009bz';
+    expect(parseFailures(log)).toEqual([{ file: 'a.test.ts', name: 'xyz' }]);
+  });
+
+  it('reads a long run of spaces in linear time', () => {
+    const spaces = ' '.repeat(200_000);
+    const started = Date.now();
+    expect(parseFailures(`FAIL${spaces}a.test.ts${spaces}x\n${spaces}`)).toEqual([
+      { file: `a.test.ts${spaces}x`, name: null },
+    ]);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
   it('returns [] without FAIL lines', () => {
     expect(parseFailures('Test Files  1 passed (1)\n')).toEqual([]);
     expect(parseFailures('')).toEqual([]);
@@ -140,5 +155,11 @@ describe('flakeReason and flakeView', () => {
     expect(flakeView({ status: 'running' }, undefined)).toBeNull();
     expect(flakeView({ status: 'completed' }, e)).toBeNull();
     expect(flakeView({ status: 'cancelled' }, e)).toBeNull();
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      file: `t${String(i)}.test.ts`,
+      name: null,
+    }));
+    const view = flakeView({ status: 'running' }, { ...e, payload: { ...e.payload, tests: many } });
+    expect(view?.tests).toEqual(many.slice(0, 5));
   });
 });

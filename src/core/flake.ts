@@ -27,18 +27,28 @@ export interface Flake {
   at: string;
 }
 
-// eslint-disable-next-line no-control-regex
-const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+// OSC (`ESC ] ... BEL` or `ESC ] ... ESC \`), CSI, then every other control character except tab
+// and newline, so a test name never carries terminal control into status output or mail.
+/* eslint-disable no-control-regex */
+const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g;
+const CSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+/* eslint-enable no-control-regex */
 
 /** ` FAIL  <file> > <suite> > <test>` and ` FAIL  <file>` lines, de-duplicated, in log order. */
 export function parseFailures(log: string): FailedTest[] {
   const out: FailedTest[] = [];
   const seen = new Set<string>();
-  for (const line of log.replace(ANSI, '').split(/\r?\n/)) {
-    const m = /^\s*FAIL\s+(.+?)\s*$/.exec(line);
-    if (!m?.[1]) continue;
+  const clean = log.replace(/\r\n/g, '\n').replace(OSC, '').replace(CSI, '').replace(CONTROL, '');
+  for (const line of clean.split('\n')) {
+    // trim/startsWith, not a regex: a long run of spaces must not backtrack quadratically.
+    const t = line.trim();
+    if (!t.startsWith('FAIL') || !/^\s/.test(t.slice(4))) continue;
+    let body = t.slice(4).trim();
     // A suite that failed to load prints ` FAIL  <file> [ <file> ]`.
-    const [file = '', ...rest] = m[1].replace(/\s+\[.*\]$/, '').split(' > ');
+    const open = body.endsWith(']') ? body.indexOf(' [') : -1;
+    if (open > 0) body = body.slice(0, open).trimEnd();
+    const [file = '', ...rest] = body.split(' > ');
     const name = rest.length > 0 ? rest.join(' > ') : null;
     const key = `${file}\0${name ?? ''}`;
     if (file === '' || seen.has(key)) continue;
@@ -122,7 +132,8 @@ export function flakeView(job: Pick<Job, 'status'>, e: Event | undefined): Flake
     runId: Number(p['runId']),
     head: str('head'),
     check: str('check'),
-    tests: Array.isArray(p['tests']) ? (p['tests'] as FailedTest[]) : [],
+    // Capped: the views render only `reason`, which already counts the rest.
+    tests: Array.isArray(p['tests']) ? (p['tests'] as FailedTest[]).slice(0, 5) : [],
     rule: p['rule'] === 'passed-on-rerun' ? 'passed-on-rerun' : 'unchanged-file',
     reason: str('reason'),
     at: e.createdAt,

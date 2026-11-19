@@ -8,6 +8,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { planJob } from '../src/ops/factory.ts';
 import { showVerification } from '../src/ops/verify.ts';
 import { board, detail } from '../src/server/api.ts';
 import { listEvents } from '../src/storage/events.ts';
@@ -69,6 +70,7 @@ describe('verify flags likely flakes', () => {
       orch(store.home, tmpdir(), ['--json', 'factory', 'status', c.id]),
     );
     expect(plan.flake).toMatchObject({ runId: r2.runId, rule: 'unchanged-file' });
+    expect(planJob(store, c.id).flake).toMatchObject({ runId: r2.runId, rule: 'unchanged-file' });
     expect(board(store).find((r) => r.id === c.id)?.flake?.runId).toBe(r2.runId);
     const d = detail(store, c.id);
     expect(d.flake?.runId).toBe(r2.runId);
@@ -78,6 +80,7 @@ describe('verify flags likely flakes', () => {
     go(store, c, 'cancel', 'done here');
     expect(board(store).find((r) => r.id === c.id)?.flake).toBeNull();
     expect(detail(store, c.id).flake).toBeNull();
+    expect(planJob(store, c.id).flake).toBeNull();
     const after = orch(store.home, tmpdir(), ['factory', 'status', c.id]);
     expect(after.out).not.toContain('Flaky:');
   });

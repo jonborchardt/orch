@@ -67,15 +67,37 @@ export function BlockerText({
 
 /** A likely flaky verification failure: a label naming the test, never a blocker. */
 export function FlakeText({ flake, compact }: { flake: Flake; compact?: boolean }) {
+  // text.secondary, not warning.main: small text needs 4.5:1; the prefix is the non-colour cue.
+  const text = `Likely flaky test: ${flake.reason}`;
+  if (compact) {
+    return (
+      <Tooltip title={text}>
+        <Typography
+          component="div"
+          variant="caption"
+          color="text.secondary"
+          data-flake={flake.rule}
+          tabIndex={0}
+          sx={{
+            maxWidth: 240,
+            whiteSpace: 'normal',
+            overflowWrap: 'anywhere',
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: 2,
+            cursor: 'help',
+            textDecoration: 'underline dotted',
+          }}
+        >
+          {text}
+        </Typography>
+      </Tooltip>
+    );
+  }
   return (
-    <Typography
-      component="div"
-      variant={compact ? 'caption' : 'body2'}
-      color="warning.main"
-      data-flake={flake.rule}
-      sx={compact ? { maxWidth: 240, whiteSpace: 'normal', overflowWrap: 'anywhere' } : undefined}
-    >
-      Likely flaky test: {flake.reason}
+    <Typography component="div" variant="body2" color="text.secondary" data-flake={flake.rule}>
+      {text}
     </Typography>
   );
 }

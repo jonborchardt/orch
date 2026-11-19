@@ -157,7 +157,7 @@ describe('likely flaky verification failures', () => {
     ]).split('\n');
     const i = lines.findIndex((l) => l.includes('verification.flaky'));
     expect(lines[i]).toBe(`${RUN} 2026-11-17T00:00:00.000Z  verification.flaky`);
-    expect(lines[i + 1]).toBe(`    reason: ${reason}`);
+    expect(lines[i + 1]).toBe(`    reason: likely flaky test: ${reason}`);
   });
 });
 
