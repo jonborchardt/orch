@@ -211,9 +211,6 @@ export interface TransitionContext {
   mergedByHuman?: boolean | undefined;
 }
 
-/** Recorded on `job.completed` when a human merged the PR before CI reached a verdict. */
-export const MERGED_BY_HUMAN_REASON = 'merged by a human before CI finished';
-
 export interface TransitionResult {
   patch: Partial<Job>;
   events: { type: string; payload: Record<string, unknown> }[];
@@ -320,37 +317,26 @@ export function transition(
             // `pr create` and `pr status` record the rollup without a head: not a verdict.
             reject('no CI verdict has been read for the PR head; run orch gh ci');
           }
-          if (ctx.mergedByHuman === true) {
-            // A human merged the PR at the verified, approved HEAD before the checks finished.
-            if (job.prState !== 'merged') reject('the PR is not recorded as merged');
-            return {
-              patch: { stage: 'completed', status: 'completed', completedAt: now() },
-              events: [
-                completed,
-                {
-                  type: 'job.completed',
-                  payload: {
-                    prUrl: job.prUrl,
-                    head: job.ciHead,
-                    ciStatus: job.ciStatus,
-                    mergedByHuman: true,
-                    reason: MERGED_BY_HUMAN_REASON,
-                  },
-                },
-              ],
-            };
-          }
-          if (job.ciStatus !== 'passing') {
+          // A human merged the PR at the verified, approved HEAD before the checks finished.
+          const merged = ctx.mergedByHuman === true;
+          if (merged && job.prState !== 'merged') reject('the PR is not recorded as merged');
+          if (!merged && job.ciStatus !== 'passing') {
             reject(
               `required checks are ${job.ciStatus ?? 'not observed'} for the PR head; run orch gh ci`,
             );
           }
+          const payload = {
+            prUrl: job.prUrl,
+            head: job.ciHead,
+            ...(merged && {
+              ciStatus: job.ciStatus,
+              mergedByHuman: true,
+              reason: 'merged by a human before CI finished',
+            }),
+          };
           return {
             patch: { stage: 'completed', status: 'completed', completedAt: now() },
-            events: [
-              completed,
-              { type: 'job.completed', payload: { prUrl: job.prUrl, head: job.ciHead } },
-            ],
+            events: [completed, { type: 'job.completed', payload }],
           };
         }
         default:

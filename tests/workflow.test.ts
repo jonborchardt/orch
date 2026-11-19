@@ -10,7 +10,6 @@ import {
   describeNext,
   latestChallenge,
   MAX_ROUNDS_REASON,
-  MERGED_BY_HUMAN_REASON,
   requiredArtifact,
   type Stage,
   STAGES,
@@ -174,11 +173,10 @@ describe('transition: a PR merged by a human completes ci', () => {
         head: 'abc',
         ciStatus,
         mergedByHuman: true,
-        reason: MERGED_BY_HUMAN_REASON,
+        reason: 'merged by a human before CI finished',
       });
       expect(completionOf('completed', r.events[1]?.payload)).toBe('merged');
     }
-    expect(MERGED_BY_HUMAN_REASON).toBe('merged by a human before CI finished');
   });
 
   it('never completes on a stored merge alone, nor with the flag on an unmerged PR or no head', () => {
