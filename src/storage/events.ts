@@ -26,6 +26,16 @@ export function listEvents(db: Db, jobId: string, limit = 100): Event[] {
     .reverse();
 }
 
+/** Every event of the listed types for one job, newest first. */
+export function eventsOfTypes(db: Db, jobId: string, types: readonly string[]): Event[] {
+  return db
+    .select()
+    .from(events)
+    .where(and(eq(events.jobId, jobId), inArray(events.type, [...types])))
+    .orderBy(desc(events.id))
+    .all();
+}
+
 /** Newest event of each listed type per job, for a board that explains jobs without N queries. */
 export function latestEventsByJob(
   db: Db,

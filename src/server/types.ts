@@ -4,6 +4,7 @@ import type { SessionLinks, SessionRef } from '../core/session.ts';
 import type { Completion, PrPhase } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
 import type { Plan } from '../ops/factory.ts';
+import type { MergeView } from '../ops/merge-view.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 
 export type SafeJob = Omit<Job, 'ownerToken'>;
@@ -198,6 +199,8 @@ export interface JobDetailView {
   resumeCommand: string;
   /** Ids of the jobs this one replaced (`job.supersededBy` names its own replacement). */
   supersedes: string[];
+  /** Set exactly when the PR is recorded merged: the Git tab's merged summary and history. */
+  merge: MergeView | null;
 }
 
 export interface ActionRequest {

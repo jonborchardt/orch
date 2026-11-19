@@ -135,7 +135,6 @@ export function JobDetail({
     );
   }
   const { job } = detail;
-  const worktree = detail.plan?.worktree ?? null;
   const consolidatedRounds = detail.rounds.filter((r) => r.consolidated !== null).reverse();
   const next = nextAction(detail);
   const content = (path: string | null | undefined) =>
@@ -481,44 +480,7 @@ export function JobDetail({
             </TableBody>
           </Table>
         )}
-        {tab === 'Git' &&
-          (worktree ? (
-            <Stack spacing={1}>
-              <Typography variant="body2">
-                Worktree <code>{worktree.path}</code> on{' '}
-                <code>{worktree.branch ?? '(detached)'}</code>, HEAD{' '}
-                <code>{worktree.head?.slice(0, 10) ?? '?'}</code>
-                {worktree.baseRef && (
-                  <>
-                    , {String(worktree.ahead ?? 0)} ahead / {String(worktree.behind ?? 0)} behind{' '}
-                    <code>{worktree.baseRef}</code>
-                  </>
-                )}
-              </Typography>
-              {worktree.dirty.length > 0 && (
-                <Alert severity="warning">Uncommitted: {worktree.dirty.join(', ')}</Alert>
-              )}
-              <Typography variant="subtitle2">Commits on the branch</Typography>
-              {worktree.commits.length === 0 && (
-                <Typography color="text.secondary">None yet.</Typography>
-              )}
-              {worktree.commits.map((c) => (
-                <Typography key={c.sha} variant="body2">
-                  <code>{c.sha.slice(0, 8)}</code> {c.subject}
-                </Typography>
-              ))}
-              <Typography variant="subtitle2">Changed files vs base</Typography>
-              {worktree.changedFiles.map((f) => (
-                <Typography key={f} variant="body2">
-                  <code>{f}</code>
-                </Typography>
-              ))}
-            </Stack>
-          ) : (
-            <Typography color="text.secondary">
-              No worktree on disk{job.worktreePath ? ` (recorded: ${job.worktreePath})` : ''}.
-            </Typography>
-          ))}
+        {tab === 'Git' && <GitTab detail={detail} />}
         {tab === 'PR' && (
           <Stack spacing={1}>
             {job.prUrl ? (
@@ -545,6 +507,104 @@ export function JobDetail({
  * with its Rationale verbatim, and the newest consolidated round's blocking findings. The
  * BLOCKING marker is authoritative; tagged lines are listed only when it is above zero.
  */
+type Commits = NonNullable<JobDetailView['merge']>['commits'];
+
+/** A heading with its items, or nothing at all when there are none. */
+function GitList({
+  title,
+  commits,
+  files,
+}: {
+  title: string;
+  commits?: Commits;
+  files?: string[];
+}) {
+  if (!commits?.length && !files?.length) return null;
+  return (
+    <>
+      <Typography variant="subtitle2">{title}</Typography>
+      {commits?.map((c) => (
+        <Typography key={c.sha} variant="body2">
+          <code>{c.sha.slice(0, 8)}</code> {c.subject}
+        </Typography>
+      ))}
+      {files?.map((f) => (
+        <Typography key={f} variant="body2">
+          <code>{f}</code>
+        </Typography>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Branch state. A merged job is described by its recorded merge, never by the current comparison
+ * with the base (empty after a merge, still "ahead" after a squash).
+ */
+function GitTab({ detail }: { detail: JobDetailView }) {
+  const { job, merge } = detail;
+  const worktree = detail.plan?.worktree ?? null;
+  const dirty = worktree?.dirty ?? [];
+  return (
+    <Stack spacing={1}>
+      {merge && (
+        <Typography variant="body2">
+          Merged into <code>{merge.base}</code>
+          {merge.prUrl && (
+            <>
+              {' '}
+              by{' '}
+              <Link href={merge.prUrl} target="_blank" rel="noreferrer noopener">
+                {merge.prUrl}
+              </Link>
+            </>
+          )}
+          {merge.head && (
+            <>
+              {' '}
+              at <code>{merge.head.slice(0, 8)}</code>
+            </>
+          )}
+        </Typography>
+      )}
+      {worktree ? (
+        <Typography variant="body2">
+          Worktree <code>{worktree.path}</code> on <code>{worktree.branch ?? '(detached)'}</code>,
+          HEAD <code>{worktree.head?.slice(0, 10) ?? '?'}</code>
+          {!merge && worktree.baseRef && (
+            <>
+              , {String(worktree.ahead ?? 0)} ahead / {String(worktree.behind ?? 0)} behind{' '}
+              <code>{worktree.baseRef}</code>
+            </>
+          )}
+        </Typography>
+      ) : (
+        <Typography color="text.secondary">
+          No worktree on disk{job.worktreePath ? ` (recorded: ${job.worktreePath})` : ''}.
+        </Typography>
+      )}
+      {dirty.length > 0 && <Alert severity="warning">Uncommitted: {dirty.join(', ')}</Alert>}
+      {merge ? (
+        <>
+          {merge.outstanding?.length === 0 && dirty.length === 0 && (
+            <Typography color="text.secondary">Nothing outstanding since the merge.</Typography>
+          )}
+          <GitList title="Commits since the merge" commits={merge.outstanding ?? []} />
+          <GitList title="Commits merged" commits={merge.commits} />
+          <GitList title="Files changed" files={merge.changedFiles} />
+        </>
+      ) : (
+        worktree && (
+          <>
+            <GitList title="Commits on the branch" commits={worktree.commits} />
+            <GitList title="Changed files vs base" files={worktree.changedFiles} />
+          </>
+        )
+      )}
+    </Stack>
+  );
+}
+
 function Escalation({ detail }: { detail: JobDetailView }) {
   const decision = detail.artifacts.find((a) => a.path === 'decision.md');
   const rationale = section(detail.contents['decision.md'] ?? '', 'Rationale');

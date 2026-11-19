@@ -61,6 +61,26 @@ export function parseNameStatus(out: string): WorktreeInfo['changes'] {
   });
 }
 
+/** Commits in `from..to`, newest first; null when Git cannot resolve either commit. */
+export function commitsBetween(path: string, from: string, to: string): Commit[] | null {
+  const log = tryGit(path, 'log', '--format=%H%x09%s', `${from}..${to}`, '--');
+  if (log === undefined) return null;
+  return (log ? log.split(/\r?\n/) : []).map((l) => {
+    const [sha = '', ...rest] = l.split('\t');
+    return { sha, subject: rest.join('\t') };
+  });
+}
+
+/** Files `to` changed since its merge base with `from`; null when Git cannot resolve either. */
+export function changesBetween(
+  path: string,
+  from: string,
+  to: string,
+): WorktreeInfo['changes'] | null {
+  const out = tryGit(path, 'diff', '--name-status', `${from}...${to}`, '--');
+  return out === undefined ? null : parseNameStatus(out);
+}
+
 /** Read-only description of `path` as a candidate worktree of `repoRoot`. */
 export function inspectWorktree(repoRoot: string, path: string, baseBranch: string): WorktreeInfo {
   const info: WorktreeInfo = {
