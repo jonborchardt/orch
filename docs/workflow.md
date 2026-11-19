@@ -278,8 +278,7 @@ HEAD, conflicts, files changed by taking the base, and `material`: files whose m
 neither parent, from `git diff-tree --cc`). Outcomes: `up-to-date` (no commit), `merged`, `conflict`
 (merge aborted), `interrupted`. In the `approve` or `pr` stage a conflict, or a merge with material
 edits, moves the job back to `build` (`rework`): the builder merges and resolves, and the result is
-verified, reviewed, and approved again. In `approve` this replaces an escalate-and-resume detour when
-the base moved during approval; elsewhere a conflict is an error. A clean merge only needs a fresh `orch verify` on the new commit.
+verified, reviewed, and approved again. A clean merge only needs a fresh `orch verify` on the new commit.
 On resume, a row left `started` is reconciled from Git: a half-done merge (`MERGE_HEAD`) is
 aborted, a merge that completed but was never recorded is recorded, anything else is marked
 interrupted; the merge is never blindly retried. Delivery (`gh push`, `gh pr create`) then requires
