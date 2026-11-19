@@ -7,8 +7,9 @@ export default defineConfig({
     // Per file: a scratch ORCH_HOME and removal of every tempDir() the file created.
     setupFiles: ['tests/setup.ts'],
     // CLI tests spawn many Node processes; Git and verification tests create real repositories
-    // and run real subprocesses, and 19 such files run in parallel on Windows.
-    testTimeout: 180_000,
+    // and run real subprocesses, and 19 such files run in parallel on Windows. A test that drives
+    // three jobs to the ci stage takes 190-240s on a loaded machine, so 180s failed every run.
+    testTimeout: 360_000,
     hookTimeout: 60_000,
     coverage: {
       provider: 'v8',

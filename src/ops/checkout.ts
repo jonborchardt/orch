@@ -10,6 +10,7 @@ import { OwnershipError, ValidationError } from '../core/errors.ts';
 import type { RuntimePaths } from '../core/paths.ts';
 import { now } from '../core/workflow.ts';
 import { type CheckoutIdentity, checkoutIdentity } from '../git/repo.ts';
+import { tryGit } from '../git/run.ts';
 import {
   type CheckoutClaim,
   claimCheckout,
@@ -126,7 +127,8 @@ function describe(owner: LiveClaim): string {
  * Claude Code hook: PreToolUse on Edit/Write claims the checkout that contains the file and
  * blocks (exit 2) while another live session holds it; SessionStart only reports an existing
  * holder as context, so a read-only session never claims anything; SessionEnd releases whatever
- * this session held. Any other event, or a tool call without a file path, is ignored. The claim
+ * this session held. Any other event, a tool call without a file path, or a write to a file Git
+ * ignores is ignored. The claim
  * records `transcript_path`, so the holder stays live while its session is active at all, not
  * only while it edits.
  */
@@ -163,6 +165,11 @@ export function hookCheckout(paths: RuntimePaths, input: HookInput): HookOutcome
   if (!file) return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
   const checkout = checkoutIdentity(file);
   if (!checkout) return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
+  // A file Git ignores is in no commit of this checkout, so two sessions may share it (decision
+  // 2026-11-18-checkout-guard-skips-ignored-files).
+  if (tryGit(checkout.root, 'check-ignore', '-q', file) !== undefined) {
+    return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
+  }
   try {
     claimCheckout(paths, checkout, session, { transcript: input.transcript_path });
     return { exitCode: 0, stdout: '', stderr: '', action: 'claimed' };
