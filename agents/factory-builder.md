@@ -67,7 +67,7 @@ Simplify stage: after every build, the coordinator gives you `round-N/simplify-r
 simplifier's over-engineering findings) and asks for `round-N/simplify.md` instead of `build.md`.
 Apply the findings that make sense; never widen scope or drop anything the spec or the project's
 instructions require. Same hard rules: targeted tests, commit if anything changed (nothing changed
-is fine), then `orch verify`. Write `simplify.md` with the headings `Applied` (each finding applied,
+is fine), then `orch verify` (with no commit it returns the build's run at once). Write `simplify.md` with the headings `Applied` (each finding applied,
 or "none"), `Declined` (each finding not applied, with its reason), and `Validation` (the passing
 run id and HEAD). The file is the deliverable.
 

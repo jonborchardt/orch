@@ -98,9 +98,15 @@ always-on reviewers (`security`, `correctness`, `code-quality`) have a verdict (
 UI changes), and when the verdicts describe a commit other than the one this round's `simplify.md`
 was registered for (or, in a round with no `simplify.md`, such as a `request-review` or `resume --to
 review`, the one `build.md` was registered for). If every verdict is `pass` and `BLOCKING: 0`, the job moves to `approve`; otherwise the round is
-a rejection and the job returns to `build`, unless it is the `--max-rounds`-th rejection (default 3),
-in which case it escalates to `needs-human`. Rounds that passed and were followed by a CI repair or a
-base-integration rework spend nothing; `maxCiRepairs` bounds CI repairs separately.
+a rejection and the job returns to `build`, unless the round is the last allowed one (`round >=
+maxRounds`, from `--max-rounds`, default 3), in which case it escalates to `needs-human` with `max
+review rounds reached`. Rounds that are not review-driven raise `maxRounds` by one instead of
+spending it, recorded as `maxRounds` on the event: a base-integration rework (`job.reworked` from
+`pr`), a CI repair (`job.reworked` from `ci`; `maxCiRepairs` bounds those separately, and an
+exhausted repair escalates without raising), and a human resume from `needs-human` to `build`,
+`simplify`, or `review` (`job.resumed`; the dashboard's Request rework and Request review round are
+such resumes). Every other resume raises nothing. So the board's `round / maxRounds` never shows a
+round past its maximum.
 
 **PRs.** `orch gh pr create` records the job's draft PR (created or reused); the `pr` stage cannot
 complete without one, and completing it enters `ci`, which only `orch gh ci` completes, in the call
@@ -132,7 +138,7 @@ Every accepted change appends events (`job.created`, `job.claimed`, `job.release
 `review.recorded`, `job.blocked`, `job.resumed`, `job.interrupted`, `job.cancelled`,
 `job.completed`, `job.superseded`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
 `integration.started`, `integration.completed`, `verification.started`,
-`verification.completed`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
+`verification.completed`, `verification.flaky`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
 `ci.observed`, `pr.ready`) in the same transaction. A `ci.observed` event from `orch gh ci` carries the head,
 outcome, required-check list, every check's status and conclusion, and saved log paths.
 `orch job events <id>` lists them.
@@ -391,6 +397,17 @@ earlier required check already failed), exit code or signal, duration, and the l
 and is marked truncated). All expected checks are rowed before anything runs, so an interrupted run
 is visibly incomplete; starting a new run marks any still-`running` one `interrupted`.
 
+**Likely flakes.** After a run finishes, `orch verify` labels a failed run a likely flake with a
+`verification.flaky` event (run id, head, tree, check, failing tests, rule, one-line reason) when
+every failing test that the first failed required check's log names (Vitest ` FAIL  <file> > ...`
+lines, read by `src/core/flake.ts`) is in a file the job did not change (`unchanged-file`), or
+when a later run at the same tree and policy passes (`passed-on-rerun`). Paths are compared
+worktree-relative after joining the check's `cwd`; a path that is absolute or leaves the worktree
+counts as changed. A run is flagged at most once. The flag is a label for a human: it never
+changes the run's status, its validity, a gate, or a retry. The newest one shows as `Flaky:` in
+`orch factory status`, as `plan.flake`, on the dashboard, and in status mails, until the job
+finishes (decision 2026-11-18-flag-likely-flaky-verification-failures).
+
 **One at a time.** Checks run for one `orch verify` at a time per runtime home (a lock file,
 `verify.lock` in the data directory, holding the holder's PID and job id). Another `orch verify`
 waits inside its own command, prints `orch verify: waiting ...` (naming the holder's job) to stderr
@@ -406,6 +423,13 @@ Under the lock the worktree and policy are checked again, since either may have 
 **Validity.** A run is evidence only while HEAD and its tree are unchanged, the worktree is clean,
 the policy fingerprint matches the effective policy, every currently required check passed in
 that run, and the run completed. Anything else is reported as the reason it is stale.
+
+**Reuse.** When the latest run is still valid for the clean HEAD under the effective policy,
+`orch verify` returns it (`reused: true`, same run id) without taking the lock or running anything,
+so a simplify that commits nothing costs seconds. Any new commit, tree, or policy change, or a
+latest run that failed, was interrupted, or is still running, starts a new run. A base integration
+that only brings in docs still reruns: the tree changed, and in this repository Markdown is
+checked too (decision 2026-11-18-verify-reuses-a-valid-run).
 
 **Sensitive changes.** The plan classifies the job's diff (`plan.sensitive`): application tests
 (added, modified, deleted), test or lint configuration, CI workflows, dependency manifests, and

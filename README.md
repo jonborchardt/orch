@@ -197,7 +197,8 @@ recovery pass) sends one mail summarising those changes: the job's stage, status
 with its reason, and `orch factory status <id>`. When the job needs something, the mail leads with
 it: why it stopped, the recorded reason, and the next command or dashboard decision. Reported events are job creation, stage start,
 completion, and failure, blocking, resume, rework, cancellation, completion, interruption, and
-failed recovery attempts; CI polls, pushes, and verification runs are not mailed. All mails of a
+failed recovery attempts, and likely flaky verification failures (naming the test); CI polls,
+pushes, and verification runs themselves are not mailed. All mails of a
 job share one subject (`[orch] <id>: <title>`) and reply to the previous one, so a mail client
 shows them as one conversation. `orch mail report "<subject>" (--text "<body>" | --text-file <file>) [--reply-to <id>]`
 sends any text the same way and prints `SENT <message-id>`.
@@ -216,7 +217,9 @@ command. Unset, nothing is sent and nothing changes.
   recomputed from HEAD, tree, and policy fingerprint at every gate.
 - Review rounds: security, correctness, and code-quality must all report, against the commit
   `build.md` describes; reviewers are read-only (fingerprint-checked); blocking findings or
-  `CHANGES` return the job to build, until the `maxRounds`-th such rejection escalates.
+  `CHANGES` return the job to build, until a rejection in round `maxRounds` escalates. Base-integration
+  rework, CI repairs, and a human's resume to build, simplify, or review raise `maxRounds` by one
+  instead of using it up.
 - Delivery: only an approved commit (plus clean base merges) is pushed or counts as delivered; the
   draft PR is created or reused, never duplicated; the job completes only inside `orch gh ci` after
   GitHub reports passing required checks for that exact head on the job's own PR; failed checks

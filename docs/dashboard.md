@@ -62,7 +62,11 @@ consolidation's BLOCKING count, and the newest verification run. When the state 
 escalation the line says so (`Escalated from build`) rather than guessing. The line wraps to two
 lines before its ellipsis and is dotted-underlined; hovering or focusing it (it is in the Tab order)
 shows the full text, prefixed with the blocker label, in a tooltip. Jobs a session may resume
-get a **Copy resume** control. Filter by repository and by **Show**: `current` (the default, every
+get a **Copy resume** control. A live job whose verification recently failed in a way that looks
+flaky (`flake` on the row, from the newest `verification.flaky` event; see `docs/workflow.md`)
+shows a **Likely flaky test** line naming the test, on the board and in the detail's status panel.
+It is history, not state: it names its run and head, never blocks, and is hidden once the job
+finishes. Filter by repository and by **Show**: `current` (the default, every
 unarchived job), `active`, `needs human`, `running`, `stale`, `failed` (failed or interrupted),
 `idle`, `finished`, `cancelled`, or `archived`, each labelled with its count; plus a free-text
 **Filter** box matching title, id, repository, stage, status, session, or branch. The app bar's
@@ -159,7 +163,7 @@ workflow allows in the current state (`allowedActions`) and the client renders o
 server re-checks every request. Each control except Refresh PR states its effect in one sentence,
 as a hover/focus tooltip and again in its confirm dialog: Resume says it moves the job without
 fixing anything, Request rework and Request review round name the next review round (`round + 1`
-of `maxRounds`), and Cancel says the job ends for good with its worktree and branch kept. `Resume at <stage>` (the `approve` action, labelled by the stage
+of `maxRounds + 1`: a human resume grants that round by raising `maxRounds`), and Cancel says the job ends for good with its worktree and branch kept. `Resume at <stage>` (the `approve` action, labelled by the stage
 it sends the job to) is the primary control only when the approver escalated (`decision.md` says
 ESCALATE); for any other blocker it is demoted behind a warning, because resuming moves the job
 without fixing anything. Request rework is primary only when reviewers

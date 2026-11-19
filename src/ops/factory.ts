@@ -9,6 +9,7 @@ import { join } from 'node:path';
 
 import { CI_MAX_SESSION_POLLS, waitSeconds } from '../core/ci.ts';
 import { ValidationError } from '../core/errors.ts';
+import { type Flake, FLAKY_EVENT, flakeView } from '../core/flake.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import type { SensitiveReport } from '../core/sensitive.ts';
@@ -27,7 +28,6 @@ import {
   latestChallenge,
   now,
   prPhase,
-  rejectedBefore,
   requiredArtifact,
   RESUMABLE_STATUSES,
   reviewArtifact,
@@ -39,6 +39,7 @@ import { dirtyFiles } from '../git/repo.ts';
 import type { WorktreeInfo } from '../git/worktree.ts';
 import { validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
+import { latestEventsByJob } from '../storage/events.ts';
 import { claimJob, createJob, getJob, jobDetail, resumeJob } from '../storage/jobs.ts';
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
 import { listIntegrations } from '../storage/verification.ts';
@@ -115,6 +116,8 @@ export interface Plan {
   verification: VerificationStatus | null;
   /** Sensitive paths in the job's diff, disabled tests, and policy drift; null without a diff. */
   sensitive: SensitiveReport | null;
+  /** Newest likely-flaky verification failure; null for finished jobs. A label only. */
+  flake: Flake | null;
   /** Most recent base integration attempt, if any. */
   integration: Integration | null;
   /** Rendered UI touched (decides whether UI reviewers run). */
@@ -269,6 +272,10 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     checkoutDirty: existsSync(job.repoPath) ? (tryDirty(job.repoPath) ?? null) : null,
     verification,
     sensitive,
+    flake: flakeView(
+      job,
+      latestEventsByJob(store.db, [id], [FLAKY_EVENT]).get(id)?.get(FLAKY_EVENT),
+    ),
     integration,
     ui,
     agents: [],
@@ -451,8 +458,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       plan.reason =
         `Simplify round ${String(job.round)}: the simplifier reviews the job's diff for over-engineering and writes ` +
         `${findings} without touching code; the builder applies the findings that make sense (never widening ` +
-        `scope), commits if anything changed, runs orch verify, and writes ${record} listing what was applied ` +
-        'and each declined finding with its reason.';
+        `scope), commits if anything changed, runs orch verify (which returns the build's run when nothing ` +
+        `changed), and writes ${record} listing what was applied and each declined finding with its reason.`;
       plan.commands = [
         ...start,
         add(findings, has(findings)),
@@ -473,7 +480,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         .filter((r) => !current.some((c) => c.reviewer === r.name && c.verdict !== null))
         .map((r) => r.name);
       plan.reason =
-        `Review round ${String(job.round)} (${String(rejectedBefore(job.round, detail.reviews, detail.artifacts))} of ${String(job.maxRounds)} rejections used): run ${String(reviewers.length)} reviewers` +
+        `Review round ${String(job.round)} of ${String(job.maxRounds)}: run ${String(reviewers.length)} reviewers` +
         `${ui ? ' (UI reviewers included)' : ''} concurrently, record verdicts, consolidate.` +
         (pending.length ? ` Pending: ${pending.join(', ')}.` : ' All verdicts recorded.');
       plan.commands = [
