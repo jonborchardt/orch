@@ -108,7 +108,10 @@ spec, build summary, review history per round (the job's current round is labell
 `Round N (current)`; one collapsed panel per reviewer whose header shows the reviewer, verdict,
 and summary; expand it for the full review text), consolidated
 findings per round, the approval decision, registered artifacts (size, marker, hash), the event
-log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files), and
+log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files; once
+the PR is recorded merged, "Merged into `<base>`" with the PR link and merged head, the commits
+and files from the merged head's recorded verification, and only commits made since the merge as
+outstanding, never the current ahead/behind), and
 the PR with its CI state. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
 GitHub. The header carries the same progress strip as the board (in place of a raw stage chip)
 and the round as `Round: none` or `Round N / M`, with the same tooltip. The Overview tab ends with a
