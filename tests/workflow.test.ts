@@ -181,7 +181,24 @@ describe('transition: CI repair cycle', () => {
     const pr = run(job('pr', 'running', { ciRepairs: 1 }), 'rework');
     expect(pr.patch).toEqual({ stage: 'build', status: 'pending', maxRounds: 4 });
     expect(pr.events[0]?.payload).toMatchObject({ from: 'pr', maxRounds: 4 });
-    expect(() => run(job('build', 'running'), 'rework')).toThrow(/pr and ci stages/);
+    expect(() => run(job('build', 'running'), 'rework')).toThrow(/approve, pr and ci stages/);
+    expect(() => run(job('review', 'running'), 'rework')).toThrow(/approve, pr and ci stages/);
+  });
+
+  it('rework from approve returns to build without counting a repair, from any status', () => {
+    for (const status of ['running', 'pending', 'failed'] as const) {
+      const r = run(job('approve', status, { ciRepairs: 1 }), 'rework', {
+        ...none,
+        reason: 'base conflicts',
+      });
+      expect(r.patch).toEqual({ stage: 'build', status: 'pending', maxRounds: 4 });
+      expect(r.events).toEqual([
+        {
+          type: 'job.reworked',
+          payload: { from: 'approve', reason: 'base conflicts', ciRepairs: 1, maxRounds: 4 },
+        },
+      ]);
+    }
   });
 
   it('escalates instead of a third repair when the budget is spent; the reason is recorded', () => {

@@ -239,7 +239,8 @@ Follow `plan.commands`; the coordinator adds:
 
 ### Approval and delivery
 
-If `decision.md` says `ESCALATE`, run `escalate` with its reason. If `APPROVE`, follow the `pr`
+If `decision.md` says `ESCALATE` because the base moved, run `orch worktree integrate` instead of
+escalating; otherwise run `escalate` with its reason. If `APPROVE`, follow the `pr`
 stage commands. After `orch worktree integrate`, run `orch factory next` again because HEAD
 changed. A conflicting merge sends the job back to `build`: never resolve conflicts or merge by
 hand, and never `--force` anything; on resume, `orch worktree integrate` reconstructs an

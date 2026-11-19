@@ -10,6 +10,7 @@ spec → build → simplify → review → approve → pr → ci → completed
                             │  changes            │     │
                             └──────→ build        │     └─ (requires passing required checks for HEAD)
                             ▲                     └─ (requires a recorded PR)
+                            ├── rework (base integration needs the builder) ── approve, pr
                             └── rework (CI failed, repairs < max) ── ci
          any stage ── escalate ──→ needs-human ── resume --to <stage> ──→ back
 ```
@@ -19,15 +20,15 @@ spec → build → simplify → review → approve → pr → ci → completed
 
 Claude requests an action; `orch job transition <id> <action>` validates and applies it:
 
-| Action     | Allowed when                                                                     | Effect                                                                                                                       |
-| ---------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `start`    | status `pending`, `failed`, or `interrupted`                                     | status `running`                                                                                                             |
-| `complete` | status `running` and required artifact registered                                | next stage, status `pending` (see below)                                                                                     |
-| `fail`     | status `running`                                                                 | status `failed`                                                                                                              |
-| `escalate` | any live stage                                                                   | stage `needs-human`, status `blocked`, remembers origin                                                                      |
-| `resume`   | `needs-human`, or status `interrupted`/`failed`/`blocked`                        | back to the origin or `--to` stage, status `pending`                                                                         |
-| `rework`   | stage `pr` (base integration needs the builder) or `ci` (required checks failed) | stage `build`, status `pending`; re-review follows; from `ci` counts a repair, or `needs-human` when `maxCiRepairs` is spent |
-| `cancel`   | any job not already finished                                                     | status `cancelled`                                                                                                           |
+| Action     | Allowed when                                                                         | Effect                                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `start`    | status `pending`, `failed`, or `interrupted`                                         | status `running`                                                                                                             |
+| `complete` | status `running` and required artifact registered                                    | next stage, status `pending` (see below)                                                                                     |
+| `fail`     | status `running`                                                                     | status `failed`                                                                                                              |
+| `escalate` | any live stage                                                                       | stage `needs-human`, status `blocked`, remembers origin                                                                      |
+| `resume`   | `needs-human`, or status `interrupted`/`failed`/`blocked`                            | back to the origin or `--to` stage, status `pending`                                                                         |
+| `rework`   | stage `approve` or `pr` (base integration needs the builder) or `ci` (checks failed) | stage `build`, status `pending`; re-review follows; from `ci` counts a repair, or `needs-human` when `maxCiRepairs` is spent |
+| `cancel`   | any job not already finished                                                         | status `cancelled`                                                                                                           |
 
 Required artifacts, relative to the job's artifact directory and registered with
 `orch job artifact add`: `spec.md`, `build.md`, `round-N/simplify.md` (with
@@ -281,9 +282,9 @@ orch worktree remove <id> [--repo <clone>]  # delete the directory; refused whil
 merge base, the approval commit, the valid verification run) and completes it afterwards (result
 HEAD, conflicts, files changed by taking the base, and `material`: files whose merge result matches
 neither parent, from `git diff-tree --cc`). Outcomes: `up-to-date` (no commit), `merged`, `conflict`
-(merge aborted), `interrupted`. In the `pr` stage a conflict, or a merge with material edits, moves
-the job back to `build` (`rework`): the builder merges and resolves, and the result is verified,
-reviewed, and approved again. A clean merge only needs a fresh `orch verify` on the new commit.
+(merge aborted), `interrupted`. In the `approve` or `pr` stage a conflict, or a merge with material
+edits, moves the job back to `build` (`rework`): the builder merges and resolves, and the result is
+verified, reviewed, and approved again. A clean merge only needs a fresh `orch verify` on the new commit.
 On resume, a row left `started` is reconciled from Git: a half-done merge (`MERGE_HEAD`) is
 aborted, a merge that completed but was never recorded is recorded, anything else is marked
 interrupted; the merge is never blindly retried. Delivery (`gh push`, `gh pr create`) then requires

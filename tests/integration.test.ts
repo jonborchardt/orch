@@ -179,7 +179,7 @@ describe('conflicts and material edits', () => {
     deliver(c);
   });
 
-  it('outside the pr stage a conflict is an error and the worktree is left untouched', () => {
+  it('outside the pr and approve stages a conflict is an error and the worktree is left untouched', () => {
     const c = start(store, clone);
     toReview(store, c, 'src/app.ts');
     const before = head(c.wt);
