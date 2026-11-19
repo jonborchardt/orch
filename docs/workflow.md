@@ -97,9 +97,15 @@ always-on reviewers (`security`, `correctness`, `code-quality`) have a verdict (
 UI changes), and when the verdicts describe a commit other than the one this round's `simplify.md`
 was registered for (or, in a round with no `simplify.md`, such as a `request-review` or `resume --to
 review`, the one `build.md` was registered for). If every verdict is `pass` and `BLOCKING: 0`, the job moves to `approve`; otherwise the round is
-a rejection and the job returns to `build`, unless it is the `--max-rounds`-th rejection (default 3),
-in which case it escalates to `needs-human`. Rounds that passed and were followed by a CI repair or a
-base-integration rework spend nothing; `maxCiRepairs` bounds CI repairs separately.
+a rejection and the job returns to `build`, unless the round is the last allowed one (`round >=
+maxRounds`, from `--max-rounds`, default 3), in which case it escalates to `needs-human` with `max
+review rounds reached`. Rounds that are not review-driven raise `maxRounds` by one instead of
+spending it, recorded as `maxRounds` on the event: a base-integration rework (`job.reworked` from
+`pr`), a CI repair (`job.reworked` from `ci`; `maxCiRepairs` bounds those separately, and an
+exhausted repair escalates without raising), and a human resume from `needs-human` to `build`,
+`simplify`, or `review` (`job.resumed`; the dashboard's Request rework and Request review round are
+such resumes). Every other resume raises nothing. So the board's `round / maxRounds` never shows a
+round past its maximum.
 
 **PRs.** `orch gh pr create` records the job's draft PR (created or reused); the `pr` stage cannot
 complete without one, and completing it enters `ci`, which only `orch gh ci` completes, in the call

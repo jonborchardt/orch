@@ -22,10 +22,16 @@ let webRoot: string;
 let ids: SeededJobs;
 const dirs: string[] = [];
 
+// One connection per request. The server shares this process's event loop, and seeding blocks it
+// for seconds; fetch's keep-alive clock counts timer ticks, not wall time, so it can reuse a
+// pooled socket the server's (wall-clock) keep-alive timeout has just closed: ECONNRESET.
 const api = (path: string, init: RequestInit = {}) =>
   fetch(new URL(path, server.url), {
     ...init,
-    headers: { ...((init.headers as Record<string, string> | undefined) ?? {}) },
+    headers: {
+      ...((init.headers as Record<string, string> | undefined) ?? {}),
+      Connection: 'close',
+    },
   });
 const same = () => ({
   Origin: `http://127.0.0.1:${String(server.port)}`,
