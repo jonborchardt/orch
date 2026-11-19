@@ -199,7 +199,7 @@ export function markFlaky(
   store: Store,
   id: string,
   auth: Auth,
-  flake: Omit<Flake, 'at'> & { tree: string },
+  flake: Omit<Flake, 'at' | 'sharedWith'> & { tree: string },
 ): boolean {
   return mutateReturning(store, id, auth, (_job, tx) => {
     const done = tx
@@ -225,14 +225,23 @@ export function listRuns(db: Db, jobId: string): VerificationRun[] {
     .all();
 }
 
-/** Newest run per job (checks not loaded); one query for the whole board. */
-export function latestRunsByJob(db: Db, jobIds: readonly string[]): Map<string, VerificationRun> {
+/** Newest run per job, optionally of one status (checks not loaded); one query for the whole board. */
+export function latestRunsByJob(
+  db: Db,
+  jobIds: readonly string[],
+  status?: VerificationRun['status'],
+): Map<string, VerificationRun> {
   const out = new Map<string, VerificationRun>();
   if (jobIds.length === 0) return out;
   const rows = db
     .select()
     .from(verificationRuns)
-    .where(inArray(verificationRuns.jobId, [...jobIds]))
+    .where(
+      and(
+        inArray(verificationRuns.jobId, [...jobIds]),
+        status ? eq(verificationRuns.status, status) : undefined,
+      ),
+    )
     .orderBy(verificationRuns.id)
     .all();
   for (const r of rows) out.set(r.jobId, r);

@@ -1,5 +1,6 @@
 /** Human vs JSON rendering. Handlers return plain data; this decides how it is printed. */
 import { OrchError } from '../core/errors.ts';
+import { flakeLabel } from '../core/flake.ts';
 import type { FactoryRow } from '../ops/dispatch.ts';
 import type { Plan, Step } from '../ops/factory.ts';
 
@@ -112,7 +113,7 @@ export function formatPlan(plan: Plan): string {
     ['Reason', plan.reason],
   ];
   if (plan.blockedReason) next.push(['Blocked', plan.blockedReason]);
-  if (plan.flake) next.push(['Flaky', `likely flaky test: ${plan.flake.reason}`]);
+  if (plan.flake) next.push(['Flaky', flakeLabel(plan.flake)]);
   const out = [
     ...lines([
       ['Job', plan.jobId],

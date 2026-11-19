@@ -2835,6 +2835,7 @@ describe('Likely flaky test', () => {
     rule: 'unchanged-file' as const,
     reason,
     at: '2026-11-18T00:00:00.000Z',
+    sharedWith: [] as string[],
   };
 
   it('names the test on the board row only when the server flags one', async () => {
@@ -2846,6 +2847,21 @@ describe('Likely flaky test', () => {
       within(boardRowOf('job-00000001')).getByText(`Likely flaky test: ${reason}`),
     ).toBeVisible();
     expect(boardRowOf('job-00000002').querySelector('[data-flake]')).toBeNull();
+  });
+
+  it('says once that the same test fails in other jobs, on the row and in the detail', async () => {
+    mockFetch();
+    const shared = { ...flake, sharedWith: ['job-00000002'] };
+    const text = `Likely machine-wide flaky test (also failing in job-00000002): ${reason}`;
+    data.rows = [row({ id: 'job-00000001', title: 'Flaky', flake: shared })];
+    const { unmount } = mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(within(boardRowOf('job-00000001')).getByText(text)).toBeVisible();
+    unmount();
+    data.detail = detail({ flake: shared });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    expect(await screen.findByText(text)).toBeVisible();
   });
 
   it('names the test in the job detail status panel, and nothing without a flag', async () => {

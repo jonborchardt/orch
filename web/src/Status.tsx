@@ -79,7 +79,11 @@ export function BlockerText({
 /** A likely flaky verification failure: a label naming the test, never a blocker. */
 export function FlakeText({ flake, compact }: { flake: Flake; compact?: boolean }) {
   // text.secondary, not warning.main: small text needs 4.5:1; the prefix is the non-colour cue.
-  const text = `Likely flaky test: ${flake.reason}`;
+  // Same wording as `flakeLabel` in src/core/flake.ts (web imports only types from src/).
+  const text =
+    flake.sharedWith.length > 0
+      ? `Likely machine-wide flaky test (also failing in ${flake.sharedWith.join(', ')}): ${flake.reason}`
+      : `Likely flaky test: ${flake.reason}`;
   if (compact) {
     return (
       <Tooltip title={text}>

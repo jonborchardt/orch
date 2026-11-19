@@ -406,7 +406,15 @@ worktree-relative after joining the check's `cwd`; a path that is absolute or le
 counts as changed. A run is flagged at most once. The flag is a label for a human: it never
 changes the run's status, its validity, a gate, or a retry. The newest one shows as `Flaky:` in
 `orch factory status`, as `plan.flake`, on the dashboard, and in status mails, until the job
-finishes (decision 2026-11-18-flag-likely-flaky-verification-failures).
+finishes or a newer run of the job passes (decision
+2026-11-18-flag-likely-flaky-verification-failures). When the latest run failed at HEAD with an
+`unchanged-file` flag and the base branch moved (`worktree.behind > 0`), the plan for `build`,
+`simplify`, `approve` and `pr` says "integrate base, then verify again" and lists
+`orch worktree integrate` before `orch verify`, and the failing `orch verify` hint says the same.
+When other unfinished jobs show a flag naming the same first test, `flake.sharedWith` lists them and
+the one `Flaky:` line reads "likely machine-wide flaky test (also failing in ...)"; a new flag's
+event reason names those jobs, so mail says so too (decision
+2026-11-19-integrate-base-before-reworking-unchanged-failures).
 
 **One at a time.** Checks run for one `orch verify` at a time per runtime home (a lock file,
 `verify.lock` in the data directory, holding the holder's PID and job id). Another `orch verify`

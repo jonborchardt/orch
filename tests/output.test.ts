@@ -199,10 +199,32 @@ describe('formatPlan', () => {
           rule: 'unchanged-file',
           reason,
           at: '2026-11-18T00:00:00.000Z',
+          sharedWith: [],
         },
       }),
     );
     expect(out).toContain(`Flaky:   likely flaky test: ${reason}`);
+  });
+
+  it('says once that a test failing in other jobs is likely machine-wide', () => {
+    const reason = 'web/src/App.test.tsx > Loading failed in run 12 at abc1234; why';
+    const out = formatPlan(
+      plan({
+        flake: {
+          runId: 12,
+          head: 'abc1234def',
+          check: 'check',
+          tests: [{ file: 'web/src/App.test.tsx', name: 'Loading' }],
+          rule: 'unchanged-file',
+          reason,
+          at: '2026-11-18T00:00:00.000Z',
+          sharedWith: ['job-00000002', 'job-00000003'],
+        },
+      }),
+    );
+    expect(out.split('\n').filter((l) => l.startsWith('Flaky:'))).toEqual([
+      `Flaky:   likely machine-wide flaky test (also failing in job-00000002, job-00000003): ${reason}`,
+    ]);
   });
 
   it('shows (none), no PR, no agents, and the block reason for a human step', () => {

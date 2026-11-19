@@ -9,7 +9,7 @@ import { join } from 'node:path';
 
 import { CI_MAX_SESSION_POLLS, waitSeconds } from '../core/ci.ts';
 import { ValidationError } from '../core/errors.ts';
-import { type Flake, FLAKY_EVENT, flakeView } from '../core/flake.ts';
+import { type Flake, integrateFirst, integrateFirstAdvice } from '../core/flake.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import type { SensitiveReport } from '../core/sensitive.ts';
@@ -39,13 +39,13 @@ import { dirtyFiles } from '../git/repo.ts';
 import type { WorktreeInfo } from '../git/worktree.ts';
 import { validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import { latestEventsByJob } from '../storage/events.ts';
 import { claimJob, createJob, getJob, jobDetail, resumeJob } from '../storage/jobs.ts';
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
-import { listIntegrations } from '../storage/verification.ts';
+import { latestRun, listIntegrations } from '../storage/verification.ts';
 import { issue as ghIssue } from './github.ts';
 import { jobRepository } from './repo.ts';
 import {
+  currentFlakes,
   effectivePolicy,
   sensitiveReport,
   verificationStatus,
@@ -116,7 +116,7 @@ export interface Plan {
   verification: VerificationStatus | null;
   /** Sensitive paths in the job's diff, disabled tests, and policy drift; null without a diff. */
   sensitive: SensitiveReport | null;
-  /** Newest likely-flaky verification failure; null for finished jobs. A label only. */
+  /** Newest likely-flaky verification failure; null for finished jobs or after a newer pass. A label only. */
   flake: Flake | null;
   /** Most recent base integration attempt, if any. */
   integration: Integration | null;
@@ -272,10 +272,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     checkoutDirty: existsSync(job.repoPath) ? (tryDirty(job.repoPath) ?? null) : null,
     verification,
     sensitive,
-    flake: flakeView(
-      job,
-      latestEventsByJob(store.db, [id], [FLAKY_EVENT]).get(id)?.get(FLAKY_EVENT),
-    ),
+    flake: currentFlakes(store).get(id) ?? null,
     integration,
     ui,
     agents: [],
@@ -568,6 +565,23 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     }
     default:
       break;
+  }
+  // A failure only in files the job did not change, with a moved base: integrate and verify again
+  // before any rework (decision 2026-11-19-integrate-base-before-reworking-unchanged-failures).
+  const behind = worktree.behind ?? 0;
+  if (
+    ['build', 'simplify', 'approve', 'pr'].includes(job.stage) &&
+    integrateFirst(plan.flake, latestRun(store.db, id)?.run, worktree.head, behind)
+  ) {
+    plan.reason = `${integrateFirstAdvice(id, behind)} ${plan.reason}`;
+    // pr already integrates first when base moved.
+    if (job.stage !== 'pr') {
+      plan.commands.splice(
+        start.length,
+        0,
+        `orch worktree integrate ${id}${tok}   # base moved; verify again after it`,
+      );
+    }
   }
   if (required && !plan.requiredArtifacts.includes(required)) plan.requiredArtifacts.push(required);
   if (notes.length > 0) plan.reason = `${plan.reason} ${notes.join(' ')}`;
