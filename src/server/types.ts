@@ -239,6 +239,11 @@ export interface JobDetailView {
   };
   /** Current execution session, or null when none was ever attached. */
   session: SessionView | null;
+  /**
+   * Every claude-code session ever attached (all `session.attached` events, not the timeline
+   * cap), newest first, one per ref. The first is the one the Session tab reads.
+   */
+  claudeSessions: ClaudeSession[];
   /** Null for finished jobs; otherwise whether and how a session may resume it. */
   resume: Resume | null;
   resumeCommand: string;
@@ -246,6 +251,74 @@ export interface JobDetailView {
   supersedes: string[];
   /** Set exactly when the PR is recorded merged: the Git tab's merged summary and history. */
   merge: MergeView | null;
+}
+
+export interface ClaudeSession {
+  /** The Claude Code session UUID (`claude --resume <ref>`). */
+  ref: string;
+  attachedAt: string;
+}
+
+/** A subagent of the tied session, from its `agent-<id>.meta.json`; null where the meta is missing. */
+export interface SessionAgent {
+  id: string;
+  type: string | null;
+  description: string | null;
+}
+
+export type SessionEntryKind = 'user' | 'assistant' | 'tool' | 'result' | 'error';
+
+/** One normalized transcript record: plain text, capped at `ENTRY_TEXT_MAX`. */
+export interface SessionEntry {
+  at: string;
+  kind: SessionEntryKind;
+  text: string;
+  /** The text was cut at `ENTRY_TEXT_MAX`. */
+  truncated: boolean;
+  /** Null for the main session. */
+  agent: SessionAgent | null;
+}
+
+/** One file read: `main` or `agent-<id>`, with how much of it was read from its end. */
+export interface SessionFile {
+  source: string;
+  size: number;
+  bytesRead: number;
+  truncated: boolean;
+  modifiedAt: string;
+}
+
+export interface SubagentSummary extends SessionAgent {
+  /** The meta file's `finished`; null when absent or not a boolean. */
+  finished: boolean | null;
+  modifiedAt: string;
+}
+
+/**
+ * The Session tab: a bounded, read-only tail of the job's Claude Code transcript and its
+ * subagents' transcripts (src/server/transcript.ts). `found: false` carries the reason.
+ */
+export interface SessionLogView {
+  found: boolean;
+  reason: string | null;
+  /** The claude-code session UUID read, or null when the job has none attached. */
+  ref: string | null;
+  /**
+   * The command the job's own session runs (through /factory) to tie itself to the job; named for
+   * reference only, never as something the dashboard user runs (it needs the owner's token).
+   */
+  attach: string;
+  /** How many project directories hold `<ref>.jsonl`; the newest-modified one is read. */
+  matches: number;
+  /** Every file read (`main` and each subagent), newest-modified first, the order the budget took. */
+  files: SessionFile[];
+  subagents: SubagentSummary[];
+  /** Subagent files not read because of `MAX_SUBAGENT_FILES`. */
+  subagentsNotRead: number;
+  /** Main and subagent entries merged by timestamp, newest first. */
+  entries: SessionEntry[];
+  /** A file was cut, or a cap (files, bytes, entries, response size) was hit. */
+  truncated: boolean;
 }
 
 export interface ActionRequest {

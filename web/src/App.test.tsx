@@ -12,7 +12,13 @@ import {
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { BoardRow, CiView, JobDetailView, Progress } from '../../src/server/types.ts';
+import type {
+  BoardRow,
+  CiView,
+  JobDetailView,
+  Progress,
+  SessionLogView,
+} from '../../src/server/types.ts';
 import { App } from './App.tsx';
 import { CiChip } from './Ci.tsx';
 import {
@@ -230,6 +236,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       branch: null,
     },
     session: null,
+    claudeSessions: [],
     resume: { command: '/factory resume job-00000003', heldBy: null },
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
     supersedes: [],
@@ -251,7 +258,30 @@ const boardRowOf = (id: string) =>
 function openDetails() {
   fireEvent.click(screen.getByRole('button', { name: 'Details' }));
 }
-let data: { rows: BoardRow[]; detail: JobDetailView; actionStatus: number; actionBody: unknown };
+let data: {
+  rows: BoardRow[];
+  detail: JobDetailView;
+  actionStatus: number;
+  actionBody: unknown;
+  sessionLog: SessionLogView;
+};
+const ATTACH = 'orch job session attach job-00000003 --provider claude-code';
+const NO_SESSION =
+  "No Claude Code session is recorded for this job. A job's session records itself when it starts " +
+  'or resumes through /factory; jobs started before session logs were recorded have none.';
+const SESSION_UUID = '565e2b23-152d-4533-b6b3-e1d4981c7297';
+const noSessionLog = (): SessionLogView => ({
+  found: false,
+  reason: NO_SESSION,
+  ref: null,
+  attach: ATTACH,
+  matches: 0,
+  files: [],
+  subagents: [],
+  subagentsNotRead: 0,
+  entries: [],
+  truncated: false,
+});
 /** While set, board or detail responses wait for the promise (a held request). */
 let hold: { board?: Promise<void>; detail?: Promise<void> } = {};
 
@@ -274,6 +304,7 @@ function mockFetch(): FetchMock {
     if (/^\/api\/jobs\/job-[0-9a-f]{8}\/actions$/.test(url) && init?.method === 'POST') {
       return json(data.actionStatus, data.actionBody);
     }
+    if (/^\/api\/jobs\/job-[0-9a-f]{8}\/session-log$/.test(url)) return json(200, data.sessionLog);
     if (/^\/api\/jobs\/job-[0-9a-f]{8}$/.test(url))
       return (hold.detail ?? Promise.resolve()).then(() => json(200, data.detail));
     return json(404, { error: { type: 'NotFoundError', message: `no ${url}` } });
@@ -297,6 +328,7 @@ beforeEach(() => {
   data = {
     rows,
     detail: detail(),
+    sessionLog: noSessionLog(),
     actionStatus: 200,
     actionBody: {
       job: detail().job,
@@ -2958,6 +2990,7 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
       contents: { 'spec.md': '# Spec\n\nThe spec body.\n' },
       rounds: [round(1, 5), round(2, 3)],
       events: events(34),
+      claudeSessions: [{ ref: SESSION_UUID, attachedAt: '2026-11-13T08:10:00.000Z' }],
       plan: {
         step: 'done',
         reason: '',
@@ -3027,6 +3060,7 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
       },
       { name: 'Artifacts', label: 'Artifacts (0)', count: 0, empty: true, unavailable: null },
       { name: 'Events', label: 'Events (0)', count: 0, empty: true, unavailable: null },
+      { name: 'Session', label: 'Session (empty)', count: null, empty: true, unavailable: null },
       { name: 'Git', label: 'Git (empty)', count: null, empty: true, unavailable: null },
       {
         name: 'Verification',
@@ -3051,6 +3085,7 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
       'Decision',
       'Artifacts (6)',
       'Events (34)',
+      'Session',
       'Git',
       'Verification',
       'PR',
@@ -3147,6 +3182,7 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
       ['Findings (empty)', /No consolidated findings yet\./],
       ['Artifacts (0)', /No artifacts registered\./],
       ['Events (0)', /No events recorded\./],
+      ['Session (empty)', /No Claude Code session is recorded for this job\./],
       ['Git (empty)', /No worktree on disk/],
       ['Verification (empty)', /Plan unavailable\./],
     ];
@@ -3154,7 +3190,10 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
       expect(tab(name)).not.toHaveAttribute('aria-disabled');
       fireEvent.click(tab(name));
       expect(tab(name)).toHaveAttribute('aria-selected', 'true');
-      expect(screen.getByRole('tabpanel')).toHaveTextContent(text);
+      // The Session panel fetches its own data.
+      await waitFor(() => {
+        expect(screen.getByRole('tabpanel')).toHaveTextContent(text);
+      });
     }
   });
 
@@ -3242,6 +3281,233 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
     fireEvent.click(tab('Events (0)'));
     await new Promise((r) => setTimeout(r, 200));
     expect(tab('Events (0)')).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('Job detail: Session tab (todo 0074)', () => {
+  const OLDER = '33333333-4444-4555-8666-777777777777';
+  const t = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+  const builder = { id: 'a1', type: 'builder', description: 'Build round 1' };
+  const withSession = (): JobDetailView =>
+    detail({
+      claudeSessions: [
+        { ref: SESSION_UUID, attachedAt: t(30) },
+        { ref: OLDER, attachedAt: t(90) },
+      ],
+    });
+  const found = (): SessionLogView => ({
+    ...noSessionLog(),
+    found: true,
+    reason: null,
+    ref: SESSION_UUID,
+    matches: 1,
+    files: [
+      { source: 'main', size: 2048, bytesRead: 2048, truncated: true, modifiedAt: t(1) },
+      { source: 'agent-a1', size: 10, bytesRead: 10, truncated: false, modifiedAt: t(2) },
+    ],
+    subagents: [
+      { ...builder, finished: false, modifiedAt: t(2) },
+      {
+        id: 'a2',
+        type: 'reviewer',
+        description: 'Security review',
+        finished: true,
+        modifiedAt: t(20),
+      },
+      // No meta (finished null), and finished: false but quiet for 30 minutes: both unknown.
+      { id: 'a3', type: null, description: null, finished: null, modifiedAt: t(1) },
+      { id: 'a4', type: 'tester', description: 'Old run', finished: false, modifiedAt: t(30) },
+    ],
+    subagentsNotRead: 3,
+    entries: [
+      { at: t(1), kind: 'assistant', text: 'Tests pass now.', truncated: false, agent: null },
+      { at: t(2), kind: 'tool', text: 'Edit src/x.ts', truncated: false, agent: builder },
+      {
+        at: t(3),
+        kind: 'result',
+        text: '12 passed\nsecond line of output',
+        truncated: false,
+        agent: null,
+      },
+      {
+        at: t(4),
+        kind: 'user',
+        text: '<b>bold</b> **not markdown** <img src=x onerror=alert(1)>',
+        truncated: false,
+        agent: null,
+      },
+    ],
+    truncated: true,
+  });
+  const open = async (d: JobDetailView, name: string, refreshMs = 50) => {
+    data.detail = d;
+    const f = mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount(refreshMs);
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('tab', { name }));
+    return f;
+  };
+  const logCalls = (f: FetchMock) =>
+    f.mock.calls.filter(([u]) => String(u).endsWith('/session-log')).length;
+
+  it('is Session (empty) without a claude-code session and Session with one, never disabled (AC8)', async () => {
+    expect(detailTabs(detail()).find((x) => x.name === 'Session')).toEqual({
+      name: 'Session',
+      label: 'Session (empty)',
+      count: null,
+      empty: true,
+      unavailable: null,
+    });
+    expect(detailTabs(withSession()).find((x) => x.name === 'Session')).toEqual({
+      name: 'Session',
+      label: 'Session',
+      count: null,
+      empty: false,
+      unavailable: null,
+    });
+    expect(resolveTab(detail(), 'Session')).toBe('Session');
+    expect(resolveTab(withSession(), 'Session')).toBe('Session');
+    await open(detail(), 'Session (empty)');
+    const tabEl = screen.getByRole('tab', { name: 'Session (empty)' });
+    expect(tabEl).not.toHaveAttribute('aria-disabled');
+    expect(tabEl).toHaveStyle({ fontStyle: 'italic' });
+    expect(tabEl).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('names the reason and the attach command when nothing is tied, as nothing to run (AC9)', async () => {
+    await open(detail(), 'Session (empty)');
+    const empty = await screen.findByTestId('session-log-empty');
+    expect(empty).toHaveTextContent(NO_SESSION);
+    expect(empty).toHaveTextContent(`Nothing to do here: the session runs ${ATTACH} itself.`);
+    expect(empty).not.toHaveTextContent('--token');
+    expect(empty).not.toHaveTextContent('claude --resume');
+  });
+
+  it('says a recorded session has no transcript here, with no instruction to attach (finding 2)', async () => {
+    data.sessionLog = {
+      ...noSessionLog(),
+      ref: SESSION_UUID,
+      reason:
+        `Claude Code session ${SESSION_UUID} is recorded for this job, but its transcript ` +
+        `${SESSION_UUID}.jsonl was not found in any project directory under /h/projects. ` +
+        'It may be under another Claude home (CLAUDE_CONFIG_DIR) or on another machine.',
+    };
+    await open(withSession(), 'Session');
+    const empty = await screen.findByTestId('session-log-empty');
+    expect(empty).toHaveTextContent(`${SESSION_UUID}.jsonl was not found`);
+    expect(empty).toHaveTextContent('/h/projects');
+    expect(empty).toHaveTextContent(`claude --resume ${SESSION_UUID}`);
+    expect(empty).not.toHaveTextContent('orch job session attach');
+    expect(empty).not.toHaveTextContent('--token');
+  });
+
+  it('says when a transcript was read but nothing in it could be shown, outside any list (findings 2, 3)', async () => {
+    data.sessionLog = { ...found(), entries: [], truncated: false };
+    await open(withSession(), 'Session');
+    const none = await screen.findByTestId('session-log-no-entries');
+    expect(none).toHaveTextContent(
+      'The transcript has content, but none of its records could be shown: it may be unreadable or ' +
+        'in a format this dashboard does not recognise.',
+    );
+    expect(screen.queryByRole('list', { name: 'Session timeline' })).toBeNull();
+    expect(none.closest('ol, ul')).toBeNull();
+    // Every list child on the panel is an <li>.
+    for (const list of screen.getByRole('tabpanel').querySelectorAll('ol, ul')) {
+      for (const child of list.children) expect(child.tagName).toBe('LI');
+    }
+    cleanup();
+    data.sessionLog = {
+      ...found(),
+      entries: [],
+      truncated: false,
+      files: [{ source: 'main', size: 0, bytesRead: 0, truncated: false, modifiedAt: t(1) }],
+    };
+    await open(withSession(), 'Session');
+    expect(await screen.findByTestId('session-log-no-entries')).toHaveTextContent(
+      'No activity is recorded in the transcript yet.',
+    );
+  });
+
+  it('renders the timeline newest first with times, agent labels, subagents, and earlier sessions (AC2, AC9)', async () => {
+    data.sessionLog = found();
+    await open(withSession(), 'Session');
+    const list = await screen.findByRole('list', { name: 'Session timeline' });
+    const items = within(list).getAllByRole('listitem');
+    expect(items.map((i) => i.getAttribute('data-kind'))).toEqual([
+      'assistant',
+      'tool',
+      'result',
+      'user',
+    ]);
+    expect(items[0]).toHaveTextContent('1m ago');
+    expect(items[0]).toHaveTextContent('main');
+    expect(items[1]).toHaveTextContent('builder: Build round 1');
+    const time = must(items[1]?.querySelector('time'));
+    expect(time).toHaveAttribute('title', data.sessionLog.entries[1]?.at);
+    expect(time).toHaveTextContent('2m ago');
+    const subs = screen.getByTestId('session-subagents');
+    const sub = (id: string) => must(subs.querySelector(`[data-agent-id="${id}"]`));
+    expect(sub('a1')).toHaveTextContent(/^builder: Build round 1 — running, last active 2m ago$/);
+    expect(sub('a2')).toHaveTextContent(/^reviewer: Security review — finished, last active/);
+    // finished missing, or false but quiet past the window: never a confident "running".
+    expect(sub('a3')).toHaveTextContent(/^agent: a3 — status unknown, last active 1m ago$/);
+    expect(sub('a4')).toHaveTextContent(/^tester: Old run — status unknown, last active 30m ago$/);
+    expect(within(subs).getAllByRole('listitem')).toHaveLength(4);
+    expect(subs).toHaveTextContent('3 older subagent transcript(s) not read.');
+    expect(screen.getByTestId('session-log-header')).toHaveTextContent(SESSION_UUID);
+    expect(screen.getByTestId('session-log-header')).toHaveTextContent('2.0 KB');
+    expect(screen.getByTestId('session-log-truncated')).toHaveTextContent(
+      'Earlier activity not shown: these are the most recent 4 entries within the read limits.',
+    );
+    expect(screen.getByTestId('session-earlier')).toHaveTextContent(`claude --resume ${OLDER}`);
+    expect(screen.getByTestId('session-earlier')).not.toHaveTextContent(SESSION_UUID);
+  });
+
+  it('collapses long results and shows content as plain text (AC9)', async () => {
+    data.sessionLog = found();
+    await open(withSession(), 'Session');
+    const list = await screen.findByRole('list', { name: 'Session timeline' });
+    const result = must(within(list).getAllByRole('listitem')[2]);
+    expect(result).toHaveTextContent('12 passed');
+    expect(result).not.toHaveTextContent('second line of output');
+    const more = within(result).getByRole('button', {
+      name: 'Show more: result from main, 3m ago',
+    });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    const body = must(document.getElementById(must(more.getAttribute('aria-controls'))));
+    expect(body).toHaveTextContent('12 passed');
+    fireEvent.click(more);
+    expect(result).toHaveTextContent('second line of output');
+    const less = within(result).getByRole('button', {
+      name: 'Show less: result from main, 3m ago',
+    });
+    expect(less).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(less);
+    expect(result).not.toHaveTextContent('second line of output');
+    // Each toggle names its own entry.
+    const names = screen
+      .getAllByRole('button', { name: /^Show more/ })
+      .map((b) => b.getAttribute('aria-label'));
+    expect(new Set(names).size).toBe(names.length);
+    const userItem = must(within(list).getAllByRole('listitem')[3]);
+    expect(userItem).toHaveTextContent('<b>bold</b> **not markdown** <img src=x onerror=alert(1)>');
+    expect(userItem.querySelector('b, img, strong')).toBeNull();
+  });
+
+  it('refetches on the poll only while shown', async () => {
+    data.sessionLog = found();
+    const f = await open(withSession(), 'Events (0)');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(logCalls(f)).toBe(0);
+    fireEvent.click(screen.getByRole('tab', { name: 'Session' }));
+    await waitFor(() => {
+      expect(logCalls(f)).toBeGreaterThanOrEqual(3);
+    });
+    fireEvent.click(screen.getByRole('tab', { name: 'Events (0)' }));
+    const stopped = logCalls(f);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(logCalls(f)).toBe(stopped);
   });
 });
 

@@ -20,7 +20,7 @@ import {
 import { DEFAULT_PORT, webDistDir } from '../core/paths.ts';
 import { mailWatermark, reportJobMail } from '../ops/mail.ts';
 import type { Store } from '../storage/client.ts';
-import { act, artifactContent, assertJobId, board, detail, repos } from './api.ts';
+import { act, artifactContent, assertJobId, board, detail, repos, sessionLog } from './api.ts';
 import type { ApiError, SessionInfo } from './types.ts';
 
 const HOST = '127.0.0.1';
@@ -139,6 +139,13 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
     return origin !== undefined && allowedOrigins.has(origin);
   };
 
+  /** A GET without Origin (same-origin fetch, new tab) passes; a foreign Origin is a 403. */
+  const refuseForeignOrigin = (req: IncomingMessage) => {
+    if (req.headers.origin !== undefined && !isSameOrigin(req)) {
+      throw new HttpError(403, 'Foreign origin');
+    }
+  };
+
   const guardHost = (req: IncomingMessage) => {
     // Defeats DNS rebinding: the page must have been loaded from this loopback address.
     const host = req.headers.host ?? '';
@@ -206,9 +213,7 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
     if (method === 'GET') {
       if (root === 'session' && !id) {
         // The token is only useful to the page; a foreign page cannot read this response.
-        if (req.headers.origin !== undefined && !isSameOrigin(req)) {
-          throw new HttpError(403, 'Foreign origin');
-        }
+        refuseForeignOrigin(req);
         const info: SessionInfo = { csrf };
         send(res, 200, info);
         return;
@@ -225,6 +230,13 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
       }
       if (root === 'jobs' && id && !sub) {
         send(res, 200, detail(store, assertJobId(id)));
+        return;
+      }
+      // No query or suffix selects a file: the job's own attached session decides what is read.
+      if (root === 'jobs' && id && sub === 'session-log' && rest.length === 0) {
+        // Transcripts hold secrets: a foreign page is refused outright, not only unable to read.
+        refuseForeignOrigin(req);
+        send(res, 200, sessionLog(store, assertJobId(id)), { 'X-Content-Type-Options': 'nosniff' });
         return;
       }
       if (root === 'jobs' && id && sub === 'artifacts' && rest.length > 0) {

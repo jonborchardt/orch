@@ -11,7 +11,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { homePaths } from '../tests/helpers.ts';
-import { seedDashboard, type SeededJobs } from '../tests/fixtures/dashboard.ts';
+import {
+  SEEDED_CLAUDE_SESSION,
+  seedDashboard,
+  type SeededJobs,
+} from '../tests/fixtures/dashboard.ts';
+import { assistant, user, writeAgent, writeSession } from '../tests/transcript-fixture.ts';
 import { openStore } from '../src/storage/client.ts';
 
 /** Environment variable naming this run's state file; set here, read by the spec and teardown. */
@@ -35,13 +40,34 @@ export default async function globalSetup(): Promise<void> {
   for (const d of Object.values(repos)) mkdirSync(d, { recursive: true });
   const ids = seedDashboard(store, repos);
   store.close();
+  // A scratch Claude home: the Session tab never reads the developer's real transcripts.
+  const claude = join(home, 'claude');
+  const project = writeSession(
+    claude,
+    'seed-project',
+    [
+      user(0, 'Please export reports as CSV'),
+      assistant(2, [{ type: 'text', text: 'Launching the builder.' }]),
+    ].join('\n'),
+    SEEDED_CLAUDE_SESSION,
+  );
+  writeAgent(
+    project,
+    'b1',
+    assistant(1, [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/export.ts' } }]),
+    { agentType: 'builder', description: 'Build round 1', finished: false },
+    SEEDED_CLAUDE_SESSION,
+  );
 
   const requested = process.env['ORCH_E2E_PORT'];
   const port = requested === undefined ? 0 : Number(requested);
   const child = spawn(
     process.execPath,
     [join(import.meta.dirname, '..', 'src', 'cli', 'main.ts'), 'ui', '--port', String(port)],
-    { env: { ...process.env, ORCH_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] },
+    {
+      env: { ...process.env, ORCH_HOME: home, CLAUDE_CONFIG_DIR: claude },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
   );
   let stderr = '';
   child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));

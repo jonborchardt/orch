@@ -138,6 +138,15 @@ describe('skill', () => {
     expect(body.toLowerCase()).toContain('cannot restart');
   });
 
+  it('records the claude-code session before the vscode-agents one, for the Session tab', () => {
+    const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    const claude = body.indexOf(
+      'orch job session attach <id> --provider claude-code --ref "$CLAUDE_CODE_SESSION_ID"',
+    );
+    expect(claude).toBeGreaterThan(-1);
+    expect(body.indexOf('--provider vscode-agents --ref <openLink>')).toBeGreaterThan(claude);
+  });
+
   it('defaults a single job to the interactive session and reads notices on every next', () => {
     const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
     for (const phrase of [

@@ -169,6 +169,10 @@ orch verify show job-1a2b3c4d         # latest verification run and whether it s
 orch ui                               # dashboard at http://127.0.0.1:4777/ (optional)
 ```
 
+The dashboard's Session tab shows the recent turns of the job's Claude Code session and its
+subagents, read from the session's own transcript once `/factory` has attached it
+(`orch job session attach --provider claude-code`).
+
 A job whose session stopped keeps its state. `/factory <id>` in any session resumes it: it takes
 over the lapsed lease (a live one needs `--force`, which rotates the token so the old session's
 commands fail, and the skill forces only when the previous session has clearly died), recreates the worktree if it is gone, re-verifies every registered artifact, and

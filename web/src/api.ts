@@ -6,6 +6,7 @@ import type {
   BoardRow,
   JobDetailView,
   SessionInfo,
+  SessionLogView,
 } from '../../src/server/types.ts';
 
 export class ApiFailure extends Error {
@@ -42,6 +43,8 @@ export const fetchBoard = (repo?: string) =>
   getJson<BoardRow[]>(`/api/jobs${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`);
 export const fetchRepos = () => getJson<string[]>('/api/repos');
 export const fetchDetail = (id: string) => getJson<JobDetailView>(`/api/jobs/${id}`);
+export const fetchSessionLog = (id: string) =>
+  getJson<SessionLogView>(`/api/jobs/${id}/session-log`);
 
 let session: Promise<SessionInfo> | undefined;
 export function fetchSession(): Promise<SessionInfo> {

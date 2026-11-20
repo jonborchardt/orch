@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { jobArtifactDir } from '../../src/core/paths.ts';
 import type { Store } from '../../src/storage/client.ts';
 import {
+  attachSession,
   claimJob,
   clearWorktree,
   createJob,
@@ -209,6 +210,9 @@ function write(dir: string, rel: string, body: string): void {
   writeFileSync(abs, body);
 }
 
+/** The completed job's Claude Code session; e2e/global-setup.ts writes a synthetic transcript for it. */
+export const SEEDED_CLAUDE_SESSION = '0e0e0e0e-1111-4222-8333-444444444444';
+
 export interface SeededJobs {
   completed: string;
   reviewing: string;
@@ -262,6 +266,10 @@ export function seedDashboard(
   {
     const { token } = claimJob(store, completed.id, { session: 'claude-20261112-1500-9f1e' });
     const id = completed.id;
+    attachSession(store, id, {
+      session: { provider: 'claude-code', ref: SEEDED_CLAUDE_SESSION, cwd: null },
+      token,
+    });
     // Its branch stays recorded; the worktree is removed below, after delivery.
     setWorktree(store, id, {
       token,
