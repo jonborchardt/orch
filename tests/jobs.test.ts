@@ -27,7 +27,7 @@ import {
   transitionJob,
 } from '../src/storage/jobs.ts';
 import type { Stage } from '../src/core/workflow.ts';
-import { events, type Job } from '../src/storage/schema.ts';
+import { events, jobs, type Job } from '../src/storage/schema.ts';
 import { fixture, type TempStore, tempStore, writeArtifact } from './helpers.ts';
 
 const input = (title = 'T', repo = 'github.com/o/r') => ({
@@ -126,6 +126,14 @@ describe('jobs: create, read, list', () => {
     expect(listJobs(store.db, { repo: 'github.com/o/a' }).map((j) => j.title)).toEqual(['one']);
     expect(listJobs(store.db, { status: 'pending' })).toHaveLength(2);
     expect(listJobs(store.db, { stage: 'build' })).toHaveLength(0);
+  });
+
+  it('breaks a createdAt tie by insertion order, newest first', () => {
+    createJob(store, input('one'));
+    createJob(store, input('two'));
+    createJob(store, input('three'));
+    store.db.update(jobs).set({ createdAt: '2026-01-01T00:00:00.000Z' }).run();
+    expect(listJobs(store.db).map((j) => j.title)).toEqual(['three', 'two', 'one']);
   });
 });
 
