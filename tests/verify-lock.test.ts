@@ -2,7 +2,6 @@
  * `orch verify` runs checks one at a time per runtime home: a waiting command renews the lease
  * (never the token), a dead holder's lock is taken over, and the lock is always released.
  */
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { verifyLockPath, verifyQueueDir } from '../src/core/paths.ts';
 import { planJob } from '../src/ops/factory.ts';
 import { showVerification, verifyJob } from '../src/ops/verify.ts';
-import { acquireVerifyLock, verifyQueueState } from '../src/ops/verify-lock.ts';
+import { acquireVerifyLock, alive, verifyQueueState } from '../src/ops/verify-lock.ts';
 import { authorize, getJob } from '../src/storage/jobs.ts';
 import { listRuns } from '../src/storage/verification.ts';
 import { makePolicyRepo, start } from './drive.ts';
@@ -25,6 +24,9 @@ const entries = () => {
   return existsSync(dir) ? readdirSync(dir) : [];
 };
 const queueOf = (id: string) => showVerification(store, id)?.queue ?? null;
+// A PID no live process can hold on any platform (Linux pid_max <= 2^22, Windows PIDs are far
+// lower). A just-exited child's PID is not dead for long: Windows reuses it under load.
+const DEAD_PID = 2 ** 31 - 1;
 
 async function until(cond: () => boolean, ms = 60_000): Promise<void> {
   const end = Date.now() + ms;
@@ -74,7 +76,8 @@ describe('verify lock', () => {
   it('takes over a lock whose holder is no longer running', () => {
     const c = start(store, clone);
     const lock = verifyLockPath(store.paths);
-    const dead = spawnSync(process.execPath, ['-e', '']).pid;
+    const dead = DEAD_PID;
+    expect(alive(dead)).toBe(false);
     writeFileSync(lock, JSON.stringify({ pid: dead, startedAt: new Date().toISOString() }));
     const r = orch(store.home, tmpdir(), ['verify', c.id, '--token', c.token]);
     expect(r.err).not.toContain('waiting');
@@ -154,7 +157,8 @@ describe('verify lock', () => {
 
   it('never reports a dead holder or waiter as running or queued', () => {
     const c = start(store, clone);
-    const dead = spawnSync(process.execPath, ['-e', '']).pid;
+    const dead = DEAD_PID;
+    expect(alive(dead)).toBe(false);
     const dir = verifyQueueDir(store.paths);
     mkdirSync(dir, { recursive: true });
     writeFileSync(
