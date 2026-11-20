@@ -10,6 +10,7 @@ import type {
   Resume,
 } from '../../src/server/types.ts';
 import { BLOCKER_LABEL, STATE } from './format.ts';
+import { PrText } from './Links.tsx';
 
 /**
  * Execution state chip: glyph plus label, never colour alone. Same look on board and detail. A
@@ -43,11 +44,14 @@ export function BlockerText({
   blocker,
   compact,
   ciLine,
+  pr = null,
 }: {
   blocker: Blocker;
   compact?: boolean;
   /** Detail only: a ci blocker's summary is the CI line. */
   ciLine?: string;
+  /** Detail only: the PR URL to link inside the CI line (`links.pr`). */
+  pr?: string | null;
 }) {
   const text = blocker.detail ? `${blocker.summary}: ${blocker.detail}` : blocker.summary;
   if (compact) {
@@ -77,7 +81,12 @@ export function BlockerText({
   }
   // The detail's summary sentence: a ci blocker reads the CI line, which already names the head
   // and the repair budget; the recorded reason sits in the Details expander (BlockerNotes).
-  const sentence = blocker.kind === 'ci' && ciLine ? ciLine : `${text}${blocker.detail ? '' : '.'}`;
+  const sentence =
+    blocker.kind === 'ci' && ciLine ? (
+      <PrText text={ciLine} pr={pr} />
+    ) : (
+      `${text}${blocker.detail ? '' : '.'}`
+    );
   return (
     <Typography data-blocker={blocker.kind}>
       <b>{BLOCKER_LABEL[blocker.kind]}.</b> {sentence}

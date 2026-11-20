@@ -599,6 +599,23 @@ test('CI escalations: close-out is offered only where the workflow allows it', a
     'https://github.com/acme/alpha/actions/runs/9/job/901',
   );
   await expect(panel).toContainText('ci/d4e5f60/test.log');
+  // The saved log opens through the artifact route, in a new tab that passes the Host guard.
+  const saved = panel.getByRole('link', { name: 'Saved log ci/d4e5f60/test.log' });
+  await expect(saved).toHaveAttribute(
+    'href',
+    `/api/jobs/${ids.ciExhausted}/artifacts/ci/d4e5f60/test.log`,
+  );
+  await expect(saved).toHaveAttribute('target', '_blank');
+  await expect(saved).toHaveAttribute('rel', 'noreferrer noopener');
+  const [logTab] = await Promise.all([page.context().waitForEvent('page'), saved.click()]);
+  await logTab.waitForLoadState();
+  await expect(logTab.locator('body')).toContainText('FAIL tests/export.test.ts for d4e5f60');
+  await logTab.close();
+  // The PR head is a commit link on the github.com repository.
+  await expect(panel.getByRole('link', { name: 'Commit d4e5f607 on GitHub' })).toHaveAttribute(
+    'href',
+    'https://github.com/acme/alpha/commit/d4e5f60718293041',
+  );
 
   // No checks at all: a human may close it out, with a reason, and the result says so.
   await page.goto(`/#/jobs/${ids.ciNone}`);

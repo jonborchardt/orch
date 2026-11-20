@@ -1,4 +1,10 @@
-import type { BlockerKind, BoardRow, Liveness, Verdict } from '../../src/server/types.ts';
+import type {
+  BlockerKind,
+  BoardRow,
+  JobDetailView,
+  Liveness,
+  Verdict,
+} from '../../src/server/types.ts';
 
 export function elapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -192,4 +198,90 @@ export function repoLabels(repos: readonly string[]): Map<string, string> {
     labels.set(id, label);
   });
   return labels;
+}
+
+/** R2: `<links.repo>/commit/<sha>` for a hex SHA, else null (no base, or not a SHA). */
+export function commitHref(repo: string | null, sha: string | null | undefined): string | null {
+  return repo && sha && /^[0-9a-f]{7,40}$/.test(sha) ? `${repo}/commit/${sha}` : null;
+}
+
+/**
+ * R3: the commits known to exist on the remote. (a) the CI head, every `branch.pushed` head, the
+ * merged head and merged commits; (b) in each newest-first list, every entry from the first one
+ * in (a) on; (c) the integration's base commit and a baseline policy head, when the base ref
+ * came from `origin/`.
+ */
+export function knownCommits(d: JobDetailView): Set<string> {
+  const wt = d.plan?.worktree ?? null;
+  const pushed = d.events.flatMap((e) =>
+    e.type === 'branch.pushed' && typeof e.payload['head'] === 'string' ? [e.payload['head']] : [],
+  );
+  const a = new Set(
+    [d.ci.head, ...pushed, d.merge?.head, ...(d.merge?.commits ?? []).map((c) => c.sha)].filter(
+      (s): s is string => typeof s === 'string',
+    ),
+  );
+  const known = new Set(a);
+  for (const list of [wt?.commits ?? [], d.merge?.outstanding ?? []]) {
+    const i = list.findIndex((c) => a.has(c.sha));
+    if (i >= 0) for (const c of list.slice(i)) known.add(c.sha);
+  }
+  const integ = d.plan?.integration ?? null;
+  if (integ?.baseRef.startsWith('origin/')) known.add(integ.baseSha);
+  const policy = d.plan?.verification?.policy;
+  if (policy?.source === 'baseline' && policy.head && wt?.baseRef?.startsWith('origin/')) {
+    known.add(policy.head);
+  }
+  return known;
+}
+
+/** R4, the same check as `isLogPath` in src/server/api.ts: only log paths orch itself writes. */
+export function isLogPath(p: unknown): p is string {
+  return (
+    typeof p === 'string' &&
+    /^(?:verification\/\d+|ci\/[0-9a-f]{7})\/[A-Za-z0-9._-]+\.log$/.test(p) &&
+    !p.split('/').some((s) => s === '.' || s === '..')
+  );
+}
+
+/** The artifact route for a recorded log, each segment encoded; null for any other path. */
+export function logHref(jobId: string, p: unknown): string | null {
+  return isLogPath(p)
+    ? `/api/jobs/${jobId}/artifacts/${p.split('/').map(encodeURIComponent).join('/')}`
+    : null;
+}
+
+/** R8: GitHub's log URL is an href only over https. */
+export function httpsHref(url: unknown): string | null {
+  if (typeof url !== 'string') return null;
+  try {
+    return new URL(url).protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * R6: split `text` at whole occurrences of the PR URL (`pr`), at most three. An occurrence counts
+ * only when bounded: before it nothing, whitespace or `( [ " '`; after it nothing, whitespace or
+ * `. , ; : ! ? ) ] " '`. Those characters stay in the text. No other URL is linked.
+ */
+export function prParts(text: string, pr: string | null): (string | { pr: string })[] {
+  if (!pr) return [text];
+  const parts: (string | { pr: string })[] = [];
+  let last = 0;
+  let links = 0;
+  for (let i = text.indexOf(pr); i >= 0 && links < 3; i = text.indexOf(pr, i + 1)) {
+    const before = text.charAt(i - 1);
+    const after = text.charAt(i + pr.length);
+    if (i < last) continue;
+    if ((i === 0 || /[\s(["']/.test(before)) && (after === '' || /[\s.,;:!?)\]"']/.test(after))) {
+      if (i > last) parts.push(text.slice(last, i));
+      parts.push({ pr });
+      last = i + pr.length;
+      links++;
+    }
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
 }

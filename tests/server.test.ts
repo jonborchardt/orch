@@ -1,10 +1,11 @@
 /** Dashboard API: read models, security guards, actions through the domain layer. */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { jobArtifactDir } from '../src/core/paths.ts';
 import { MAX_CI_REPAIRS_REASON, MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { board, detail } from '../src/server/api.ts';
@@ -23,6 +24,7 @@ import {
   transitionJob,
 } from '../src/storage/jobs.ts';
 import { jobs } from '../src/storage/schema.ts';
+import { recordCheck, startRun } from '../src/storage/verification.ts';
 import { seedDashboard, type SeededJobs } from './fixtures/dashboard.ts';
 import { orchAsync, tempDir, type TempStore, tempStore } from './helpers.ts';
 
@@ -1108,5 +1110,197 @@ describe('orch ui command', () => {
     const list = await orchAsync(home, home, ['--json', 'job', 'list']);
     expect(list.code).toBe(0);
     expect((await orchAsync(home, home, ['ui', '--port', 'abc'])).code).toBe(2);
+  });
+});
+
+describe('recorded logs on the artifact route (todo 0019)', () => {
+  let own: TempStore;
+  let srv: RunningServer;
+  let a: { id: string; token: string };
+  let b: { id: string; token: string };
+  let verifyLog = '';
+  const ciLog = 'ci/abcdef0/test.log';
+  const get = (path: string, headers: Record<string, string> = {}) =>
+    fetch(new URL(path, srv.url), { headers: { ...headers, Connection: 'close' } });
+  /** A raw request: fetch() cannot set Host, and normalizes nothing we need kept. */
+  const raw = async (path: string, headers: Record<string, string> = {}) => {
+    const { request } = await import('node:http');
+    return new Promise<number>((resolve) => {
+      request({ host: '127.0.0.1', port: srv.port, path, headers }, (res) => {
+        resolve(res.statusCode ?? 0);
+        res.resume();
+      }).end();
+    });
+  };
+  const put = (id: string, rel: string, body: string) => {
+    const abs = join(jobArtifactDir(id, own.paths), ...rel.split('/'));
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, body);
+  };
+  const mk = (title: string, repo = 'github.com/acme/alpha') => {
+    const job = createJob(own, { title, description: title, repo, repoPath, baseBranch: 'main' });
+    const { token } = claimJob(own, job.id, { session: 'claude-logs' });
+    return { id: job.id, token };
+  };
+  let repoPath = '';
+
+  beforeAll(async () => {
+    own = tempStore();
+    repoPath = tempDir('logs-');
+    dirs.push(repoPath);
+    srv = await startServer({ store: own, port: 0, webRoot });
+    a = mk('logs A');
+    b = mk('logs B');
+    const run = startRun(own, a.id, {
+      token: a.token,
+      head: 'abcdef0123456789',
+      tree: 't',
+      dirty: [],
+      configFingerprint: 'fp',
+      policySource: 'baseline',
+      policyHead: null,
+      checks: [
+        { id: 'check', command: 'node', args: [], cwd: '.', required: true, timeoutMs: 1000 },
+      ],
+    });
+    verifyLog = `verification/${String(run.run.id)}/check.log`;
+    const ts = new Date().toISOString();
+    recordCheck(own, a.id, { token: a.token }, (run.checks[0] ?? { id: -1 }).id, {
+      status: 'passed',
+      startedAt: ts,
+      completedAt: ts,
+      durationMs: 1,
+      exitCode: 0,
+      signal: null,
+      outputPath: verifyLog,
+      outputSha256: null,
+      truncated: false,
+      error: null,
+    });
+    put(a.id, verifyLog, 'verify output <script>alert(1)</script>\n');
+    put(a.id, ciLog, 'ci output\n');
+    put(a.id, 'ci/abcdef0/other.log', 'never recorded\n');
+    // Poisoned payload values, each with a file present where it points.
+    put(a.id, 'notes.txt', 'notes\n');
+    put(a.id, '42', 'number\n');
+    // `ci/x/../../secret.log` resolves to <dir>/secret.log, `ci/abcdef0/../../../x.log` to <dir>/../x.log.
+    put(a.id, 'secret.log', 'inside, never recorded\n');
+    put(a.id, '../x.log', 'outside the artifact directory\n');
+    // A recorded log whose directory is a junction to a directory outside the job.
+    const outside = tempDir('logs-outside-');
+    dirs.push(outside);
+    writeFileSync(join(outside, 'test.log'), 'outside via junction\n');
+    mkdirSync(join(jobArtifactDir(a.id, own.paths), 'ci'), { recursive: true });
+    symlinkSync(outside, join(jobArtifactDir(a.id, own.paths), 'ci', 'fedcba9'), 'junction');
+    recordEvent(own, a.id, { token: a.token }, 'ci.observed', {
+      head: 'abcdef0123456789',
+      failures: [
+        { name: 'test', conclusion: 'failure', url: null, log: ciLog },
+        { name: 'n', conclusion: 'failure', url: null, log: 'notes.txt' },
+        { name: 's', conclusion: 'failure', url: null, log: 'ci/x/../../secret.log' },
+        { name: 'num', conclusion: 'failure', url: null, log: 42 },
+        { name: 'deep', conclusion: 'failure', url: null, log: 'ci/abcdef0/../../../x.log' },
+        { name: 'junction', conclusion: 'failure', url: null, log: 'ci/fedcba9/test.log' },
+        { name: 'gone', conclusion: 'failure', url: null, log: 'ci/1234567/gone.log' },
+      ],
+    });
+  });
+  afterAll(async () => {
+    await srv.close();
+    own.cleanup();
+  });
+
+  it('serves a recorded verification log and a recorded CI log as plain, unsniffed text', async () => {
+    for (const [rel, body] of [
+      [verifyLog, 'verify output <script>alert(1)</script>\n'],
+      [ciLog, 'ci output\n'],
+    ] as const) {
+      const r = await get(`/api/jobs/${a.id}/artifacts/${rel}`);
+      expect(r.status).toBe(200);
+      expect(r.headers.get('content-type')).toContain('text/plain');
+      expect(r.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(r.headers.get('cache-control')).toBe('no-store');
+      expect(await r.text()).toBe(body);
+    }
+  });
+
+  it('refuses an unrecorded file under the artifact directory (422)', async () => {
+    expect((await get(`/api/jobs/${a.id}/artifacts/ci/abcdef0/other.log`)).status).toBe(422);
+  });
+
+  it('refuses encoded traversal, backslashes, and absolute paths', async () => {
+    expect((await get(`/api/jobs/${a.id}/artifacts/..%2Fsecret.log`)).status).toBe(400);
+    expect((await get(`/api/jobs/${a.id}/artifacts/ci/..%2F..%2Fsecret.log`)).status).toBe(400);
+    expect((await get(`/api/jobs/${a.id}/artifacts/..%5C..%5Cx.log`)).status).toBe(400);
+    expect((await get(`/api/jobs/${a.id}/artifacts/ci%5Cabcdef0%5Ctest.log`)).status).toBe(400);
+    expect((await get(`/api/jobs/${a.id}/artifacts/ci/abcdef0/test.log%00`)).status).toBe(400);
+    for (const p of ['%2Fetc%2Fpasswd', 'C%3A%5CWindows%5Cwin.ini', 'C%3A%2FWindows%2Fwin.ini']) {
+      const r = await get(`/api/jobs/${a.id}/artifacts/${p}`);
+      expect(r.status).not.toBe(200);
+      expect(r.status).toBe(400);
+    }
+  });
+
+  it('ignores ci.observed payload values that are not log-shaped strings', async () => {
+    const asIs = ['notes.txt', 'ci/x/../../secret.log', '42', 'ci/abcdef0/../../../x.log'];
+    for (const v of asIs) {
+      // Unnormalized on the wire, and percent-encoded so no `..` is resolved by the URL parser.
+      expect(await raw(`/api/jobs/${a.id}/artifacts/${v}`)).not.toBe(200);
+      const enc = encodeURIComponent(v);
+      const r = await get(`/api/jobs/${a.id}/artifacts/${enc}`);
+      expect(r.status).not.toBe(200);
+    }
+    expect((await get(`/api/jobs/${a.id}/artifacts/notes.txt`)).status).toBe(422);
+    expect((await get(`/api/jobs/${a.id}/artifacts/42`)).status).toBe(422);
+  });
+
+  it('refuses a recorded log reached through a junction out of the job directory (422)', async () => {
+    const r = await get(`/api/jobs/${a.id}/artifacts/ci/fedcba9/test.log`);
+    expect(r.status).toBe(422);
+    expect(await r.text()).not.toContain('outside via junction');
+  });
+
+  it('refuses a recorded log that is missing on disk (422)', async () => {
+    expect((await get(`/api/jobs/${a.id}/artifacts/ci/1234567/gone.log`)).status).toBe(422);
+  });
+
+  it("refuses job A's recorded logs under job B's id (422)", async () => {
+    expect((await get(`/api/jobs/${b.id}/artifacts/${verifyLog}`)).status).toBe(422);
+    expect((await get(`/api/jobs/${b.id}/artifacts/${ciLog}`)).status).toBe(422);
+  });
+
+  it('keeps the Host and Sec-Fetch-Site guards on log requests', async () => {
+    expect(await raw(`/api/jobs/${a.id}/artifacts/${ciLog}`, { Host: 'evil.example' })).toBe(400);
+    expect(
+      (await get(`/api/jobs/${a.id}/artifacts/${ciLog}`, { 'Sec-Fetch-Site': 'cross-site' }))
+        .status,
+    ).toBe(403);
+    // A new tab opened from the page sends same-origin, which passes.
+    expect(
+      (await get(`/api/jobs/${a.id}/artifacts/${ciLog}`, { 'Sec-Fetch-Site': 'same-origin' }))
+        .status,
+    ).toBe(200);
+  });
+
+  it('links.repo is the github.com repository only; links.pr is an http(s) URL only', () => {
+    expect(detail(own, a.id).links.repo).toBe('https://github.com/acme/alpha');
+    const withPr = (repo: string, prUrl: string | null) => {
+      const { id } = mk(`repo ${repo}`, repo);
+      if (prUrl) own.db.update(jobs).set({ prUrl }).where(eq(jobs.id, id)).run();
+      return detail(own, id).links;
+    };
+    expect(withPr('gitlab.com/a/b', 'https://github.com/a/b/pull/1').repo).toBeNull();
+    expect(withPr('git.example/acme/alpha', 'https://git.example/acme/alpha/pull/3').repo).toBe(
+      null,
+    );
+    expect(withPr('/local/path/repo', null).repo).toBeNull();
+    expect(withPr('github.com/acme/alpha/extra', null).repo).toBeNull();
+    const script = withPr('github.com/acme/alpha', 'javascript:alert(1)');
+    expect(script.pr).toBeNull();
+    expect(script.repo).toBe('https://github.com/acme/alpha');
+    expect(withPr('github.com/acme/alpha', 'https://github.com/acme/alpha/pull/9').pr).toBe(
+      'https://github.com/acme/alpha/pull/9',
+    );
+    expect(withPr('github.com/acme/alpha', 'not a url').pr).toBeNull();
   });
 });

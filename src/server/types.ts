@@ -226,8 +226,17 @@ export interface JobDetailView {
   /**
    * `vscode://file/...` for the worktree (when recorded) and for the initiating checkout; the
    * branch's GitHub tree URL once a recorded PR or `branch.pushed` event shows it is on the remote.
+   * `pr` is the recorded PR URL only when it parses with an http(s) scheme; every PR href in the
+   * detail view uses it. `repo` is `https://github.com/<owner>/<repo>` for a github.com identity and
+   * null for any other remote; commit links are built from it alone.
    */
-  links: { vscode: string | null; checkout: string; pr: string | null; branch: string | null };
+  links: {
+    vscode: string | null;
+    checkout: string;
+    pr: string | null;
+    repo: string | null;
+    branch: string | null;
+  };
   /** Current execution session, or null when none was ever attached. */
   session: SessionView | null;
   /** Null for finished jobs; otherwise whether and how a session may resume it. */

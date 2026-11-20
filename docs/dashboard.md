@@ -191,12 +191,24 @@ round's blocking findings: "Round N: K blocking finding(s)" with that round's `[
 The `BLOCKING:` marker is authoritative, so a round recorded as 0 says "no blocking findings" even
 when tagged lines remain in the file.
 
+**References** in the detail are links where the destination is known (decision
+2026-11-20-serve-recorded-logs). Every PR href is the read model's `links.pr`, the recorded PR URL
+only when it is http(s); prose (the plan reason, the Next line, the CI line and guidance) links
+only whole, punctuation-bounded occurrences of that URL, at most three per string. A commit SHA
+links to `<links.repo>/commit/<sha>` only for a `github.com/<owner>/<repo>` identity and only when
+the commit is known to be on the remote: the CI head, a `branch.pushed` head, the merged head and
+commits, the entries of the branch's (or since-the-merge) list from the first such commit on, and
+a base commit fetched from `origin/`. Anything else, including any commit on another host, stays
+text. Verification and CI logs link to the artifact route. Links open a new tab with
+`rel="noreferrer noopener"`; the header's CI chip stays text.
+
 **CI state** is shown with the commit it was read for, never on its own: the board's chip reads
 `CI <rollup> @<sha7>` and the detail's PR tab carries
 the full head, when it was observed, whether it is still the worktree HEAD (an old green verdict
 for a commit that is no longer HEAD is marked as not current), GitHub's reason
-from the last `orch gh ci` reconciliation, each failed required check with its GitHub log link and
-the log saved under the artifact directory, and one line of guidance. The CI chip says only what CI
+from the last `orch gh ci` reconciliation, each failed required check with its GitHub log link (an
+href only over https) and a `Saved log <path>` link that opens the log saved under the artifact
+directory, and one line of guidance. The CI chip says only what CI
 is doing. Repairs are rounds, so the board's Round column carries a `repairs n/m` caption under
 the round indicator once a repair happened or CI is failing; in the detail the budget is stated in
 the CI line (`n of m repairs used`). The detail's status panel uses the CI line as its summary and the
@@ -302,8 +314,13 @@ loopback origins (DNS rebinding), rejects cross-site `Sec-Fetch-Site`, and for s
 requests requires a same-origin `Origin`, `Content-Type: application/json`, and a per-process
 CSRF token obtained from `/api/session` (which a foreign origin cannot read). Bodies are limited to
 64 KB and validated field by field; unknown fields are rejected. Static files come only from
-`web/dist`; artifact text is served only for files registered in the database (no arbitrary path
-reads); job rows never include the owner token; there is no shell-execution endpoint. Responses
+`web/dist`; `GET /api/jobs/<id>/artifacts/<path>` serves only that job's registered artifacts plus
+the verification and CI logs orch recorded for it (a check's `outputPath`, a `ci.observed`
+failure's `log`), matched exactly and shape-checked (`verification/<run>/<check>.log`,
+`ci/<sha7>/<name>.log`), and every file is confined by real path to the job's real artifact
+directory, so a junction or symlink cannot lead out (no arbitrary path reads; refusals are 400 for
+a malformed path, 422 otherwise). Logs are sent as `text/plain` with `nosniff`. Job rows never
+include the owner token; there is no shell-execution endpoint. Responses
 carry a CSP, `nosniff`, and `no-store`.
 
 **Development.** `npm run web:dev` starts Vite with hot reload on `127.0.0.1:5173`, proxying
