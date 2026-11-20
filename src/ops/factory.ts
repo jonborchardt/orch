@@ -189,7 +189,7 @@ function noticesFor(
     by: null,
     eventId: null,
   });
-  const finished = TERMINAL_STATUSES.includes(job.status) || job.stage === 'completed';
+  const finished = TERMINAL_STATUSES.includes(job.status);
   const behind = worktree?.behind ?? 0;
   if (worktree?.baseRef && behind > 0 && !finished && job.stage !== 'needs-human') {
     const sha = tryGit(worktree.path, 'rev-parse', worktree.baseRef)?.slice(0, 7) ?? '?';
@@ -306,7 +306,7 @@ export interface PlanOptions {
  */
 export function planJobFresh(store: Store, id: string, opts: PlanOptions = {}): Plan {
   const job = getJob(store.db, id);
-  const finished = TERMINAL_STATUSES.includes(job.status) || job.stage === 'completed';
+  const finished = TERMINAL_STATUSES.includes(job.status);
   let fetchError: string | undefined;
   if (
     !finished &&

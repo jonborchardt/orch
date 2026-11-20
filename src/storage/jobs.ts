@@ -890,9 +890,8 @@ export function postNotice(
       if (TERMINAL_STATUSES.includes(job.status)) {
         throw new ValidationError(`${id} is ${job.status}; nobody would read the notice.`);
       }
-      appendEvent(tx, id, 'notice.posted', { text }, input.actor, now());
-      const posted = listEvents(tx, id, 1)[0];
-      return { jobId: id, eventId: posted?.id ?? 0, text };
+      const eventId = appendEvent(tx, id, 'notice.posted', { text }, input.actor, now());
+      return { jobId: id, eventId, text };
     },
     { behavior: 'immediate' },
   );

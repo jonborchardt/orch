@@ -10,8 +10,12 @@ export function appendEvent(
   payload: Record<string, unknown>,
   actor: string | null,
   createdAt: string,
-): void {
-  tx.insert(events).values({ jobId, type, payload, actor, createdAt }).run();
+): number {
+  return tx
+    .insert(events)
+    .values({ jobId, type, payload, actor, createdAt })
+    .returning({ id: events.id })
+    .get().id;
 }
 
 /** Newest last. */

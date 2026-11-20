@@ -159,6 +159,8 @@ describe('posted notices', () => {
     const [m] = of(plan, 'message');
     const id = listEvents(store.db, c.id, 100).find((e) => e.type === 'notice.posted')?.id;
     expect(m).toMatchObject({ text: 'main has the verify fix', by: 'human', eventId: id });
+    // The post reports the id of the event it appended.
+    expect(r.out).toMatch(new RegExp(`eventId\\s+${String(id)}\\b`));
     expect(m?.at).toBeTruthy();
     expect(plan.noticeAck).toBe(
       `orch job notice ack ${c.id} --through ${String(id)} --token <token>`,
