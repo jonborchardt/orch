@@ -240,7 +240,8 @@ recovery worker call `planJob`, which never fetches, so their `base-moved` uses 
 ref. In `review`, `base-moved` says to integrate after the round completes.
 
 `orch job notice post <id> --message <m> [--by <name>]` posts a message without a token (actor
-`human` by default; at most 2000 characters; refused on a completed or cancelled job). It changes
+`human` by default, at most 100 characters; text at most 2000 characters; control characters and
+line breaks become spaces; refused on a completed or cancelled job). It changes
 no revision or lease. `ops/actions.ts` `postNotice` is the one write path, for the dashboard's
 prompt box later. The owner acknowledges with `plan.noticeAck`
 (`orch job notice ack <id> --through <event-id> --token <t>`), which records `notice.acked`;

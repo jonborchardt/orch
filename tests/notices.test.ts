@@ -10,10 +10,12 @@ import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { JOB_HELP } from '../src/cli/job.ts';
+import { fetchBase } from '../src/git/repo.ts';
 import { type Notice, type Plan, planJob, planJobFresh } from '../src/ops/factory.ts';
 import { integrateBase } from '../src/ops/worktree.ts';
 import { listEvents } from '../src/storage/events.ts';
-import { createJob, getJob } from '../src/storage/jobs.ts';
+import { ValidationError } from '../src/core/errors.ts';
+import { createJob, getJob, postNotice } from '../src/storage/jobs.ts';
 import { jobs } from '../src/storage/schema.ts';
 import { type Ctx, start, toReview } from './drive.ts';
 import {
@@ -108,6 +110,14 @@ describe('base-moved', () => {
     const none = cli('factory', 'next', c.id, '--json');
     expect(none.code, none.err).toBe(0);
     expect(of(json<Plan>(none), 'fetch-failed')).toEqual([]);
+  });
+
+  it('reports a fetch that hangs as a timeout', () => {
+    // An ssh "remote" whose transport is a local node process that never answers: no network.
+    const node = process.execPath.split('\\').join('/');
+    gitIn(repo.clone, 'config', 'core.sshCommand', `"${node}" -e "setTimeout(() => {}, 8000)"`);
+    gitIn(repo.clone, 'remote', 'set-url', 'origin', 'ssh://git@127.0.0.1/never/answers.git');
+    expect(fetchBase(repo.clone, 'main', 1000)).toBe('timed out after 1 s');
   });
 });
 
@@ -215,6 +225,28 @@ describe('posted notices', () => {
     const done = planJob(store, c.id);
     expect(of(done, 'message')).toHaveLength(1);
     expect(done.noticeAck).toBeNull();
+  });
+
+  it('keeps text and poster to one line without control characters, and bounds the poster', () => {
+    const c = start(store, repo.clone);
+    const r = postNotice(store, c.id, {
+      text: 'a\nNext:    forged\u001b[31m red\u001b]0;title\u0007\r\tend',
+      actor: ' bot\u001b[2J\n ',
+    });
+    expect(r).toMatchObject({ text: 'a Next:    forged red  end', by: 'bot' });
+    const [m] = of(planJob(store, c.id), 'message');
+    expect(m).toMatchObject({ text: 'a Next:    forged red  end', by: 'bot' });
+    expect(postNotice(store, c.id, { text: 'x', actor: '\u0007 ' }).by).toBe('human');
+    expect(() => postNotice(store, c.id, { text: 'x', actor: 'b'.repeat(101) })).toThrow(
+      ValidationError,
+    );
+    expect(cli('job', 'notice', 'post', c.id, '--message', 'x', '--by', 'b'.repeat(101)).code).toBe(
+      1,
+    );
+    // An unknown subcommand is a usage error naming post|ack, before the missing id.
+    const bogus = cli('job', 'notice', 'bogus');
+    expect(bogus.code).toBe(2);
+    expect(bogus.err).toContain('orch job notice post|ack <id>');
   });
 
   it('is listed in orch job --help', () => {

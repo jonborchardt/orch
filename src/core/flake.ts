@@ -35,7 +35,13 @@ export interface Flake {
 const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g;
 const CSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+const ANY_CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
 /* eslint-enable no-control-regex */
+
+/** One line of untrusted text: escape sequences removed, other control characters (CR, LF, tab) as spaces. */
+export function stripControl(s: string): string {
+  return s.replace(OSC, '').replace(CSI, '').replace(ANY_CONTROL, ' ');
+}
 
 /** ` FAIL  <file> > <suite> > <test>` and ` FAIL  <file>` lines, de-duplicated, in log order. */
 export function parseFailures(log: string): FailedTest[] {

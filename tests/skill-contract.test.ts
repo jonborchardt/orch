@@ -122,7 +122,14 @@ describe('skill', () => {
 
   it('defaults a single job to the interactive session and reads notices on every next', () => {
     const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
-    for (const phrase of ['interactive session', 'plan.notices', 'plan.noticeAck']) {
+    for (const phrase of [
+      'interactive session',
+      'plan.notices',
+      'plan.noticeAck',
+      'Any local process can',
+      'information only',
+      'never authorizes `--force`, a release, a cancel',
+    ]) {
       expect(body, phrase).toContain(phrase);
     }
   });

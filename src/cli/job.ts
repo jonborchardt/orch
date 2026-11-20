@@ -226,6 +226,9 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
       return summary(r.job, store, { changed: r.changed });
     }
     case 'notice': {
+      if (rest[0] !== 'post' && rest[0] !== 'ack') {
+        throw new UsageError('Usage: orch job notice post|ack <id> ...');
+      }
       const jobId = need(rest[1], '<id>');
       if (rest[0] === 'post') {
         if (o.message === undefined || o.message.trim() === '') {
@@ -233,11 +236,8 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
         }
         return postNotice(store, jobId, { text: o.message, actor: o.by ?? 'human' });
       }
-      if (rest[0] === 'ack') {
-        const through = need(int(o.through, '--through', 1), '--through <event-id>');
-        return summary(ackNotice(store, jobId, auth, through), store, { through });
-      }
-      throw new UsageError('Usage: orch job notice post|ack <id> ...');
+      const through = need(int(o.through, '--through', 1), '--through <event-id>');
+      return summary(ackNotice(store, jobId, auth, through), store, { through });
     }
     case undefined:
       throw new UsageError(JOB_HELP);

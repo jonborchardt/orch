@@ -18,6 +18,7 @@ import {
   leaseUntil,
   newToken,
 } from '../core/ownership.ts';
+import { stripControl } from '../core/flake.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { DEFAULT_CONFIG } from '../core/roles.ts';
 import { SESSION_EVENT, type SessionRef } from '../core/session.ts';
@@ -868,21 +869,28 @@ export function recordMailOutcome(store: Store, id: string, outcome: MailOutcome
 
 /** Longest posted notice; a note for the session, not a document. */
 export const NOTICE_MAX = 2000;
+/** Longest poster name (`--by`). */
+export const NOTICE_BY_MAX = 100;
 
 /**
  * Post a notice for the job's session (`notice.posted`), shown by `orch factory next` until the
- * owner acknowledges it. A human is not the owner, so no token; metadata like
- * `recordMailOutcome`: no revision, updatedAt, or lease change.
+ * owner acknowledges it. The poster is not the owner, so no token; metadata like
+ * `recordMailOutcome`: no revision, updatedAt, or lease change. Text and poster are kept to one
+ * line without control characters, so a post cannot forge plan lines or drive the terminal.
  */
 export function postNotice(
   store: Store,
   id: string,
   input: { text: string; actor: string },
-): { jobId: string; eventId: number; text: string } {
-  const text = input.text.trim();
+): { jobId: string; eventId: number; text: string; by: string } {
+  const text = stripControl(input.text).trim();
   if (text === '') throw new ValidationError('A notice needs a non-blank text.');
   if (text.length > NOTICE_MAX) {
     throw new ValidationError(`A notice is at most ${String(NOTICE_MAX)} characters.`);
+  }
+  const by = stripControl(input.actor).trim() || 'human';
+  if (by.length > NOTICE_BY_MAX) {
+    throw new ValidationError(`A poster name is at most ${String(NOTICE_BY_MAX)} characters.`);
   }
   return store.db.transaction(
     (tx) => {
@@ -890,16 +898,16 @@ export function postNotice(
       if (TERMINAL_STATUSES.includes(job.status)) {
         throw new ValidationError(`${id} is ${job.status}; nobody would read the notice.`);
       }
-      const eventId = appendEvent(tx, id, 'notice.posted', { text }, input.actor, now());
-      return { jobId: id, eventId, text };
+      const eventId = appendEvent(tx, id, 'notice.posted', { text }, by, now());
+      return { jobId: id, eventId, text, by };
     },
     { behavior: 'immediate' },
   );
 }
 
 /**
- * The owner acknowledges every posted notice up to `through` (`notice.acked`): `recordEvent`
- * with a check that `through` is one of this job's `notice.posted` events.
+ * The owner acknowledges every posted notice up to `through` (`notice.acked`): one owner-checked
+ * `mutate` that first checks `through` is one of this job's `notice.posted` events.
  */
 export function ackNotice(store: Store, id: string, auth: Auth, through: number): Job {
   return mutate(store, id, auth, (_job, tx) => {
