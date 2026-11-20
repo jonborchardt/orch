@@ -1170,8 +1170,12 @@ describe('Job detail: header', () => {
     expect(h.querySelector('[data-phase]')).toBeNull();
     expect(h.querySelector('[data-ci]')).toBeNull();
     expect(within(h).queryByRole('link', { name: /^PR/ })).toBeNull();
-    expect(h).toHaveTextContent('gamma');
+    // The repository is shown exactly as recorded, as its own segment.
+    expect(within(h).getByText(detail().job.repo)).toBeInTheDocument();
     expect(within(h).getByText(/^updated /)).toBeInTheDocument();
+    // The base branch, no longer in the header text, is a visible line in Details.
+    openDetails();
+    expect(await screen.findByTestId('branch-line')).toHaveTextContent('Base branch main');
   });
 
   it('keeps the owner and lease in the status tooltip and the update time in its own', async () => {
@@ -1185,7 +1189,11 @@ describe('Job detail: header', () => {
     const title = must(h.querySelector('[data-state]')).getAttribute('title') ?? '';
     expect(title).toContain('claude-9');
     expect(title).toContain(`lease until ${lease}`);
-    expect(within(h).getByText(/^updated /)).toHaveAttribute('title', detail().job.updatedAt);
+    const updated = within(h).getByText(/^updated /);
+    expect(updated).toHaveAttribute('title', detail().job.updatedAt);
+    // A <time> element exposes the exact time to assistive technology, not only as a tooltip.
+    expect(updated.tagName).toBe('TIME');
+    expect(updated).toHaveAttribute('datetime', detail().job.updatedAt);
   });
 
   it('names a lapsed owner in Details, and nothing when there is no owner', async () => {
@@ -1248,6 +1256,13 @@ describe('Job detail: header', () => {
       'title',
       'into main',
     );
+    // Details states the base visibly, for keyboard and touch users; not a GitHub repository, so
+    // no push claim.
+    openDetails();
+    expect(await screen.findByTestId('branch-line')).toHaveTextContent(
+      `Branch ${branch} into main`,
+    );
+    expect(screen.getByTestId('branch-line')).not.toHaveTextContent('not pushed yet');
     cleanup();
 
     await open(detail({ job: { ...detail().job, repo: 'github.com/x/y' } }));
@@ -1256,6 +1271,19 @@ describe('Job detail: header', () => {
       'title',
       'into main; not pushed yet',
     );
+    openDetails();
+    expect(await screen.findByTestId('branch-line')).toHaveTextContent(
+      `Branch ${branch} into main, not pushed yet`,
+    );
+    cleanup();
+
+    // Once linked, Details still names the base and claims nothing about pushing.
+    await open(delivered());
+    openDetails();
+    expect(await screen.findByTestId('branch-line')).toHaveTextContent(
+      `Branch ${branch} into main`,
+    );
+    expect(screen.getByTestId('branch-line')).not.toHaveTextContent('not pushed yet');
   });
 });
 

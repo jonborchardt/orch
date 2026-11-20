@@ -18,12 +18,12 @@ import { BLOCKER_LABEL, STATE } from './format.ts';
 export function StatusChip({
   state,
   outcome,
-  detail,
+  tooltipExtra,
 }: {
   state: Liveness;
   outcome?: Outcome | null;
   /** Detail header only: a second tooltip line (the owner and lease). */
-  detail?: string | null;
+  tooltipExtra?: string | null;
 }) {
   const s = STATE[state];
   return (
@@ -33,7 +33,7 @@ export function StatusChip({
       variant={s.variant}
       data-state={state}
       data-outcome={outcome?.kind}
-      title={detail ? `${s.describe}\n${detail}` : s.describe}
+      title={tooltipExtra ? `${s.describe}\n${tooltipExtra}` : s.describe}
     />
   );
 }

@@ -241,6 +241,18 @@ export function JobDetail({
                     {lease && `, ${lease}`}
                   </Typography>
                 )}
+                <Typography variant="body2" data-testid="branch-line">
+                  {job.branch ? (
+                    <>
+                      Branch <code>{job.branch}</code> into <code>{job.baseBranch}</code>
+                      {notPushed(detail) && ', not pushed yet'}
+                    </>
+                  ) : (
+                    <>
+                      Base branch <code>{job.baseBranch}</code>
+                    </>
+                  )}
+                </Typography>
                 <SessionLine session={detail.session} />
               </Stack>
             </AccordionDetails>
@@ -485,19 +497,29 @@ function leaseText(job: JobDetailView['job']): string | null {
 }
 
 /**
+ * The server links the branch only with push evidence (`links.branch`); true when it could have
+ * derived a link from the repository but has no such evidence yet.
+ */
+function notPushed(detail: JobDetailView): boolean {
+  const { job } = detail;
+  return (
+    !job.prUrl &&
+    !detail.events.some((e) => e.type === 'branch.pushed') &&
+    /^github\.com\/[^/]+\/[^/]+$/.test(job.repo)
+  );
+}
+
+/**
  * Two lines: identity and operational status, then delivery. A field without data is omitted;
- * the owner, lease, and base branch are tooltips. Long values break anywhere, so nothing clips.
+ * the owner, lease, and base branch are tooltips here and visible lines in Details. Long values
+ * break anywhere, so nothing clips.
  */
 function JobHeader({ detail, error }: { detail: JobDetailView; error: string | null }) {
   const { job, ci, links } = detail;
   const lease = leaseText(job);
   const owner = job.ownerSession ? `Owner ${job.ownerSession}${lease ? `; ${lease}` : ''}` : null;
   const into = `into ${job.baseBranch}`;
-  // The server links the branch only with push evidence; say why when it could have.
-  const unpushed =
-    !job.prUrl &&
-    !detail.events.some((e) => e.type === 'branch.pushed') &&
-    /^github\.com\/[^/]+\/[^/]+$/.test(job.repo);
+  const unpushed = notPushed(detail);
   const prNumber = job.prUrl ? /\/pull\/(\d+)\/?$/.exec(job.prUrl)?.[1] : undefined;
   const delivery = [
     <span key="repo">{job.repo}</span>,
@@ -527,9 +549,9 @@ function JobHeader({ detail, error }: { detail: JobDetailView; error: string | n
       <PrPhaseChip key="phase" phase={detail.prPhase} />
     ),
     (ci.status !== null || ci.completion !== null) && <CiChip key="ci" ci={ci} compact />,
-    <span key="updated" title={job.updatedAt}>
+    <time key="updated" dateTime={job.updatedAt} title={job.updatedAt}>
       updated {ago(job.updatedAt)}
-    </span>,
+    </time>,
   ].filter(Boolean);
   return (
     <Box component="header" data-testid="job-header" sx={{ overflowWrap: 'anywhere' }}>
@@ -546,7 +568,7 @@ function JobHeader({ detail, error }: { detail: JobDetailView; error: string | n
           {job.title}
         </Typography>
         <Typography color="text.secondary">{job.id}</Typography>
-        <StatusChip state={detail.liveness} outcome={detail.outcome} detail={owner} />
+        <StatusChip state={detail.liveness} outcome={detail.outcome} tooltipExtra={owner} />
         <ProgressStrip progress={detail.progress} />
         <RoundIndicator round={job.round} maxRounds={job.maxRounds} chip />
         {job.archivedAt !== null && (

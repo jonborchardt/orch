@@ -137,7 +137,10 @@ derived from a `github.com/<owner>/<name>` repository or the PR URL, with no net
 it is known to be on the remote: a recorded PR or a `branch.pushed` event. Before that it is plain
 text, with `not pushed yet` in its tooltip. The owner session and its lease (`lease until|lapsed
 <ISO>`) are in the status chip's tooltip, and as an `Owner …` line in the status panel's Details
-whenever an owner is recorded, live or lapsed. The Overview tab ends with a
+whenever an owner is recorded, live or lapsed. Details also always has a visible branch line,
+`Branch <branch> into <base>` (with `, not pushed yet` when the header tooltip says so) or
+`Base branch <base>` before a branch exists, so nothing in a header tooltip is reachable only by
+hovering. The update time is a `<time datetime>` element. The Overview tab ends with a
 **Progress** section: every step in order with the same state as the strip and the times the
 timeline knows (`started …`, `completed …`, or `completed earlier …` for a step the current pass
 has not redone), then the **Timeline**. Times read relatively (`5m ago`), with the exact timestamp

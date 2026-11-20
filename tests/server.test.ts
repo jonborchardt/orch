@@ -344,11 +344,11 @@ describe('seeded board and detail', () => {
     const repoPath = tempDir('links-');
     dirs.push(repoPath);
     try {
-      const mk = (title: string, branch: string | null) => {
+      const mk = (title: string, branch: string | null, repo = 'github.com/acme/alpha') => {
         const job = createJob(own, {
           title,
           description: title,
-          repo: 'github.com/acme/alpha',
+          repo,
           repoPath,
           baseBranch: 'main',
         });
@@ -367,6 +367,25 @@ describe('seeded board and detail', () => {
       );
       expect(detail(own, mk('unpushed', 'factory/unpushed').id).links.branch).toBeNull();
       expect(detail(own, mk('no branch', null).id).links.branch).toBeNull();
+
+      // Each branch path segment is URI-encoded.
+      const odd = mk('odd', 'factory/a#b?c');
+      recordEvent(own, odd.id, { token: odd.token }, 'branch.pushed', { branch: 'x', head: 'a' });
+      expect(detail(own, odd.id).links.branch).toBe(
+        'https://github.com/acme/alpha/tree/factory/a%23b%3Fc',
+      );
+
+      // Another host: the base comes from an http(s) PR URL only. Set directly, as a read model
+      // must not trust that every stored URL went through recordPr's check.
+      const withPr = (title: string, prUrl: string) => {
+        const { id } = mk(title, `factory/${title}`, 'git.example/acme/alpha');
+        own.db.update(jobs).set({ prUrl }).where(eq(jobs.id, id)).run();
+        return detail(own, id).links.branch;
+      };
+      expect(withPr('fallback', 'https://git.example/acme/alpha/pull/3')).toBe(
+        'https://git.example/acme/alpha/tree/factory/fallback',
+      );
+      expect(withPr('script', 'javascript:alert(1)//x/acme/alpha/pull/3')).toBeNull();
     } finally {
       own.cleanup();
     }
