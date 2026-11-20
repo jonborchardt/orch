@@ -76,9 +76,8 @@ describe('verify lock', () => {
   it('takes over a lock whose holder is no longer running', () => {
     const c = start(store, clone);
     const lock = verifyLockPath(store.paths);
-    const dead = DEAD_PID;
-    expect(alive(dead)).toBe(false);
-    writeFileSync(lock, JSON.stringify({ pid: dead, startedAt: new Date().toISOString() }));
+    expect(alive(DEAD_PID)).toBe(false);
+    writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, startedAt: new Date().toISOString() }));
     const r = orch(store.home, tmpdir(), ['verify', c.id, '--token', c.token]);
     expect(r.err).not.toContain('waiting');
     expect(r.code).toBe(0);
@@ -157,17 +156,16 @@ describe('verify lock', () => {
 
   it('never reports a dead holder or waiter as running or queued', () => {
     const c = start(store, clone);
-    const dead = DEAD_PID;
-    expect(alive(dead)).toBe(false);
+    expect(alive(DEAD_PID)).toBe(false);
     const dir = verifyQueueDir(store.paths);
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       verifyLockPath(store.paths),
-      JSON.stringify({ pid: dead, startedAt: new Date().toISOString(), jobId: c.id }),
+      JSON.stringify({ pid: DEAD_PID, startedAt: new Date().toISOString(), jobId: c.id }),
     );
     writeFileSync(
-      join(dir, `${c.id}.${String(dead)}.json`),
-      JSON.stringify({ pid: dead, jobId: c.id, since: new Date().toISOString() }),
+      join(dir, `${c.id}.${String(DEAD_PID)}.json`),
+      JSON.stringify({ pid: DEAD_PID, jobId: c.id, since: new Date().toISOString() }),
     );
     expect(queueOf(c.id)).toBeNull();
     rmSync(dir, { recursive: true });
