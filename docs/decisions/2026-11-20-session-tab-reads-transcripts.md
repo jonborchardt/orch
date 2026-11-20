@@ -29,6 +29,8 @@ capped; the client renders plain text only. The route is loopback-only behind th
 
 **Limits.** The transcript format, `CLAUDE_CODE_SESSION_ID`, and the `subagents/*.meta.json` layout
 are Claude Code's and undocumented (observed in 2.1.326); unknown shapes are skipped or give null
-fields. Earlier claude-code sessions of a resumed job are listed with `claude --resume`, not read.
+fields. Because `finished` may be missing or stale, a subagent reads `running` only when its meta
+says `finished: false` and its transcript changed in the last five minutes, else `status unknown`.
+Earlier claude-code sessions of a resumed job are listed with `claude --resume`, not read.
 A long job can have more subagents than are read; the panel counts the rest. A job driven only
 from the Agents window shows an empty tab until its session runs the claude-code attach.

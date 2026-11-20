@@ -1393,8 +1393,10 @@ describe('session log route (todo 0074)', () => {
   it('says why when nothing is tied or found (AC3)', async () => {
     const none = await log(mk('none'));
     expect(none).toMatchObject({ found: false, ref: null, entries: [] });
-    expect(none.reason).toContain('No Claude Code session');
-    expect(none.attach).toContain('--provider claude-code --ref "$CLAUDE_CODE_SESSION_ID"');
+    expect(none.reason).toContain('No Claude Code session is recorded for this job.');
+    // Named for reference; nothing in the empty state needs the owner's token.
+    expect(none.attach).toMatch(/^orch job session attach job-[0-9a-f]{8} --provider claude-code$/);
+    expect(JSON.stringify(none)).not.toContain('--token');
     const vscodeOnly = await log(mk('vscode', ['vscode-agents', LINK]));
     expect(vscodeOnly).toMatchObject({ found: false, ref: null });
     const missing = await log(mk('missing', ['claude-code', OLDER]));
@@ -1448,6 +1450,12 @@ describe('session log route (todo 0074)', () => {
     expect(ok.status).toBe(200);
     expect(ok.headers.get('cache-control')).toBe('no-store');
     expect(ok.headers.get('x-content-type-options')).toBe('nosniff');
+    // A foreign Origin is refused outright; the page's own origin passes.
+    const foreign = await get(path, { Origin: 'http://evil.example' });
+    expect(foreign.status).toBe(403);
+    expect(await foreign.text()).not.toContain('Please build');
+    const sameOrigin = { Origin: `http://127.0.0.1:${String(srv.port)}` };
+    expect((await get(path, sameOrigin)).status).toBe(200);
     expect((await get('/api/jobs/job-00000000/session-log')).status).toBe(404);
     expect((await get('/api/jobs/not-an-id/session-log')).status).toBe(422);
   });

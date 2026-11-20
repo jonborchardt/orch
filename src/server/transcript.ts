@@ -7,7 +7,16 @@
  * projects directory (a subagent file also inside its real `subagents/`) and be a regular file.
  * Every read is bounded; `parseTranscript` and `mergeEntries` are pure.
  */
-import { closeSync, openSync, readdirSync, readSync, realpathSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 
 import { UUID } from '../core/session.ts';
@@ -34,6 +43,8 @@ export const MAX_ENTRIES = 400;
 export const ENTRY_TEXT_MAX = 4000;
 /** Bytes of the serialized response. */
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
+/** Characters of a subagent's type or description from its meta file. */
+export const META_TEXT_MAX = 200;
 
 export const LIMITS = {
   TAIL_WINDOW_BYTES,
@@ -43,6 +54,7 @@ export const LIMITS = {
   MAX_ENTRIES,
   ENTRY_TEXT_MAX,
   MAX_RESPONSE_BYTES,
+  META_TEXT_MAX,
 };
 export type Limits = typeof LIMITS;
 
@@ -54,6 +66,13 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const firstLine = (s: string) => s.trim().split(/\r?\n/, 1)[0] ?? '';
+
+/** At most `n` UTF-16 units of `s`, never ending on half of a surrogate pair. */
+function clip(s: string, n: number): string {
+  if (s.length <= n) return s;
+  const last = s.charCodeAt(n - 1);
+  return s.slice(0, last >= 0xd800 && last <= 0xdbff ? n - 1 : n);
+}
 
 function toolLine(name: string, input: unknown): string {
   const i = isObj(input) ? input : {};
@@ -102,7 +121,7 @@ export function parseTranscript(
       const t = raw.trim();
       if (!t) return;
       const truncated = t.length > entryTextMax;
-      out.push({ at, kind, text: truncated ? t.slice(0, entryTextMax) : t, truncated, agent });
+      out.push({ at, kind, text: truncated ? clip(t, entryTextMax) : t, truncated, agent });
     };
     if (r['type'] === 'system') {
       if (r['level'] === 'error') push('error', str(r['content']) ?? 'System error');
@@ -141,33 +160,41 @@ export function mergeEntries(lists: SessionEntry[][], max: number = MAX_ENTRIES)
     .map((x) => x.e);
 }
 
-interface Found {
+/** A checked file: its real path and the identity `readChecked` requires of what it opens. */
+export interface Found {
   path: string;
   size: number;
   mtimeMs: number;
+  dev: number;
+  ino: number;
 }
 
 /**
  * The real path of `p` with its stats when it lies inside the real directory `root` and is a
  * regular file (`dir`: a directory); null when it is missing, elsewhere, or another kind.
  */
-function confined(p: string, root: string, dir = false): Found | null {
+export function confined(p: string, root: string, dir = false): Found | null {
   try {
     const real = realpathSync(p);
     if (!real.startsWith(root + sep)) return null;
     const st = statSync(real);
     return (dir ? st.isDirectory() : st.isFile())
-      ? { path: real, size: st.size, mtimeMs: st.mtimeMs }
+      ? { path: real, size: st.size, mtimeMs: st.mtimeMs, dev: st.dev, ino: st.ino }
       : null;
   } catch {
     return null;
   }
 }
 
-/** Up to `length` bytes of `file` from byte `start`; never more, even if the file grew. */
-function readAt(file: string, start: number, length: number): Buffer {
-  const fd = openSync(file, 'r');
+/**
+ * Up to `length` bytes of `file` from byte `start`, never more even if it grew; null when the file
+ * opened is not the regular file `confined` checked (a path component swapped in between).
+ */
+export function readChecked(file: Found, start: number, length: number): Buffer | null {
+  const fd = openSync(file.path, 'r');
   try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.dev !== file.dev || st.ino !== file.ino) return null;
     const buf = Buffer.alloc(length);
     const n = readSync(fd, buf, 0, length, start);
     return buf.subarray(0, n);
@@ -180,7 +207,7 @@ function readAt(file: string, start: number, length: number): Buffer {
 function readMeta(file: Found | null, max: number): Obj {
   if (!file || file.size > max) return {};
   try {
-    const m: unknown = JSON.parse(readAt(file.path, 0, file.size).toString('utf8'));
+    const m: unknown = JSON.parse(readChecked(file, 0, file.size)?.toString('utf8') ?? '');
     return isObj(m) ? m : {};
   } catch {
     return {};
@@ -211,7 +238,7 @@ export function readSessionLog(
     truncated: false,
   };
   if (ref === null || !UUID.test(ref)) {
-    return { ...view, ref: null, reason: 'No Claude Code session is attached to this job.' };
+    return { ...view, ref: null, reason: NO_SESSION };
   }
   const dir = join(claudeDir, 'projects');
   let projects: string;
@@ -220,7 +247,10 @@ export function readSessionLog(
     projects = realpathSync(dir);
     names = readdirSync(projects);
   } catch {
-    return { ...view, reason: `No Claude Code projects directory at ${dir}.` };
+    return {
+      ...view,
+      reason: `${recorded(ref)} no Claude Code projects directory exists at ${dir}. ${ELSEWHERE}`,
+    };
   }
   const seen = new Set<string>();
   const matches = names
@@ -229,26 +259,44 @@ export function readSessionLog(
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
   const main = matches[0];
   if (!main) {
-    return { ...view, reason: `No transcript ${ref}.jsonl in any project directory under ${dir}.` };
+    return {
+      ...view,
+      reason:
+        `${recorded(ref)} its transcript ${ref}.jsonl was not found in any project directory ` +
+        `under ${dir}. ${ELSEWHERE}`,
+    };
   }
 
   // The session's own `subagents/`, itself inside projects; each file inside it.
   const sub = confined(join(dirname(main.path), ref, 'subagents'), projects, true)?.path ?? '';
-  const agents = (sub ? readdirSync(sub) : [])
-    .flatMap((n) => {
-      const id = AGENT_FILE.exec(n)?.[1];
-      const f = id ? confined(join(sub, n), sub) : null;
-      return f && id ? [{ ...f, id }] : [];
+  // Ordered by one cheap lstat each; only the newest MAX_SUBAGENT_FILES are resolved and checked.
+  const candidates = (sub ? readdirSync(sub) : [])
+    .flatMap((name) => {
+      const id = AGENT_FILE.exec(name)?.[1];
+      if (!id) return [];
+      try {
+        return [{ id, name, mtimeMs: lstatSync(join(sub, name)).mtimeMs }];
+      } catch {
+        return [];
+      }
     })
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
-  const read = agents.slice(0, L.MAX_SUBAGENT_FILES);
+  const chosen = candidates.slice(0, L.MAX_SUBAGENT_FILES);
+  const read = chosen.flatMap((c) => {
+    const f = confined(join(sub, c.name), sub);
+    return f ? [{ ...f, id: c.id }] : [];
+  });
+  const metaText = (v: unknown) => {
+    const t = str(v);
+    return t === null ? null : clip(t, L.META_TEXT_MAX);
+  };
 
   const subagents: SubagentSummary[] = read.map((f) => {
     const m = readMeta(confined(join(sub, `agent-${f.id}.meta.json`), sub), L.META_MAX_BYTES);
     return {
       id: f.id,
-      type: str(m['agentType']),
-      description: str(m['description']),
+      type: metaText(m['agentType']),
+      description: metaText(m['description']),
       finished: typeof m['finished'] === 'boolean' ? m['finished'] : null,
       modifiedAt: new Date(f.mtimeMs).toISOString(),
     };
@@ -273,7 +321,7 @@ export function readSessionLog(
     budget -= n;
     let text = '';
     try {
-      text = n > 0 ? readAt(file.path, file.size - n, n).toString('utf8') : '';
+      text = n > 0 ? (readChecked(file, file.size - n, n)?.toString('utf8') ?? '') : '';
     } catch {
       /* unreadable now: reported with what was read, nothing parsed */
     }
@@ -296,13 +344,20 @@ export function readSessionLog(
     matches: matches.length,
     files,
     subagents,
-    subagentsNotRead: agents.length - read.length,
+    subagentsNotRead: candidates.length - chosen.length,
     entries,
     truncated:
-      files.some((f) => f.truncated) || agents.length > read.length || all > entries.length,
+      files.some((f) => f.truncated) || candidates.length > chosen.length || all > entries.length,
   };
   return fitResponse(out, L.MAX_RESPONSE_BYTES);
 }
+
+/** The empty state when no claude-code session is tied: no instruction anyone at the dashboard runs. */
+export const NO_SESSION =
+  "No Claude Code session is recorded for this job. A job's session records itself when it starts " +
+  'or resumes through /factory; jobs started before session logs were recorded have none.';
+const recorded = (ref: string) => `Claude Code session ${ref} is recorded for this job, but`;
+const ELSEWHERE = 'It may be under another Claude home (CLAUDE_CONFIG_DIR) or on another machine.';
 
 /** Drop the oldest entries until the serialized view fits in `max` bytes. */
 function fitResponse(view: SessionLogView, max: number): SessionLogView {

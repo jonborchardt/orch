@@ -183,22 +183,35 @@ modified file when several directories hold it, and reads that session's subagen
 Nothing else is read: no `cwd` or transcript-path matching, no query parameter or path suffix that
 picks a file. Each file must resolve, by real path, inside the real `projects` directory (a
 subagent file also inside its real `subagents/`) and be a regular file, so a junction or symlink
-cannot lead out. **Bounds** (exported constants): each file is read only from its end, at most
-`TAIL_WINDOW_BYTES` (256 KB); at most `TOTAL_READ_BYTES` (2 MB) per request, newest file first;
-the newest `MAX_SUBAGENT_FILES` (24) subagent files, the rest counted; `META_MAX_BYTES` (16 KB) per
-meta file; `MAX_ENTRIES` (400) entries, `ENTRY_TEXT_MAX` (4000) characters each, and
+cannot lead out; the file is then read through one descriptor whose identity (device and inode)
+must match the checked file, so a path swapped in between is not followed. **Bounds** (exported
+constants): each file is read only from its end, at most `TAIL_WINDOW_BYTES` (256 KB); at most
+`TOTAL_READ_BYTES` (2 MB) per request, newest file first; the newest `MAX_SUBAGENT_FILES` (24)
+subagent files, ordered by one `lstat` each and only those resolved, the rest counted;
+`META_MAX_BYTES` (16 KB) per meta file, with its type and description cut at `META_TEXT_MAX` (200)
+characters; `MAX_ENTRIES` (400) entries, `ENTRY_TEXT_MAX` (4000) characters each, and
 `MAX_RESPONSE_BYTES` (1 MB) of JSON. Records become `user`, `assistant`, `tool` (the tool name and
 its key input), `result`, and `error` entries; thinking blocks, attachments, queue operations,
 snapshots, malformed lines, and sidechain records in the main file are skipped. The panel shows
-the transcript's modified time and size, a Subagents list (`running` until the meta file says
-`finished`), the merged timeline newest first (relative time with the exact time in a tooltip, and
-a `main` or `<agent type>: <description>` label), "Earlier activity not shown" when a file was cut
-or a cap was hit, and earlier claude-code sessions with their `claude --resume <ref>` (not read).
-Long text collapses with Show more; content is plain text, never Markdown or HTML. The tab
-refetches on the detail poll, only while it is shown. Without a tie or a transcript it names the
-reason and the attach command. Transcripts hold secrets and file contents: the route is loopback
-only, behind the same `Host` and `Sec-Fetch-Site` guards as the detail, and sends `no-store` and
-`nosniff`; anyone who can open the dashboard can read the tail, as with the log routes.
+the transcript's modified time and size; a Subagents list where each subagent is `finished` when
+its meta file says so, `running` only when the meta file says `finished: false` and its transcript
+changed in the last five minutes, and `status unknown` otherwise, each with when it was last
+active; the merged timeline newest first (relative time with the exact time in a tooltip, and a
+`main` or `<agent type>: <description>` label); "Earlier activity not shown" with the number of
+entries shown when a file was cut or a cap was hit; and earlier claude-code sessions with their
+`claude --resume <ref>` (not read). Long text collapses with Show more / Show less, a button with
+`aria-expanded` whose accessible name also names its entry; content is plain text, never Markdown
+or HTML. The tab refetches on the detail poll, only while it is shown. The empty states never ask
+the reader to run a command (attaching needs the owning session's token): with no claude-code
+session recorded, the tab says the job's session records itself when it starts or resumes through
+`/factory` (naming the command it runs) and that jobs started before session logs have none; with
+a session recorded but no transcript found, it names the session id and the directory searched,
+and gives `claude --resume <ref>`; when a transcript was read but no record could be shown, it says
+the file may be unreadable or in an unknown format. Transcripts hold secrets and file contents:
+the route is loopback only, behind the same `Host` and `Sec-Fetch-Site` guards as the detail,
+refuses a foreign `Origin`, and sends `no-store` and `nosniff`; anyone who can open the dashboard
+can read the tail, as with the log routes.
+
 A status panel above the controls reads as one summary line, one **Next:** line, and a
 collapsed **Details** expander. The summary is the bold blocker label and one sentence: for a
 `CI stopped` job the CI line (head and repair budget), otherwise the blocker summary with the

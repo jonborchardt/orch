@@ -286,7 +286,8 @@ function claudeSessions(store: Store, id: string): ClaudeSession[] {
 /** The Session tab: the bounded tail of the newest attached claude-code session's transcript. */
 export function sessionLog(store: Store, id: string): SessionLogView {
   getJob(store.db, id);
-  const attach = `orch job session attach ${id} --provider claude-code --ref "$CLAUDE_CODE_SESSION_ID" --token <t>`;
+  // What the job's own session runs (the /factory skill); never an instruction to the dashboard user.
+  const attach = `orch job session attach ${id} --provider claude-code`;
   return readSessionLog(claudeHome(), claudeSessions(store, id)[0]?.ref ?? null, attach);
 }
 

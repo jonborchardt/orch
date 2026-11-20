@@ -1,5 +1,5 @@
 /** The Session tab reader: parsing, subagents, read bounds, and real-path confinement (todo 0074). */
-import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -9,8 +9,11 @@ import {
   MAX_ENTRIES,
   MAX_RESPONSE_BYTES,
   MAX_SUBAGENT_FILES,
+  confined,
   mergeEntries,
+  NO_SESSION,
   parseTranscript,
+  readChecked,
   readSessionLog,
 } from '../src/server/transcript.ts';
 import type { SessionEntry } from '../src/server/types.ts';
@@ -74,6 +77,9 @@ describe('parseTranscript', () => {
     expect(parseTranscript(user(0, 'x'.repeat(50)), null, 10)).toEqual([
       { at: at(0), kind: 'user', text: 'x'.repeat(10), truncated: true, agent: null },
     ]);
+    // Never half of a surrogate pair: 9 x's and an emoji cut at 10 keeps the 9.
+    const [e] = parseTranscript(user(0, `${'x'.repeat(9)}\u{1F600}tail`), null, 10);
+    expect(e?.text).toBe('x'.repeat(9));
   });
 });
 
@@ -160,10 +166,13 @@ describe('readSessionLog', () => {
     const claude = tempDir('claude-');
     expect(readSessionLog(claude, null, ATTACH)).toMatchObject({
       found: false,
-      reason: 'No Claude Code session is attached to this job.',
+      reason: NO_SESSION,
       attach: ATTACH,
     });
-    expect(readSessionLog(claude, U, ATTACH).found).toBe(false);
+    const noProjects = readSessionLog(claude, U, ATTACH);
+    expect(noProjects).toMatchObject({ found: false, ref: U });
+    expect(noProjects.reason).toContain(`Claude Code session ${U} is recorded for this job, but`);
+    expect(noProjects.reason).toContain('no Claude Code projects directory exists at');
     writeSession(claude, 'E--repo', mainTranscript(), '99999999-2222-4333-8444-555555555555');
     const none = readSessionLog(claude, U, ATTACH);
     expect(none.found).toBe(false);
@@ -253,6 +262,50 @@ describe('readSessionLog', () => {
     expect(texts(vc.entries)).toEqual(['inside agent', 'main']);
     expect(vc.subagents.map((s) => s.id)).toEqual(['ok']);
     expect(leaks(c)).not.toContain('outside');
+  });
+
+  it('caps the subagent type and description taken from a meta file (finding 6)', () => {
+    const claude = tempDir('claude-');
+    const project = writeSession(claude, 'p', user(0, 'main'));
+    writeAgent(project, 'k1', user(1, 'agent'), {
+      agentType: 't'.repeat(1000),
+      description: 'd'.repeat(5000),
+    });
+    const v = readSessionLog(claude, U, ATTACH);
+    expect(v.subagents[0]?.type).toBe('t'.repeat(200));
+    expect(v.subagents[0]?.description).toBe('d'.repeat(200));
+    expect(v.entries.find((e) => e.text === 'agent')?.agent?.description).toBe('d'.repeat(200));
+  });
+
+  it('resolves only the newest MAX_SUBAGENT_FILES candidates (finding 4)', () => {
+    const outside = tempDir('outside-');
+    writeFileSync(join(outside, 'x.jsonl'), user(5, 'outside'));
+    const claude = tempDir('claude-');
+    const project = writeSession(claude, 'p', user(0, 'main'));
+    for (const id of ['o1', 'o2', 'o3']) writeAgent(project, id, user(1, `agent ${id}`));
+    const old = new Date(Date.now() - 600_000);
+    for (const id of ['o1', 'o2', 'o3'])
+      utimesSync(join(project, U, 'subagents', `agent-${id}.jsonl`), old, old);
+    // The newest candidate is a junction out of subagents/: it takes a slot and is refused,
+    // rather than an older file being resolved in its place.
+    symlinkSync(outside, join(project, U, 'subagents', 'agent-zz.jsonl'), 'junction');
+    const v = readSessionLog(claude, U, ATTACH, { MAX_SUBAGENT_FILES: 2 });
+    expect(v.subagents).toHaveLength(1);
+    expect(v.subagentsNotRead).toBe(2);
+    expect(JSON.stringify(v)).not.toContain('outside');
+  });
+
+  it('refuses to read a checked file that was swapped before it was opened (finding 5)', () => {
+    const root = tempDir('claude-');
+    const file = join(root, 'agent-a.jsonl');
+    writeFileSync(file, 'original');
+    const checked = confined(file, root);
+    if (!checked) throw new Error('expected the file to pass the check');
+    expect(readChecked(checked, 0, 8)?.toString()).toBe('original');
+    rmSync(file);
+    writeFileSync(join(root, 'other'), 'replaced');
+    renameSync(join(root, 'other'), file);
+    expect(readChecked(checked, 0, 8)).toBeNull();
   });
 
   it('ignores a meta file larger than META_MAX_BYTES', () => {

@@ -303,7 +303,10 @@ export interface SessionLogView {
   reason: string | null;
   /** The claude-code session UUID read, or null when the job has none attached. */
   ref: string | null;
-  /** The command that ties a session to this job. */
+  /**
+   * The command the job's own session runs (through /factory) to tie itself to the job; named for
+   * reference only, never as something the dashboard user runs (it needs the owner's token).
+   */
   attach: string;
   /** How many project directories hold `<ref>.jsonl`; the newest-modified one is read. */
   matches: number;
