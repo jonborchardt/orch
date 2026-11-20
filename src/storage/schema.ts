@@ -56,6 +56,8 @@ export const jobs = sqliteTable(
     /** CI repair cycles taken (`rework` from the ci stage); bounded by `maxCiRepairs`. */
     ciRepairs: integer().notNull().default(0),
     maxCiRepairs: integer().notNull().default(2),
+    /** Scope-gap reworks taken (`rework` from approve on REWORK-BUILD/SPEC); the second escalates. */
+    scopeReworks: integer().notNull().default(0),
     /**
      * Verification policy a human authorized for this job (dashboard `accept-policy`), replacing
      * the baseline read from the merge base. Null means the baseline applies.
@@ -123,7 +125,10 @@ export const artifacts = sqliteTable(
     marker: text(),
     /** Worktree HEAD when the artifact was registered; null when the job had no worktree. */
     head: text(),
-    /** For spec-review-N.md: sha256 of the spec.md registered when the challenge was; else null. */
+    /**
+     * For spec-review-N.md and decision.md: sha256 of the spec.md registered when this artifact
+     * was; else null.
+     */
     specSha256: text(),
     createdAt: text().notNull(),
   },

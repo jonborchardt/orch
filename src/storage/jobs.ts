@@ -401,10 +401,13 @@ export function registerArtifact(
     assertStageOwns(checked.path, job.stage, job.round);
     const existing = findArtifact(tx, id, checked.path);
     const head = opts.head ?? null;
-    // A spec challenge is bound to the spec.md registered now (core/workflow.ts).
+    // A spec challenge is bound to the spec.md registered now (core/workflow.ts); so is a decision,
+    // so a REWORK-SPEC can tell whether spec.md has been revised since.
     const specSha256 = looksLikeSpecChallenge(checked.path)
       ? challengeSpecHash(checked.path, listArtifacts(tx, id))
-      : null;
+      : checked.path === 'decision.md'
+        ? (findArtifact(tx, id, 'spec.md')?.sha256 ?? null)
+        : null;
     // The commit (or spec) an artifact describes is part of what was registered: re-binding
     // unchanged text to a new one is a replacement too, and leaves the same audit trail.
     const replaced =

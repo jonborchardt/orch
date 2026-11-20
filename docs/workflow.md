@@ -11,7 +11,9 @@ spec → build → simplify → review → approve → pr → ci → completed
                             └──────→ build        │     └─ (requires passing required checks for HEAD)
                             ▲                     └─ (requires a recorded PR)
                             ├── rework (base integration needs the builder) ── approve, pr, ci
-                            └── rework (CI failed, repairs < max) ── ci
+                            ├── rework (CI failed, repairs < max) ── ci
+         ▲                  └── rework (scope gap: DECISION: REWORK-BUILD, once per job) ── approve
+         └── rework (scope gap: DECISION: REWORK-SPEC, once per job) ── approve
          any stage ── escalate ──→ needs-human ── resume --to <stage> ──→ back
 ```
 
@@ -28,6 +30,7 @@ Claude requests an action; `orch job transition <id> <action>` validates and app
 | `escalate` | any live stage                                                                              | stage `needs-human`, status `blocked`, remembers origin                                                                                                                      |
 | `resume`   | `needs-human`, or status `interrupted`/`failed`/`blocked`                                   | back to the origin or `--to` stage, status `pending`                                                                                                                         |
 | `rework`   | stage `approve`, `pr`, or `ci` (base integration needs the builder) or `ci` (checks failed) | stage `build`, status `pending`; re-review follows; a CI failure from `ci` counts a repair, or `needs-human` when `maxCiRepairs` is spent; base integration never counts one |
+| `rework`   | stage `approve` with `decision.md` saying `REWORK-BUILD` or `REWORK-SPEC` (scope gap)       | stage `build` or `spec`, status `pending`; `scopeReworks` + 1; the second scope gap goes to `needs-human` instead                                                            |
 | `cancel`   | any job not already finished                                                                | status `cancelled`                                                                                                                                                           |
 
 Required artifacts, relative to the job's artifact directory and registered with
@@ -36,21 +39,22 @@ Required artifacts, relative to the job's artifact directory and registered with
 Registration checks the file is inside the artifact directory (no absolute paths or `..`), is
 `.md`, exists, is non-empty, and has the structure its path requires (`src/core/artifact-rules.ts`):
 
-| Artifact                     | Required headings                | Marker line (exactly once)        |
-| ---------------------------- | -------------------------------- | --------------------------------- |
-| `spec.md`                    | Goal, Scope, Acceptance criteria |                                   |
-| `spec-review-1.md`, `-2.md`  | Findings                         | `VERDICT: PASS` or `CHANGES`      |
-| `build.md`                   | Summary, Validation              |                                   |
-| `round-N/simplify-review.md` | Findings                         |                                   |
-| `round-N/simplify.md`        | Applied, Declined, Validation    |                                   |
-| `round-N/review-<name>.md`   | Findings                         | `VERDICT: PASS` or `CHANGES`      |
-| `round-N/consolidated.md`    | Findings                         | `BLOCKING: <count>`               |
-| `decision.md`                | Rationale                        | `DECISION: APPROVE` or `ESCALATE` |
-| `pr.md`                      | Validation, Known limitations    |                                   |
+| Artifact                     | Required headings                | Marker line (exactly once)                                        |
+| ---------------------------- | -------------------------------- | ----------------------------------------------------------------- |
+| `spec.md`                    | Goal, Scope, Acceptance criteria |                                                                   |
+| `spec-review-1.md`, `-2.md`  | Findings                         | `VERDICT: PASS` or `CHANGES`                                      |
+| `build.md`                   | Summary, Validation              |                                                                   |
+| `round-N/simplify-review.md` | Findings                         |                                                                   |
+| `round-N/simplify.md`        | Applied, Declined, Validation    |                                                                   |
+| `round-N/review-<name>.md`   | Findings                         | `VERDICT: PASS` or `CHANGES`                                      |
+| `round-N/consolidated.md`    | Findings                         | `BLOCKING: <count>`                                               |
+| `decision.md`                | Rationale                        | `DECISION: APPROVE`, `ESCALATE`, `REWORK-BUILD`, or `REWORK-SPEC` |
+| `pr.md`                      | Validation, Known limitations    |                                                                   |
 
 Headings match case-insensitively at any level. The marker is stored on the artifact row and the
 workflow reads it: `review record --verdict pass` is refused if the file says `CHANGES`, and
-`approve` cannot complete unless `decision.md` says `APPROVE` (use `escalate` instead). Files with
+`approve` cannot complete unless `decision.md` says `APPROVE` (use `escalate`, or `rework` for a
+`REWORK-*` decision, instead). Files with
 other names (evidence, notes) are accepted without structure checks. A file on disk is not evidence
 of completion until it is registered.
 
@@ -107,6 +111,21 @@ exhausted repair escalates without raising), and a human resume from `needs-huma
 `simplify`, or `review` (`job.resumed`; the dashboard's Request rework and Request review round are
 such resumes). Every other resume raises nothing. So the board's `round / maxRounds` never shows a
 round past its maximum.
+
+**Scope gaps.** When the approver finds the build covers less than was asked, `decision.md` says
+`REWORK-BUILD` (the code is less than the spec) or `REWORK-SPEC` (the spec is less than the
+request), and `rework` from `approve` sends the job back on its own: to `build`, or to `spec` and
+then `build`. Plain `rework` from `approve` is refused without one of those decisions (base
+integration passes its own flag). The rework raises `maxRounds` like the others and counts on the
+job's `scopeReworks`; with one already taken, the next `REWORK-*` moves the job to `needs-human`
+(`returnStage` the requested stage, reason `scope gap found again after the automatic scope
+rework`). Code cannot tell whether a second gap is the same one, so the bound is a count. A
+registered `decision.md` records the hash of the `spec.md` registered at that moment; after a
+`REWORK-SPEC`, `complete` from `spec` is refused while `spec.md` still has that hash, and the
+challenge gate then requires a PASS for the revised spec. Reviewers count a scope gap as BLOCKING,
+which already sends the round back to build, and the spec challenger refuses a spec that drops part
+of the request unless the request or a human excluded it; see
+[the decision](decisions/2026-11-20-scope-gap-reworks-automatically.md).
 
 **PRs.** `orch gh pr create` records the job's draft PR (created or reused); the `pr` stage cannot
 complete without one, and completing it enters `ci`, which only `orch gh ci` completes, in the call

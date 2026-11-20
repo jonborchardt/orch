@@ -187,6 +187,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       ciHead: null,
       ciRepairs: 0,
       maxCiRepairs: 2,
+      scopeReworks: 0,
       revision: 9,
       createdAt: '2026-11-13T08:00:00.000Z',
       updatedAt: '2026-11-13T08:30:00.000Z',

@@ -54,7 +54,8 @@ export const ARTIFACT_RULES: readonly ArtifactRule[] = [
     path: /^decision\.md$/,
     stage: 'approve',
     headings: ['Rationale'],
-    marker: { name: 'DECISION', values: ['APPROVE', 'ESCALATE'] },
+    // REWORK-BUILD: the code is less than the spec; REWORK-SPEC: the spec is less than the request.
+    marker: { name: 'DECISION', values: ['APPROVE', 'ESCALATE', 'REWORK-BUILD', 'REWORK-SPEC'] },
   },
   { path: /^pr\.md$/, stage: 'pr', headings: ['Validation', 'Known limitations'] },
 ];

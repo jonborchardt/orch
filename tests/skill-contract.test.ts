@@ -88,6 +88,24 @@ describe('agents', () => {
     expect(tools('factory-builder')).toContain('Edit');
     expect(tools('factory-spec-writer')).not.toContain('Edit');
   });
+
+  it('a scope gap is rework, not a human decision (todo 0073)', () => {
+    // Whitespace-normalized, so rewrapping the prose does not break the contract.
+    const read = (agent: string) =>
+      readFileSync(join(agentsDir, `${agent}.md`), 'utf8').replace(/\s+/g, ' ');
+    const approver = read('factory-approver');
+    expect(approver).toContain('REWORK-BUILD');
+    expect(approver).toContain('REWORK-SPEC');
+    for (const r of ROLES.filter((x) => x.kind === 'review')) {
+      expect(read(r.agent), r.agent).toContain('A scope gap is BLOCKING, whatever your ownership');
+    }
+    expect(read('factory-spec-challenger')).toContain(
+      'A spec that drops part of the request gets CHANGES unless the request itself or a human said to leave it out',
+    );
+    const skill = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+    expect(skill).toContain('orch job transition <id> rework');
+    expect(skill).toContain('REWORK-SPEC');
+  });
 });
 
 describe('skill', () => {

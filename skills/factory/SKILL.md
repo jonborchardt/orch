@@ -251,16 +251,24 @@ Follow `plan.commands`; the coordinator adds:
 - If `orch factory check-readonly` exits 1, the round failed: `orch job transition <id> fail`.
 - Record each verdict from the reviewer's `VERDICT:` line.
 - Write `round-N/consolidated.md` (template in reference.md): deduplicate actionable findings
-  across reviewers, drop anything out of scope for the spec, and count `BLOCKING: <n>` honestly;
+  across reviewers, drop anything out of scope for the spec, and count `BLOCKING: <n>` honestly.
+  Never drop or downgrade a scope gap (something the spec puts in scope that the diff does not
+  implement): it is BLOCKING whichever reviewer found it;
   `n > 0` sends the job back to build even when every verdict is PASS. Register it with
   `orch job artifact add <id> round-N/consolidated.md --token <t>`. The next builder gets this file
   and must address every blocking finding without expanding scope.
 
 ### Approval and delivery
 
-If `decision.md` says `ESCALATE` because the base moved, run `orch worktree integrate` instead of
-escalating; otherwise run `escalate` with its reason. If `APPROVE`, follow the `pr`
-stage commands. After `orch worktree integrate`, run `orch factory next` again because HEAD
+`decision.md` has one of four outcomes. `APPROVE`: follow the `pr` stage commands.
+`REWORK-BUILD` (the code is less than the spec) or `REWORK-SPEC` (the spec is less than the
+request) is a scope gap, which is rework, not a human decision: run
+`orch job transition <id> rework --reason "<the gap>" --token <t>` and keep going with
+`orch factory next`. It returns the job to `build`, or to `spec` (revise `spec.md` with
+`--replace`, re-challenge, then build). `orch` allows one automatic scope rework per job; a second
+one moves the job to `needs-human` on its own. If `decision.md` says `ESCALATE` because the base
+moved, run `orch worktree integrate` instead of escalating; otherwise run `escalate` with its
+reason. After `orch worktree integrate`, run `orch factory next` again because HEAD
 changed. A conflicting merge sends the job back to `build`: never resolve conflicts or merge by
 hand, and never `--force` anything; on resume, `orch worktree integrate` reconstructs an
 interrupted attempt.

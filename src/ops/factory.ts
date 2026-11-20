@@ -31,6 +31,7 @@ import {
   requiredArtifact,
   RESUMABLE_STATUSES,
   reviewArtifact,
+  scopeGapSpecRefusal,
   simplifyArtifact,
   simplifyReviewArtifact,
   type Stage,
@@ -518,6 +519,13 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         task('spec', 'spec.md');
         plan.reason = 'Write the specification from the request and the repository.';
         plan.commands = [...start, add('spec.md'), next];
+      } else if (scopeGapSpecRefusal(detail.artifacts)) {
+        // The approver found the spec less than the request (DECISION: REWORK-SPEC).
+        task('spec', 'spec.md');
+        plan.reason =
+          'Scope gap at approval: decision.md says REWORK-SPEC, the spec covers less than the request. ' +
+          'Revise spec.md from the request and decision.md so it covers every requested case, then it is challenged again.';
+        plan.commands = [...start, add('spec.md', true), next];
       } else if (current && latest.marker === 'pass') {
         plan.reason = `${reviewed} passes the current spec.md; complete the stage.`;
         plan.commands = [...start, complete];
@@ -555,11 +563,14 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const why = typeof pending?.payload['reason'] === 'string' ? pending.payload['reason'] : null;
       const reworkNote = !pending
         ? ''
-        : pending.payload['from'] === 'ci' && pending.payload['integration'] !== true
-          ? ` CI repair ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}: ${why ?? 'required checks failed'}. ` +
-            'The builder reads the saved logs, fixes the defect without weakening checks or the policy, commits, and runs orch verify.'
-          : ` Base integration needs the builder: ${why ?? 'the merge did not apply cleanly'}. ` +
-            `Merge ${job.baseBranch}, resolve, commit the merge; the result is reviewed as new code.`;
+        : typeof pending.payload['scopeGap'] === 'string'
+          ? ` Scope gap at approval: ${why ?? 'the build covers less than requested'}. ` +
+            'Implement everything spec.md puts in scope that decision.md names as missing; this is the one automatic scope rework.'
+          : pending.payload['from'] === 'ci' && pending.payload['integration'] !== true
+            ? ` CI repair ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}: ${why ?? 'required checks failed'}. ` +
+              'The builder reads the saved logs, fixes the defect without weakening checks or the policy, commits, and runs orch verify.'
+            : ` Base integration needs the builder: ${why ?? 'the merge did not apply cleanly'}. ` +
+              `Merge ${job.baseBranch}, resolve, commit the merge; the result is reviewed as new code.`;
       plan.reason =
         (rework
           ? `Rework round ${String(job.round + 1)}: address round-${String(job.round)}/consolidated.md, then rebuild build.md.`
@@ -631,7 +642,9 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         ...start,
         ...verifyIfStale,
         add('decision.md', has('decision.md')),
-        `${complete}   # only if DECISION: APPROVE; otherwise: orch job transition ${id} escalate --reason "<why>"${tok}`,
+        `${complete}   # only if DECISION: APPROVE`,
+        `orch job transition ${id} rework --reason "<the scope gap>"${tok}   # DECISION: REWORK-BUILD (code less than spec) or REWORK-SPEC (spec less than request)`,
+        `orch job transition ${id} escalate --reason "<why>"${tok}   # DECISION: ESCALATE`,
       ];
       break;
     }
