@@ -395,9 +395,11 @@ export function transition(
         const to = ctx.to ?? job.returnStage;
         if (to === 'completed') return acceptDelivery(job, ctx);
         if (!to || to === 'needs-human') reject('specify --to <stage>');
-        // Leaving a spec escalation for a later stage skips nothing: the challenge gate holds.
+        // Leaving a spec escalation for a later stage skips nothing: an unanswered REWORK-SPEC
+        // and the challenge gate both hold, in the order `complete` from spec checks them.
         if (job.returnStage === 'spec' && to !== 'spec') {
-          const refused = specChallengeRefusal(ctx.artifacts, true);
+          const refused =
+            scopeGapSpecRefusal(ctx.artifacts) ?? specChallengeRefusal(ctx.artifacts, true);
           if (refused) reject(refused);
         }
         // A simplify or review requested from needs-human is a fresh round, as after a build:

@@ -791,6 +791,37 @@ describe('transition: scope-gap rework from approve', () => {
       'build',
     );
   });
+
+  it('after REWORK-SPEC, resume out of a spec escalation skips spec only once spec.md changed', () => {
+    const blocked = job('needs-human', 'blocked', { returnStage: 'spec' });
+    const decision = art('decision.md', 'rework-spec', { specSha256: 's1' });
+    const unchanged = { ...none, artifacts: [...passedSpec(), decision] };
+    for (const to of ['build', 'review', 'approve', 'pr'] as const) {
+      expect(() => run(blocked, 'resume', { ...unchanged, to })).toThrow(
+        /REWORK-SPEC for this spec\.md/,
+      );
+    }
+    // Back to spec, explicitly or by default, is how the human answers it.
+    expect(run(blocked, 'resume', unchanged).patch.stage).toBe('spec');
+    expect(run(blocked, 'resume', { ...unchanged, to: 'spec' }).patch.stage).toBe('spec');
+    // Revised and re-challenged: the resume to build goes through.
+    const fresh = [
+      art('spec.md', null, { sha256: 's2' }),
+      art('spec-review-1.md', 'pass', { specSha256: 's2' }),
+      decision,
+    ];
+    expect(run(blocked, 'resume', { ...none, artifacts: fresh, to: 'build' }).patch.stage).toBe(
+      'build',
+    );
+    // REWORK-BUILD, or a REWORK-SPEC that judged another spec.md, never holds the resume back.
+    for (const other of [
+      art('decision.md', 'rework-build', { specSha256: 's1' }),
+      art('decision.md', 'rework-spec', { specSha256: 's0' }),
+    ]) {
+      const artifacts = [...passedSpec(), other];
+      expect(run(blocked, 'resume', { ...none, artifacts, to: 'build' }).patch.stage).toBe('build');
+    }
+  });
 });
 
 describe('describeNext / requiredArtifact', () => {
