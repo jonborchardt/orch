@@ -14,7 +14,14 @@ import type { Artifact, Event, VerificationRun } from '../src/storage/schema.ts'
 import { type RunningServer, startServer } from '../src/server/http.ts';
 import type { ActionResponse, BoardRow, JobDetailView, SessionInfo } from '../src/server/types.ts';
 import { listEvents } from '../src/storage/events.ts';
-import { claimJob, createJob, getJob, transitionJob } from '../src/storage/jobs.ts';
+import {
+  claimJob,
+  createJob,
+  getJob,
+  recordEvent,
+  setWorktree,
+  transitionJob,
+} from '../src/storage/jobs.ts';
 import { jobs } from '../src/storage/schema.ts';
 import { seedDashboard, type SeededJobs } from './fixtures/dashboard.ts';
 import { orchAsync, tempDir, type TempStore, tempStore } from './helpers.ts';
@@ -308,6 +315,10 @@ describe('seeded board and detail', () => {
     expect(d.links.pr).toBe('https://github.com/acme/alpha/pull/41');
     expect(d.links.vscode).toBeNull(); // no worktree recorded for the fixture
     expect(d.links.checkout).toMatch(/^vscode:\/\/file\/.*alpha/);
+    // A recorded PR proves the branch is on GitHub.
+    expect(d.links.branch).toBe(
+      `https://github.com/acme/alpha/tree/factory/${ids.completed}-export-reports-as-csv`,
+    );
     expect(d.resumeCommand).toContain(ids.completed);
     expect(d.liveness).toBe('completed');
     expect(d.outcome).toEqual({ kind: 'completed', label: 'completed' });
@@ -326,6 +337,39 @@ describe('seeded board and detail', () => {
     const cancelled = (await (await api(`/api/jobs/${ids.cancelled}`)).json()) as JobDetailView;
     expect(cancelled.actions).toEqual(['archive']);
     expect(cancelled.resume).toBeNull();
+  });
+
+  it('links the branch only once it is known to be pushed, without asking GitHub', () => {
+    const own = tempStore();
+    const repoPath = tempDir('links-');
+    dirs.push(repoPath);
+    try {
+      const mk = (title: string, branch: string | null) => {
+        const job = createJob(own, {
+          title,
+          description: title,
+          repo: 'github.com/acme/alpha',
+          repoPath,
+          baseBranch: 'main',
+        });
+        const { token } = claimJob(own, job.id, { session: 'claude-links' });
+        if (branch)
+          setWorktree(own, job.id, { token, path: `/wt/${job.id}`, branch, how: 'created' });
+        return { id: job.id, token };
+      };
+      const pushed = mk('pushed', 'factory/pushed');
+      recordEvent(own, pushed.id, { token: pushed.token }, 'branch.pushed', {
+        branch: 'factory/pushed',
+        head: 'abc',
+      });
+      expect(detail(own, pushed.id).links.branch).toBe(
+        'https://github.com/acme/alpha/tree/factory/pushed',
+      );
+      expect(detail(own, mk('unpushed', 'factory/unpushed').id).links.branch).toBeNull();
+      expect(detail(own, mk('no branch', null).id).links.branch).toBeNull();
+    } finally {
+      own.cleanup();
+    }
   });
 
   it('serves only registered artifacts and rejects traversal', async () => {

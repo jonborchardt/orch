@@ -15,7 +15,16 @@ import { BLOCKER_LABEL, STATE } from './format.ts';
  * Execution state chip: glyph plus label, never colour alone. Same look on board and detail. A
  * completed job's label says how it ended (the server's outcome).
  */
-export function StatusChip({ state, outcome }: { state: Liveness; outcome?: Outcome | null }) {
+export function StatusChip({
+  state,
+  outcome,
+  detail,
+}: {
+  state: Liveness;
+  outcome?: Outcome | null;
+  /** Detail header only: a second tooltip line (the owner and lease). */
+  detail?: string | null;
+}) {
   const s = STATE[state];
   return (
     <Chip
@@ -24,7 +33,7 @@ export function StatusChip({ state, outcome }: { state: Liveness; outcome?: Outc
       variant={s.variant}
       data-state={state}
       data-outcome={outcome?.kind}
-      title={s.describe}
+      title={detail ? `${s.describe}\n${detail}` : s.describe}
     />
   );
 }

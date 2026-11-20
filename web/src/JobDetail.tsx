@@ -137,6 +137,7 @@ export function JobDetail({
   const { job } = detail;
   const consolidatedRounds = detail.rounds.filter((r) => r.consolidated !== null).reverse();
   const next = nextAction(detail);
+  const lease = leaseText(job);
   const content = (path: string | null | undefined) =>
     path && detail.contents[path] !== undefined ? (
       <Markdown text={detail.contents[path] ?? ''} />
@@ -146,39 +147,7 @@ export function JobDetail({
 
   return (
     <Box sx={{ p: 2 }}>
-      <Stack
-        direction="row"
-        spacing={1}
-        useFlexGap
-        sx={{ alignItems: 'baseline', flexWrap: 'wrap' }}
-      >
-        <Link href="#/" underline="hover">
-          ← Jobs
-        </Link>
-        <Typography variant="h6" component="h1">
-          {job.title}
-        </Typography>
-        <Typography color="text.secondary">{job.id}</Typography>
-        <ProgressStrip progress={detail.progress} />
-        <StatusChip state={detail.liveness} outcome={detail.outcome} />
-        {job.archivedAt !== null && (
-          <Tooltip title={`Archived ${job.archivedAt}; shown on the board under Show: archived`}>
-            <Chip label="archived" />
-          </Tooltip>
-        )}
-        {detail.ci.completion === 'human' && <CiChip ci={detail.ci} compact />}
-        {job.prUrl && <PrPhaseChip phase={detail.prPhase} />}
-        <RoundIndicator round={job.round} maxRounds={job.maxRounds} chip />
-        {error && <Chip label={`refresh failed: ${error}`} color="warning" />}
-      </Stack>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-        {job.repo} · base <code>{job.baseBranch}</code> · branch <code>{job.branch ?? '—'}</code> ·
-        owner {job.ownerSession ?? 'none'}
-        {job.leaseExpiresAt
-          ? ` (lease ${Date.parse(job.leaseExpiresAt) > Date.now() ? 'until' : 'lapsed'} ${job.leaseExpiresAt})`
-          : ''}{' '}
-        · updated {ago(job.updatedAt)}
-      </Typography>
+      <JobHeader detail={detail} error={error} />
       <Supersession supersededBy={job.supersededBy} supersedes={detail.supersedes} />
       <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap' }}>
         {detail.links.vscode && (
@@ -265,6 +234,12 @@ export function JobDetail({
                     checkoutLink={detail.links.checkout}
                     worktree={job.worktreePath}
                   />
+                )}
+                {job.ownerSession && (
+                  <Typography variant="body2" data-testid="owner-line">
+                    Owner <code>{job.ownerSession}</code>
+                    {lease && `, ${lease}`}
+                  </Typography>
                 )}
                 <SessionLine session={detail.session} />
               </Stack>
@@ -498,6 +473,112 @@ export function JobDetail({
           </Stack>
         )}
       </Box>
+    </Box>
+  );
+}
+
+/** `lease until|lapsed <ISO>`, or null without a lease. */
+function leaseText(job: JobDetailView['job']): string | null {
+  if (!job.leaseExpiresAt) return null;
+  const live = Date.parse(job.leaseExpiresAt) > Date.now();
+  return `lease ${live ? 'until' : 'lapsed'} ${job.leaseExpiresAt}`;
+}
+
+/**
+ * Two lines: identity and operational status, then delivery. A field without data is omitted;
+ * the owner, lease, and base branch are tooltips. Long values break anywhere, so nothing clips.
+ */
+function JobHeader({ detail, error }: { detail: JobDetailView; error: string | null }) {
+  const { job, ci, links } = detail;
+  const lease = leaseText(job);
+  const owner = job.ownerSession ? `Owner ${job.ownerSession}${lease ? `; ${lease}` : ''}` : null;
+  const into = `into ${job.baseBranch}`;
+  // The server links the branch only with push evidence; say why when it could have.
+  const unpushed =
+    !job.prUrl &&
+    !detail.events.some((e) => e.type === 'branch.pushed') &&
+    /^github\.com\/[^/]+\/[^/]+$/.test(job.repo);
+  const prNumber = job.prUrl ? /\/pull\/(\d+)\/?$/.exec(job.prUrl)?.[1] : undefined;
+  const delivery = [
+    <span key="repo">{job.repo}</span>,
+    job.branch &&
+      (links.branch ? (
+        <Link
+          key="branch"
+          href={links.branch}
+          target="_blank"
+          rel="noreferrer noopener"
+          title={into}
+        >
+          <code>{job.branch}</code>
+        </Link>
+      ) : (
+        <span key="branch" title={unpushed ? `${into}; not pushed yet` : into}>
+          <code>{job.branch}</code>
+        </span>
+      )),
+    job.prUrl && (
+      <Link key="pr" href={job.prUrl} target="_blank" rel="noreferrer noopener">
+        {prNumber ? `PR #${prNumber}` : 'PR'}
+      </Link>
+    ),
+    // The CI chip already says "CI running/failing", with the head; don't repeat it.
+    job.prUrl && detail.prPhase !== 'ci-running' && detail.prPhase !== 'ci-failing' && (
+      <PrPhaseChip key="phase" phase={detail.prPhase} />
+    ),
+    (ci.status !== null || ci.completion !== null) && <CiChip key="ci" ci={ci} compact />,
+    <span key="updated" title={job.updatedAt}>
+      updated {ago(job.updatedAt)}
+    </span>,
+  ].filter(Boolean);
+  return (
+    <Box component="header" data-testid="job-header" sx={{ overflowWrap: 'anywhere' }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        sx={{ alignItems: 'baseline', flexWrap: 'wrap' }}
+      >
+        <Link href="#/" underline="hover">
+          ← Jobs
+        </Link>
+        <Typography variant="h6" component="h1" sx={{ minWidth: 0 }}>
+          {job.title}
+        </Typography>
+        <Typography color="text.secondary">{job.id}</Typography>
+        <StatusChip state={detail.liveness} outcome={detail.outcome} detail={owner} />
+        <ProgressStrip progress={detail.progress} />
+        <RoundIndicator round={job.round} maxRounds={job.maxRounds} chip />
+        {job.archivedAt !== null && (
+          <Tooltip title={`Archived ${job.archivedAt}; shown on the board under Show: archived`}>
+            <Chip label="archived" />
+          </Tooltip>
+        )}
+        {error && <Chip label={`refresh failed: ${error}`} color="warning" />}
+      </Stack>
+      <Stack
+        direction="row"
+        spacing={0.75}
+        useFlexGap
+        sx={{
+          mt: 0.5,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          typography: 'body2',
+          color: 'text.secondary',
+        }}
+      >
+        {/* Each separator sticks to its segment, so a wrapped line never starts with one. */}
+        {delivery.map((part, i) => (
+          <Box
+            key={i}
+            sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}
+          >
+            {part}
+            {i < delivery.length - 1 && <span aria-hidden="true">·</span>}
+          </Box>
+        ))}
+      </Stack>
     </Box>
   );
 }
