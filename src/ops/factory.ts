@@ -34,11 +34,14 @@ import {
   simplifyArtifact,
   simplifyReviewArtifact,
   type Stage,
+  TERMINAL_STATUSES,
 } from '../core/workflow.ts';
-import { dirtyFiles } from '../git/repo.ts';
+import { dirtyFiles, fetchBase, remoteExists } from '../git/repo.ts';
+import { tryGit } from '../git/run.ts';
 import type { WorktreeInfo } from '../git/worktree.ts';
 import { validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
+import { eventsOfTypes } from '../storage/events.ts';
 import { claimJob, createJob, getJob, jobDetail, resumeJob } from '../storage/jobs.ts';
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
 import { latestRun, listIntegrations } from '../storage/verification.ts';
@@ -153,6 +156,93 @@ export interface Plan {
   };
   /** Last escalation reason, when the job is in needs-human. */
   blockedReason?: string | null;
+  /** Outside events for the session, read before acting on the step. */
+  notices: Notice[];
+  /** Command that acknowledges the posted messages shown; null when none or the job is finished. */
+  noticeAck: string | null;
+}
+
+/**
+ * Something that happened outside the session: derived from state on every plan (base moved, PR
+ * merged, cancelled, fetch failed) or posted by a human or tool until the owner acknowledges it.
+ */
+export interface Notice {
+  kind: 'base-moved' | 'pr-merged' | 'cancelled' | 'fetch-failed' | 'message';
+  text: string;
+  at: string | null;
+  by: string | null;
+  eventId: number | null;
+}
+
+function noticesFor(
+  store: Store,
+  job: Job,
+  worktree: WorktreeInfo | null,
+  fetchError: string | undefined,
+): Notice[] {
+  const id = job.id;
+  const out: Notice[] = [];
+  const derived = (kind: Notice['kind'], text: string): Notice => ({
+    kind,
+    text,
+    at: null,
+    by: null,
+    eventId: null,
+  });
+  const finished = TERMINAL_STATUSES.includes(job.status) || job.stage === 'completed';
+  const behind = worktree?.behind ?? 0;
+  if (worktree?.baseRef && behind > 0 && !finished && job.stage !== 'needs-human') {
+    const sha = tryGit(worktree.path, 'rev-parse', worktree.baseRef)?.slice(0, 7) ?? '?';
+    const integrate = `orch worktree integrate ${id} --token <token>`;
+    out.push(
+      derived(
+        'base-moved',
+        `Base ${job.baseBranch} moved: ${String(behind)} commit(s) ahead of this branch at ${sha}; ` +
+          (job.stage === 'review'
+            ? `integrate after this round completes (${integrate}).`
+            : `run \`${integrate}\` before the next \`orch verify\`.`),
+      ),
+    );
+  }
+  if (job.prState === 'merged') {
+    out.push(derived('pr-merged', `PR merged: ${job.prUrl ?? 'no URL'}.`));
+  }
+  if (fetchError !== undefined) {
+    out.push(
+      derived(
+        'fetch-failed',
+        `Could not fetch origin/${job.baseBranch} (${fetchError}); base-moved uses the last fetched ref.`,
+      ),
+    );
+  }
+  const own = eventsOfTypes(store.db, id, ['job.cancelled', 'notice.posted', 'notice.acked']);
+  const cancelled = own.find((e) => e.type === 'job.cancelled');
+  if (cancelled) {
+    const reason =
+      typeof cancelled.payload['reason'] === 'string' ? cancelled.payload['reason'] : '';
+    out.push({
+      kind: 'cancelled',
+      text: `Cancelled by ${cancelled.actor ?? 'unknown'}: ${reason || 'no reason given'}`,
+      at: cancelled.createdAt,
+      by: cancelled.actor,
+      eventId: cancelled.id,
+    });
+  }
+  // Event ids are global and increasing; acknowledged means id <= the largest `through`.
+  const acked = Math.max(
+    0,
+    ...own.filter((e) => e.type === 'notice.acked').map((e) => Number(e.payload['through']) || 0),
+  );
+  for (const e of own.filter((x) => x.type === 'notice.posted' && x.id > acked).reverse()) {
+    out.push({
+      kind: 'message',
+      text: String(e.payload['text']),
+      at: e.createdAt,
+      by: e.actor,
+      eventId: e.id,
+    });
+  }
+  return out;
 }
 
 function tryDirty(root: string): string[] | undefined {
@@ -205,6 +295,28 @@ function reviewersForJob(
 export interface PlanOptions {
   /** Force UI reviewers on or off instead of detecting from the diff. */
   ui?: boolean | undefined;
+  /** Why fetching the base failed (from `planJobFresh`); shown as a `fetch-failed` notice. */
+  fetchError?: string | undefined;
+}
+
+/**
+ * `planJob` after fetching the base, so `base-moved` reflects origin: the session's
+ * `orch factory next|status`. Other readers (dashboard, mail, recovery) call `planJob`, which
+ * never fetches. No `origin`, no worktree, or a finished job: no fetch.
+ */
+export function planJobFresh(store: Store, id: string, opts: PlanOptions = {}): Plan {
+  const job = getJob(store.db, id);
+  const finished = TERMINAL_STATUSES.includes(job.status) || job.stage === 'completed';
+  let fetchError: string | undefined;
+  if (
+    !finished &&
+    job.worktreePath !== null &&
+    existsSync(job.worktreePath) &&
+    remoteExists(job.repoPath)
+  ) {
+    fetchError = fetchBase(job.worktreePath, job.baseBranch) ?? undefined;
+  }
+  return planJob(store, id, { ...opts, fetchError });
 }
 
 /** What `orch gh ci` did about the draft after completing the job (the newest `pr.ready` event). */
@@ -255,6 +367,12 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   // Every mutating command carries the token explicitly: shells spawned by Claude Code do not
   // keep environment variables between calls, so the skill substitutes <token> each time.
   const tok = ' --token <token>';
+  const notices = noticesFor(store, job, worktree, opts.fetchError);
+  const newestMessage = notices.filter((n) => n.kind === 'message').at(-1)?.eventId;
+  const noticeAck =
+    newestMessage != null && !TERMINAL_STATUSES.includes(job.status)
+      ? `orch job notice ack ${id} --through ${String(newestMessage)}${tok}`
+      : null;
 
   const plan: Plan = {
     jobId: id,
@@ -296,6 +414,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       release: job.ciStatus === 'pending' && sessionPolls >= CI_MAX_SESSION_POLLS,
       lastReason: (lastObserved?.payload['reason'] as string | undefined) ?? null,
     },
+    notices,
+    noticeAck,
   };
 
   if (job.status === 'cancelled') {

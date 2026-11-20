@@ -41,7 +41,7 @@ import {
 } from '../core/workflow.ts';
 import { findArtifact, listArtifacts, upsertArtifact, validateArtifact } from './artifacts.ts';
 import type { Db, Store } from './client.ts';
-import { appendEvent, latestEventsByJob, listEvents } from './events.ts';
+import { appendEvent, eventsOfTypes, latestEventsByJob, listEvents } from './events.ts';
 import { type Artifact, type Event, type Job, jobs, type Review, reviews } from './schema.ts';
 
 export interface CreateJobInput {
@@ -864,6 +864,50 @@ export function recordMailOutcome(store: Store, id: string, outcome: MailOutcome
     },
     { behavior: 'immediate' },
   );
+}
+
+/** Longest posted notice; a note for the session, not a document. */
+export const NOTICE_MAX = 2000;
+
+/**
+ * Post a notice for the job's session (`notice.posted`), shown by `orch factory next` until the
+ * owner acknowledges it. A human is not the owner, so no token; metadata like
+ * `recordMailOutcome`: no revision, updatedAt, or lease change.
+ */
+export function postNotice(
+  store: Store,
+  id: string,
+  input: { text: string; actor: string },
+): { jobId: string; eventId: number; text: string } {
+  const text = input.text.trim();
+  if (text === '') throw new ValidationError('A notice needs a non-blank text.');
+  if (text.length > NOTICE_MAX) {
+    throw new ValidationError(`A notice is at most ${String(NOTICE_MAX)} characters.`);
+  }
+  return store.db.transaction(
+    (tx) => {
+      const job = getJob(tx, id);
+      if (TERMINAL_STATUSES.includes(job.status)) {
+        throw new ValidationError(`${id} is ${job.status}; nobody would read the notice.`);
+      }
+      appendEvent(tx, id, 'notice.posted', { text }, input.actor, now());
+      const posted = listEvents(tx, id, 1)[0];
+      return { jobId: id, eventId: posted?.id ?? 0, text };
+    },
+    { behavior: 'immediate' },
+  );
+}
+
+/**
+ * The owner acknowledges every posted notice up to `through` (`notice.acked`): `recordEvent`
+ * with a check that `through` is one of this job's `notice.posted` events.
+ */
+export function ackNotice(store: Store, id: string, auth: Auth, through: number): Job {
+  return mutate(store, id, auth, (_job, tx) => {
+    const posted = eventsOfTypes(tx, id, ['notice.posted']).some((e) => e.id === through);
+    if (!posted) throw new ValidationError(`Event ${String(through)} is not a notice of ${id}.`);
+    return { patch: {}, events: [{ type: 'notice.acked', payload: { through } }] };
+  });
 }
 
 function checkAuth(job: Job, auth: Auth): void {

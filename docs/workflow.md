@@ -220,6 +220,34 @@ claim by any other session resets the count. After a successful probe the next p
 smallest CI `waitSeconds`, at least 60 s. The worker never launches, resumes, or messages a Claude
 session and never removes a worktree.
 
+## Session notices
+
+A running session is never messaged; it learns of outside events on its next `orch factory
+next|status` (decision 2026-11-19-session-notices-are-pulled-on-next). `plan.notices` lists them,
+and the text output prints them as a `Notices:` block above `Next:`:
+
+| Kind           | Shown while                                                            |
+| -------------- | ---------------------------------------------------------------------- |
+| `base-moved`   | the worktree is behind its base ref (unfinished, not `needs-human`)    |
+| `pr-merged`    | `prState` is `merged`                                                  |
+| `cancelled`    | the job has a `job.cancelled` event (who and why, from that event)     |
+| `fetch-failed` | `next`/`status` tried to fetch `origin/<base>` and failed (15 s limit) |
+| `message`      | a `notice.posted` event newer than the largest acknowledged `through`  |
+
+`next` and `status` call `planJobFresh`, which fetches the base branch into the job's repository
+first when the job is unfinished, has a worktree, and has an `origin`; the dashboard, mail, and the
+recovery worker call `planJob`, which never fetches, so their `base-moved` uses the last fetched
+ref. In `review`, `base-moved` says to integrate after the round completes.
+
+`orch job notice post <id> --message <m> [--by <name>]` posts a message without a token (actor
+`human` by default; at most 2000 characters; refused on a completed or cancelled job). It changes
+no revision or lease. `ops/actions.ts` `postNotice` is the one write path, for the dashboard's
+prompt box later. The owner acknowledges with `plan.noticeAck`
+(`orch job notice ack <id> --through <event-id> --token <t>`), which records `notice.acked`;
+`through` must be one of the job's `notice.posted` events. Event ids are global and increasing, so
+acknowledging an older id after a newer one never brings a message back. `plan.commands` never
+carries the ack; `plan.noticeAck` is null when nothing is unacknowledged or the job is finished.
+
 ## Status mail
 
 Optional (decision 2026-11-17-mail-reports-built-in-smtp-client; settings in the README's "Email

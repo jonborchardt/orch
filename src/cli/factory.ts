@@ -8,7 +8,7 @@ import {
   checkReadonly,
   configPath,
   loadConfig,
-  planJob,
+  planJobFresh,
   resumeFactoryJob,
   startJob,
 } from '../ops/factory.ts';
@@ -122,7 +122,7 @@ export function runFactory(
       return listFactory(store, { repo: o.repo });
     case 'next':
     case 'status':
-      return planJob(store, needId(), { ui });
+      return planJobFresh(store, needId(), { ui });
     case 'resume': {
       const jobId = needId();
       const session = needSession();

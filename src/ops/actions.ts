@@ -23,6 +23,7 @@ import { latestEventsByJob } from '../storage/events.ts';
 import {
   claimJob,
   getJob,
+  postNotice as storeNotice,
   recordPrState,
   releaseJob,
   setArchived,
@@ -281,6 +282,19 @@ export function removeMergedWorktree(
     job: withoutToken(getJob(store.db, id)),
     message: `Removed the worktree ${path}. The branch ${before.branch ?? ''} is kept.`,
   };
+}
+
+/**
+ * Post a notice for the job's session: shown by its next `orch factory next|status` until the
+ * owner acknowledges it. No lease: the poster is not the owner. `orch job notice post` and the
+ * dashboard's prompt box (todo 0058) both come here.
+ */
+export function postNotice(
+  store: Store,
+  id: string,
+  input: { text: string; actor: string },
+): ReturnType<typeof storeNotice> {
+  return storeNotice(store, id, input);
 }
 
 export interface SupersedeInput {

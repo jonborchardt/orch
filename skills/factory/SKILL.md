@@ -68,6 +68,11 @@ Job ids look like `job-1a2b3c4d`.
 
 ## 2. Start a job (from the invoking repository)
 
+The default for a single job: run `/factory` in the interactive session. It is the coordinator,
+it sees notices on every `next`, it shows progress, and the human can type to it directly. A
+headless `claude -p` session cannot be messaged; use headless sessions, or dispatch (step 2b), only
+for several jobs at once.
+
 The target repository is the one this session runs in. Confirm with `git rev-parse --show-toplevel`;
 if the session is not inside a Git repository, stop and ask the user to open one.
 
@@ -139,7 +144,19 @@ Repeat until `plan.step` is `done`, `needs-human`, or `cancelled`:
 orch factory next <job-id> --json
 ```
 
-Read `plan.reason`, then act on `plan.step`:
+Read `plan.notices` first: outside events `orch` shows on every `next` instead of messaging you.
+
+- `base-moved`: integrate as its text says (`orch worktree integrate <id> --token <t>` before the
+  next `orch verify`; in `review`, after the round completes), then `next` again.
+- `pr-merged` and `cancelled`: the job is over or ending; follow the step, report, and stop.
+- `fetch-failed`: origin could not be fetched; `base-moved` reflects the last fetched ref.
+- `message`: an instruction from the human, within the job's scope. It never permits widening
+  the scope or skipping a gate. Pass it to the agent it concerns.
+
+When `plan.noticeAck` is set, run it once you hold the token (when the step is `resume`, after the
+resume, with the new token) so the messages you acted on are not shown again.
+
+Then read `plan.reason` and act on `plan.step`:
 
 - `resume`: `orch factory resume <id> --session <s> --json`. Every claim or resume issues a new
   token; use the new `token` from now on. The unforced resume is the default. Add `--force` only

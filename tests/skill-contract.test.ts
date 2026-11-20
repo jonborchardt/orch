@@ -120,6 +120,13 @@ describe('skill', () => {
     expect(body.toLowerCase()).toContain('cannot restart');
   });
 
+  it('defaults a single job to the interactive session and reads notices on every next', () => {
+    const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+    for (const phrase of ['interactive session', 'plan.notices', 'plan.noticeAck']) {
+      expect(body, phrase).toContain(phrase);
+    }
+  });
+
   it('reference templates satisfy the artifact rules the CLI enforces', () => {
     const text = readFileSync(join(skillDir, 'reference.md'), 'utf8');
     const template = (heading: string): string => {

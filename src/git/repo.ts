@@ -114,6 +114,22 @@ export function remoteExists(repoRoot: string, name = 'origin'): boolean {
   return tryGit(repoRoot, 'remote', 'get-url', name) !== undefined;
 }
 
+/**
+ * `git fetch origin <branch>` in `cwd`, bounded so a hung remote or a credential prompt cannot
+ * stall the caller. Null on success, else the first stderr line (or the timeout).
+ */
+export function fetchBase(cwd: string, branch: string): string | null {
+  const r = spawnTool('git', ['fetch', '--quiet', 'origin', branch], {
+    cwd,
+    timeout: 15_000,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  });
+  if (r.status === 0) return null;
+  if (r.status === null && r.stderr.includes('ETIMEDOUT')) return 'timed out after 15 s';
+  const first = r.stderr.trim().split(/\r?\n/)[0] ?? '';
+  return first === '' ? `git fetch exited ${String(r.status)}` : first;
+}
+
 export function refExists(repoRoot: string, ref: string): boolean {
   return tryGit(repoRoot, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`) !== undefined;
 }

@@ -134,6 +134,12 @@ Every state change is a CLI call `orch` validates. The same loop works from a sh
 `--description`, or `--issue` so the description is fetched from the issue; a job with a missing or
 blank description is refused (exit 2) and nothing is created.
 
+Run a single job in the interactive session: it shows progress and you can type to it. A headless
+`claude -p` session cannot be messaged; use headless sessions or dispatch for several jobs at once.
+Either way, `orch factory next` shows the session outside events on its next call (base moved, PR
+merged, cancelled) and any message left with `orch job notice post <id> --message "<text>"`, until
+the session acknowledges it ([docs/workflow.md](docs/workflow.md#session-notices)).
+
 ## Dispatch several jobs at once
 
 From one session in VS Code's Agents window:
