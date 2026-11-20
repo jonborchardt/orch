@@ -6,7 +6,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import { assertStageOwns } from '../core/artifact-rules.ts';
 import { NotFoundError, OwnershipError, UsageError, ValidationError } from '../core/errors.ts';
@@ -135,11 +135,12 @@ export function listJobs(db: Db, filter: JobFilter = {}): Job[] {
     filter.status ? eq(jobs.status, filter.status) : undefined,
     filter.stage ? eq(jobs.stage, filter.stage) : undefined,
   ].filter((c) => c !== undefined);
+  // createdAt has millisecond resolution; the implicit rowid breaks ties by insertion order.
   return db
     .select()
     .from(jobs)
     .where(where.length ? and(...where) : undefined)
-    .orderBy(desc(jobs.createdAt))
+    .orderBy(desc(jobs.createdAt), sql`rowid desc`)
     .all();
 }
 
