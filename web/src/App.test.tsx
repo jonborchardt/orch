@@ -210,6 +210,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     timeline: { entries: [], truncated: false },
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
+    conflicts: null,
     links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null },
     session: null,
     resume: { command: '/factory resume job-00000003', heldBy: null },
@@ -2365,6 +2366,96 @@ describe('PR phase, Merge, and Refresh PR', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Removed the worktree');
     });
     expect(posts(f)).toEqual([{ action: 'remove-worktree', force: true }]);
+  });
+
+  it('Fix merge conflicts shows only when listed and its confirm names the files', async () => {
+    const f = mockFetch();
+    data.detail = detail({ actions: ['request-rework', 'cancel'] });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByRole('button', { name: 'Fix merge conflicts' })).not.toBeInTheDocument();
+    cleanup();
+
+    const job = { ...detail().job, stage: 'approve' as const, status: 'pending' as const };
+    data.detail = detail({
+      job,
+      actions: ['fix-conflicts', 'request-rework', 'cancel'],
+      conflicts: { files: ['src/app.ts', 'README.md'], github: false },
+    });
+    data.actionBody = {
+      job: { ...job, stage: 'build' },
+      message: 'Merging origin/main conflicts in src/app.ts, README.md: the job returned to build.',
+      resumeCommand: 'orch factory resume job-00000003 --session <name>',
+    };
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('button', { name: 'Fix merge conflicts' }));
+    const dialog = await screen.findByRole('dialog');
+    const files = within(dialog).getByTestId('fix-conflicts-files');
+    expect(
+      within(files)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['src/app.ts', 'README.md']);
+    const effect = within(dialog).getByTestId('action-effect');
+    expect(effect).toHaveTextContent('returns to build');
+    expect(effect).toHaveTextContent('No session is started');
+    // The files are listed once, not repeated in the effect sentence.
+    expect(effect).not.toHaveTextContent('README.md');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('returned to build');
+    });
+    expect(posts(f)).toEqual([{ action: 'fix-conflicts' }]);
+  });
+
+  it('Fix merge conflicts words its dialog for ci, a completed re-land, and GitHub-only', async () => {
+    mockFetch();
+    const base = detail().job;
+    const cases = [
+      {
+        job: { ...base, stage: 'ci' as const, status: 'running' as const },
+        conflicts: { files: ['src/app.ts'], github: false },
+        says: ['The branch conflicts with its base', 'returns to build', 'no CI repair is used'],
+        not: ['re-land'],
+      },
+      {
+        job: { ...base, stage: 'completed' as const, status: 'completed' as const },
+        conflicts: { files: [], github: true },
+        says: [
+          'GitHub reports the PR CONFLICTING',
+          'creates a re-land job and marks this one superseded',
+          'start it yourself',
+        ],
+        not: ['returns to build'],
+      },
+      {
+        job: { ...base, stage: 'pr' as const, status: 'pending' as const },
+        conflicts: { files: [], github: true },
+        says: ['GitHub reports the PR CONFLICTING', 'returns to build'],
+        not: ['no CI repair'],
+      },
+    ];
+    for (const c of cases) {
+      cleanup();
+      data.detail = detail({
+        job: c.job,
+        actions: ['fix-conflicts'],
+        conflicts: c.conflicts,
+      });
+      window.location.hash = '#/jobs/job-00000003';
+      mount();
+      fireEvent.click(await screen.findByRole('button', { name: 'Fix merge conflicts' }));
+      const dialog = await screen.findByRole('dialog');
+      const effect = within(dialog).getByTestId('action-effect');
+      for (const s of c.says) expect(effect).toHaveTextContent(s);
+      for (const s of c.not) expect(effect).not.toHaveTextContent(s);
+      // No file list is shown when only GitHub reports the conflict.
+      expect(within(dialog).queryByTestId('fix-conflicts-files') === null).toBe(
+        c.conflicts.files.length === 0,
+      );
+    }
   });
 
   it('Refresh PR posts at once and shows a refused merge error', async () => {

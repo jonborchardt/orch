@@ -253,6 +253,26 @@ describe('transition: CI repair cycle', () => {
     expect(run(ci({ maxCiRepairs: 0 }), 'rework').patch.stage).toBe('needs-human');
   });
 
+  it('base-integration rework from ci spends no repair and never escalates for the budget', () => {
+    for (const extra of [{}, { ciRepairs: 2, maxCiRepairs: 2 }, { maxCiRepairs: 0 }]) {
+      const before = ci(extra);
+      const r = run(before, 'rework', { ...none, reason: 'base conflicts', integration: true });
+      expect(r.patch).toEqual({ stage: 'build', status: 'pending', maxRounds: 4 });
+      expect(r.events).toEqual([
+        {
+          type: 'job.reworked',
+          payload: {
+            from: 'ci',
+            reason: 'base conflicts',
+            ciRepairs: before.ciRepairs,
+            maxRounds: 4,
+            integration: true,
+          },
+        },
+      ]);
+    }
+  });
+
   it('a human may close out only a no-checks or merged delivery escalated from ci', () => {
     const blocked = (extra: Partial<JobState>) =>
       job('needs-human', 'blocked', {

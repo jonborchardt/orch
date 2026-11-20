@@ -209,6 +209,11 @@ export interface TransitionContext {
    * `orch gh ci` call. Only `completeCi` passes it; a stored `prState: merged` never implies it.
    */
   mergedByHuman?: boolean | undefined;
+  /**
+   * `rework` only: base integration needed the builder. Only `integrateBase` passes it; from `ci`
+   * it reworks like approve and pr, spending no CI repair.
+   */
+  integration?: boolean | undefined;
 }
 
 export interface TransitionResult {
@@ -403,11 +408,19 @@ export function transition(
       if (stage !== 'approve' && stage !== 'pr' && stage !== 'ci')
         reject('rework is only for the approve, pr and ci stages');
       const maxRounds = job.maxRounds + 1;
+      // A base conflict is not a CI failure: integration reworks from ci without spending a repair.
+      const integration = ctx.integration === true;
       const reworked = {
         type: 'job.reworked',
-        payload: { from: stage, reason: ctx.reason ?? null, ciRepairs: job.ciRepairs, maxRounds },
+        payload: {
+          from: stage,
+          reason: ctx.reason ?? null,
+          ciRepairs: job.ciRepairs,
+          maxRounds,
+          ...(integration ? { integration: true } : {}),
+        },
       };
-      if (stage !== 'ci')
+      if (stage !== 'ci' || integration)
         return { patch: { stage: 'build', status: 'pending', maxRounds }, events: [reworked] };
       if (job.ciRepairs >= job.maxCiRepairs) {
         return {

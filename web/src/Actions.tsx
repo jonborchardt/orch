@@ -1,5 +1,6 @@
 import {
   Alert,
+  Box,
   Button,
   Checkbox,
   Dialog,
@@ -31,6 +32,7 @@ const LABEL: Record<DashboardAction, string> = {
   merge: 'Merge the PR',
   'refresh-pr': 'Refresh the PR state from GitHub',
   'remove-worktree': 'Remove the worktree (the branch is kept)',
+  'fix-conflicts': 'Fix merge conflicts with the base',
 };
 
 const STAGES = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci'] as const;
@@ -78,6 +80,21 @@ function effect(a: DashboardAction, d: JobDetailView, to: string): string {
       return 'Hides the job from the board unless Show is set to archived.';
     case 'unarchive':
       return 'Puts the job back in the board views.';
+    case 'fix-conflicts': {
+      const why =
+        (d.conflicts?.files.length ?? 0) > 0
+          ? 'The branch conflicts with its base'
+          : 'GitHub reports the PR CONFLICTING';
+      if (job.status === 'completed') {
+        return `${why}. A finished job cannot be reopened, so this creates a re-land job and marks this one superseded; start it yourself with /factory <new id> in a new Claude Code session, and close this PR once the new one merges. No session is started.`;
+      }
+      const base = d.plan?.worktree?.baseRef ?? 'the base';
+      const ci =
+        job.stage === 'ci'
+          ? ' Even a clean merge returns to build, since the new head needs verification, approval, and pr again; no CI repair is used.'
+          : '';
+      return `${why}. Merges ${base} into the branch: a conflicting merge is aborted and recorded, and the job returns to build as pending for the builder to resolve it.${ci} No session is started; resume the job from a Claude Code session.`;
+    }
     case 'refresh-pr':
       return '';
   }
@@ -216,6 +233,19 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
               }}
             >
               {resumeAt(resumeStage)}
+            </Button>,
+          )}
+        {allowed.has('fix-conflicts') &&
+          tip(
+            'fix-conflicts',
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={() => {
+                start('fix-conflicts');
+              }}
+            >
+              Fix merge conflicts
             </Button>,
           )}
         {allowed.has('request-rework') &&
@@ -428,22 +458,42 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                     ))}
                   </TextField>
                 )}
-                <TextField
-                  label={
-                    open === 'accept-delivery'
-                      ? 'Reason (required; recorded as the human close-out)'
-                      : "Reason (recorded in the job's events)"
-                  }
-                  required={open === 'accept-delivery'}
-                  value={reason}
-                  onChange={(e) => {
-                    setReason(e.target.value);
-                  }}
-                  multiline
-                  minRows={2}
-                  slotProps={{ htmlInput: { maxLength: 500 } }}
-                  autoFocus
-                />
+                {open === 'fix-conflicts' ? (
+                  (detail.conflicts?.files.length ?? 0) > 0 && (
+                    <div>
+                      <Typography id="fix-conflicts-label">Conflicting files:</Typography>
+                      <Box
+                        component="ul"
+                        aria-labelledby="fix-conflicts-label"
+                        data-testid="fix-conflicts-files"
+                        sx={{ my: 0, maxHeight: 160, overflowY: 'auto', overflowWrap: 'anywhere' }}
+                      >
+                        {detail.conflicts?.files.map((f) => (
+                          <li key={f}>
+                            <code>{f}</code>
+                          </li>
+                        ))}
+                      </Box>
+                    </div>
+                  )
+                ) : (
+                  <TextField
+                    label={
+                      open === 'accept-delivery'
+                        ? 'Reason (required; recorded as the human close-out)'
+                        : "Reason (recorded in the job's events)"
+                    }
+                    required={open === 'accept-delivery'}
+                    value={reason}
+                    onChange={(e) => {
+                      setReason(e.target.value);
+                    }}
+                    multiline
+                    minRows={2}
+                    slotProps={{ htmlInput: { maxLength: 500 } }}
+                    autoFocus
+                  />
+                )}
                 {liveOwner && (
                   <FormControlLabel
                     control={
@@ -469,8 +519,10 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                 ) : (
                   <Alert severity="warning" variant="outlined">
                     This records the decision
-                    {open === 'accept-policy' ? '' : ' and returns the job to a pending stage'}. It
-                    does not start or wake any Claude session; resume the job from a session
+                    {open === 'accept-policy' || finished
+                      ? ''
+                      : ' and returns the job to a pending stage'}
+                    . It does not start or wake any Claude session; resume the job from a session
                     afterwards.
                   </Alert>
                 )}

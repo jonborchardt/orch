@@ -186,7 +186,12 @@ export function ensureDraftPr(store: Store, id: string, input: EnsurePrInput): P
   // The rollup from `gh pr view` is informational: only `orch gh ci` records a per-commit
   // verdict (ciHead), so the ci stage cannot complete on this observation alone.
   const ciStatus = summarizeChecks(pr.checks);
-  const updated = recordCi(store, id, { token: input.token, ciStatus, head: null });
+  const updated = recordCi(store, id, {
+    token: input.token,
+    ciStatus,
+    head: null,
+    detail: { mergeable: pr.mergeable },
+  });
   return { job: updated, pr, created: existing === undefined, ciStatus };
 }
 
@@ -220,7 +225,7 @@ export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): Pr
       store,
       id,
       { token: auth.token, expectRevision: auth.expectRevision },
-      { event: 'pr.observed', state, head: pr.headSha },
+      { event: 'pr.observed', state, head: pr.headSha, mergeable: pr.mergeable },
     );
     return { job: updated, pr, ciStatus, prState: state, recorded: true };
   }
@@ -236,6 +241,7 @@ export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): Pr
       ciStatus,
       prState: state,
       head: null, // a rollup, not a per-commit verdict; `orch gh ci` must read the head again
+      detail: { mergeable: pr.mergeable },
     });
     return { job: updated, pr, ciStatus, prState: state, recorded: true };
   }
@@ -517,6 +523,7 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     prState,
     head,
     detail: {
+      mergeable: pr.mergeable,
       current,
       outcome,
       polls,

@@ -475,9 +475,9 @@ describe('mutations', () => {
     expect(getJob(store.db, ids.fresh).status).toBe('pending');
   });
 
-  it('merge and refresh-pr pass the same Origin, CSRF, and content-type guards', async () => {
+  it('merge, refresh-pr, and fix-conflicts pass the same Origin, CSRF, and content-type guards', async () => {
     const before = getJob(store.db, ids.completed);
-    for (const action of ['merge', 'refresh-pr']) {
+    for (const action of ['merge', 'refresh-pr', 'fix-conflicts']) {
       const body = { action, force: true };
       expect((await post(ids.completed, body, { 'Content-Type': 'application/json' })).status).toBe(
         403,
@@ -523,6 +523,12 @@ describe('mutations', () => {
     const h = { ...same(), 'X-Orch-Csrf': csrf };
     const bad = async (body: unknown) => (await post(ids.fresh, body, h)).status;
     expect(await bad({ action: 'merge' })).toBe(422);
+    // Parsed and dispatched; refused because the job has no base conflicts.
+    const fix = await post(ids.fresh, { action: 'fix-conflicts' }, h);
+    expect(fix.status).toBe(422);
+    expect(((await fix.json()) as { error: { message: string } }).error.message).toContain(
+      'No merge conflicts',
+    );
     expect(await bad({ action: 'cancel', extra: 1 })).toBe(422);
     expect(await bad({ action: 'cancel', reason: 'x'.repeat(501) })).toBe(422);
     expect(await bad({ action: 'cancel', force: 'yes' })).toBe(422);

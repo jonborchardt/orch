@@ -152,7 +152,12 @@ describe('refresh PR', () => {
       ciStatus: 'passing',
       completedAt,
     });
-    expect(events(c, 'pr.observed').at(-1)).toEqual({ state: 'merged', head: sha });
+    // GitHub's mergeable answer is recorded too (it backs Fix merge conflicts).
+    expect(events(c, 'pr.observed').at(-1)).toEqual({
+      state: 'merged',
+      head: sha,
+      mergeable: 'MERGEABLE',
+    });
     expect(detail(store, c.id).actions).not.toContain('refresh-pr');
     expect(ghCalls('merge')).toHaveLength(0);
   });

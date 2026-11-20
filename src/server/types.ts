@@ -217,6 +217,12 @@ export interface JobDetailView {
   prPhase: PrPhase;
   /** Dashboard actions the workflow allows in this state (the server re-checks on POST). */
   actions: DashboardAction[];
+  /**
+   * What reports merge conflicts with the base (approve, pr, ci, or a completed job with an open
+   * PR not yet superseded): files from the local base ref probe and/or GitHub's last recorded
+   * CONFLICTING; null when neither does or the action does not apply. Backs Fix merge conflicts.
+   */
+  conflicts: { files: string[]; github: boolean } | null;
   /** `vscode://file/...` for the worktree (when recorded) and for the initiating checkout. */
   links: { vscode: string | null; checkout: string; pr: string | null };
   /** Current execution session, or null when none was ever attached. */
