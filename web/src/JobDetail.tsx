@@ -21,7 +21,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
@@ -40,21 +40,7 @@ import {
 } from './Status.tsx';
 import { ApiFailure, fetchDetail } from './api.ts';
 import { STATE, ago, verdictColor } from './format.ts';
-
-const TABS = [
-  'Overview',
-  'Spec',
-  'Build',
-  'Reviews',
-  'Findings',
-  'Decision',
-  'Artifacts',
-  'Events',
-  'Git',
-  'Verification',
-  'PR',
-] as const;
-type TabName = (typeof TABS)[number];
+import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
 
 /** What the detail page's own fetch is doing, for the app bar's shared indicator. */
 export type DetailActivity = 'loading' | 'refreshing' | 'idle';
@@ -71,7 +57,8 @@ export function JobDetail({
   const [detail, setDetail] = useState<JobDetailView | null>(null);
   const [inFlight, setInFlight] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabName>('Overview');
+  // What the user last picked; the rendered tab is resolveTab() of it, so it can come back.
+  const [selected, setSelected] = useState<TabName>('Overview');
   const [tick, setTick] = useState(0);
   const [openReviews, setOpenReviews] = useState<Record<number, boolean>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -135,6 +122,10 @@ export function JobDetail({
     );
   }
   const { job } = detail;
+  const tabs = detailTabs(detail);
+  const unavailable = tabs.filter((t) => t.unavailable !== null);
+  // Derived while rendering, never in an effect: an unavailable panel is never drawn.
+  const tab = resolveTab(detail, selected);
   const consolidatedRounds = detail.rounds.filter((r) => r.consolidated !== null).reverse();
   const next = nextAction(detail);
   const lease = leaseText(job);
@@ -275,17 +266,51 @@ export function JobDetail({
       <Tabs
         value={tab}
         onChange={(_e, v: TabName) => {
-          setTab(v);
+          // aria-disabled (unlike `disabled`) keeps the tab focusable, so clicks and Enter/Space
+          // still arrive here.
+          if (!tabs.find((t) => t.name === v)?.unavailable) setSelected(v);
         }}
         variant="scrollable"
         scrollButtons="auto"
         sx={{ mt: 2, borderBottom: 1, borderColor: 'divider' }}
         aria-label="Job sections"
       >
-        {TABS.map((t) => (
-          <Tab key={t} label={t} value={t} id={`tab-${t}`} aria-controls={`panel-${t}`} />
+        {tabs.map((t) => (
+          <Tab
+            key={t.name}
+            label={t.label}
+            value={t.name}
+            id={`tab-${t.name}`}
+            aria-controls={`panel-${t.name}`}
+            aria-disabled={t.unavailable ? 'true' : undefined}
+            aria-describedby={t.unavailable ? `tab-reason-${t.name}` : undefined}
+            // The label's text cue carries the meaning; italics and a dimmer colour only echo it.
+            sx={
+              t.unavailable
+                ? { color: 'text.disabled', cursor: 'not-allowed' }
+                : t.empty
+                  ? { fontStyle: 'italic' }
+                  : undefined
+            }
+          />
         ))}
       </Tabs>
+      {unavailable.length > 0 && (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          data-testid="tab-unavailable"
+          sx={{ mt: 0.5 }}
+        >
+          Not available yet:
+          {unavailable.map((t) => (
+            <Fragment key={t.name}>
+              {' '}
+              <span id={`tab-reason-${t.name}`}>{t.unavailable}</span>
+            </Fragment>
+          ))}
+        </Typography>
+      )}
       <Box role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} sx={{ pt: 2 }}>
         {tab === 'Overview' && (
           <Stack spacing={1}>
@@ -464,6 +489,11 @@ export function JobDetail({
                   </TableCell>
                 </TableRow>
               ))}
+              {detail.events.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4}>No events recorded.</TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         )}
@@ -711,7 +741,7 @@ function GitTab({ detail }: { detail: JobDetailView }) {
 function Escalation({ detail }: { detail: JobDetailView }) {
   const decision = detail.artifacts.find((a) => a.path === 'decision.md');
   const rationale = section(detail.contents['decision.md'] ?? '', 'Rationale');
-  const latest = detail.rounds.filter((r) => r.consolidated !== null).at(-1);
+  const latest = newestConsolidated(detail);
   const blocking = latest?.blocking ?? 0;
   const lines =
     latest?.consolidated && blocking > 0

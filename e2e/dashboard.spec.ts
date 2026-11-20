@@ -105,6 +105,10 @@ test('job detail exposes spec, reviews, long findings, decision, events, and lin
     'href',
     'https://github.com/acme/alpha/pull/41',
   );
+  // Counts with one meaning each: two review rounds; round 2's consolidation recorded BLOCKING: 0.
+  await expect(page.getByRole('tab', { name: 'Reviews (2 rounds)', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Findings (0 blocking)', exact: true })).toBeVisible();
+  await expect(page.getByTestId('tab-unavailable')).toHaveCount(0);
   await page.getByRole('tab', { name: 'Spec' }).click();
   await expect(page.getByText('Users can download any report as a CSV file.')).toBeVisible();
   await page.getByRole('tab', { name: 'Reviews' }).click();
@@ -141,6 +145,37 @@ test('job detail exposes spec, reviews, long findings, decision, events, and lin
   await expect(page.getByRole('button', { name: 'Archive' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancel job' })).toHaveCount(0);
   await expect(page.getByTestId('resume')).toHaveCount(0);
+});
+
+test('a fresh job explains its unavailable tabs, and the keyboard cannot open them', async ({
+  page,
+}) => {
+  const { ids } = state();
+  await page.goto(`/#/jobs/${ids.fresh}`);
+  await expect(page.getByRole('heading', { name: 'Add health endpoint' })).toBeVisible();
+  const block = page.getByTestId('tab-unavailable');
+  await expect(block).toBeVisible();
+  await expect(block).toHaveText(
+    'Not available yet: Spec needs spec.md (spec stage). Build needs build.md (build stage). ' +
+      'Decision needs decision.md (approve stage). PR needs an opened PR or pr.md (pr stage).',
+  );
+  const overview = page.getByRole('tab', { name: 'Overview' });
+  const spec = page.getByRole('tab', { name: 'Spec', exact: true });
+  await expect(spec).toHaveAttribute('aria-disabled', 'true');
+  await expect(spec).toHaveAccessibleDescription('Spec needs spec.md (spec stage).');
+  await expect(page.getByRole('tab', { name: 'Reviews (0 rounds)', exact: true })).toBeVisible();
+  // Playwright will not click an aria-disabled element unless forced; a user still can.
+  await spec.click({ force: true });
+  await expect(overview).toHaveAttribute('aria-selected', 'true');
+  await spec.focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
+  await expect(overview).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tabpanel')).toHaveAttribute('id', 'panel-Overview');
+  // Arrow keys skip Spec and Build.
+  await overview.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: 'Reviews (0 rounds)', exact: true })).toBeFocused();
 });
 
 test('a finished job can be archived, found under Show: archived, and unarchived', async ({

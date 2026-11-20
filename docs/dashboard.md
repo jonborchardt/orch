@@ -151,6 +151,22 @@ and `job.completed`, oldest first, each with its time and a plain label. Going b
 requested, rework from PR or CI, resume to an earlier stage) is a new entry, never an edit to an
 earlier one. The detail loads the newest 500 events; when it reaches that cap the timeline says
 "Earlier history not shown", and the step states, which never read the timeline, are unaffected.
+The tab labels say what each tab holds, one meaning per count, and the count is part of the tab's
+accessible name: `Reviews (N rounds)` counts review rounds (never reviews), `Findings (N
+blocking)` is the newest consolidated round's validated `BLOCKING` marker (plain `Findings` when
+that round has none), `Artifacts (N)` counts registered artifacts, and `Events (N)` counts the
+events loaded (`Events (500+)` at the cap). A tab whose empty state is useful stays reachable and
+says so in its label: `Reviews (0 rounds)`, `Findings (empty)` before any consolidation,
+`Artifacts (0)`, `Events (0)`, `Git (empty)` without a worktree or merge, and `Verification
+(empty)` without verification state; it is also set in italics. Spec, Build, Decision, and PR
+cannot have content until `spec.md`, `build.md`, `decision.md`, or a PR URL or `pr.md` exists:
+they are `aria-disabled`, and one line under the tab strip (`Not available yet: …`) gives each
+one's reason, which is also the tab's accessible description. Activating one changes nothing,
+and arrow keys skip it. The shown tab is the one last picked when it is available and Overview
+otherwise, decided on every render, so a tab that becomes unavailable on a poll or another job
+falls back to Overview and returns when it is available again. `web/src/tabs.ts` holds these
+rules (`detailTabs`, `resolveTab`); deep links to tabs must use those two functions, never a rule
+of their own.
 A status panel above the controls reads as one summary line, one **Next:** line, and a
 collapsed **Details** expander. The summary is the bold blocker label and one sentence: for a
 `CI stopped` job the CI line (head and repair budget), otherwise the blocker summary with the

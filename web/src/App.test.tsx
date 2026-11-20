@@ -18,6 +18,7 @@ import { CiChip } from './Ci.tsx';
 import { byAttention, ciColor, repoLabels, reviewRollup } from './format.ts';
 import { Markdown } from './Markdown.tsx';
 import { RESUME_NOTE } from './Status.tsx';
+import { TABS, detailTabs, resolveTab } from './tabs.ts';
 import { theme } from './main.tsx';
 
 // The full suite runs ~20 process-heavy files in parallel; the 1 s default flakes under that load.
@@ -692,7 +693,7 @@ describe('Job detail', () => {
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     expect(screen.getByText(/Plan unavailable: config broken/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('tab', { name: 'Findings' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Findings (0 blocking)' }));
     expect(screen.getByText(/finding 40/)).toBeInTheDocument();
     expect(screen.getByText('BLOCKING: 0')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open worktree in VS Code' })).toHaveAttribute(
@@ -2241,7 +2242,7 @@ describe('Job detail: reviews', () => {
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
-    fireEvent.click(screen.getByRole('tab', { name: 'Reviews' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Reviews (1 round)' }));
     expect(screen.getByText('blocking 1')).toBeInTheDocument();
     const header = screen.getByRole('button', { name: /security.*pass.*No issues/ });
     const other = screen.getByRole('button', { name: /correctness.*changes.*One bug/ });
@@ -2315,7 +2316,7 @@ describe('Job detail: reviews', () => {
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
-    fireEvent.click(screen.getByRole('tab', { name: 'Reviews' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Reviews (2 rounds)' }));
     expect(screen.getByRole('heading', { name: /^Round 2 \(current\)/ })).toBeInTheDocument();
     const old = screen.getByRole('heading', { name: /^Round 1/ });
     expect(old).not.toHaveTextContent('current');
@@ -2863,6 +2864,365 @@ describe('Board attention order, summary chips, review rollup', () => {
       'cancelled (1)',
       'archived (1)',
     ]);
+  });
+});
+
+describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () => {
+  const art = (id: number, path: string) =>
+    ({
+      id,
+      jobId: 'job-00000003',
+      stage: 'spec',
+      round: null,
+      path,
+      bytes: 10,
+      sha256: null,
+      marker: null,
+      head: null,
+      specSha256: null,
+      createdAt: '2026-11-13T08:20:00.000Z',
+    }) satisfies JobDetailView['artifacts'][number];
+  const events = (n: number): JobDetailView['events'] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: i + 1,
+      jobId: 'job-00000003',
+      type: 'job.note',
+      payload: {},
+      actor: null,
+      createdAt: '2026-11-13T08:00:00.000Z',
+    }));
+  const round = (n: number, blocking: number | null, consolidated = true) => ({
+    round: n,
+    reviews: [],
+    consolidated: consolidated ? `round-${String(n)}/consolidated.md` : null,
+    blocking,
+  });
+  const reasons = {
+    Spec: 'Spec needs spec.md (spec stage).',
+    Build: 'Build needs build.md (build stage).',
+    Decision: 'Decision needs decision.md (approve stage).',
+    PR: 'PR needs an opened PR or pr.md (pr stage).',
+  } as const;
+  /** Just created: nothing registered, no rounds, events, plan, worktree, or PR. */
+  function fresh(over: Partial<JobDetailView> = {}): JobDetailView {
+    const base = detail();
+    return detail({
+      job: { ...base.job, stage: 'spec', status: 'pending', round: 0 },
+      liveness: 'idle',
+      blocker: null,
+      artifacts: [],
+      contents: {},
+      rounds: [],
+      events: [],
+      plan: null,
+      planError: 'no worktree',
+      merge: null,
+      ...over,
+    });
+  }
+  /** Delivered: every document registered, two consolidated rounds (newest BLOCKING: 3), a PR. */
+  function done(over: Partial<JobDetailView> = {}): JobDetailView {
+    const base = detail();
+    const paths = ['spec.md', 'build.md', 'round-1/consolidated.md', 'round-2/consolidated.md'];
+    return detail({
+      job: {
+        ...base.job,
+        stage: 'completed',
+        status: 'completed',
+        round: 2,
+        prUrl: 'https://github.com/x/y/pull/9',
+        prState: 'merged',
+      },
+      liveness: 'completed',
+      blocker: null,
+      artifacts: [...paths, 'decision.md', 'pr.md'].map((p, i) => art(i + 1, p)),
+      contents: { 'spec.md': '# Spec\n\nThe spec body.\n' },
+      rounds: [round(1, 5), round(2, 3)],
+      events: events(34),
+      plan: {
+        step: 'done',
+        reason: '',
+        agents: [],
+        artifacts: [],
+        worktree: {
+          path: '/wt/g',
+          exists: true,
+          isWorktree: true,
+          branch: 'factory/job-00000003-gamma',
+          head: '9999999988888888',
+          dirty: [],
+          baseRef: 'origin/main',
+          ahead: 0,
+          behind: 0,
+          commits: [],
+          changedFiles: [],
+          changes: [],
+          fingerprint: 'fp',
+        },
+        verification: {
+          configured: true,
+          policy: {
+            source: 'baseline',
+            head: 'abc1234567',
+            fingerprint: 'fp',
+            checks: ['check'],
+            authorization: 'not-needed',
+            candidateError: null,
+          },
+          run: null,
+          valid: false,
+          reason: 'no verification run recorded',
+          queue: null,
+        },
+        sensitive: null,
+        integration: null,
+      } as unknown as JobDetailView['plan'],
+      planError: null,
+      ...over,
+    });
+  }
+  const tab = (name: string) => screen.getByRole('tab', { name });
+  const selectedTab = () =>
+    screen.getAllByRole('tab').find((t) => t.getAttribute('aria-selected') === 'true');
+  const show = async (d: JobDetailView) => {
+    data.detail = d;
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+  };
+
+  it('describes a fresh job: four tabs unavailable with reasons, the rest counted or empty (AC1)', () => {
+    expect(detailTabs(fresh())).toEqual([
+      { name: 'Overview', label: 'Overview', count: null, empty: false, unavailable: null },
+      { name: 'Spec', label: 'Spec', count: null, empty: true, unavailable: reasons.Spec },
+      { name: 'Build', label: 'Build', count: null, empty: true, unavailable: reasons.Build },
+      { name: 'Reviews', label: 'Reviews (0 rounds)', count: 0, empty: true, unavailable: null },
+      { name: 'Findings', label: 'Findings (empty)', count: null, empty: true, unavailable: null },
+      {
+        name: 'Decision',
+        label: 'Decision',
+        count: null,
+        empty: true,
+        unavailable: reasons.Decision,
+      },
+      { name: 'Artifacts', label: 'Artifacts (0)', count: 0, empty: true, unavailable: null },
+      { name: 'Events', label: 'Events (0)', count: 0, empty: true, unavailable: null },
+      { name: 'Git', label: 'Git (empty)', count: null, empty: true, unavailable: null },
+      {
+        name: 'Verification',
+        label: 'Verification (empty)',
+        count: null,
+        empty: true,
+        unavailable: null,
+      },
+      { name: 'PR', label: 'PR', count: null, empty: true, unavailable: reasons.PR },
+    ]);
+  });
+
+  it('describes a completed job: nothing unavailable, newest round blocking count (AC1)', () => {
+    const tabs = detailTabs(done());
+    expect(tabs.map((t) => t.name)).toEqual([...TABS]);
+    expect(tabs.map((t) => t.label)).toEqual([
+      'Overview',
+      'Spec',
+      'Build',
+      'Reviews (2 rounds)',
+      'Findings (3 blocking)',
+      'Decision',
+      'Artifacts (6)',
+      'Events (34)',
+      'Git',
+      'Verification',
+      'PR',
+    ]);
+    expect(tabs.every((t) => t.unavailable === null && !t.empty)).toBe(true);
+    expect(tabs.find((t) => t.name === 'Findings')?.count).toBe(3);
+    expect(tabs.find((t) => t.name === 'Reviews')?.count).toBe(2);
+    // A recorded merge alone gives Git content; pr.md alone makes PR available.
+    const merged = detailTabs(
+      fresh({
+        merge: {
+          base: 'main',
+          prUrl: null,
+          head: null,
+          historyKnown: false,
+          commits: [],
+          changedFiles: [],
+          outstanding: null,
+        },
+        artifacts: [art(1, 'pr.md')],
+      }),
+    );
+    expect(merged.find((t) => t.name === 'Git')?.label).toBe('Git');
+    expect(merged.find((t) => t.name === 'PR')?.unavailable).toBeNull();
+  });
+
+  it('counts the newest consolidated round, including 0, and labels truncated events (AC1, AC3)', () => {
+    const findings = (rounds: JobDetailView['rounds']) =>
+      detailTabs(fresh({ rounds })).find((t) => t.name === 'Findings');
+    // Round 3 has no consolidation yet: round 2 is the newest consolidated round.
+    expect(findings([round(1, 5), round(2, 0), round(3, null, false)])).toEqual({
+      name: 'Findings',
+      label: 'Findings (0 blocking)',
+      count: 0,
+      empty: false,
+      unavailable: null,
+    });
+    expect(findings([round(1, 5), round(2, null)])).toEqual({
+      name: 'Findings',
+      label: 'Findings',
+      count: null,
+      empty: false,
+      unavailable: null,
+    });
+    // Reviews counts round sections, with or without reviewers or consolidation.
+    const reviews = detailTabs(fresh({ rounds: [round(1, null, false)] })).find(
+      (t) => t.name === 'Reviews',
+    );
+    expect(reviews?.label).toBe('Reviews (1 round)');
+    const truncated = detailTabs(
+      fresh({ events: events(500), timeline: { entries: [], truncated: true } }),
+    ).find((t) => t.name === 'Events');
+    expect(truncated).toMatchObject({ label: 'Events (500+)', count: 500 });
+  });
+
+  it('resolves an unavailable tab to Overview and an available one to itself (AC2)', () => {
+    const d = fresh();
+    for (const t of TABS) {
+      expect(resolveTab(d, t)).toBe(t in reasons ? 'Overview' : t);
+    }
+    for (const t of TABS) expect(resolveTab(done(), t)).toBe(t);
+  });
+
+  it('puts counts in the accessible names of the rendered tabs (AC3, AC9)', async () => {
+    await show(done());
+    for (const name of [
+      'Reviews (2 rounds)',
+      'Findings (3 blocking)',
+      'Artifacts (6)',
+      'Events (34)',
+    ]) {
+      expect(tab(name)).toHaveTextContent(name);
+      expect(tab(name)).not.toHaveAttribute('aria-label');
+    }
+    expect(screen.queryByTestId('tab-unavailable')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('tab').filter((t) => t.hasAttribute('aria-disabled'))).toEqual([]);
+    // Ids and panels are keyed by tab name, not label.
+    fireEvent.click(tab('Reviews (2 rounds)'));
+    expect(tab('Reviews (2 rounds)')).toHaveAttribute('id', 'tab-Reviews');
+    expect(tab('Reviews (2 rounds)')).toHaveAttribute('aria-controls', 'panel-Reviews');
+    const panel = screen.getByRole('tabpanel');
+    expect(panel).toHaveAttribute('id', 'panel-Reviews');
+    expect(panel).toHaveAttribute('aria-labelledby', 'tab-Reviews');
+    expect(panel).toHaveAccessibleName('Reviews (2 rounds)');
+    cleanup();
+    await show(done({ events: events(500), timeline: { entries: [], truncated: true } }));
+    expect(tab('Events (500+)')).toBeInTheDocument();
+  });
+
+  it('keeps empty tabs reachable with a text cue and their empty text (AC4)', async () => {
+    await show(fresh());
+    const cases: [string, RegExp][] = [
+      ['Reviews (0 rounds)', /No review rounds yet\./],
+      ['Findings (empty)', /No consolidated findings yet\./],
+      ['Artifacts (0)', /No artifacts registered\./],
+      ['Events (0)', /No events recorded\./],
+      ['Git (empty)', /No worktree on disk/],
+      ['Verification (empty)', /Plan unavailable\./],
+    ];
+    for (const [name, text] of cases) {
+      expect(tab(name)).not.toHaveAttribute('aria-disabled');
+      fireEvent.click(tab(name));
+      expect(tab(name)).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('tabpanel')).toHaveTextContent(text);
+    }
+  });
+
+  it('disables the four unavailable tabs with a visible, described explanation (AC5, AC7)', async () => {
+    await show(fresh());
+    const block = screen.getByTestId('tab-unavailable');
+    expect(block).toBeVisible();
+    expect(block).toHaveTextContent(
+      `Not available yet: ${reasons.Spec} ${reasons.Build} ${reasons.Decision} ${reasons.PR}`,
+    );
+    for (const [name, reason] of Object.entries(reasons)) {
+      const t = tab(name);
+      expect(t).toHaveAttribute('aria-disabled', 'true');
+      expect(t).toHaveAccessibleDescription(reason);
+      expect(t).toHaveAttribute('aria-describedby', `tab-reason-${name}`);
+      expect(document.querySelectorAll(`[id="tab-reason-${name}"]`)).toHaveLength(1);
+    }
+    // No tab is disabled without an explanation, on either fixture.
+    const undescribed = () =>
+      screen
+        .getAllByRole('tab')
+        .filter((t) => t.getAttribute('aria-disabled') === 'true')
+        .filter((t) => {
+          const by = t.getAttribute('aria-describedby');
+          return !by || !document.getElementById(by)?.textContent.trim();
+        });
+    expect(undescribed()).toEqual([]);
+    cleanup();
+    await show(done());
+    expect(undescribed()).toEqual([]);
+  });
+
+  it('ignores a disabled tab activated by click or keyboard, and arrows skip it (AC6)', async () => {
+    await show(fresh());
+    fireEvent.click(tab('Events (0)'));
+    const before = screen.getByRole('tabpanel').innerHTML;
+    const spec = tab('Spec');
+    fireEvent.click(spec);
+    expect(spec).toHaveAttribute('aria-selected', 'false');
+    expect(selectedTab()).toBe(tab('Events (0)'));
+    spec.focus();
+    for (const key of ['Enter', ' ']) {
+      fireEvent.keyDown(spec, { key });
+      fireEvent.keyUp(spec, { key });
+    }
+    expect(selectedTab()).toBe(tab('Events (0)'));
+    expect(screen.getByRole('tabpanel').innerHTML).toBe(before);
+    // Roving focus: from Overview, ArrowRight skips Spec and Build.
+    tab('Overview').focus();
+    fireEvent.keyDown(tab('Overview'), { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(tab('Reviews (0 rounds)'));
+  });
+
+  it('falls back to Overview at render time when the tab goes away, and returns to it (AC8)', async () => {
+    const withSpec = fresh({ artifacts: [art(1, 'spec.md')], contents: { 'spec.md': 'Body A' } });
+    await show(withSpec);
+    fireEvent.click(tab('Spec'));
+    expect(await screen.findByText('Body A')).toBeInTheDocument();
+    // Watch for the Spec panel being drawn without spec.md, even for one commit.
+    let drawnUnavailable = false;
+    const observer = new MutationObserver(() => {
+      if (document.body.textContent.includes('Not available (spec.md).')) drawnUnavailable = true;
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    data.detail = fresh();
+    await waitFor(() => {
+      expect(tab('Overview')).toHaveAttribute('aria-selected', 'true');
+    });
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'panel-Overview');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Request');
+    expect(tab('Spec')).toHaveAttribute('aria-disabled', 'true');
+    // Refresh refetches the same unavailable state: still Overview.
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(tab('Overview')).toHaveAttribute('aria-selected', 'true');
+    observer.disconnect();
+    expect(drawnUnavailable).toBe(false);
+    // The pick was kept: once spec.md is back, Spec is shown again.
+    data.detail = withSpec;
+    await waitFor(() => {
+      expect(tab('Spec')).toHaveAttribute('aria-selected', 'true');
+    });
+    expect(screen.getByText('Body A')).toBeInTheDocument();
+    // An available tab stays selected across polls.
+    fireEvent.click(tab('Events (0)'));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(tab('Events (0)')).toHaveAttribute('aria-selected', 'true');
   });
 });
 
