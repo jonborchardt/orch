@@ -341,17 +341,11 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
   const url = before.prUrl ?? '';
   const head = before.ciHead ?? '';
   const { error, message } = withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
-    const pr = viewPr(url, ghCwd(before));
-    const state = prWorkflowState(pr);
     if (!merge) {
-      recordPrState(
-        store,
-        before.id,
-        { token },
-        { event: 'pr.observed', state, head: pr.headSha, mergeable: pr.mergeable },
-      );
+      const { pr, state } = observePr(store, before, token);
       return { error: null, message: `GitHub reports ${url} as ${state ?? pr.state}.` };
     }
+    const pr = viewPr(url, ghCwd(before));
     const why = mergeRefusal(pr, head);
     if (why) throw new ValidationError(`Cannot merge ${url}: ${why}.`);
     const failed = mergePr(url, head, ghCwd(before));
@@ -360,6 +354,20 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
   });
   if (error !== null) throw new ValidationError(`gh pr merge failed: ${error}`);
   return { job: withoutToken(getJob(store.db, before.id)), message };
+}
+
+/** Re-read the job's PR and record what GitHub reports, including whether it is mergeable. */
+function observePr(store: Store, job: Job, token: string) {
+  const pr = viewPr(job.prUrl ?? '', ghCwd(job));
+  const state = prWorkflowState(pr);
+  const observed = {
+    event: 'pr.observed',
+    state,
+    head: pr.headSha,
+    mergeable: pr.mergeable,
+  } as const;
+  recordPrState(store, job.id, { token }, observed);
+  return { pr, state };
 }
 
 const resumeCommand = (id: string): string => `orch factory resume ${id} --session <name>`;
@@ -372,14 +380,7 @@ const resumeCommand = (id: string): string => `orch factory resume ${id} --sessi
 function reland(store: Store, before: Job, force: boolean | undefined): ActionResult {
   const url = before.prUrl ?? '';
   const created = withLease(store, before, DASHBOARD_SESSION, force, (token) => {
-    const pr = viewPr(url, ghCwd(before));
-    const state = prWorkflowState(pr);
-    recordPrState(
-      store,
-      before.id,
-      { token },
-      { event: 'pr.observed', state, head: pr.headSha, mergeable: pr.mergeable },
-    );
+    const { pr } = observePr(store, before, token);
     if (pr.state !== 'OPEN' || pr.mergeable !== 'CONFLICTING') {
       throw new ValidationError(
         `Nothing to re-land: GitHub reports ${url} ${pr.state} and ${pr.mergeable ?? 'UNKNOWN'}, ` +
@@ -428,15 +429,14 @@ function reland(store: Store, before: Job, force: boolean | undefined): ActionRe
  * re-landed instead. orch resolves nothing and starts no session.
  */
 function fixConflicts(store: Store, before: Job, force: boolean | undefined): ActionResult {
-  const route = fixConflictsRoute(before);
-  if (route === null || baseConflicts(store, before) === null) {
+  if (baseConflicts(store, before) === null) {
     throw new ValidationError(
       'No merge conflicts with the base to fix: only a job in approve, pr, or ci, or a completed ' +
         'job with an open PR not yet superseded, whose branch conflicts with its base (or whose ' +
         'PR GitHub last reported CONFLICTING) qualifies.',
     );
   }
-  if (route === 're-land') return reland(store, before, force);
+  if (fixConflictsRoute(before) === 're-land') return reland(store, before, force);
   const r = withLease(store, before, DASHBOARD_SESSION, force, (token) =>
     integrateBase(store, before.id, { token }),
   );
