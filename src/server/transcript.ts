@@ -171,7 +171,7 @@ export interface Found {
 /**
  * The real path of `p` with its stats when it lies inside the real directory `root` and is a
  * regular file (`dir`: a directory); null when it is missing, elsewhere, or another kind. A filter
- * only: what is read is proven again on the open handle by `readConfined`.
+ * only; reads go through `readConfined`.
  */
 export function confined(p: string, root: string, dir = false): Found | null {
   try {
@@ -199,13 +199,11 @@ const READ_FLAGS = constants.O_RDONLY | ((constants as Partial<typeof constants>
  * handle: up to `length` bytes from the start, or the last `length` bytes (`fromEnd`). Null when
  * the proof fails or anything cannot be read.
  *
- * Why after the open: an open handle pins its inode, so no other file can be given the same number
- * while the identities are compared. Comparing a stat taken before the open with one taken after
- * it does not hold: once the checked file is deleted, Linux hands its inode number to the next file
- * created (the CI failure of round 3), so a swapped-in file can carry the checked identity.
- * What remains: a writer to `root`'s parents who moves a directory to a link and back between the
- * open and the resolve, and again before the stat, which needs write access to the user's own
- * Claude projects directory (where it could write any transcript text anyway) and two won races.
+ * Why after the open: an open handle pins its inode, so no other file can take its number while
+ * the identities are compared. Never trust an identity taken before the open: a deleted file's
+ * inode number goes to the next file created (at once on Linux). Not closed: two won races that
+ * move a directory on the path to a link and back, which needs write access to the user's own
+ * Claude projects directory.
  */
 export function readConfined(
   p: string,
@@ -249,9 +247,9 @@ function list(dir: string): string[] {
 }
 
 /** A meta file's fields; empty when it is absent, larger than `max`, or not a JSON object. */
-function readMeta(file: Found | null, root: string, max: number): Obj {
-  if (!file || file.size > max) return {};
-  const read = readConfined(file.path, root, max);
+function readMeta(path: string, root: string, max: number): Obj {
+  // At most `max` bytes are read; a file larger than that is ignored, never parsed in part.
+  const read = readConfined(path, root, max);
   if (!read || read.size > max) return {};
   try {
     const m: unknown = JSON.parse(read.buf.toString('utf8'));
@@ -339,7 +337,7 @@ export function readSessionLog(
   };
 
   const subagents: SubagentSummary[] = read.map((f) => {
-    const m = readMeta(confined(join(sub, `agent-${f.id}.meta.json`), sub), sub, L.META_MAX_BYTES);
+    const m = readMeta(join(sub, `agent-${f.id}.meta.json`), sub, L.META_MAX_BYTES);
     return {
       id: f.id,
       type: metaText(m['agentType']),
