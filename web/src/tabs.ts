@@ -10,6 +10,7 @@ export const TABS = [
   'Decision',
   'Artifacts',
   'Events',
+  'Session',
   'Git',
   'Verification',
   'PR',
@@ -69,6 +70,8 @@ export function detailTabs(detail: JobDetailView): DetailTab[] {
     plain('Decision', !has('decision.md'), 'Decision needs decision.md (approve stage).'),
     counted('Artifacts', detail.artifacts.length),
     counted('Events', events, detail.timeline.truncated ? `${String(events)}+` : String(events)),
+    // Empty without a claude-code session, but reachable: its panel says how to attach one.
+    plain('Session', detail.claudeSessions.length === 0),
     plain('Git', !detail.plan?.worktree && !detail.merge),
     plain('Verification', !detail.plan?.verification),
     plain('PR', !detail.job.prUrl && !has('pr.md'), 'PR needs an opened PR or pr.md (pr stage).'),

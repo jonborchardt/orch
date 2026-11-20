@@ -167,6 +167,38 @@ otherwise, decided on every render, so a tab that becomes unavailable on a poll 
 falls back to Overview and returns when it is available again. `web/src/tabs.ts` holds these
 rules (`detailTabs`, `resolveTab`); deep links to tabs must use those two functions, never a rule
 of their own.
+
+The **Session** tab, after Events, shows what the job's Claude Code session and its subagents are
+doing and have done, read directly from Claude Code's transcripts (decision
+2026-11-20-session-tab-reads-transcripts; afk-viewer reads the same files but is not used). It is
+labelled `Session (empty)`, in italics, while the job has no claude-code session attached, and is
+never `aria-disabled`. **Tie rule:** a transcript belongs to a job only through a session UUID in
+that job's own `session.attached` events with `provider: claude-code` (the `/factory` skill
+records `$CLAUDE_CODE_SESSION_ID` after `start` or `resume`); the newest such attachment is read
+even when a later `vscode-agents` attachment is the current session. The server
+(`src/server/transcript.ts`, `GET /api/jobs/<id>/session-log`) finds `<uuid>.jsonl` one level
+under `<claude home>/projects/` (`CLAUDE_CONFIG_DIR`, else `~/.claude`), taking the most recently
+modified file when several directories hold it, and reads that session's subagents from the
+`agent-<id>.jsonl` files (with their `agent-<id>.meta.json`) in `<that directory>/<uuid>/subagents/`.
+Nothing else is read: no `cwd` or transcript-path matching, no query parameter or path suffix that
+picks a file. Each file must resolve, by real path, inside the real `projects` directory (a
+subagent file also inside its real `subagents/`) and be a regular file, so a junction or symlink
+cannot lead out. **Bounds** (exported constants): each file is read only from its end, at most
+`TAIL_WINDOW_BYTES` (256 KB); at most `TOTAL_READ_BYTES` (2 MB) per request, newest file first;
+the newest `MAX_SUBAGENT_FILES` (24) subagent files, the rest counted; `META_MAX_BYTES` (16 KB) per
+meta file; `MAX_ENTRIES` (400) entries, `ENTRY_TEXT_MAX` (4000) characters each, and
+`MAX_RESPONSE_BYTES` (1 MB) of JSON. Records become `user`, `assistant`, `tool` (the tool name and
+its key input), `result`, and `error` entries; thinking blocks, attachments, queue operations,
+snapshots, malformed lines, and sidechain records in the main file are skipped. The panel shows
+the transcript's modified time and size, a Subagents list (`running` until the meta file says
+`finished`), the merged timeline newest first (relative time with the exact time in a tooltip, and
+a `main` or `<agent type>: <description>` label), "Earlier activity not shown" when a file was cut
+or a cap was hit, and earlier claude-code sessions with their `claude --resume <ref>` (not read).
+Long text collapses with Show more; content is plain text, never Markdown or HTML. The tab
+refetches on the detail poll, only while it is shown. Without a tie or a transcript it names the
+reason and the attach command. Transcripts hold secrets and file contents: the route is loopback
+only, behind the same `Host` and `Sec-Fetch-Site` guards as the detail, and sends `no-store` and
+`nosniff`; anyone who can open the dashboard can read the tail, as with the log routes.
 A status panel above the controls reads as one summary line, one **Next:** line, and a
 collapsed **Details** expander. The summary is the bold blocker label and one sentence: for a
 `CI stopped` job the CI line (head and repair budget), otherwise the blocker summary with the

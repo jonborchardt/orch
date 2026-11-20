@@ -131,6 +131,14 @@ test('job detail exposes spec, reviews, long findings, decision, events, and lin
   await expect(
     page.getByRole('table', { name: 'Events' }).getByText('job.completed'),
   ).toBeVisible();
+  // The attached claude-code session's synthetic transcript, its subagent merged in by time.
+  await page.getByRole('tab', { name: 'Session', exact: true }).click();
+  const timeline = page.getByRole('list', { name: 'Session timeline' });
+  await expect(timeline.getByRole('listitem')).toHaveCount(3);
+  await expect(timeline.getByRole('listitem').first()).toContainText('Launching the builder.');
+  await expect(timeline.getByRole('listitem').nth(1)).toContainText('builder: Build round 1');
+  await expect(timeline.getByRole('listitem').nth(1)).toContainText('Edit src/export.ts');
+  await expect(page.getByTestId('session-subagents')).toContainText('running');
   await page.getByRole('tab', { name: 'Verification' }).click();
   // Seeded jobs have no worktree, so the evidence panel says so instead of inventing a run.
   await expect(page.getByText('No worktree; nothing verified.')).toBeVisible();

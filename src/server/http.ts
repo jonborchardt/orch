@@ -20,7 +20,7 @@ import {
 import { DEFAULT_PORT, webDistDir } from '../core/paths.ts';
 import { mailWatermark, reportJobMail } from '../ops/mail.ts';
 import type { Store } from '../storage/client.ts';
-import { act, artifactContent, assertJobId, board, detail, repos } from './api.ts';
+import { act, artifactContent, assertJobId, board, detail, repos, sessionLog } from './api.ts';
 import type { ApiError, SessionInfo } from './types.ts';
 
 const HOST = '127.0.0.1';
@@ -225,6 +225,11 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
       }
       if (root === 'jobs' && id && !sub) {
         send(res, 200, detail(store, assertJobId(id)));
+        return;
+      }
+      // No query or suffix selects a file: the job's own attached session decides what is read.
+      if (root === 'jobs' && id && sub === 'session-log' && rest.length === 0) {
+        send(res, 200, sessionLog(store, assertJobId(id)), { 'X-Content-Type-Options': 'nosniff' });
         return;
       }
       if (root === 'jobs' && id && sub === 'artifacts' && rest.length > 0) {
