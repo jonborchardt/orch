@@ -8,7 +8,8 @@ are not review-driven and counting on the new `jobs.scopeReworks` column. With o
 already taken, the next `REWORK-*` moves the job to `needs-human` with reason
 `SCOPE_GAP_REASON`, `returnStage` the requested stage. `decision.md` records the hash of the
 `spec.md` registered with it; after `REWORK-SPEC`, `complete` from `spec` is refused until
-`spec.md` changed, and the existing challenge gate then needs a PASS for the new spec. Reviewer
+`spec.md` changed, and the existing challenge gate then needs a PASS for the new spec. A human `resume` out of a spec escalation to a later stage is
+refused the same way while `spec.md` still has that hash; a resume does not override it. Reviewer
 prose makes any in-scope item the diff does not implement BLOCKING, so review sends it back to
 build as before; the spec challenger answers CHANGES to a spec that drops part of the request
 unless the request or a human excluded it.
