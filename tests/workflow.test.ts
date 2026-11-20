@@ -11,6 +11,7 @@ import {
   latestChallenge,
   MAX_ROUNDS_REASON,
   requiredArtifact,
+  SCOPE_GAP_REASON,
   type Stage,
   STAGES,
   type Status,
@@ -34,6 +35,7 @@ function job(stage: Stage, status: Status, extra: Partial<JobState> = {}): JobSt
     ciHead: null,
     ciRepairs: 0,
     maxCiRepairs: 2,
+    scopeReworks: 0,
     ...extra,
   };
 }
@@ -224,17 +226,24 @@ describe('transition: CI repair cycle', () => {
     expect(() => run(job('review', 'running'), 'rework')).toThrow(/approve, pr and ci stages/);
   });
 
-  it('rework from approve returns to build without counting a repair, from any status', () => {
+  it('base-integration rework from approve returns to build without counting a repair, from any status', () => {
     for (const status of ['running', 'pending', 'failed'] as const) {
-      const r = run(job('approve', status, { ciRepairs: 1 }), 'rework', {
+      const r = run(job('approve', status, { ciRepairs: 1, scopeReworks: 1 }), 'rework', {
         ...none,
         reason: 'base conflicts',
+        integration: true,
       });
       expect(r.patch).toEqual({ stage: 'build', status: 'pending', maxRounds: 4 });
       expect(r.events).toEqual([
         {
           type: 'job.reworked',
-          payload: { from: 'approve', reason: 'base conflicts', ciRepairs: 1, maxRounds: 4 },
+          payload: {
+            from: 'approve',
+            reason: 'base conflicts',
+            ciRepairs: 1,
+            maxRounds: 4,
+            integration: true,
+          },
         },
       ]);
     }
@@ -689,6 +698,98 @@ describe('cannotAcceptDelivery', () => {
       /escalated from the ci/,
     );
     expect(cannotAcceptDelivery({ ...base, stage: 'ci' })).toMatch(/escalated from the ci/);
+  });
+});
+
+describe('transition: scope-gap rework from approve', () => {
+  const decided = (marker: string, extra: Partial<Artifact> = {}): TransitionContext => ({
+    ...none,
+    artifacts: [art('decision.md', marker, extra)],
+    reason: 'two requested cases missing',
+  });
+
+  it('REWORK-BUILD goes back to build and REWORK-SPEC to spec, counting one scope rework', () => {
+    for (const [marker, to] of [
+      ['rework-build', 'build'],
+      ['rework-spec', 'spec'],
+    ] as const) {
+      const r = run(job('approve', 'running', { round: 2 }), 'rework', decided(marker));
+      expect(r.patch).toEqual({ stage: to, status: 'pending', scopeReworks: 1, maxRounds: 4 });
+      expect(r.events).toEqual([
+        {
+          type: 'job.reworked',
+          payload: {
+            from: 'approve',
+            reason: 'two requested cases missing',
+            ciRepairs: 0,
+            maxRounds: 4,
+            scopeGap: to,
+          },
+        },
+      ]);
+    }
+  });
+
+  it('is refused without a REWORK decision; integration rework ignores the decision', () => {
+    const j = job('approve', 'running');
+    expect(() => run(j, 'rework')).toThrow(/says NOTHING; rework from approve needs DECISION/);
+    for (const marker of ['approve', 'escalate']) {
+      expect(() => run(j, 'rework', decided(marker))).toThrow(
+        new RegExp(`says ${marker.toUpperCase()}; rework from approve needs`),
+      );
+    }
+    const base = run(j, 'rework', { ...decided('approve'), integration: true });
+    expect(base.patch).toEqual({ stage: 'build', status: 'pending', maxRounds: 4 });
+  });
+
+  it('a second scope gap escalates to a human, returning to the requested stage', () => {
+    for (const [marker, to] of [
+      ['rework-build', 'build'],
+      ['rework-spec', 'spec'],
+    ] as const) {
+      const r = run(job('approve', 'running', { scopeReworks: 1 }), 'rework', decided(marker));
+      expect(r.patch).toEqual({ stage: 'needs-human', status: 'blocked', returnStage: to });
+      expect(r.events).toEqual([
+        {
+          type: 'job.blocked',
+          payload: {
+            from: 'approve',
+            reason: SCOPE_GAP_REASON,
+            detail: 'two requested cases missing',
+          },
+        },
+      ]);
+    }
+  });
+
+  it('complete from approve on a REWORK decision names rework; APPROVE and ESCALATE unchanged', () => {
+    const j = job('approve', 'running');
+    for (const marker of ['rework-build', 'rework-spec']) {
+      expect(() => run(j, 'complete', decided(marker))).toThrow(
+        new RegExp(`${marker.toUpperCase()}; use rework`),
+      );
+    }
+    expect(() => run(j, 'complete', decided('escalate'))).toThrow(/ESCALATE; use escalate/);
+    expect(run(j, 'complete', decided('approve')).patch.stage).toBe('pr');
+  });
+
+  it('after REWORK-SPEC, spec completes only once spec.md changed and was re-challenged', () => {
+    const j = job('spec', 'running');
+    const decision = art('decision.md', 'rework-spec', { specSha256: 's1' });
+    expect(() => run(j, 'complete', { ...none, artifacts: [...passedSpec(), decision] })).toThrow(
+      /REWORK-SPEC for this spec\.md/,
+    );
+    // Revised but not yet challenged: the challenge gate applies as usual.
+    const revised = art('spec.md', null, { sha256: 's2' });
+    const stale = [revised, art('spec-review-1.md', 'pass', { specSha256: 's1' }), decision];
+    expect(() => run(j, 'complete', { ...none, artifacts: stale })).toThrow(/earlier spec\.md/);
+    const fresh = [revised, art('spec-review-1.md', 'pass', { specSha256: 's2' }), decision];
+    expect(run(j, 'complete', { ...none, artifacts: fresh }).patch.stage).toBe('build');
+    // A REWORK-BUILD decision never holds spec back.
+    const build = art('decision.md', 'rework-build', { specSha256: 's1' });
+    expect(run(j, 'complete', { ...none, artifacts: [...passedSpec(), build] }).patch.stage).toBe(
+      'build',
+    );
   });
 });
 

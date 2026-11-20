@@ -63,6 +63,30 @@ export const RESUMABLE_STATUSES: readonly Status[] = ['interrupted', 'failed'];
 export const MAX_ROUNDS_REASON = 'max review rounds reached';
 /** Reason recorded on `job.blocked` when CI still fails after `maxCiRepairs` repair cycles. */
 export const MAX_CI_REPAIRS_REASON = 'max CI repair cycles reached';
+/** Reason recorded on `job.blocked` when approval finds a scope gap after the automatic rework. */
+export const SCOPE_GAP_REASON = 'scope gap found again after the automatic scope rework';
+
+/**
+ * Where a decision.md marker sends the job for a scope gap: `rework-build` (the code is less than
+ * the spec) to build, `rework-spec` (the spec is less than the request) to spec. Null otherwise.
+ */
+export function scopeGapTarget(marker: string | null | undefined): 'build' | 'spec' | null {
+  if (marker === 'rework-build') return 'build';
+  if (marker === 'rework-spec') return 'spec';
+  return null;
+}
+
+/**
+ * Why spec may not complete after a REWORK-SPEC decision, or null: the spec.md that decision
+ * judged (its recorded hash) must have been replaced first.
+ */
+export function scopeGapSpecRefusal(artifacts: readonly Artifact[]): string | null {
+  const decision = artifacts.find((a) => a.path === 'decision.md');
+  const spec = artifacts.find((a) => a.path === 'spec.md');
+  if (decision?.marker !== 'rework-spec' || !decision.specSha256) return null;
+  if (decision.specSha256 !== spec?.sha256) return null;
+  return 'decision.md says REWORK-SPEC for this spec.md; revise spec.md (--replace) to cover the request, then re-challenge it';
+}
 
 /** Artifact a stage must register (relative to the job artifact dir) before it can complete. */
 export function requiredArtifact(stage: Stage, round: number): string | undefined {
@@ -234,6 +258,7 @@ type JobState = Pick<
   | 'ciHead'
   | 'ciRepairs'
   | 'maxCiRepairs'
+  | 'scopeReworks'
 >;
 
 /** Pure decision: throws WorkflowError when the action is illegal in the current state. */
@@ -277,7 +302,7 @@ export function transition(
       const blocking = blockingCount(ctx.artifacts, job.round);
       switch (stage) {
         case 'spec': {
-          const refused = specChallengeRefusal(ctx.artifacts);
+          const refused = scopeGapSpecRefusal(ctx.artifacts) ?? specChallengeRefusal(ctx.artifacts);
           if (refused) reject(refused);
           return { patch: { stage: 'build', status: 'pending' }, events: [completed] };
         }
@@ -292,11 +317,11 @@ export function transition(
         case 'review':
           return completeReview(job, ctx, blocking, completed);
         case 'approve': {
-          // decision.md carries DECISION: APPROVE | ESCALATE; only an approval advances.
+          // decision.md carries DECISION: APPROVE | ESCALATE | REWORK-BUILD | REWORK-SPEC; only an
+          // approval advances.
           if (artifact?.marker !== 'approve') {
-            reject(
-              `decision.md says ${(artifact?.marker ?? 'nothing').toUpperCase()}; use escalate`,
-            );
+            const use = scopeGapTarget(artifact?.marker) ? 'rework' : 'escalate';
+            reject(`decision.md says ${(artifact?.marker ?? 'nothing').toUpperCase()}; use ${use}`);
           }
           // An approval cannot step over findings the last review round counted as blocking.
           if (blocking > 0) {
@@ -420,6 +445,32 @@ export function transition(
           ...(integration ? { integration: true } : {}),
         },
       };
+      if (stage === 'approve' && !integration) {
+        // A scope gap the approver recorded: code less than the spec goes back to build, a spec
+        // less than the request to spec. One automatic scope rework per job; then a human decides.
+        const decision = ctx.artifacts.find((a) => a.path === 'decision.md')?.marker;
+        const to = scopeGapTarget(decision);
+        if (!to) {
+          reject(
+            `decision.md says ${(decision ?? 'nothing').toUpperCase()}; rework from approve needs DECISION: REWORK-BUILD or REWORK-SPEC`,
+          );
+        }
+        if (job.scopeReworks >= 1) {
+          return {
+            patch: { stage: 'needs-human', status: 'blocked', returnStage: to },
+            events: [
+              {
+                type: 'job.blocked',
+                payload: { from: stage, reason: SCOPE_GAP_REASON, detail: ctx.reason ?? null },
+              },
+            ],
+          };
+        }
+        return {
+          patch: { stage: to, status: 'pending', maxRounds, scopeReworks: job.scopeReworks + 1 },
+          events: [{ ...reworked, payload: { ...reworked.payload, scopeGap: to } }],
+        };
+      }
       if (stage !== 'ci' || integration)
         return { patch: { stage: 'build', status: 'pending', maxRounds }, events: [reworked] };
       if (job.ciRepairs >= job.maxCiRepairs) {

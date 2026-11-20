@@ -31,6 +31,18 @@ describe('artifact rules', () => {
     expect(checkArtifact('pr.md', fixture('pr.md'))).toBeNull();
   });
 
+  it('decision.md accepts the two scope-gap rework outcomes and nothing else new', () => {
+    expect(checkArtifact('decision.md', fixture('decision.md', 'REWORK-BUILD'))).toBe(
+      'rework-build',
+    );
+    expect(checkArtifact('decision.md', fixture('decision.md', 'REWORK-SPEC'))).toBe('rework-spec');
+    for (const bad of ['REWORK', 'REWORK-PR', 'CHANGES']) {
+      expect(() => checkArtifact('decision.md', fixture('decision.md', bad))).toThrow(
+        /DECISION must be one of APPROVE, ESCALATE, REWORK-BUILD, REWORK-SPEC/,
+      );
+    }
+  });
+
   it('headings are case-insensitive and any level; markers must appear exactly once', () => {
     expect(
       checkArtifact('spec.md', '# GOAL\nx\n### scope\ny\n## Acceptance Criteria (testable)\nz\n'),

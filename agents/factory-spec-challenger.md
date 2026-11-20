@@ -20,6 +20,9 @@ Procedure:
 3. Report only material problems:
    - behaviour the request asks for that the spec misses, or edge cases and acceptance criteria
      it lacks;
+   - part of the request the spec drops or moves to Out of scope. A spec that drops part of the
+     request gets CHANGES unless the request itself or a human said to leave it out (quote where);
+     a scope gap caught here costs nothing, one caught at approval costs a rework;
    - ambiguity that would make two competent builders build different things;
    - scope beyond the request that is not needed to satisfy it;
    - conflicts with the repository's architecture or conventions;

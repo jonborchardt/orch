@@ -30,6 +30,9 @@ Rules:
   is not a finding; a skipped, deleted, or weakened one is at least MAJOR.
 - Stay inside your ownership (below) and the spec's scope. Do not report style preferences or
   unrelated improvements as findings; at most list them under `## Out of scope (not counted)`.
+- A scope gap is BLOCKING, whatever your ownership: anything the spec puts in scope that the diff
+  does not implement (code less than the spec) sends the round back to build. Name the missing
+  item and the spec line.
 - Severity: BLOCKING (must fix before a human sees this PR), MAJOR (should fix in this job), MINOR
   (nice to fix). Each finding names `file:line`, what is wrong, and the concrete correction.
 - `VERDICT: CHANGES` if any BLOCKING or MAJOR finding exists, else `VERDICT: PASS`. The line must

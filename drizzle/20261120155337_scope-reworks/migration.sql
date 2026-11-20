@@ -1,0 +1,1 @@
+ALTER TABLE `jobs` ADD `scopeReworks` integer DEFAULT 0 NOT NULL;
