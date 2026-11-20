@@ -2,8 +2,8 @@
  * Dashboard read models and action dispatch. Reads go through storage and ops; writes go through
  * ops/actions.ts (which uses the same validated transitions as the CLI). No SQL here.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, realpathSync } from 'node:fs';
+import { join, sep } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
@@ -23,7 +23,7 @@ import { currentFlakes } from '../ops/verify.ts';
 import { baseConflicts } from '../ops/worktree.ts';
 import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import { latestEventsByJob, listEvents } from '../storage/events.ts';
+import { eventsOfTypes, latestEventsByJob, listEvents } from '../storage/events.ts';
 import {
   getJob,
   listJobs,
@@ -33,7 +33,7 @@ import {
   sessionOf,
 } from '../storage/jobs.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
-import { latestRun, latestRunsByJob } from '../storage/verification.ts';
+import { latestRun, latestRunsByJob, runDetail } from '../storage/verification.ts';
 import {
   BLOCKER_EVENTS,
   blockerOf,
@@ -184,12 +184,66 @@ export function assertJobId(id: string | undefined): string {
   return id;
 }
 
-/** Content of a registered artifact only; anything else under the directory is not served. */
+/**
+ * The only shapes orch writes logs under: `verification/<runId>/<checkId>.log` (ops/verify.ts) and
+ * `ci/<sha7>/<name>.log` (ops/github.ts). Mirrored by `isLogPath` in web/src/format.ts.
+ */
+const LOG_PATH = /^(?:verification\/\d+|ci\/[0-9a-f]{7})\/[A-Za-z0-9._-]+\.log$/;
+
+export function isLogPath(p: unknown): p is string {
+  return (
+    typeof p === 'string' && LOG_PATH.test(p) && !p.split('/').some((s) => s === '.' || s === '..')
+  );
+}
+
+/**
+ * Whether orch recorded `rel` as a log of this job: a check `outputPath` of one of its verification
+ * runs, or a `failures[].log` of one of its `ci.observed` events. Payload values that are not
+ * strings or not log-shaped never match.
+ */
+function recordedLog(store: Store, id: string, rel: string): boolean {
+  if (!isLogPath(rel)) return false;
+  const run = /^verification\/(\d+)\//.exec(rel);
+  if (run) {
+    const d = runDetail(store.db, Number(run[1]));
+    return d?.run.jobId === id && d.checks.some((c) => c.outputPath === rel);
+  }
+  return eventsOfTypes(store.db, id, ['ci.observed']).some((e) => {
+    const failures = e.payload['failures'];
+    return (
+      Array.isArray(failures) &&
+      failures.some((f: unknown) => {
+        const log = typeof f === 'object' && f !== null ? (f as { log?: unknown }).log : undefined;
+        return isLogPath(log) && log === rel;
+      })
+    );
+  });
+}
+
+/**
+ * Content of a registered artifact or a log orch recorded for the job; anything else under the
+ * directory is not served. The file's real path must lie inside the real artifact directory, so a
+ * junction or symlink cannot lead out of it.
+ */
 export function artifactContent(store: Store, id: string, relPath: string): string {
-  const registered = listArtifacts(store.db, id).find((a) => a.path === relPath);
-  if (!registered) throw new ValidationError(`Artifact ${relPath} is not registered for ${id}.`);
+  const registered = listArtifacts(store.db, id).some((a) => a.path === relPath);
+  if (!registered && !recordedLog(store, id, relPath)) {
+    throw new ValidationError(`Artifact ${relPath} is not registered for ${id}.`);
+  }
+  const dir = jobArtifactDir(id, store.paths);
+  let root: string;
+  let file: string;
   try {
-    return readFileSync(join(jobArtifactDir(id, store.paths), ...relPath.split('/')), 'utf8');
+    root = realpathSync(dir);
+    file = realpathSync(join(dir, ...relPath.split('/')));
+  } catch {
+    throw new ValidationError(`Artifact ${relPath} is missing on disk.`);
+  }
+  if (!file.startsWith(root + sep)) {
+    throw new ValidationError(`Artifact ${relPath} is outside the job's artifact directory.`);
+  }
+  try {
+    return readFileSync(file, 'utf8');
   } catch {
     throw new ValidationError(`Artifact ${relPath} is missing on disk.`);
   }
@@ -266,7 +320,8 @@ export function detail(store: Store, id: string): JobDetailView {
     links: {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,
       checkout: vscodeLink(job.repoPath),
-      pr: job.prUrl,
+      pr: httpUrl(job.prUrl),
+      repo: githubRepo(job.repo),
       branch: branchLink(job, events),
     },
     session: sessionView(events),
@@ -284,10 +339,27 @@ export function detail(store: Store, id: string): JobDetailView {
  */
 function branchLink(job: Job, events: Event[]): string | null {
   if (!job.branch || (!job.prUrl && !events.some((e) => e.type === 'branch.pushed'))) return null;
-  const base = /^github\.com\/[^/]+\/[^/]+$/.test(job.repo)
-    ? `https://${job.repo}`
-    : (/^(https?:\/\/[^/]+\/[^/]+\/[^/]+)\/pull\/\d+/.exec(job.prUrl ?? '')?.[1] ?? null);
+  const base =
+    githubRepo(job.repo) ??
+    /^(https?:\/\/[^/]+\/[^/]+\/[^/]+)\/pull\/\d+/.exec(job.prUrl ?? '')?.[1] ??
+    null;
   return base && `${base}/tree/${job.branch.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/** `https://github.com/<owner>/<repo>` for a github.com identity; null for any other remote. */
+function githubRepo(repo: string): string | null {
+  return /^github\.com\/[^/]+\/[^/]+$/.test(repo) ? `https://${repo}` : null;
+}
+
+/** The URL itself when it parses with an http(s) scheme, else null; stored URLs are not trusted. */
+function httpUrl(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'https:' || protocol === 'http:' ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 function vscodeLink(dir: string): string {

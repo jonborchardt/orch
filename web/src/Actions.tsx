@@ -19,6 +19,7 @@ import { type ReactElement, useState } from 'react';
 import type { DashboardAction } from '../../src/ops/actions.ts';
 import type { ActionResponse, JobDetailView } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
+import { PrLink } from './Links.tsx';
 
 const LABEL: Record<DashboardAction, string> = {
   approve: 'Resume at stage',
@@ -435,8 +436,8 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                 )}
                 {open === 'merge' && (
                   <Typography data-testid="merge-confirm">
-                    PR <b>{detail.job.prUrl}</b> at <code>{detail.ci.head?.slice(0, 7)}</code>;
-                    GitHub is checked first.
+                    PR <PrLink url={detail.job.prUrl ?? ''} pr={detail.links.pr} /> at{' '}
+                    <code>{detail.ci.head?.slice(0, 7)}</code>; GitHub is checked first.
                   </Typography>
                 )}
               </>

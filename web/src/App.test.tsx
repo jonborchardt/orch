@@ -15,7 +15,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BoardRow, CiView, JobDetailView, Progress } from '../../src/server/types.ts';
 import { App } from './App.tsx';
 import { CiChip } from './Ci.tsx';
-import { byAttention, ciColor, repoLabels, reviewRollup } from './format.ts';
+import {
+  byAttention,
+  ciColor,
+  commitHref,
+  httpsHref,
+  logHref,
+  prParts,
+  repoLabels,
+  reviewRollup,
+} from './format.ts';
 import { Markdown } from './Markdown.tsx';
 import { RESUME_NOTE } from './Status.tsx';
 import { TABS, detailTabs, resolveTab } from './tabs.ts';
@@ -212,7 +221,13 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     conflicts: null,
-    links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null, branch: null },
+    links: {
+      vscode: 'vscode://file//wt/g',
+      checkout: 'vscode://file//g',
+      pr: null,
+      repo: null,
+      branch: null,
+    },
     session: null,
     resume: { command: '/factory resume job-00000003', heldBy: null },
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
@@ -969,6 +984,7 @@ describe('Job detail', () => {
         ciStatus: 'none',
         ciHead: 'b2c3d4e5f6071829',
       },
+      links: { ...base.links, pr: 'https://github.com/x/y/pull/9' },
       ci: ciNone,
       blocker: {
         kind: 'ci',
@@ -1040,6 +1056,7 @@ describe('Job detail', () => {
         ciRepairs: 1,
         maxCiRepairs: 1,
       },
+      links: { ...base.links, pr: 'https://github.com/x/y/pull/9' },
       blocker: {
         kind: 'ci',
         summary: 'CI still failing after 1 of 1 repair cycles',
@@ -2933,6 +2950,7 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
         prUrl: 'https://github.com/x/y/pull/9',
         prState: 'merged',
       },
+      links: { ...base.links, pr: 'https://github.com/x/y/pull/9' },
       liveness: 'completed',
       blocker: null,
       artifacts: [...paths, 'decision.md', 'pr.md'].map((p, i) => art(i + 1, p)),
@@ -3267,6 +3285,8 @@ describe('Job detail: Git tab', () => {
     const base = detail();
     data.detail = detail({
       job: { ...base.job, prUrl: m ? pr : null, prState: m ? 'merged' : null },
+      // PR hrefs come only from the read model's checked `links.pr` (todo 0019).
+      links: { ...base.links, pr: m ? pr : null },
       plan: (wt
         ? { step: 'done', reason: '', agents: [], artifacts: [], worktree: wt }
         : null) as unknown as JobDetailView['plan'],
@@ -3518,5 +3538,442 @@ describe('Likely flaky test', () => {
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     expect(document.querySelector('[data-flake]')).toBeNull();
+  });
+});
+
+describe('Job detail: navigable PR, commit, and log references (todo 0019)', () => {
+  const repo = 'https://github.com/acme/alpha';
+  const pr = 'https://github.com/acme/alpha/pull/7';
+  const sha = (c: string) => c.repeat(40);
+  // Branch commits, newest first: c4 is local only, c3 was pushed, c2 and c1 are older.
+  const c1 = sha('1');
+  const c2 = sha('2');
+  const c3 = sha('3');
+  const c4 = sha('4');
+  const ciHead = sha('5');
+  const base1 = sha('b');
+  const base0 = sha('e');
+  const commitName = (s: string) => `Commit ${s.slice(0, 8)} on GitHub`;
+  const external = (a: Element) => {
+    expect(a).toHaveAttribute('target', '_blank');
+    expect(a).toHaveAttribute('rel', 'noreferrer noopener');
+  };
+  type Plan = NonNullable<JobDetailView['plan']>;
+  const check = (id: number, checkId: string, outputPath: string) => ({
+    id,
+    checkId,
+    command: 'npm',
+    args: [],
+    cwd: '.',
+    status: 'passed',
+    required: true,
+    exitCode: 0,
+    signal: null,
+    durationMs: 1,
+    outputPath,
+    truncated: false,
+  });
+  const integration = {
+    id: 3,
+    status: 'clean',
+    fromHead: c3,
+    baseRef: 'origin/main',
+    baseSha: base1,
+    resultHead: c4,
+    conflicts: [],
+    material: [],
+    changedFiles: [],
+  };
+  const verification = {
+    configured: true,
+    policy: {
+      source: 'authorized',
+      head: c4,
+      fingerprint: 'fp',
+      checks: ['check'],
+      authorization: 'not-needed',
+      candidateError: null,
+    },
+    run: {
+      id: 12,
+      status: 'passed',
+      head: c3,
+      checks: [check(1, 'check', 'verification/12/check.log'), check(2, 'abs', '/abs/x.log')],
+    },
+    valid: true,
+    reason: null,
+    queue: null,
+  };
+  function rich(
+    over: Partial<JobDetailView> = {},
+    plan: Partial<Record<'integration' | 'verification', unknown>> = {},
+  ): JobDetailView {
+    const b = detail();
+    return detail({
+      job: { ...b.job, repo: 'github.com/acme/alpha', prUrl: pr, prState: 'draft', ciHead },
+      links: { ...b.links, pr, repo },
+      events: [
+        {
+          id: 1,
+          jobId: b.job.id,
+          type: 'branch.pushed',
+          payload: { branch: 'factory/x', head: c3 },
+          actor: null,
+          createdAt: b.job.updatedAt,
+        },
+      ],
+      actions: ['merge'],
+      ci: noCi({
+        head: ciHead,
+        status: 'failing',
+        outcome: 'failing',
+        checkedAt: b.job.updatedAt,
+        line: `CI failing for ${pr}.`,
+        guidance: `Read ${pr}, then rework.`,
+        failures: [
+          {
+            name: 'test',
+            conclusion: 'failure',
+            url: `${repo}/actions/runs/1`,
+            log: 'ci/5555555/test.log',
+          },
+          { name: 'lint', conclusion: 'failure', url: 'javascript:alert(1)', log: '..\\x.log' },
+          { name: 'abs', conclusion: 'failure', url: null, log: '/abs/x.log' },
+          { name: 'drive', conclusion: 'failure', url: null, log: 'C:\\x.log' },
+          { name: 'notes', conclusion: 'failure', url: null, log: 'notes.txt' },
+        ],
+      }),
+      plan: {
+        step: 'run-agent',
+        reason: `Waiting on (${pr}).`,
+        agents: [],
+        artifacts: [],
+        worktree: {
+          path: '/wt/g',
+          exists: true,
+          isWorktree: true,
+          branch: 'factory/x',
+          head: c4,
+          dirty: [],
+          baseRef: 'origin/main',
+          ahead: 4,
+          behind: 0,
+          commits: [
+            { sha: c4, subject: 'Local only' },
+            { sha: c3, subject: 'Pushed head' },
+            { sha: c2, subject: 'Older two' },
+            { sha: c1, subject: 'Older one' },
+          ],
+          changedFiles: [],
+          changes: [],
+          fingerprint: 'fp',
+        },
+        verification,
+        sensitive: null,
+        integration,
+        ...plan,
+      } as unknown as Plan,
+      planError: null,
+      ...over,
+    });
+  }
+  async function view(d: JobDetailView) {
+    mockFetch();
+    data.detail = d;
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+  }
+  const tab = async (name: RegExp) => {
+    fireEvent.click(await screen.findByRole('tab', { name }));
+  };
+  const hrefs = () =>
+    [...document.querySelectorAll('[href]')].map((a) => a.getAttribute('href') ?? '');
+
+  it('links every PR reference to links.pr: button, header, Overview, PR tab, and merge dialog', async () => {
+    await view(rich());
+    external(screen.getByRole('link', { name: 'Open PR on GitHub' }));
+    expect(screen.getByRole('link', { name: 'Open PR on GitHub' })).toHaveAttribute('href', pr);
+    const num = within(screen.getByTestId('job-header')).getByRole('link', { name: 'PR #7' });
+    expect(num).toHaveAttribute('href', pr);
+    external(num);
+    // Overview: "(<pr>)." with the brackets and the full stop outside the link.
+    const step = must(screen.getByText(/Next step:/).closest('p'));
+    const inStep = within(step).getByRole('link', { name: pr });
+    expect(inStep).toHaveAttribute('href', pr);
+    external(inStep);
+    expect(step).toHaveTextContent(`Waiting on (${pr}).`);
+    await tab(/^PR/);
+    const panel = screen.getByTestId('ci-panel');
+    const inPanel = within(panel).getAllByRole('link', { name: pr });
+    expect(inPanel).toHaveLength(2); // ci.line and ci.guidance
+    for (const a of inPanel) {
+      expect(a).toHaveAttribute('href', pr);
+      external(a);
+    }
+    // The PR tab's URL line, plus the two in the CI panel.
+    const prTab = screen.getByRole('tabpanel');
+    expect(within(prTab).getAllByRole('link', { name: pr })).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    const dialog = await screen.findByRole('dialog');
+    const confirm = within(dialog).getByTestId('merge-confirm');
+    const inDialog = within(confirm).getByRole('link', { name: pr });
+    expect(inDialog).toHaveAttribute('href', pr);
+    external(inDialog);
+  });
+
+  it('links the PR in the status Next line and in a ci blocker summary', async () => {
+    await view(rich({ blocker: { kind: 'ci', summary: 'CI still failing', detail: null } }));
+    const next = screen.getByTestId('status-next');
+    expect(within(next).getByRole('link', { name: pr })).toHaveAttribute('href', pr);
+    expect(next).toHaveTextContent(`Next: Read ${pr}, then rework.`);
+    const summary = screen.getByTestId('status-summary');
+    expect(within(summary).getByRole('link', { name: pr })).toHaveAttribute('href', pr);
+    expect(summary).toHaveTextContent(`CI failing for ${pr}.`);
+  });
+
+  it('PR tab: links the CI head, the saved log, and an https GitHub log; refuses the rest', async () => {
+    await view(rich());
+    await tab(/^PR/);
+    const panel = screen.getByTestId('ci-panel');
+    const head = within(panel).getByRole('link', { name: commitName(ciHead) });
+    expect(head).toHaveAttribute('href', `${repo}/commit/${ciHead}`);
+    expect(head).toHaveTextContent(ciHead.slice(0, 8));
+    expect(head.querySelector('code')).not.toBeNull();
+    external(head);
+    const saved = within(panel).getByRole('link', { name: 'Saved log ci/5555555/test.log' });
+    expect(saved).toHaveAttribute('href', '/api/jobs/job-00000003/artifacts/ci/5555555/test.log');
+    external(saved);
+    const gh = within(panel).getAllByRole('link', { name: 'GitHub log' });
+    expect(gh).toHaveLength(1); // the javascript: URL is not an href
+    expect(gh[0]).toHaveAttribute('href', `${repo}/actions/runs/1`);
+    for (const bad of ['..\\x.log', '/abs/x.log', 'C:\\x.log', 'notes.txt']) {
+      expect(panel).toHaveTextContent(`saved ${bad} under the artifact directory`);
+    }
+    expect(hrefs().some((h) => h.trim().toLowerCase().startsWith('javascript:'))).toBe(false);
+    expect(hrefs().filter((h) => h.startsWith('/api/'))).toEqual([
+      '/api/jobs/job-00000003/artifacts/ci/5555555/test.log',
+    ]);
+  });
+
+  it('Git tab: links the pushed head and the older commits only, never a local-only one (R3 b)', async () => {
+    await view(rich());
+    await tab(/^Git/);
+    const git = must(screen.getByText(/^Worktree/).parentElement);
+    for (const s of [c3, c2, c1]) {
+      const a = within(git).getByRole('link', { name: commitName(s) });
+      expect(a).toHaveAttribute('href', `${repo}/commit/${s}`);
+      external(a);
+    }
+    expect(within(git).queryByRole('link', { name: commitName(c4) })).toBeNull();
+    expect(git).toHaveTextContent(`HEAD ${c4.slice(0, 10)}`); // the worktree HEAD is c4
+    expect(git).toHaveTextContent('33333333 Pushed head');
+    expect(git).toHaveTextContent('44444444 Local only');
+  });
+
+  it('Git tab after a merge: the PR, merged head and commits linked; since-the-merge by R3 b', async () => {
+    const [m1, m0, o3, o2, o1] = [sha('a'), sha('9'), sha('8'), sha('7'), sha('6')];
+    const d = rich();
+    d.job = { ...d.job, prState: 'merged' };
+    d.events = [{ ...must(d.events[0]), payload: { branch: 'factory/x', head: o2 } }];
+    d.merge = {
+      base: 'main',
+      prUrl: pr,
+      head: m1,
+      historyKnown: true,
+      commits: [
+        { sha: m1, subject: 'Merged one' },
+        { sha: m0, subject: 'Merged zero' },
+      ],
+      changedFiles: [],
+      outstanding: [
+        { sha: o3, subject: 'Local follow-up' },
+        { sha: o2, subject: 'Pushed follow-up' },
+        { sha: o1, subject: 'Older follow-up' },
+      ],
+    };
+    await view(d);
+    await tab(/^Git/);
+    const git = must(screen.getByText(/^Worktree/).parentElement);
+    expect(within(git).getByRole('link', { name: pr })).toHaveAttribute('href', pr);
+    // "at <merge.head>" and "Commits merged" both link m1.
+    expect(within(git).getAllByRole('link', { name: commitName(m1) })).toHaveLength(2);
+    for (const s of [m1, m0, o2, o1]) {
+      for (const a of within(git).getAllByRole('link', { name: commitName(s) })) {
+        expect(a).toHaveAttribute('href', `${repo}/commit/${s}`);
+      }
+    }
+    expect(within(git).queryByRole('link', { name: commitName(o3) })).toBeNull();
+    expect(git).toHaveTextContent('88888888 Local follow-up');
+  });
+
+  it('Verification tab: log links, heads by R3, the base commit only from origin (R3 c)', async () => {
+    await view(rich());
+    await tab(/^Verification/);
+    const panel = screen.getByRole('tabpanel');
+    const log = within(panel).getByRole('link', { name: 'verification/12/check.log' });
+    expect(log).toHaveAttribute(
+      'href',
+      '/api/jobs/job-00000003/artifacts/verification/12/check.log',
+    );
+    external(log);
+    expect(within(panel).queryByRole('link', { name: '/abs/x.log' })).toBeNull();
+    expect(panel).toHaveTextContent('/abs/x.log');
+    // Run head and fromHead are the pushed c3; the authorized policy head and resultHead c4 are not.
+    expect(within(panel).getAllByRole('link', { name: commitName(c3) })).toHaveLength(2);
+    expect(within(panel).queryByRole('link', { name: commitName(c4) })).toBeNull();
+    expect(panel).toHaveTextContent(c4.slice(0, 10));
+    expect(within(panel).getByRole('link', { name: commitName(base1) })).toHaveAttribute(
+      'href',
+      `${repo}/commit/${base1}`,
+    );
+    cleanup();
+
+    // A local base ref has no known remote copy; a baseline policy head follows the worktree's
+    // base ref (origin/main here).
+    await view(
+      rich(
+        {},
+        {
+          integration: { ...integration, baseRef: 'main' },
+          verification: {
+            ...verification,
+            policy: { ...verification.policy, source: 'baseline', head: base0 },
+          },
+        },
+      ),
+    );
+    await tab(/^Verification/);
+    const p2 = screen.getByRole('tabpanel');
+    expect(within(p2).queryByRole('link', { name: commitName(base1) })).toBeNull();
+    expect(p2).toHaveTextContent(base1.slice(0, 10));
+    expect(within(p2).getByRole('link', { name: commitName(base0) })).toHaveAttribute(
+      'href',
+      `${repo}/commit/${base0}`,
+    );
+  });
+
+  it('builds no commit link without links.repo and no PR link without links.pr', async () => {
+    const d = rich();
+    await view({ ...d, links: { ...d.links, repo: null, pr: null } });
+    expect(screen.queryByRole('link', { name: 'Open PR on GitHub' })).toBeNull();
+    const h = screen.getByTestId('job-header');
+    expect(within(h).queryByRole('link', { name: 'PR #7' })).toBeNull();
+    expect(h).toHaveTextContent('PR #7');
+    for (const t of [/^Overview/, /^PR/, /^Git/, /^Verification/]) {
+      await tab(t);
+      expect(screen.queryByRole('link', { name: /^Commit / })).toBeNull();
+      expect(screen.queryByRole('link', { name: pr })).toBeNull();
+      expect(hrefs().some((x) => x.includes('/commit/') || x === pr)).toBe(false);
+    }
+    expect(screen.getByRole('tabpanel')).toHaveTextContent(c3.slice(0, 10));
+  });
+
+  it('every external or artifact-route link opens a new tab without referrer or opener', async () => {
+    await view(rich());
+    for (const t of [/^Overview/, /^PR/, /^Git/, /^Verification/]) {
+      await tab(t);
+      const as = document.querySelectorAll('a[href^="http"], a[href^="/api/"]');
+      expect(as.length).toBeGreaterThan(0);
+      for (const a of as) external(a);
+      expect(hrefs().some((x) => x.trim().toLowerCase().startsWith('javascript:'))).toBe(false);
+    }
+  });
+});
+
+describe('prParts (R6)', () => {
+  const pr = 'https://github.com/acme/alpha/pull/7';
+  const links = (text: string) => prParts(text, pr).filter((p) => typeof p !== 'string');
+
+  it('links only bounded occurrences and keeps the punctuation outside', () => {
+    expect(prParts(`See ${pr}.`, pr)).toEqual(['See ', { pr }, '.']);
+    expect(prParts(`(${pr})`, pr)).toEqual(['(', { pr }, ')']);
+    expect(prParts(`"${pr}", '${pr}'; [${pr}]!`, pr)).toEqual([
+      '"',
+      { pr },
+      '", \'',
+      { pr },
+      "'; [",
+      { pr },
+      ']!',
+    ]);
+    expect(links(`${pr}/files`)).toHaveLength(0);
+    expect(links(`${pr}0`)).toHaveLength(0);
+    expect(links(`x${pr}`)).toHaveLength(0);
+    expect(prParts(`${pr}/files and ${pr}`, pr)).toEqual([`${pr}/files and `, { pr }]);
+    expect(prParts('no url', null)).toEqual(['no url']);
+  });
+
+  it('makes at most three links; later occurrences stay text', () => {
+    const text = `${pr} ${pr} ${pr} ${pr}`;
+    expect(links(text)).toHaveLength(3);
+    expect(prParts(text, pr).at(-1)).toBe(` ${pr}`);
+  });
+
+  it('renders the bounded links only, each to links.pr, at most three', async () => {
+    const b = detail();
+    mockFetch();
+    const reason = `a ${pr}. b (${pr}) c ${pr}/files d ${pr}0 e ${pr} f ${pr}`;
+    data.detail = detail({
+      links: { ...b.links, pr },
+      plan: {
+        step: 'run-agent',
+        reason,
+        agents: [],
+        artifacts: [],
+        worktree: null,
+      } as unknown as JobDetailView['plan'],
+      planError: null,
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    const step = must((await screen.findByText(/Next step:/)).closest('p'));
+    const as = within(step).getAllByRole('link');
+    expect(as).toHaveLength(3);
+    for (const a of as) {
+      expect(a).toHaveAttribute('href', pr);
+      expect(a.textContent).toBe(pr);
+    }
+    expect(step).toHaveTextContent(reason);
+  });
+});
+
+describe('reference helpers (R2, R4, R8)', () => {
+  it('builds commit hrefs only from a repo base and a lowercase hex SHA', () => {
+    expect(commitHref('https://github.com/a/b', 'abcdef0')).toBe(
+      'https://github.com/a/b/commit/abcdef0',
+    );
+    expect(commitHref(null, 'abcdef0')).toBeNull();
+    expect(commitHref('https://github.com/a/b', 'abcdef')).toBeNull();
+    expect(commitHref('https://github.com/a/b', 'ABCDEF0')).toBeNull();
+    expect(commitHref('https://github.com/a/b', '../x')).toBeNull();
+    expect(commitHref('https://github.com/a/b', 'a'.repeat(41))).toBeNull();
+  });
+
+  it('accepts only the log shapes orch writes', () => {
+    for (const ok of ['verification/3/check.log', 'ci/abcdef0/test.log', 'ci/abcdef0/a_b-c.d.log'])
+      expect(logHref('job-00000001', ok)).toBe(`/api/jobs/job-00000001/artifacts/${ok}`);
+    for (const bad of [
+      '/abs/x.log',
+      '..\\x.log',
+      'C:\\x.log',
+      'notes.txt',
+      'ci/x/../../secret.log',
+      'ci/abcdef0/../../../x.log',
+      'verification/3/../x.log',
+      'ci/ABCDEF0/x.log',
+      'verification/x/c.log',
+      42,
+      null,
+    ])
+      expect(logHref('job-00000001', bad)).toBeNull();
+  });
+
+  it('accepts only https for GitHub log URLs', () => {
+    expect(httpsHref('https://github.com/a/b/actions/runs/1')).toBe(
+      'https://github.com/a/b/actions/runs/1',
+    );
+    for (const bad of ['javascript:alert(1)', 'http://github.com/x', 'data:text/html,x', 'x', null])
+      expect(httpsHref(bad)).toBeNull();
   });
 });

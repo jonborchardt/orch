@@ -26,6 +26,7 @@ import { Fragment, useEffect, useState } from 'react';
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
 import { CiChip, CiPanel, PrPhaseChip } from './Ci.tsx';
+import { LogRef, PrLink, PrText, commitRef } from './Links.tsx';
 import { Markdown, blockingLines, section } from './Markdown.tsx';
 import { ProgressSection, ProgressStrip, RoundIndicator } from './Progress.tsx';
 import {
@@ -178,17 +179,23 @@ export function JobDetail({
             <Box sx={{ flex: 1, minWidth: 240 }}>
               <Box data-testid="status-summary">
                 {detail.blocker ? (
-                  <BlockerText blocker={detail.blocker} ciLine={detail.ci.line} />
+                  <BlockerText
+                    blocker={detail.blocker}
+                    ciLine={detail.ci.line}
+                    pr={detail.links.pr}
+                  />
                 ) : detail.liveness === 'completed' ? (
                   // Completed by GitHub's verdict, by a human, or before the ci stage existed.
-                  <Typography data-testid="completion">{detail.ci.line}</Typography>
+                  <Typography data-testid="completion">
+                    <PrText text={detail.ci.line} pr={detail.links.pr} />
+                  </Typography>
                 ) : (
                   <Typography>{STATE[detail.liveness].describe}</Typography>
                 )}
               </Box>
               {next && (
                 <Typography data-testid="status-next">
-                  <b>Next:</b> {next}
+                  <b>Next:</b> <PrText text={next} pr={detail.links.pr} />
                 </Typography>
               )}
               {detail.flake && <FlakeText flake={detail.flake} />}
@@ -317,7 +324,8 @@ export function JobDetail({
             {detail.plan ? (
               <>
                 <Typography>
-                  <b>Next step:</b> {detail.plan.step} — {detail.plan.reason}
+                  <b>Next step:</b> {detail.plan.step} —{' '}
+                  <PrText text={detail.plan.reason} pr={detail.links.pr} />
                 </Typography>
                 {detail.plan.agents.length > 0 && (
                   <Typography variant="body2">
@@ -502,10 +510,7 @@ export function JobDetail({
           <Stack spacing={1}>
             {job.prUrl ? (
               <Typography>
-                <Link href={job.prUrl} target="_blank" rel="noreferrer noopener">
-                  {job.prUrl}
-                </Link>{' '}
-                <Chip label={job.prState ?? '?'} />
+                <PrLink url={job.prUrl} pr={detail.links.pr} /> <Chip label={job.prState ?? '?'} />
               </Typography>
             ) : (
               <Typography color="text.secondary">No PR recorded.</Typography>
@@ -570,9 +575,9 @@ function JobHeader({ detail, error }: { detail: JobDetailView; error: string | n
         </span>
       )),
     job.prUrl && (
-      <Link key="pr" href={job.prUrl} target="_blank" rel="noreferrer noopener">
+      <PrLink key="pr" url={job.prUrl} pr={links.pr}>
         {prNumber ? `PR #${prNumber}` : 'PR'}
-      </Link>
+      </PrLink>
     ),
     // The CI chip already says "CI running/failing", with the head; don't repeat it.
     job.prUrl && detail.prPhase !== 'ci-running' && detail.prPhase !== 'ci-failing' && (
@@ -642,10 +647,12 @@ function GitList({
   title,
   commits,
   files,
+  commit,
 }: {
   title: string;
   commits?: Commits;
   files?: string[];
+  commit?: ReturnType<typeof commitRef>;
 }) {
   if (!commits?.length && !files?.length) return null;
   return (
@@ -653,7 +660,7 @@ function GitList({
       <Typography variant="subtitle2">{title}</Typography>
       {commits?.map((c) => (
         <Typography key={c.sha} variant="body2">
-          <code>{c.sha.slice(0, 8)}</code> {c.subject}
+          {commit ? commit(c.sha) : <code>{c.sha.slice(0, 8)}</code>} {c.subject}
         </Typography>
       ))}
       {files?.map((f) => (
@@ -673,6 +680,7 @@ function GitTab({ detail }: { detail: JobDetailView }) {
   const { job, merge } = detail;
   const worktree = detail.plan?.worktree ?? null;
   const dirty = worktree?.dirty ?? [];
+  const commit = commitRef(detail);
   return (
     <Stack spacing={1}>
       {merge && (
@@ -681,24 +689,16 @@ function GitTab({ detail }: { detail: JobDetailView }) {
           {merge.prUrl && (
             <>
               {' '}
-              by{' '}
-              <Link href={merge.prUrl} target="_blank" rel="noreferrer noopener">
-                {merge.prUrl}
-              </Link>
+              by <PrLink url={merge.prUrl} pr={detail.links.pr} />
             </>
           )}
-          {merge.head && (
-            <>
-              {' '}
-              at <code>{merge.head.slice(0, 8)}</code>
-            </>
-          )}
+          {merge.head && <> at {commit(merge.head)}</>}
         </Typography>
       )}
       {worktree ? (
         <Typography variant="body2">
           Worktree <code>{worktree.path}</code> on <code>{worktree.branch ?? '(detached)'}</code>,
-          HEAD <code>{worktree.head?.slice(0, 10) ?? '?'}</code>
+          HEAD {worktree.head ? commit(worktree.head, 10) : <code>?</code>}
           {!merge && worktree.baseRef && (
             <>
               , {String(worktree.ahead ?? 0)} ahead / {String(worktree.behind ?? 0)} behind{' '}
@@ -717,14 +717,18 @@ function GitTab({ detail }: { detail: JobDetailView }) {
           {merge.outstanding?.length === 0 && dirty.length === 0 && (
             <Typography color="text.secondary">Nothing outstanding since the merge.</Typography>
           )}
-          <GitList title="Commits since the merge" commits={merge.outstanding ?? []} />
-          <GitList title="Commits merged" commits={merge.commits} />
+          <GitList
+            title="Commits since the merge"
+            commits={merge.outstanding ?? []}
+            commit={commit}
+          />
+          <GitList title="Commits merged" commits={merge.commits} commit={commit} />
           <GitList title="Files changed" files={merge.changedFiles} />
         </>
       ) : (
         worktree && (
           <>
-            <GitList title="Commits on the branch" commits={worktree.commits} />
+            <GitList title="Commits on the branch" commits={worktree.commits} commit={commit} />
             <GitList title="Changed files vs base" files={worktree.changedFiles} />
           </>
         )
@@ -851,6 +855,7 @@ function Verification({ detail }: { detail: JobDetailView }) {
   const s = detail.plan?.sensitive ?? null;
   const integ = detail.plan?.integration ?? null;
   if (!detail.plan) return <Typography color="text.secondary">Plan unavailable.</Typography>;
+  const commit = commitRef(detail);
   return (
     <Stack spacing={2}>
       {v ? (
@@ -860,14 +865,8 @@ function Verification({ detail }: { detail: JobDetailView }) {
           </Typography>
           <Typography variant="body2">
             Source: <b>{v.policy.source}</b>
-            {v.policy.head ? (
-              <>
-                {' '}
-                at <code>{v.policy.head.slice(0, 10)}</code>
-              </>
-            ) : null}
-            , fingerprint <code>{v.policy.fingerprint}</code>. Checks:{' '}
-            {v.policy.checks.join(', ') || 'none'}.
+            {v.policy.head ? <> at {commit(v.policy.head, 10)}</> : null}, fingerprint{' '}
+            <code>{v.policy.fingerprint}</code>. Checks: {v.policy.checks.join(', ') || 'none'}.
           </Typography>
           {!v.configured && (
             <Alert severity="warning" sx={{ mt: 1 }}>
@@ -895,7 +894,7 @@ function Verification({ detail }: { detail: JobDetailView }) {
               <>
                 #{v.run.id}{' '}
                 <Chip size="small" label={v.run.status} color={v.valid ? 'success' : 'default'} />{' '}
-                at <code>{v.run.head.slice(0, 10)}</code>,{' '}
+                at {commit(v.run.head, 10)},{' '}
                 {v.valid ? 'valid for HEAD' : `stale: ${v.reason ?? ''}`}
               </>
             ) : (
@@ -940,7 +939,7 @@ function Verification({ detail }: { detail: JobDetailView }) {
                     <TableCell align="right">{c.exitCode ?? c.signal ?? ''}</TableCell>
                     <TableCell align="right">{c.durationMs ?? ''}</TableCell>
                     <TableCell>
-                      {c.outputPath ?? ''}
+                      {c.outputPath ? <LogRef jobId={detail.job.id} path={c.outputPath} /> : ''}
                       {c.truncated ? ' (truncated)' : ''}
                     </TableCell>
                   </TableRow>
@@ -983,15 +982,9 @@ function Verification({ detail }: { detail: JobDetailView }) {
             Base integration #{integ.id}: {integ.status}
           </Typography>
           <Typography variant="body2">
-            From <code>{integ.fromHead.slice(0, 10)}</code> with {integ.baseRef} at{' '}
-            <code>{integ.baseSha.slice(0, 10)}</code>
-            {integ.resultHead ? (
-              <>
-                {' '}
-                → <code>{integ.resultHead.slice(0, 10)}</code>
-              </>
-            ) : null}
-            .{integ.conflicts?.length ? ` Conflicts: ${integ.conflicts.join(', ')}.` : ''}
+            From {commit(integ.fromHead, 10)} with {integ.baseRef} at {commit(integ.baseSha, 10)}
+            {integ.resultHead ? <> → {commit(integ.resultHead, 10)}</> : null}.
+            {integ.conflicts?.length ? ` Conflicts: ${integ.conflicts.join(', ')}.` : ''}
             {integ.material?.length
               ? ` Edited inside the merge: ${integ.material.join(', ')}.`
               : ''}

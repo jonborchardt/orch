@@ -229,12 +229,20 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
       }
       if (root === 'jobs' && id && sub === 'artifacts' && rest.length > 0) {
         const rel = rest.map(decode).join('/');
-        if (rel.split('/').some((p) => p === '..' || p === '' || p === '.')) {
+        // No Windows separators, drive or stream colons, or NUL: only plain relative segments.
+        if (
+          rel.split('/').some((p) => p === '..' || p === '' || p === '.') ||
+          /[\\:]/.test(rel) ||
+          rel.includes('\u0000')
+        ) {
           throw new HttpError(400, 'Bad artifact path');
         }
         const text = artifactContent(store, assertJobId(id), rel);
         res.writeHead(200, {
-          'Content-Type': 'text/markdown; charset=utf-8',
+          // Logs carry CI output an attacker may influence: never rendered, never sniffed.
+          'Content-Type': rel.endsWith('.log')
+            ? 'text/plain; charset=utf-8'
+            : 'text/markdown; charset=utf-8',
           'Cache-Control': 'no-store',
           'X-Content-Type-Options': 'nosniff',
         });

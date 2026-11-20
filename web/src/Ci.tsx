@@ -1,7 +1,8 @@
 import { Alert, Chip, Link, Stack, Typography } from '@mui/material';
 
 import type { CiView, JobDetailView } from '../../src/server/types.ts';
-import { ago, type ChipColor, ciColor, sha7 } from './format.ts';
+import { ago, type ChipColor, ciColor, httpsHref, logHref, sha7 } from './format.ts';
+import { LogRef, PrText, commitRef } from './Links.tsx';
 
 type PrPhase = JobDetailView['prPhase'];
 
@@ -110,18 +111,22 @@ export function CiChip({
 /** The PR tab's CI panel: the verdict with its commit, the failures, and what to do. */
 export function CiPanel({ detail }: { detail: JobDetailView }) {
   const { ci, job } = detail;
+  const pr = detail.links.pr;
+  const commit = commitRef(detail);
   return (
     <Stack spacing={1} data-testid="ci-panel">
       <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
         <CiChip ci={ci} compact />
-        <Typography>{ci.line}</Typography>
+        <Typography>
+          <PrText text={ci.line} pr={pr} />
+        </Typography>
       </Stack>
       <Typography variant="body2" color="text.secondary">
         {ci.checkedAt ? `Last observed ${ago(ci.checkedAt)}` : 'Never observed'}
         {ci.head ? (
           <>
             {' '}
-            for PR head <code>{ci.head}</code>
+            for PR head {commit(ci.head, ci.head.length)}
             {ci.current === true ? ' (current worktree HEAD)' : ''}
           </>
         ) : null}
@@ -129,29 +134,37 @@ export function CiPanel({ detail }: { detail: JobDetailView }) {
       </Typography>
       {ci.failures.length > 0 && (
         <ul style={{ margin: 0 }}>
-          {ci.failures.map((f) => (
-            <li key={f.name}>
-              <b>{f.name}</b> {f.conclusion}
-              {f.url ? (
-                <>
-                  {' '}
-                  <Link href={f.url} target="_blank" rel="noreferrer noopener">
-                    GitHub log
-                  </Link>
-                </>
-              ) : null}
-              {f.log ? (
-                <>
-                  {' '}
-                  · saved <code>{f.log}</code> under the artifact directory
-                </>
-              ) : null}
-            </li>
-          ))}
+          {ci.failures.map((f) => {
+            const url = httpsHref(f.url);
+            return (
+              <li key={f.name}>
+                <b>{f.name}</b> {f.conclusion}
+                {url ? (
+                  <>
+                    {' '}
+                    <Link href={url} target="_blank" rel="noreferrer noopener">
+                      GitHub log
+                    </Link>
+                  </>
+                ) : null}
+                {logHref(job.id, f.log) ? (
+                  <>
+                    {' '}
+                    · <LogRef jobId={job.id} path={f.log} label="Saved log " />
+                  </>
+                ) : f.log ? (
+                  <>
+                    {' '}
+                    · saved <code>{f.log}</code> under the artifact directory
+                  </>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       )}
       <Alert severity={ci.completion === 'human' ? 'warning' : 'info'} variant="outlined">
-        {ci.guidance}
+        <PrText text={ci.guidance} pr={pr} />
         {job.stage === 'completed' ? '' : ' A draft PR is not a passing build.'}
       </Alert>
     </Stack>

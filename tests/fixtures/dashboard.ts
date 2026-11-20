@@ -546,17 +546,32 @@ export function seedDashboard(
     const id = ciExhausted.id;
     toCi(id, token, 'Cache report thumbnails', 53);
     run(id, token, 'start');
-    const failing = (sha: string) =>
-      observed(id, token, sha, 'failing', 'failing', `CI failed for ${sha.slice(0, 7)}: test`, {
-        failures: [
-          {
-            name: 'test',
-            conclusion: 'failure',
-            url: 'https://github.com/acme/alpha/actions/runs/9/job/901',
-            log: `ci/${sha.slice(0, 7)}/test.log`,
-          },
-        ],
-      });
+    const failing = (sha: string) => {
+      // The saved log, as ops/github.ts writes it, so the dashboard can open it.
+      write(
+        jobArtifactDir(id, store.paths),
+        `ci/${sha.slice(0, 7)}/test.log`,
+        `FAIL tests/export.test.ts for ${sha.slice(0, 7)}\n`,
+      );
+      return observed(
+        id,
+        token,
+        sha,
+        'failing',
+        'failing',
+        `CI failed for ${sha.slice(0, 7)}: test`,
+        {
+          failures: [
+            {
+              name: 'test',
+              conclusion: 'failure',
+              url: 'https://github.com/acme/alpha/actions/runs/9/job/901',
+              log: `ci/${sha.slice(0, 7)}/test.log`,
+            },
+          ],
+        },
+      );
+    };
     failing('c3d4e5f607182930');
     run(id, token, 'rework', { reason: 'CI failed for c3d4e5f: test' }); // repair 1 of 1
     run(id, token, 'start');
