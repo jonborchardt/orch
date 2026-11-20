@@ -14,7 +14,7 @@ const KEYS = ['id', 'title', 'status', 'type', 'area', 'priority', 'effort', 'de
 const STATUS = ['open', 'in-progress', 'done', 'dropped', 'duplicate'];
 const active = (t) => t.status === 'open' || t.status === 'in-progress';
 const TYPE = ['bug', 'feature', 'chore', 'question'];
-const PRIORITY = ['P1', 'P2', 'P3'];
+const PRIORITY = ['P1', 'P2', 'P3', 'P4'];
 const EFFORT = [0.25, 0.5, 1, 2, 3, 5];
 const CLASSIFIED = ['auto', 'user'];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -203,7 +203,7 @@ function selfTest() {
   assert.deepEqual(ids, ['0004', '0001', '0002']);
   assert.match(index, /duplicate of 0001/);
   assert.match(index, /\| video \| 1 \|/);
-  assert.match(index, /3 open: 3 P1, 0 P2, 0 P3; 3 days of open effort\. 0 in progress\. 1 closed\./);
+  assert.match(index, /3 open: 3 P1, 0 P2, 0 P3, 0 P4; 3 days of open effort\. 0 in progress\. 1 closed\./);
   run(dir);
   assert.equal(readFileSync(join(dir, 'INDEX.md'), 'utf8'), index, 'rerun is byte-identical');
   assert.ok(JSON.parse(run(dir, { json: true })).todos.length === 4);

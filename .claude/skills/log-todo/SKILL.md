@@ -36,7 +36,7 @@ Every writing verb ends with `node .claude/skills/log-todo/index.mjs`. Its exit 
    in the reply if the new text argues for a higher priority). Same subject as a done or dropped todo: a new todo with
    `related: [that id]`, no question.
 4. Classify each todo: `type`, `area` (an existing area whenever one fits; if none does, append `name: description` to
-   `todo/areas.md` before writing the todo and say so), `priority` (P1 fix now, P2 next, P3 someday), `effort` in days
+   `todo/areas.md` before writing the todo and say so), `priority` (P1 fix now, P2 next, P3 someday, P4 parked: only when the user says so), `effort` in days
    from `0.25, 0.5, 1, 2, 3, 5` (an educated guess), `depends_on` and `related` by id. Values the text gives (`p1`,
    `area: api`, `2 days`, `depends on 7`, `blocks 9`) are taken as given. `classified: user` when the text gave any of
    area, priority or effort, else `auto`; the first Note names which of the three were given and which guessed.
