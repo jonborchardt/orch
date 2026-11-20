@@ -325,6 +325,33 @@ for (const width of [800, 1000]) {
   }
 }
 
+for (const width of [390, 800]) {
+  test(`detail header at ${String(width)}px keeps its summary inside the viewport`, async ({
+    page,
+  }) => {
+    const { ids } = state();
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/#/jobs/${ids.completed}`);
+    const header = page.getByTestId('job-header');
+    await expect(header.getByRole('heading', { name: 'Export reports as CSV' })).toBeVisible();
+    const branch = header.getByRole('link', {
+      name: `factory/${ids.completed}-export-reports-as-csv`,
+    });
+    await expect(branch).toHaveAttribute(
+      'href',
+      `https://github.com/acme/alpha/tree/factory/${ids.completed}-export-reports-as-csv`,
+    );
+    for (const l of [
+      header.getByRole('heading', { name: 'Export reports as CSV' }),
+      header.locator('[data-state]'),
+      header.getByRole('img', { name: /^Progress:/ }),
+      branch,
+      header.getByRole('link', { name: 'PR #41' }),
+    ])
+      await withinWidth(page, l);
+  });
+}
+
 test('board at 1440px renders every default column', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');

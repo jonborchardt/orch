@@ -223,8 +223,11 @@ export interface JobDetailView {
    * CONFLICTING; null when neither does or the action does not apply. Backs Fix merge conflicts.
    */
   conflicts: { files: string[]; github: boolean } | null;
-  /** `vscode://file/...` for the worktree (when recorded) and for the initiating checkout. */
-  links: { vscode: string | null; checkout: string; pr: string | null };
+  /**
+   * `vscode://file/...` for the worktree (when recorded) and for the initiating checkout; the
+   * branch's GitHub tree URL once a recorded PR or `branch.pushed` event shows it is on the remote.
+   */
+  links: { vscode: string | null; checkout: string; pr: string | null; branch: string | null };
   /** Current execution session, or null when none was ever attached. */
   session: SessionView | null;
   /** Null for finished jobs; otherwise whether and how a session may resume it. */

@@ -123,9 +123,24 @@ log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommi
 the PR is recorded merged, "Merged into `<base>`" with the PR link and merged head, the commits
 and files from the merged head's recorded verification, and only commits made since the merge as
 outstanding, never the current ahead/behind), and
-the PR with its CI state. Buttons open the worktree in VS Code (`vscode://file/...`) and the PR on
-GitHub. The header carries the same progress strip as the board (in place of a raw stage chip)
-and the round as `Round: none` or `Round N / M`, with the same tooltip. The Overview tab ends with a
+the PR with its CI state. Buttons below the header open the worktree in VS Code
+(`vscode://file/...`) and the PR on GitHub. The header is two lines. The first is the title, the
+job id, the status chip, the same progress strip as the board (in place of a raw stage chip), and
+the round as `Round: none` or `Round N / M` with the same tooltip (plus `archived` and
+`refresh failed` when they apply). The second is delivery: the repository, the branch, the PR as
+`PR #<n>` (or `PR` when the URL has no `/pull/<n>`), the PR phase chip (left out while it would
+repeat the CI chip's `CI running` or `CI failing`), the compact CI chip when CI was observed or the
+job was closed out, and `updated <ago>` with the exact time in its tooltip. A field without data is
+left out, never shown as `—` or `none`, and long values wrap rather than clip. The branch tooltip
+names the base (`into <base>`). The branch links to `<repo>/tree/<branch>` on GitHub (`links.branch`,
+derived from a `github.com/<owner>/<name>` repository or the PR URL, with no network call) only once
+it is known to be on the remote: a recorded PR or a `branch.pushed` event. Before that it is plain
+text, with `not pushed yet` in its tooltip. The owner session and its lease (`lease until|lapsed
+<ISO>`) are in the status chip's tooltip, and as an `Owner …` line in the status panel's Details
+whenever an owner is recorded, live or lapsed. Details also always has a visible branch line,
+`Branch <branch> into <base>` (with `, not pushed yet` when the header tooltip says so) or
+`Base branch <base>` before a branch exists, so nothing in a header tooltip is reachable only by
+hovering. The update time is a `<time datetime>` element. The Overview tab ends with a
 **Progress** section: every step in order with the same state as the strip and the times the
 timeline knows (`started …`, `completed …`, or `completed earlier …` for a step the current pass
 has not redone), then the **Timeline**. Times read relatively (`5m ago`), with the exact timestamp
@@ -247,7 +262,7 @@ and records only its state, never the CI verdict, stage, or status; a PR merged 
 shows as merged after it, and on a ci escalation that makes Accept delivery available. Nothing
 polls GitHub: the board's periodic refresh re-reads the database only.
 
-**PR phase.** The board's PR / CI column and the detail header show a chip (glyph and label) for
+**PR phase.** The board's PR / CI column and the detail header's second line show a chip (glyph and label) for
 where the PR stands, from recorded fields only (`prPhase` in `src/core/workflow.ts`): `no PR`,
 `draft` (CI not passing yet), `CI running`, `CI failing`, `ready to merge` (completed on GitHub's
 verdict, marked ready, CI passing), `ready marking failed` (completed on the verdict but the PR is

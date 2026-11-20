@@ -267,6 +267,7 @@ export function detail(store: Store, id: string): JobDetailView {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,
       checkout: vscodeLink(job.repoPath),
       pr: job.prUrl,
+      branch: branchLink(job, events),
     },
     session: sessionView(events),
     resume: resumeOf(job, state),
@@ -274,6 +275,19 @@ export function detail(store: Store, id: string): JobDetailView {
     supersedes: predecessorsOf(store.db, id).map((j) => j.id),
     merge: mergeView(store, job, plan?.worktree ?? null),
   };
+}
+
+/**
+ * The branch on the web host, derived from the repository identity or the PR URL (no network
+ * call). Only once the branch is known to be on the remote: a recorded PR or a `branch.pushed`
+ * event (the only push orch makes); before that the link would be a 404.
+ */
+function branchLink(job: Job, events: Event[]): string | null {
+  if (!job.branch || (!job.prUrl && !events.some((e) => e.type === 'branch.pushed'))) return null;
+  const base = /^github\.com\/[^/]+\/[^/]+$/.test(job.repo)
+    ? `https://${job.repo}`
+    : (/^(https?:\/\/[^/]+\/[^/]+\/[^/]+)\/pull\/\d+/.exec(job.prUrl ?? '')?.[1] ?? null);
+  return base && `${base}/tree/${job.branch.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 function vscodeLink(dir: string): string {

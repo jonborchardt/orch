@@ -211,7 +211,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     conflicts: null,
-    links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null },
+    links: { vscode: 'vscode://file//wt/g', checkout: 'vscode://file//g', pr: null, branch: null },
     session: null,
     resume: { command: '/factory resume job-00000003', heldBy: null },
     resumeCommand: 'orch factory resume job-00000003 --session <name>',
@@ -1102,6 +1102,188 @@ describe('Job detail', () => {
     expect(screen.getByText('<script>alert(1)</script>')).toBeInTheDocument();
     expect(document.querySelector('script')).toBeNull();
     expect(screen.getByText('VERDICT: CHANGES')).toHaveAttribute('data-marker', 'VERDICT');
+  });
+});
+
+describe('Job detail: header', () => {
+  const branch = 'factory/job-00000003-gamma';
+  const prUrl = 'https://github.com/x/y/pull/9';
+  const header = () => screen.getByTestId('job-header');
+  /** On GitHub with a pushed branch, a PR, and CI failing for a head. */
+  function delivered(over: Partial<JobDetailView> = {}): JobDetailView {
+    const base = detail();
+    return detail({
+      job: { ...base.job, repo: 'github.com/x/y', prUrl, prState: 'draft' },
+      links: { ...base.links, pr: prUrl, branch: `https://github.com/x/y/tree/${branch}` },
+      ci: noCi({ status: 'failing', head: 'abcdef0123456789', outcome: 'failing' }),
+      prPhase: 'ci-failing',
+      ...over,
+    });
+  }
+  async function open(d: JobDetailView) {
+    data.detail = d;
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+  }
+  const before = (a: Element, b: Element) =>
+    (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+  it('line 1 is title, id, status, then progress; delivery chips and buttons are elsewhere', async () => {
+    await open(delivered());
+    const h = header();
+    const line1 = must(h.firstElementChild as HTMLElement | null);
+    const title = within(line1).getByRole('heading', { name: 'Gamma blocked' });
+    const id = within(line1).getByText('job-00000003');
+    const status = must(line1.querySelector('[data-state]'));
+    const strip = within(line1).getByRole('img', { name: /^Progress:/ });
+    expect(before(title, id) && before(id, status) && before(status, strip)).toBe(true);
+    expect(line1.querySelector('[data-phase]')).toBeNull();
+    expect(line1.querySelector('[data-ci]')).toBeNull();
+    // The buttons exist on the page, outside the header.
+    expect(screen.getByRole('link', { name: 'Open PR on GitHub' })).toBeInTheDocument();
+    expect(within(h).queryByRole('link', { name: 'Open PR on GitHub' })).toBeNull();
+    expect(within(h).queryByRole('link', { name: 'Open worktree in VS Code' })).toBeNull();
+    expect(within(h).queryByRole('button', { name: 'Refresh' })).toBeNull();
+  });
+
+  it('line 2 links the branch and PR and shows CI and the last update', async () => {
+    await open(delivered());
+    const h = header();
+    expect(h).toHaveTextContent('github.com/x/y');
+    expect(within(h).getByRole('link', { name: branch })).toHaveAttribute(
+      'href',
+      `https://github.com/x/y/tree/${branch}`,
+    );
+    expect(within(h).getByRole('link', { name: branch })).toHaveAttribute('title', 'into main');
+    expect(within(h).getByRole('link', { name: 'PR #9' })).toHaveAttribute('href', prUrl);
+    expect(within(h).getByText('CI failing @abcdef0')).toBeInTheDocument();
+    expect(within(h).getByText(/^updated /)).toBeInTheDocument();
+  });
+
+  it('omits absent fields instead of printing placeholders', async () => {
+    await open(detail({ job: { ...detail().job, branch: null } }));
+    const h = header();
+    for (const text of ['branch —', 'branch -']) expect(h).not.toHaveTextContent(text);
+    expect(h.textContent).not.toMatch(/owner/i);
+    expect(h.querySelector('[data-phase]')).toBeNull();
+    expect(h.querySelector('[data-ci]')).toBeNull();
+    expect(within(h).queryByRole('link', { name: /^PR/ })).toBeNull();
+    // The repository is shown exactly as recorded, as its own segment.
+    expect(within(h).getByText(detail().job.repo)).toBeInTheDocument();
+    expect(within(h).getByText(/^updated /)).toBeInTheDocument();
+    // The base branch, no longer in the header text, is a visible line in Details.
+    openDetails();
+    expect(await screen.findByTestId('branch-line')).toHaveTextContent('Base branch main');
+  });
+
+  it('keeps the owner and lease in the status tooltip and the update time in its own', async () => {
+    const lease = '2999-01-01T00:00:00.000Z';
+    await open(
+      detail({ job: { ...detail().job, ownerSession: 'claude-9', leaseExpiresAt: lease } }),
+    );
+    const h = header();
+    expect(h).not.toHaveTextContent('claude-9');
+    expect(h).not.toHaveTextContent(lease);
+    const title = must(h.querySelector('[data-state]')).getAttribute('title') ?? '';
+    expect(title).toContain('claude-9');
+    expect(title).toContain(`lease until ${lease}`);
+    const updated = within(h).getByText(/^updated /);
+    expect(updated).toHaveAttribute('title', detail().job.updatedAt);
+    // A <time> element exposes the exact time to assistive technology, not only as a tooltip.
+    expect(updated.tagName).toBe('TIME');
+    expect(updated).toHaveAttribute('datetime', detail().job.updatedAt);
+  });
+
+  it('names a lapsed owner in Details, and nothing when there is no owner', async () => {
+    const lapsed = '2000-01-01T00:00:00.000Z';
+    await open(
+      detail({
+        job: { ...detail().job, ownerSession: 'claude-9', leaseExpiresAt: lapsed },
+        liveness: 'stale',
+        resume: { command: '/factory resume job-00000003', heldBy: null },
+      }),
+    );
+    openDetails();
+    const line = await screen.findByTestId('owner-line');
+    expect(line).toHaveTextContent('claude-9');
+    expect(line).toHaveTextContent(`lease lapsed ${lapsed}`);
+    cleanup();
+
+    await open(detail());
+    openDetails();
+    await screen.findByTestId('session-none');
+    expect(screen.queryByTestId('owner-line')).not.toBeInTheDocument();
+  });
+
+  it('says CI failing once, and shows the phase chip when the CI chip does not say it', async () => {
+    await open(delivered());
+    expect(within(header()).getAllByText(/CI failing/)).toHaveLength(1);
+    expect(header().querySelector('[data-phase="ci-failing"]')).toBeNull();
+    cleanup();
+
+    await open(
+      delivered({
+        ci: noCi({ status: 'passing', head: 'abcdef0123456789', completion: 'ci' }),
+        prPhase: 'ready-to-merge',
+      }),
+    );
+    expect(header().querySelector('[data-phase="ready-to-merge"]')).not.toBeNull();
+  });
+
+  it('names an unparsable PR URL plainly, and a PR without CI data has no CI chip', async () => {
+    const odd = 'https://example.test/pr';
+    await open(
+      delivered({
+        job: { ...delivered().job, prUrl: odd },
+        links: { ...delivered().links, pr: odd },
+        ci: noCi(),
+        prPhase: 'draft',
+      }),
+    );
+    const h = header();
+    expect(within(h).getByRole('link', { name: 'PR' })).toHaveAttribute('href', odd);
+    expect(h.querySelector('[data-phase="draft"]')).not.toBeNull();
+    expect(h.querySelector('[data-ci]')).toBeNull();
+  });
+
+  it('shows an unlinked branch as text, saying when it is not pushed yet', async () => {
+    await open(detail());
+    const h = header();
+    expect(within(h).queryByRole('link', { name: branch })).toBeNull();
+    expect(must(within(h).getByText(branch).closest('[title]'))).toHaveAttribute(
+      'title',
+      'into main',
+    );
+    // Details states the base visibly, for keyboard and touch users; not a GitHub repository, so
+    // no push claim.
+    openDetails();
+    expect(await screen.findByTestId('branch-line')).toHaveTextContent(
+      `Branch ${branch} into main`,
+    );
+    expect(screen.getByTestId('branch-line')).not.toHaveTextContent('not pushed yet');
+    cleanup();
+
+    await open(detail({ job: { ...detail().job, repo: 'github.com/x/y' } }));
+    expect(within(header()).queryByRole('link', { name: branch })).toBeNull();
+    expect(must(within(header()).getByText(branch).closest('[title]'))).toHaveAttribute(
+      'title',
+      'into main; not pushed yet',
+    );
+    openDetails();
+    expect(await screen.findByTestId('branch-line')).toHaveTextContent(
+      `Branch ${branch} into main, not pushed yet`,
+    );
+    cleanup();
+
+    // Once linked, Details still names the base and claims nothing about pushing.
+    await open(delivered());
+    openDetails();
+    expect(await screen.findByTestId('branch-line')).toHaveTextContent(
+      `Branch ${branch} into main`,
+    );
+    expect(screen.getByTestId('branch-line')).not.toHaveTextContent('not pushed yet');
   });
 });
 

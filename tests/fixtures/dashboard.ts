@@ -12,6 +12,7 @@ import { jobArtifactDir } from '../../src/core/paths.ts';
 import type { Store } from '../../src/storage/client.ts';
 import {
   claimJob,
+  clearWorktree,
   createJob,
   getJob,
   recordCi,
@@ -19,6 +20,7 @@ import {
   recordReview,
   registerArtifact,
   releaseJob,
+  setWorktree,
   supersedeJob,
   transitionJob,
 } from '../../src/storage/jobs.ts';
@@ -260,6 +262,13 @@ export function seedDashboard(
   {
     const { token } = claimJob(store, completed.id, { session: 'claude-20261112-1500-9f1e' });
     const id = completed.id;
+    // Its branch stays recorded; the worktree is removed below, after delivery.
+    setWorktree(store, id, {
+      token,
+      path: `${repos.alpha}-wt`,
+      branch: `factory/${id}-export-reports-as-csv`,
+      how: 'created',
+    });
     run(id, token, 'start');
     art(id, token, 'spec.md', SPEC);
     art(id, token, 'spec-review-1.md', SPEC_REVIEW);
@@ -313,6 +322,7 @@ export function seedDashboard(
     // Completion released the job; the session comes back to observe CI and still holds it.
     const later = claimJob(store, id, { session: 'claude-20261112-1500-9f1e' }).token;
     recordCi(store, id, { token: later, ciStatus: 'failing', head: 'f1e2d3c4b5a69788' });
+    clearWorktree(store, id, { token: later }, 'delivered');
   }
 
   // 2. In review round 2 with a live session.
