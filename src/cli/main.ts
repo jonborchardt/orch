@@ -137,6 +137,9 @@ export async function main(argv: string[]): Promise<number> {
         limit: str,
         replace: bool,
         by: str,
+        // job notice
+        message: str,
+        through: str,
         // worktree / gh / checkout
         path: str,
         all: bool,

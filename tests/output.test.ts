@@ -144,6 +144,8 @@ function plan(over: Partial<Plan>): Plan {
       release: false,
       lastReason: null,
     },
+    notices: [],
+    noticeAck: null,
     ...over,
   };
 }
@@ -184,6 +186,40 @@ describe('formatPlan', () => {
     }
     expect(out).not.toContain('Blocked:');
     expect(out).not.toContain('Flaky:');
+    expect(out).not.toContain('Notices:');
+    expect(out).not.toContain('Acknowledge:');
+  });
+
+  it('prints notices and how to acknowledge them above Next', () => {
+    const ack = 'orch job notice ack job-00000001 --through 42 --token <token>';
+    const out = formatPlan(
+      plan({
+        notices: [
+          { kind: 'base-moved', text: 'Base main moved.', at: null, by: null, eventId: null },
+          { kind: 'message', text: 'main has the fix', at: 'x', by: 'human', eventId: 42 },
+        ],
+        noticeAck: ack,
+      }),
+    );
+    const lines = out.split('\n');
+    const at = lines.indexOf('Notices:');
+    expect(at).toBeGreaterThan(0);
+    expect(lines.slice(at + 1, at + 4)).toEqual([
+      '  [base-moved] Base main moved.',
+      '  [message] main has the fix',
+      `Acknowledge: ${ack}`,
+    ]);
+    expect(lines.findIndex((l) => l.startsWith('Next:'))).toBeGreaterThan(at + 3);
+  });
+
+  it('prints notices without an Acknowledge line when nothing needs acking', () => {
+    const out = formatPlan(
+      plan({
+        notices: [{ kind: 'pr-merged', text: 'PR merged.', at: null, by: null, eventId: null }],
+      }),
+    );
+    expect(out).toContain('Notices:\n  [pr-merged] PR merged.\n\nNext:');
+    expect(out).not.toContain('Acknowledge:');
   });
 
   it('names a likely flaky test with its reason', () => {

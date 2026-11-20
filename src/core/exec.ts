@@ -166,7 +166,10 @@ export function spawnTool(
     env: opts.env ?? process.env,
     maxBuffer: 64 * 1024 * 1024,
   });
-  if (r.error) return { status: null, stdout: '', stderr: r.error.message };
+  if (r.error) {
+    const timedOut = (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
+    return { status: null, stdout: '', stderr: r.error.message, timedOut };
+  }
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 

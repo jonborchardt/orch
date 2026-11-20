@@ -14,7 +14,7 @@ import {
   VERDICTS,
 } from '../core/workflow.ts';
 import { SESSION_PROVIDERS, type SessionProvider, validateSessionRef } from '../core/session.ts';
-import { supersede } from '../ops/actions.ts';
+import { postNotice, supersede } from '../ops/actions.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
 import { findJobs, jobRepository } from '../ops/repo.ts';
 import { jobUsage } from '../ops/usage.ts';
@@ -22,6 +22,7 @@ import { repointRepo } from '../ops/worktree.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
 import {
+  ackNotice,
   attachSession,
   claimJob,
   createJob,
@@ -58,6 +59,8 @@ export interface JobOptions {
   provider?: string;
   ref?: string;
   cwd?: string;
+  message?: string;
+  through?: string;
 }
 
 export const JOB_HELP = `Usage: orch job <command> [options]
@@ -84,6 +87,11 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   session attach <id> --provider <${SESSION_PROVIDERS.join('|')}> --ref <link|uuid> [--cwd <dir>] [--token <t>]
             record the execution session driving the job (metadata; the owner's token is
             required while the job is claimed, none while it is unowned)
+  notice post <id> --message <m> [--by <name>]
+            leave a message for the job's session (no token; --by defaults to human); its
+            next orch factory next|status shows it until the owner acknowledges it
+  notice ack <id> --through <event-id> --token <t>
+            acknowledge every posted notice up to that event id (the plan's noticeAck)
 
 --token defaults to $ORCH_TOKEN, --session to $ORCH_SESSION. Add --json for machine output.
 `;
@@ -216,6 +224,20 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
         actor: session,
       });
       return summary(r.job, store, { changed: r.changed });
+    }
+    case 'notice': {
+      if (rest[0] !== 'post' && rest[0] !== 'ack') {
+        throw new UsageError('Usage: orch job notice post|ack <id> ...');
+      }
+      const jobId = need(rest[1], '<id>');
+      if (rest[0] === 'post') {
+        if (o.message === undefined || o.message.trim() === '') {
+          throw new UsageError('notice post needs a non-blank --message "<text>"');
+        }
+        return postNotice(store, jobId, { text: o.message, actor: o.by ?? 'human' });
+      }
+      const through = need(int(o.through, '--through', 1), '--through <event-id>');
+      return summary(ackNotice(store, jobId, auth, through), store, { through });
     }
     case undefined:
       throw new UsageError(JOB_HELP);

@@ -132,6 +132,7 @@ export function formatPlan(plan: Plan): string {
       ['PR', pr + ci],
     ]),
     '',
+    ...notices(plan),
     ...lines(next),
   ];
   if (plan.agents.length) {
@@ -144,6 +145,14 @@ export function formatPlan(plan: Plan): string {
   plan.commands.forEach((c, i) => out.push(`  ${String(i + 1)}. ${c}`));
   out.push('', `Details: orch factory status ${plan.jobId} --json`);
   return out.join('\n');
+}
+
+/** The plan's notices, one `[kind] text` line each, and how to acknowledge them; [] when none. */
+function notices(plan: Plan): string[] {
+  if (plan.notices.length === 0) return [];
+  const out = ['Notices:', ...plan.notices.map((n) => `  [${n.kind}] ${n.text}`)];
+  if (plan.noticeAck) out.push(`Acknowledge: ${plan.noticeAck}`);
+  return [...out, ''];
 }
 
 function factoryAction(r: FactoryRow): string {
