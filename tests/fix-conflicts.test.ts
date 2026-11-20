@@ -50,7 +50,10 @@ describe('fix-conflicts', () => {
 
   it('in approve: records the conflict, reworks to build, releases, and names the resume', () => {
     const c = conflictingApprove();
-    expect(baseConflicts(getJob(store.db, c.id))).toEqual(['src/app.ts']);
+    expect(baseConflicts(store, getJob(store.db, c.id))).toEqual({
+      files: ['src/app.ts'],
+      github: false,
+    });
     // A live session lease is refused unless the takeover is forced.
     expect(() => dashboardAction(store, c.id, { action: 'fix-conflicts' })).toThrow(/live lease/);
     expect(listIntegrations(store.db, c.id)).toEqual([]);
@@ -84,7 +87,7 @@ describe('fix-conflicts', () => {
     expect(r.resumeCommand).toBe(resume(c.id));
   });
 
-  it('refuses without conflicts, in another stage, and for a finished job, changing nothing', () => {
+  it('refuses without conflicts, in build or needs-human, and when cancelled, changing nothing', () => {
     const refused = (c: Ctx) => {
       const before = getJob(store.db, c.id);
       expect(() => dashboardAction(store, c.id, { action: 'fix-conflicts', force: true })).toThrow(
@@ -98,14 +101,19 @@ describe('fix-conflicts', () => {
     toReview(store, clean, 'src/clean.ts');
     passRound(store, clean);
     advanceBase('docs/notes.md', 'upstream\n');
-    expect(baseConflicts(getJob(store.db, clean.id))).toEqual([]);
+    expect(baseConflicts(store, getJob(store.db, clean.id))).toBeNull();
     refused(clean);
     // build, with a real conflict.
     const build = start(store, clone, 'Build');
     passSpec(store, build);
     commitFile(build.wt, 'src/app.ts', 'export const app = 1; // job\n');
     advanceBase('src/app.ts', 'export const app = 2; // base\n');
-    expect(baseConflicts(getJob(store.db, build.id))).toBeNull();
+    expect(baseConflicts(store, getJob(store.db, build.id))).toBeNull();
+    refused(build);
+    // needs-human (here escalated from build), with the same conflict.
+    go(store, build, 'start');
+    go(store, build, 'escalate', 'stuck');
+    expect(getJob(store.db, build.id).stage).toBe('needs-human');
     refused(build);
     // finished.
     const done = start(store, clone, 'Done');

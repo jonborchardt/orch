@@ -1,5 +1,6 @@
 import {
   Alert,
+  Box,
   Button,
   Checkbox,
   Dialog,
@@ -79,8 +80,21 @@ function effect(a: DashboardAction, d: JobDetailView, to: string): string {
       return 'Hides the job from the board unless Show is set to archived.';
     case 'unarchive':
       return 'Puts the job back in the board views.';
-    case 'fix-conflicts':
-      return `Merges ${d.plan?.worktree?.baseRef ?? 'the base'} into the branch. It conflicts in ${(d.conflicts ?? []).join(', ')}, so the merge is aborted and recorded, and the job returns to build as pending for the builder to resolve them. No session is started; resume the job from a Claude Code session.`;
+    case 'fix-conflicts': {
+      const why =
+        (d.conflicts?.files.length ?? 0) > 0
+          ? 'The branch conflicts with its base'
+          : 'GitHub reports the PR CONFLICTING';
+      if (job.status === 'completed') {
+        return `${why}. A finished job cannot be reopened, so this creates a re-land job and marks this one superseded; start it yourself with /factory <new id> in a new Claude Code session, and close this PR once the new one merges. No session is started.`;
+      }
+      const base = d.plan?.worktree?.baseRef ?? 'the base';
+      const ci =
+        job.stage === 'ci'
+          ? ' Even a clean merge returns to build, since the new head needs verification, approval, and pr again; no CI repair is used.'
+          : '';
+      return `${why}. Merges ${base} into the branch: a conflicting merge is aborted and recorded, and the job returns to build as pending for the builder to resolve it.${ci} No session is started; resume the job from a Claude Code session.`;
+    }
     case 'refresh-pr':
       return '';
   }
@@ -445,9 +459,23 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                   </TextField>
                 )}
                 {open === 'fix-conflicts' ? (
-                  <Typography data-testid="fix-conflicts-files">
-                    Conflicting files: <code>{(detail.conflicts ?? []).join(', ')}</code>
-                  </Typography>
+                  (detail.conflicts?.files.length ?? 0) > 0 && (
+                    <div>
+                      <Typography id="fix-conflicts-label">Conflicting files:</Typography>
+                      <Box
+                        component="ul"
+                        aria-labelledby="fix-conflicts-label"
+                        data-testid="fix-conflicts-files"
+                        sx={{ my: 0, maxHeight: 160, overflowY: 'auto', overflowWrap: 'anywhere' }}
+                      >
+                        {detail.conflicts?.files.map((f) => (
+                          <li key={f}>
+                            <code>{f}</code>
+                          </li>
+                        ))}
+                      </Box>
+                    </div>
+                  )
                 ) : (
                   <TextField
                     label={
@@ -491,8 +519,10 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                 ) : (
                   <Alert severity="warning" variant="outlined">
                     This records the decision
-                    {open === 'accept-policy' ? '' : ' and returns the job to a pending stage'}. It
-                    does not start or wake any Claude session; resume the job from a session
+                    {open === 'accept-policy' || finished
+                      ? ''
+                      : ' and returns the job to a pending stage'}
+                    . It does not start or wake any Claude session; resume the job from a session
                     afterwards.
                   </Alert>
                 )}

@@ -23,6 +23,7 @@ import {
 } from '../git/worktree.ts';
 import { findArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
+import { latestEventsByJob } from '../storage/events.ts';
 import {
   type Auth,
   authorize,
@@ -219,29 +220,68 @@ export interface IntegrateResult extends WorktreeResult {
   merge: MergeResult;
   fetched: boolean;
   integration: Integration;
-  /** What must happen next: nothing, verification, or (approve and pr stages) the builder. */
+  /** What must happen next: nothing, verification, or (approve, pr, and ci stages) the builder. */
   next: 'verify' | 'rework' | 'none';
 }
 
-/** Stages where a conflicting or materially edited base merge sends the job back to build. */
+/**
+ * Stages where a conflicting or materially edited base merge sends the job back to build. In ci
+ * any merge does, since only the pr stage pushes; none of these spends a CI repair.
+ */
 export function reworksOnIntegration(stage: string): boolean {
-  return stage === 'approve' || stage === 'pr';
+  return stage === 'approve' || stage === 'pr' || stage === 'ci';
 }
 
 /**
- * Files that conflict between the job's branch and its local base ref (no fetch), or null when
- * that question does not apply: a finished job, a stage where integration does not rework, no
- * usable worktree, not behind, or a probe error. `tree` is the already-inspected worktree, if any.
+ * What Fix merge conflicts does for this job, or null when it does not apply: integrate the base
+ * (approve, pr, ci, not finished), or re-land a completed job whose PR is still open and that no
+ * job superseded yet. Terminal jobs never transition, so they get a replacement job instead.
  */
-export function baseConflicts(job: Job, tree?: WorktreeInfo | null): string[] | null {
-  if (TERMINAL_STATUSES.includes(job.status) || !reworksOnIntegration(job.stage)) return null;
+export function fixConflictsRoute(
+  job: Pick<Job, 'status' | 'stage' | 'prState' | 'supersededBy'>,
+): 'integrate' | 're-land' | null {
+  if (!TERMINAL_STATUSES.includes(job.status)) {
+    return reworksOnIntegration(job.stage) ? 'integrate' : null;
+  }
+  const open = job.prState === 'draft' || job.prState === 'ready';
+  return job.status === 'completed' && open && job.supersededBy === null ? 're-land' : null;
+}
+
+export interface BaseConflicts {
+  /** Files `git merge-tree` reports against the local base ref (no fetch); [] when none. */
+  files: string[];
+  /** The newest recorded GitHub observation of the PR said `mergeable: CONFLICTING`. */
+  github: boolean;
+}
+
+/** The newest `pr.observed` / `ci.observed` said CONFLICTING; a payload without the field is unknown. */
+function githubConflicting(store: Store, id: string): boolean {
+  const seen = latestEventsByJob(store.db, [id], ['pr.observed', 'ci.observed']).get(id);
+  const newest = [...(seen?.values() ?? [])].sort((a, b) => b.id - a.id)[0];
+  return newest?.payload['mergeable'] === 'CONFLICTING';
+}
+
+/**
+ * Whether the job has merge conflicts with its base, for Fix merge conflicts: null when the action
+ * does not apply (see `fixConflictsRoute`) or neither the read-only probe (worktree behind its
+ * local base ref) nor GitHub's recorded answer reports any. A probe error counts as no files.
+ * `tree` is the already-inspected worktree, if any.
+ */
+export function baseConflicts(
+  store: Store,
+  job: Job,
+  tree?: WorktreeInfo | null,
+): BaseConflicts | null {
+  if (fixConflictsRoute(job) === null) return null;
+  let files: string[] = [];
   try {
     const t = tree === undefined ? worktreeOf(job) : tree;
-    if (!t?.head || !t.baseRef || !t.behind) return null;
-    return mergeConflicts(t.path, t.baseRef);
+    if (t?.head && t.baseRef && t.behind) files = mergeConflicts(t.path, t.baseRef);
   } catch {
-    return null;
+    files = [];
   }
+  const github = githubConflicting(store, job.id);
+  return files.length > 0 || github ? { files, github } : null;
 }
 
 function mergeOutcome(wt: string, fromHead: string, resultHead: string) {
@@ -293,9 +333,10 @@ function reconcile(store: Store, id: string, auth: Auth, wt: string, open: Integ
 /**
  * Bring base-branch changes into the job branch with a merge commit, recording the inputs before
  * Git runs and the outcome after. Fetches origin first when there is one. Refused on a dirty
- * worktree. Conflicts abort the merge; in the approve and pr stages the job then goes back to
- * build (the builder resolves, and the result is verified, reviewed, and approved again),
- * elsewhere the conflict is raised as an error. A completed merge still needs fresh verification.
+ * worktree. Conflicts abort the merge; in the approve, pr, and ci stages the job then goes back to
+ * build without spending a CI repair (the builder resolves, and the result is verified, reviewed,
+ * and approved again), elsewhere the conflict is raised as an error. A completed merge still needs
+ * fresh verification; in ci it reworks too, since only the pr stage pushes.
  */
 export function integrateBase(store: Store, id: string, auth: Auth): IntegrateResult {
   const checked = jobCheckout(store, authorize(store, id, auth), auth);
@@ -359,6 +400,7 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
     const reworked = transitionJob(store, id, 'rework', {
       token: auth.token,
       reason: `base integration of ${ref} conflicts in ${files.join(', ') || 'unknown files'}`,
+      integration: true,
     });
     return {
       job: reworked,
@@ -376,11 +418,16 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
   });
   let next: IntegrateResult['next'] = 'verify';
   let updated = getJob(store.db, id);
-  if (outcome.material.length > 0 && reworksOnIntegration(job.stage)) {
-    updated = transitionJob(store, id, 'rework', {
-      token: auth.token,
-      reason: `merge ${merge.head.slice(0, 7)} edited ${outcome.material.join(', ')} beyond either parent`,
-    });
+  // In ci even a clean merge reworks: the new head must pass verification, approval, and pr
+  // again before it can be pushed to the same PR.
+  const reason =
+    outcome.material.length > 0
+      ? `merge ${merge.head.slice(0, 7)} edited ${outcome.material.join(', ')} beyond either parent`
+      : job.stage === 'ci'
+        ? `merge ${merge.head.slice(0, 7)} of ${ref} is a new head; it needs verification, approval, and the pr stage before it is pushed`
+        : null;
+  if (reason !== null && reworksOnIntegration(job.stage)) {
+    updated = transitionJob(store, id, 'rework', { token: auth.token, reason, integration: true });
     next = 'rework';
   }
   return {

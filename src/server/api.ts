@@ -239,7 +239,7 @@ export function detail(store: Store, id: string): JobDetailView {
   };
   // Without a readable worktree HEAD there is nothing to compare the verdict against.
   const ci = ciView(job, evidence.events, plan?.worktree?.head ?? undefined);
-  const conflicts = baseConflicts(job, plan?.worktree ?? null);
+  const conflicts = baseConflicts(store, job, plan?.worktree ?? null);
   return {
     job: safeJob(job),
     liveness: state,

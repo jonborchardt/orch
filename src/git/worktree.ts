@@ -284,7 +284,8 @@ export function mergeInto(path: string, ref: string): MergeResult {
  */
 export function mergeConflicts(path: string, ref: string): string[] {
   const args = ['merge-tree', '--write-tree', '--name-only', '--no-messages', 'HEAD', ref];
-  const r = spawnTool('git', args, { cwd: path });
+  // Runs on dashboard polls: a slow probe fails (no button) instead of holding the request.
+  const r = spawnTool('git', args, { cwd: path, timeout: 10_000 });
   if (r.status === 0) return [];
   if (r.status !== 1) {
     throw new ToolError(`git merge-tree failed in ${path}: ${(r.stderr || r.stdout).trim()}`);

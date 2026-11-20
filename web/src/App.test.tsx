@@ -2381,7 +2381,7 @@ describe('PR phase, Merge, and Refresh PR', () => {
     data.detail = detail({
       job,
       actions: ['fix-conflicts', 'request-rework', 'cancel'],
-      conflicts: ['src/app.ts', 'README.md'],
+      conflicts: { files: ['src/app.ts', 'README.md'], github: false },
     });
     data.actionBody = {
       job: { ...job, stage: 'build' },
@@ -2392,17 +2392,70 @@ describe('PR phase, Merge, and Refresh PR', () => {
     await screen.findByRole('heading', { name: 'Gamma blocked' });
     fireEvent.click(screen.getByRole('button', { name: 'Fix merge conflicts' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByTestId('fix-conflicts-files')).toHaveTextContent(
-      'src/app.ts, README.md',
-    );
+    const files = within(dialog).getByTestId('fix-conflicts-files');
+    expect(
+      within(files)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['src/app.ts', 'README.md']);
     const effect = within(dialog).getByTestId('action-effect');
     expect(effect).toHaveTextContent('returns to build');
     expect(effect).toHaveTextContent('No session is started');
+    // The files are listed once, not repeated in the effect sentence.
+    expect(effect).not.toHaveTextContent('README.md');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('returned to build');
     });
     expect(posts(f)).toEqual([{ action: 'fix-conflicts' }]);
+  });
+
+  it('Fix merge conflicts words its dialog for ci, a completed re-land, and GitHub-only', async () => {
+    mockFetch();
+    const base = detail().job;
+    const cases = [
+      {
+        job: { ...base, stage: 'ci' as const, status: 'running' as const },
+        conflicts: { files: ['src/app.ts'], github: false },
+        says: ['The branch conflicts with its base', 'returns to build', 'no CI repair is used'],
+        not: ['re-land'],
+      },
+      {
+        job: { ...base, stage: 'completed' as const, status: 'completed' as const },
+        conflicts: { files: [], github: true },
+        says: [
+          'GitHub reports the PR CONFLICTING',
+          'creates a re-land job and marks this one superseded',
+          'start it yourself',
+        ],
+        not: ['returns to build'],
+      },
+      {
+        job: { ...base, stage: 'pr' as const, status: 'pending' as const },
+        conflicts: { files: [], github: true },
+        says: ['GitHub reports the PR CONFLICTING', 'returns to build'],
+        not: ['no CI repair'],
+      },
+    ];
+    for (const c of cases) {
+      cleanup();
+      data.detail = detail({
+        job: c.job,
+        actions: ['fix-conflicts'],
+        conflicts: c.conflicts,
+      });
+      window.location.hash = '#/jobs/job-00000003';
+      mount();
+      fireEvent.click(await screen.findByRole('button', { name: 'Fix merge conflicts' }));
+      const dialog = await screen.findByRole('dialog');
+      const effect = within(dialog).getByTestId('action-effect');
+      for (const s of c.says) expect(effect).toHaveTextContent(s);
+      for (const s of c.not) expect(effect).not.toHaveTextContent(s);
+      // No file list is shown when only GitHub reports the conflict.
+      expect(within(dialog).queryByTestId('fix-conflicts-files') === null).toBe(
+        c.conflicts.files.length === 0,
+      );
+    }
   });
 
   it('Refresh PR posts at once and shows a refused merge error', async () => {

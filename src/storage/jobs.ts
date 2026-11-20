@@ -300,6 +300,8 @@ export interface TransitionOptions extends Auth {
   reason?: string | undefined;
   /** See `TransitionContext.mergedByHuman`; only `completeCi` sets it. */
   mergedByHuman?: boolean | undefined;
+  /** See `TransitionContext.integration`; only `integrateBase` sets it. */
+  integration?: boolean | undefined;
 }
 
 export function transitionJob(
@@ -328,6 +330,7 @@ export function transitionJob(
       to: opts.to,
       reason: opts.reason,
       mergedByHuman: opts.mergedByHuman,
+      integration: opts.integration,
     });
   });
 }
@@ -690,7 +693,13 @@ export function recordPrReady(
 
 /** GitHub's answer about the PR (`pr.observed`), or the outcome of a human's merge (`pr.merged`). */
 export type PrObservation =
-  | { event: 'pr.observed'; state: PrState | undefined; head: string | null }
+  | {
+      event: 'pr.observed';
+      state: PrState | undefined;
+      head: string | null;
+      /** GitHub's `mergeable` (MERGEABLE, CONFLICTING, UNKNOWN), when read. */
+      mergeable?: string | null | undefined;
+    }
   | { event: 'pr.merged'; head: string; error: string | null };
 
 /**
@@ -709,7 +718,12 @@ export function recordPrState(store: Store, id: string, auth: Auth, o: PrObserva
     }
     return {
       patch: o.state ? { prState: o.state } : {},
-      events: [{ type: 'pr.observed', payload: { state: o.state ?? null, head: o.head } }],
+      events: [
+        {
+          type: 'pr.observed',
+          payload: { state: o.state ?? null, head: o.head, mergeable: o.mergeable ?? null },
+        },
+      ],
     };
   });
 }

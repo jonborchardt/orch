@@ -435,7 +435,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const why = typeof pending?.payload['reason'] === 'string' ? pending.payload['reason'] : null;
       const reworkNote = !pending
         ? ''
-        : pending.payload['from'] === 'ci'
+        : pending.payload['from'] === 'ci' && pending.payload['integration'] !== true
           ? ` CI repair ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}: ${why ?? 'required checks failed'}. ` +
             'The builder reads the saved logs, fixes the defect without weakening checks or the policy, commits, and runs orch verify.'
           : ` Base integration needs the builder: ${why ?? 'the merge did not apply cleanly'}. ` +

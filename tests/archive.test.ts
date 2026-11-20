@@ -153,6 +153,7 @@ describe('allowedActions', () => {
     prState: null,
     archivedAt: null,
     worktreePath: null,
+    supersededBy: null as string | null,
   };
 
   it('offers remove-worktree only for a finished job with a worktree and a merged PR', () => {
@@ -184,22 +185,44 @@ describe('allowedActions', () => {
     }
   });
 
-  it('offers fix-conflicts only in approve or pr, unfinished, with conflicting files', () => {
-    const files = ['src/app.ts'];
-    for (const stage of ['approve', 'pr'] as const) {
+  it('offers fix-conflicts in approve, pr, or ci, and for a completed open PR, with conflicts', () => {
+    const files = { files: ['src/app.ts'], github: false };
+    const github = { files: [], github: true };
+    const none = { files: [], github: false };
+    for (const stage of ['approve', 'pr', 'ci'] as const) {
       const job = { ...base, stage, status: 'pending' as const };
       expect(allowedActions(job, false, null, files)).toContain('fix-conflicts');
-      expect(allowedActions(job, false, null, [])).not.toContain('fix-conflicts');
+      expect(allowedActions(job, false, null, github)).toContain('fix-conflicts');
+      expect(allowedActions(job, false, null, none)).not.toContain('fix-conflicts');
       expect(allowedActions(job, false, null, null)).not.toContain('fix-conflicts');
-      expect(allowedActions({ ...job, status: 'completed' }, false, null, files)).not.toContain(
+      expect(allowedActions({ ...job, status: 'cancelled' }, false, null, files)).not.toContain(
         'fix-conflicts',
       );
     }
-    for (const stage of ['spec', 'build', 'review', 'ci', 'needs-human'] as const) {
+    for (const stage of ['spec', 'build', 'review', 'needs-human'] as const) {
       expect(
         allowedActions({ ...base, stage, status: 'pending' }, false, null, files),
       ).not.toContain('fix-conflicts');
     }
+    // A completed job re-lands while its PR is open and nothing superseded it yet.
+    const done = { ...base, stage: 'completed' as const, status: 'completed' as const };
+    for (const prState of ['draft', 'ready'] as const) {
+      expect(allowedActions({ ...done, prState }, false, null, github)).toContain('fix-conflicts');
+      expect(allowedActions({ ...done, prState }, false, null, null)).not.toContain(
+        'fix-conflicts',
+      );
+      expect(
+        allowedActions({ ...done, prState, supersededBy: 'job-x' }, false, null, github),
+      ).not.toContain('fix-conflicts');
+    }
+    for (const prState of ['merged', 'closed', null] as const) {
+      expect(allowedActions({ ...done, prState }, false, null, github)).not.toContain(
+        'fix-conflicts',
+      );
+    }
+    expect(
+      allowedActions({ ...done, status: 'cancelled', prState: 'ready' }, false, null, github),
+    ).not.toContain('fix-conflicts');
   });
 
   it('never offers either for a non-terminal job', () => {

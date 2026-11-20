@@ -34,7 +34,14 @@ import { authorizePolicy } from '../storage/verification.ts';
 import { ghCwd } from './github.ts';
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
-import { baseConflicts, dropWorktree, integrateBase, reworksOnIntegration } from './worktree.ts';
+import { dispatchJob, launchFor } from './dispatch.ts';
+import {
+  type BaseConflicts,
+  baseConflicts,
+  dropWorktree,
+  fixConflictsRoute,
+  integrateBase,
+} from './worktree.ts';
 
 export const DASHBOARD_ACTIONS = [
   'approve',
@@ -86,24 +93,31 @@ export function allowedActions(
     | 'prState'
     | 'archivedAt'
     | 'worktreePath'
+    | 'supersededBy'
   >,
   policyDrift: boolean,
   completion: Completion = null,
-  /** `baseConflicts` for the job: files its branch conflicts in with the base, or null. */
-  conflicts: string[] | null = null,
+  /** `baseConflicts` for the job: what reports conflicts with the base, or null for none. */
+  conflicts: BaseConflicts | null = null,
 ): DashboardAction[] {
   const pr: DashboardAction[] = [];
   if (cannotMerge(job, completion) === null) pr.push('merge');
   if (cannotRefreshPr(job) === null) pr.push('refresh-pr');
+  const fix =
+    conflicts !== null &&
+    (conflicts.files.length > 0 || conflicts.github) &&
+    fixConflictsRoute(job) !== null;
   // A finished job can only be hidden from (or brought back to) the board's default views, have
-  // its PR merged or re-read, and, once that PR is merged, have its worktree removed.
+  // its PR merged or re-read, a conflicting open PR re-landed, and, once that PR is merged, have
+  // its worktree removed.
   if (TERMINAL_STATUSES.includes(job.status)) {
+    if (fix) pr.push('fix-conflicts');
     if (cannotRemoveWorktree(job) === null) pr.push('remove-worktree');
     return [...pr, job.archivedAt === null ? 'archive' : 'unarchive'];
   }
   const out: DashboardAction[] = [...pr];
   if (job.stage === 'needs-human') out.push('approve');
-  if (reworksOnIntegration(job.stage) && (conflicts?.length ?? 0) > 0) out.push('fix-conflicts');
+  if (fix) out.push('fix-conflicts');
   if (job.round > 0) out.push('request-review');
   out.push('request-rework');
   if (policyDrift) out.push('accept-policy');
@@ -330,7 +344,12 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
     const pr = viewPr(url, ghCwd(before));
     const state = prWorkflowState(pr);
     if (!merge) {
-      recordPrState(store, before.id, { token }, { event: 'pr.observed', state, head: pr.headSha });
+      recordPrState(
+        store,
+        before.id,
+        { token },
+        { event: 'pr.observed', state, head: pr.headSha, mergeable: pr.mergeable },
+      );
       return { error: null, message: `GitHub reports ${url} as ${state ?? pr.state}.` };
     }
     const why = mergeRefusal(pr, head);
@@ -346,18 +365,78 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
 const resumeCommand = (id: string): string => `orch factory resume ${id} --session <name>`;
 
 /**
- * Integrate the base into a job whose branch conflicts with it (approve and pr stages only). A
- * conflicting merge is aborted and recorded, and the job goes back to build for the builder to
- * resolve; orch resolves nothing and starts no session.
+ * A completed job whose open PR GitHub reports CONFLICTING cannot transition, so it is replaced,
+ * as the dotodo skill does: re-read the PR, create a `(re-land)` job (nothing else: no claim,
+ * worktree, or session), then record the old job as superseded by it.
+ */
+function reland(store: Store, before: Job, force: boolean | undefined): ActionResult {
+  const url = before.prUrl ?? '';
+  const created = withLease(store, before, DASHBOARD_SESSION, force, (token) => {
+    const pr = viewPr(url, ghCwd(before));
+    const state = prWorkflowState(pr);
+    recordPrState(
+      store,
+      before.id,
+      { token },
+      { event: 'pr.observed', state, head: pr.headSha, mergeable: pr.mergeable },
+    );
+    if (pr.state !== 'OPEN' || pr.mergeable !== 'CONFLICTING') {
+      throw new ValidationError(
+        `Nothing to re-land: GitHub reports ${url} ${pr.state} and ${pr.mergeable ?? 'UNKNOWN'}, ` +
+          'not OPEN and CONFLICTING. No job was created.',
+      );
+    }
+    const sentence =
+      `Re-land the work of ${before.id} (PR ${url}, branch ${before.branch ?? '?'}) on the current ` +
+      `${before.baseBranch}: start from that branch's changes, resolve the conflicts with ` +
+      `${before.baseBranch}, keep the original scope.`;
+    const { job } = dispatchJob(store, {
+      repo: before.repoPath,
+      base: before.baseBranch,
+      title: `${before.title} (re-land)`,
+      description: before.description ? `${before.description}\n\n${sentence}` : sentence,
+      session: DASHBOARD_SESSION,
+      cwd: before.repoPath,
+    });
+    try {
+      supersedeJob(store, before.id, { token }, job.id);
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      throw new ValidationError(
+        `Created ${job.id}, but recording ${before.id} as superseded by it failed: ${why} ` +
+          `Run orch job supersede ${before.id} --by ${job.id} --session <name>, or cancel ${job.id}.`,
+      );
+    }
+    return job;
+  });
+  const launch = launchFor(created);
+  return {
+    job: withoutToken(getJob(store.db, before.id)),
+    message:
+      `Created ${created.id} to re-land this work on ${before.baseBranch}; this job is marked ` +
+      `superseded by it. No session was started: start it in a new Claude Code session with ` +
+      `/factory ${created.id} (or ${launch.fallback[0] ?? ''}). Once its PR merges, close the old ` +
+      `PR: gh pr close ${url} --comment "Superseded by <new PR url>."`,
+    resumeCommand: `/factory ${created.id}`,
+  };
+}
+
+/**
+ * Fix merge conflicts. In approve, pr, and ci the base is integrated: a conflicting merge is
+ * aborted and recorded, and the job goes back to build for the builder to resolve (in ci without
+ * spending a repair, and a clean merge too). A completed job with a conflicting open PR is
+ * re-landed instead. orch resolves nothing and starts no session.
  */
 function fixConflicts(store: Store, before: Job, force: boolean | undefined): ActionResult {
-  const files = baseConflicts(before);
-  if (!files || files.length === 0) {
+  const route = fixConflictsRoute(before);
+  if (route === null || baseConflicts(store, before) === null) {
     throw new ValidationError(
-      'No merge conflicts with the base to fix: only a job in approve or pr whose branch is ' +
-        'behind its base and conflicts with it qualifies.',
+      'No merge conflicts with the base to fix: only a job in approve, pr, or ci, or a completed ' +
+        'job with an open PR not yet superseded, whose branch conflicts with its base (or whose ' +
+        'PR GitHub last reported CONFLICTING) qualifies.',
     );
   }
+  if (route === 're-land') return reland(store, before, force);
   const r = withLease(store, before, DASHBOARD_SESSION, force, (token) =>
     integrateBase(store, before.id, { token }),
   );
@@ -370,6 +449,10 @@ function fixConflicts(store: Store, before: Job, force: boolean | undefined): Ac
     message =
       `Merging ${ref} conflicts in ${conflicts.join(', ') || 'unknown files'}: the merge was aborted ` +
       `and the job returned to ${job.stage} (pending) so the builder resolves them.`;
+  } else if (r.next === 'rework' && before.stage === 'ci') {
+    message =
+      `Merged ${ref} cleanly at ${r.merge.head.slice(0, 7)}; the new head needs verification, ` +
+      `approval, and the pr stage before it is pushed, so the job returned to ${job.stage} (pending).`;
   } else if (r.next === 'rework') {
     message = `Merged ${ref}, but the merge needs the builder: the job returned to ${job.stage} (pending).`;
   } else if (r.integration.status === 'up-to-date') {
@@ -379,6 +462,7 @@ function fixConflicts(store: Store, before: Job, force: boolean | undefined): Ac
       `Merged ${ref} cleanly at ${r.merge.head.slice(0, 7)} (the base changed since the check); ` +
       'the merge needs fresh verification.';
   }
+  if (before.stage === 'ci' && r.next === 'rework') message += ' No CI repair was used.';
   return {
     job: withoutToken(job),
     message: `${message} No session is running it; resume it from a Claude Code session with: ${resume}`,
@@ -391,6 +475,7 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   if (input.action === 'merge' || input.action === 'refresh-pr') {
     return prAction(store, before, input);
   }
+  if (input.action === 'fix-conflicts') return fixConflicts(store, before, input.force);
   if (input.action === 'remove-worktree') {
     return removeMergedWorktree(store, id, {
       session: DASHBOARD_SESSION,
@@ -424,7 +509,6 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
   if (TERMINAL_STATUSES.includes(before.status)) {
     throw new ValidationError(`Job is already ${before.status}.`);
   }
-  if (input.action === 'fix-conflicts') return fixConflicts(store, before, input.force);
   if (input.action === 'approve' && before.stage !== 'needs-human') {
     throw new ValidationError('Only a job waiting in needs-human can be approved from here.');
   }

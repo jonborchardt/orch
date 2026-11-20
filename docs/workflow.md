@@ -10,7 +10,7 @@ spec → build → simplify → review → approve → pr → ci → completed
                             │  changes            │     │
                             └──────→ build        │     └─ (requires passing required checks for HEAD)
                             ▲                     └─ (requires a recorded PR)
-                            ├── rework (base integration needs the builder) ── approve, pr
+                            ├── rework (base integration needs the builder) ── approve, pr, ci
                             └── rework (CI failed, repairs < max) ── ci
          any stage ── escalate ──→ needs-human ── resume --to <stage> ──→ back
 ```
@@ -20,15 +20,15 @@ spec → build → simplify → review → approve → pr → ci → completed
 
 Claude requests an action; `orch job transition <id> <action>` validates and applies it:
 
-| Action     | Allowed when                                                                         | Effect                                                                                                                       |
-| ---------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `start`    | status `pending`, `failed`, or `interrupted`                                         | status `running`                                                                                                             |
-| `complete` | status `running` and required artifact registered                                    | next stage, status `pending` (see below)                                                                                     |
-| `fail`     | status `running`                                                                     | status `failed`                                                                                                              |
-| `escalate` | any live stage                                                                       | stage `needs-human`, status `blocked`, remembers origin                                                                      |
-| `resume`   | `needs-human`, or status `interrupted`/`failed`/`blocked`                            | back to the origin or `--to` stage, status `pending`                                                                         |
-| `rework`   | stage `approve` or `pr` (base integration needs the builder) or `ci` (checks failed) | stage `build`, status `pending`; re-review follows; from `ci` counts a repair, or `needs-human` when `maxCiRepairs` is spent |
-| `cancel`   | any job not already finished                                                         | status `cancelled`                                                                                                           |
+| Action     | Allowed when                                                                                | Effect                                                                                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start`    | status `pending`, `failed`, or `interrupted`                                                | status `running`                                                                                                                                                             |
+| `complete` | status `running` and required artifact registered                                           | next stage, status `pending` (see below)                                                                                                                                     |
+| `fail`     | status `running`                                                                            | status `failed`                                                                                                                                                              |
+| `escalate` | any live stage                                                                              | stage `needs-human`, status `blocked`, remembers origin                                                                                                                      |
+| `resume`   | `needs-human`, or status `interrupted`/`failed`/`blocked`                                   | back to the origin or `--to` stage, status `pending`                                                                                                                         |
+| `rework`   | stage `approve`, `pr`, or `ci` (base integration needs the builder) or `ci` (checks failed) | stage `build`, status `pending`; re-review follows; a CI failure from `ci` counts a repair, or `needs-human` when `maxCiRepairs` is spent; base integration never counts one |
+| `cancel`   | any job not already finished                                                                | status `cancelled`                                                                                                                                                           |
 
 Required artifacts, relative to the job's artifact directory and registered with
 `orch job artifact add`: `spec.md`, `build.md`, `round-N/simplify.md` (with
@@ -101,8 +101,8 @@ review`, the one `build.md` was registered for). If every verdict is `pass` and 
 a rejection and the job returns to `build`, unless the round is the last allowed one (`round >=
 maxRounds`, from `--max-rounds`, default 3), in which case it escalates to `needs-human` with `max
 review rounds reached`. Rounds that are not review-driven raise `maxRounds` by one instead of
-spending it, recorded as `maxRounds` on the event: a base-integration rework (`job.reworked` from
-`pr`), a CI repair (`job.reworked` from `ci`; `maxCiRepairs` bounds those separately, and an
+spending it, recorded as `maxRounds` on the event: a base-integration rework (`job.reworked` with
+`integration: true`, from `approve`, `pr`, or `ci`), a CI repair (`job.reworked` from `ci`; `maxCiRepairs` bounds those separately, and an
 exhausted repair escalates without raising), and a human resume from `needs-human` to `build`,
 `simplify`, or `review` (`job.resumed`; the dashboard's Request rework and Request review round are
 such resumes). Every other resume raises nothing. So the board's `round / maxRounds` never shows a
@@ -283,9 +283,14 @@ orch worktree remove <id> [--repo <clone>]  # delete the directory; refused whil
 merge base, the approval commit, the valid verification run) and completes it afterwards (result
 HEAD, conflicts, files changed by taking the base, and `material`: files whose merge result matches
 neither parent, from `git diff-tree --cc`). Outcomes: `up-to-date` (no commit), `merged`, `conflict`
-(merge aborted), `interrupted`. In the `approve` or `pr` stage a conflict, or a merge with material
-edits, moves the job back to `build` (`rework`): the builder merges and resolves, and the result is
-verified, reviewed, and approved again. A clean merge only needs a fresh `orch verify` on the new commit.
+(merge aborted), `interrupted`. In the `approve`, `pr`, or `ci` stage a conflict, or a merge with
+material edits, moves the job back to `build` (`rework`): the builder merges and resolves, and the
+result is verified, reviewed, and approved again. A clean merge only needs a fresh `orch verify` on
+the new commit, except in `ci`, where it reworks too: only the `pr` stage pushes, so the new head
+comes back through verification, approval, and `pr` to the same PR. A base-integration rework never
+spends a CI repair (a base conflict is not a CI failure), so a job whose repairs are exhausted still
+goes to `build`. A completed job cannot rework; the dashboard's Fix merge conflicts re-lands it as a
+new job instead (`docs/dashboard.md`).
 On resume, a row left `started` is reconciled from Git: a half-done merge (`MERGE_HEAD`) is
 aborted, a merge that completed but was never recorded is recorded, anything else is marked
 interrupted; the merge is never blindly retried. Delivery (`gh push`, `gh pr create`) then requires
