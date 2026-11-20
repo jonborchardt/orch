@@ -3407,7 +3407,7 @@ describe('Job detail: Session tab (todo 0074)', () => {
     await open(withSession(), 'Session');
     const none = await screen.findByTestId('session-log-no-entries');
     expect(none).toHaveTextContent(
-      'The transcript was read, but none of its records could be shown: it may be unreadable or ' +
+      'The transcript has content, but none of its records could be shown: it may be unreadable or ' +
         'in a format this dashboard does not recognise.',
     );
     expect(screen.queryByRole('list', { name: 'Session timeline' })).toBeNull();

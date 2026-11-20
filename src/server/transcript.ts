@@ -9,6 +9,7 @@
  */
 import {
   closeSync,
+  constants,
   fstatSync,
   lstatSync,
   openSync,
@@ -160,18 +161,17 @@ export function mergeEntries(lists: SessionEntry[][], max: number = MAX_ENTRIES)
     .map((x) => x.e);
 }
 
-/** A checked file: its real path and the identity `readChecked` requires of what it opens. */
+/** A candidate file: its real path and the stats used to order and budget the reads. */
 export interface Found {
   path: string;
   size: number;
   mtimeMs: number;
-  dev: number;
-  ino: number;
 }
 
 /**
  * The real path of `p` with its stats when it lies inside the real directory `root` and is a
- * regular file (`dir`: a directory); null when it is missing, elsewhere, or another kind.
+ * regular file (`dir`: a directory); null when it is missing, elsewhere, or another kind. A filter
+ * only: what is read is proven again on the open handle by `readConfined`.
  */
 export function confined(p: string, root: string, dir = false): Found | null {
   try {
@@ -179,7 +179,7 @@ export function confined(p: string, root: string, dir = false): Found | null {
     if (!real.startsWith(root + sep)) return null;
     const st = statSync(real);
     return (dir ? st.isDirectory() : st.isFile())
-      ? { path: real, size: st.size, mtimeMs: st.mtimeMs, dev: st.dev, ino: st.ino }
+      ? { path: real, size: st.size, mtimeMs: st.mtimeMs }
       : null;
   } catch {
     return null;
@@ -187,27 +187,74 @@ export function confined(p: string, root: string, dir = false): Found | null {
 }
 
 /**
- * Up to `length` bytes of `file` from byte `start`, never more even if it grew; null when the file
- * opened is not the regular file `confined` checked (a path component swapped in between).
+ * Non-blocking open where the platform has it, so a FIFO swapped in cannot hang the server. The
+ * typings declare `O_NONBLOCK` everywhere; Windows does not define it at runtime.
  */
-export function readChecked(file: Found, start: number, length: number): Buffer | null {
-  const fd = openSync(file.path, 'r');
+const READ_FLAGS = constants.O_RDONLY | ((constants as Partial<typeof constants>).O_NONBLOCK ?? 0);
+
+/**
+ * Open `p` once, then prove that this open handle is a regular file whose path, resolved after the
+ * open, lies inside the real directory `root`: the file at that real path must have the handle's
+ * device and inode (compared as bigints; NTFS file ids exceed a double). Read only through that
+ * handle: up to `length` bytes from the start, or the last `length` bytes (`fromEnd`). Null when
+ * the proof fails or anything cannot be read.
+ *
+ * Why after the open: an open handle pins its inode, so no other file can be given the same number
+ * while the identities are compared. Comparing a stat taken before the open with one taken after
+ * it does not hold: once the checked file is deleted, Linux hands its inode number to the next file
+ * created (the CI failure of round 3), so a swapped-in file can carry the checked identity.
+ * What remains: a writer to `root`'s parents who moves a directory to a link and back between the
+ * open and the resolve, and again before the stat, which needs write access to the user's own
+ * Claude projects directory (where it could write any transcript text anyway) and two won races.
+ */
+export function readConfined(
+  p: string,
+  root: string,
+  length: number,
+  fromEnd = false,
+): { buf: Buffer; size: number } | null {
+  let fd: number;
   try {
-    const st = fstatSync(fd);
-    if (!st.isFile() || st.dev !== file.dev || st.ino !== file.ino) return null;
-    const buf = Buffer.alloc(length);
-    const n = readSync(fd, buf, 0, length, start);
-    return buf.subarray(0, n);
+    fd = openSync(p, READ_FLAGS);
+  } catch {
+    return null;
+  }
+  try {
+    const held = fstatSync(fd, { bigint: true });
+    if (!held.isFile()) return null;
+    const real = realpathSync(p);
+    if (!real.startsWith(root + sep)) return null;
+    const there = statSync(real, { bigint: true });
+    if (there.dev !== held.dev || there.ino !== held.ino) return null;
+    const size = Number(held.size);
+    const n = Math.min(length, size);
+    const buf = Buffer.alloc(n);
+    const got = readSync(fd, buf, 0, n, fromEnd ? size - n : 0);
+    return { buf: buf.subarray(0, got), size };
+  } catch {
+    return null;
   } finally {
     closeSync(fd);
   }
 }
 
-/** A meta file's fields; empty when it is absent, larger than `max`, or not a JSON object. */
-function readMeta(file: Found | null, max: number): Obj {
-  if (!file || file.size > max) return {};
+/** A directory's entries, or none when it cannot be listed (for example gone mid-request). */
+function list(dir: string): string[] {
+  if (!dir) return [];
   try {
-    const m: unknown = JSON.parse(readChecked(file, 0, file.size)?.toString('utf8') ?? '');
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/** A meta file's fields; empty when it is absent, larger than `max`, or not a JSON object. */
+function readMeta(file: Found | null, root: string, max: number): Obj {
+  if (!file || file.size > max) return {};
+  const read = readConfined(file.path, root, max);
+  if (!read || read.size > max) return {};
+  try {
+    const m: unknown = JSON.parse(read.buf.toString('utf8'));
     return isObj(m) ? m : {};
   } catch {
     return {};
@@ -270,7 +317,7 @@ export function readSessionLog(
   // The session's own `subagents/`, itself inside projects; each file inside it.
   const sub = confined(join(dirname(main.path), ref, 'subagents'), projects, true)?.path ?? '';
   // Ordered by one cheap lstat each; only the newest MAX_SUBAGENT_FILES are resolved and checked.
-  const candidates = (sub ? readdirSync(sub) : [])
+  const candidates = list(sub)
     .flatMap((name) => {
       const id = AGENT_FILE.exec(name)?.[1];
       if (!id) return [];
@@ -292,7 +339,7 @@ export function readSessionLog(
   };
 
   const subagents: SubagentSummary[] = read.map((f) => {
-    const m = readMeta(confined(join(sub, `agent-${f.id}.meta.json`), sub), L.META_MAX_BYTES);
+    const m = readMeta(confined(join(sub, `agent-${f.id}.meta.json`), sub), sub, L.META_MAX_BYTES);
     return {
       id: f.id,
       type: metaText(m['agentType']),
@@ -302,11 +349,12 @@ export function readSessionLog(
     };
   });
   const sources = [
-    { file: main, source: 'main', agent: null as SessionAgent | null },
+    { file: main, root: projects, source: 'main', agent: null as SessionAgent | null },
     ...read.map((f, i) => {
       const s = subagents[i];
       return {
         file: f,
+        root: sub,
         source: `agent-${f.id}`,
         agent: { id: f.id, type: s?.type ?? null, description: s?.description ?? null },
       };
@@ -316,23 +364,22 @@ export function readSessionLog(
   let budget = L.TOTAL_READ_BYTES;
   const lists: SessionEntry[][] = [];
   const files: SessionFile[] = [];
-  for (const { file, source, agent } of sources) {
-    const n = Math.max(0, Math.min(L.TAIL_WINDOW_BYTES, file.size, budget));
-    budget -= n;
-    let text = '';
-    try {
-      text = n > 0 ? (readChecked(file, file.size - n, n)?.toString('utf8') ?? '') : '';
-    } catch {
-      /* unreadable now: reported with what was read, nothing parsed */
-    }
+  for (const { file, root, source, agent } of sources) {
+    const want = Math.max(0, Math.min(L.TAIL_WINDOW_BYTES, file.size, budget));
+    // Refused or unreadable now: reported with nothing read, nothing parsed.
+    const got = want > 0 ? readConfined(file.path, root, want, true) : null;
+    const bytes = got?.buf.length ?? 0;
+    const size = got?.size ?? file.size;
+    budget -= bytes;
+    let text = got?.buf.toString('utf8') ?? '';
     // A cut start lands mid-record: drop the partial first line.
-    if (n < file.size) text = text.slice(text.indexOf('\n') + 1 || text.length);
+    if (bytes < size) text = text.slice(text.indexOf('\n') + 1 || text.length);
     lists.push(parseTranscript(text, agent, L.ENTRY_TEXT_MAX));
     files.push({
       source,
-      size: file.size,
-      bytesRead: n,
-      truncated: n < file.size,
+      size,
+      bytesRead: bytes,
+      truncated: bytes < size,
       modifiedAt: new Date(file.mtimeMs).toISOString(),
     });
   }

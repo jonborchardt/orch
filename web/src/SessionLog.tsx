@@ -159,7 +159,8 @@ export function SessionLog({ detail }: { detail: JobDetailView }) {
     seen.set(k, n + 1);
     return `${k}#${String(n)}`;
   };
-  const read = log.files.some((f) => f.bytesRead > 0);
+  // A non-empty file with nothing shown was refused, unreadable, or in a format not recognised.
+  const read = log.files.some((f) => f.size > 0);
   return (
     <Stack spacing={1.5}>
       <Box role="status">
@@ -238,7 +239,7 @@ export function SessionLog({ detail }: { detail: JobDetailView }) {
       ) : (
         <Typography variant="body2" color="text.secondary" data-testid="session-log-no-entries">
           {read
-            ? 'The transcript was read, but none of its records could be shown: it may be ' +
+            ? 'The transcript has content, but none of its records could be shown: it may be ' +
               'unreadable or in a format this dashboard does not recognise.'
             : 'No activity is recorded in the transcript yet.'}
         </Typography>

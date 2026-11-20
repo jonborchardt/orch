@@ -13,7 +13,7 @@ import {
   mergeEntries,
   NO_SESSION,
   parseTranscript,
-  readChecked,
+  readConfined,
   readSessionLog,
 } from '../src/server/transcript.ts';
 import type { SessionEntry } from '../src/server/types.ts';
@@ -295,17 +295,45 @@ describe('readSessionLog', () => {
     expect(JSON.stringify(v)).not.toContain('outside');
   });
 
-  it('refuses to read a checked file that was swapped before it was opened (finding 5)', () => {
+  it('reads only through a handle proven inside root after the open, never an earlier check (finding 5, CI round 3)', () => {
+    const root = tempDir('claude-');
+    const outside = tempDir('outside-');
+    mkdirSync(join(root, 'd'));
+    writeFileSync(join(root, 'd', 'agent-a.jsonl'), 'inside');
+    writeFileSync(join(outside, 'agent-a.jsonl'), 'outside');
+    // The listing-time check passes and the read sees the file inside.
+    const checked = confined(join(root, 'd', 'agent-a.jsonl'), root);
+    if (!checked) throw new Error('expected the file to pass the check');
+    expect(readConfined(checked.path, root, 64)?.buf.toString()).toBe('inside');
+    // A directory on the checked path is swapped for a link out of root after that check: the
+    // handle now opened is the outside file, and the proof on the open handle refuses it.
+    renameSync(join(root, 'd'), join(root, 'd-old'));
+    symlinkSync(outside, join(root, 'd'), 'junction');
+    expect(readConfined(checked.path, root, 64)).toBeNull();
+    // A directory is never read as a transcript.
+    expect(readConfined(join(root, 'd-old'), root, 64)).toBeNull();
+  });
+
+  it('proves the file at read time, so inode reuse cannot pass a stale identity (CI round 3)', () => {
+    // Round 2 compared a stat taken at listing with an fstat taken after the open. On Linux a
+    // deleted file's inode number goes to the next file created, so a file deleted and recreated
+    // between the two carried the checked identity and was read (the Linux CI failure). Now the
+    // identity is taken from the open handle, which pins its inode, and compared with the file at
+    // the path resolved after the open; nothing from the listing is trusted. What that proves is
+    // "a regular file inside root when it was read". A file replaced in place inside root is such
+    // a file, on every platform, whatever inode it got: it is read, as any transcript there is.
     const root = tempDir('claude-');
     const file = join(root, 'agent-a.jsonl');
     writeFileSync(file, 'original');
     const checked = confined(file, root);
     if (!checked) throw new Error('expected the file to pass the check');
-    expect(readChecked(checked, 0, 8)?.toString()).toBe('original');
     rmSync(file);
     writeFileSync(join(root, 'other'), 'replaced');
     renameSync(join(root, 'other'), file);
-    expect(readChecked(checked, 0, 8)).toBeNull();
+    expect(readConfined(checked.path, root, 64)?.buf.toString()).toBe('replaced');
+    // Gone between the listing and the read: nothing is read, nothing throws.
+    rmSync(file);
+    expect(readConfined(checked.path, root, 64)).toBeNull();
   });
 
   it('ignores a meta file larger than META_MAX_BYTES', () => {
