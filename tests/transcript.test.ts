@@ -255,6 +255,20 @@ describe('readSessionLog', () => {
     expect(leaks(c)).not.toContain('outside');
   });
 
+  it('ignores a meta file larger than META_MAX_BYTES', () => {
+    const claude = tempDir('claude-');
+    const project = writeSession(claude, 'p', user(0, 'main'));
+    writeAgent(project, 'm1', user(1, 'agent'), {
+      agentType: 'builder',
+      description: 'd'.repeat(200),
+      finished: true,
+    });
+    const meta = (max: number) =>
+      readSessionLog(claude, U, ATTACH, { META_MAX_BYTES: max }).subagents[0];
+    expect(meta(16 * 1024)).toMatchObject({ type: 'builder', finished: true });
+    expect(meta(64)).toMatchObject({ id: 'm1', type: null, description: null, finished: null });
+  });
+
   it('never reads a ref that is not a UUID', () => {
     const claude = tempDir('claude-');
     writeSession(claude, 'p', user(0, 'x'), 'not-a-uuid');

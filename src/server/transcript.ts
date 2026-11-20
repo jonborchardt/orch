@@ -47,8 +47,8 @@ export const LIMITS = {
 export type Limits = typeof LIMITS;
 
 const AGENT_FILE = /^agent-([0-9a-z]+)\.jsonl$/;
-/** Inputs that name what a tool call is about, in the order they are preferred. */
-const KEY_INPUTS = ['description', 'file_path', 'notebook_path', 'pattern', 'path', 'url', 'query'];
+/** Inputs that name what a tool call is about, preferred first (Bash: description, then command). */
+const KEY_INPUTS = ['description', 'file_path', 'pattern', 'url', 'query', 'command'];
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -61,7 +61,7 @@ function toolLine(name: string, input: unknown): string {
     const what = [str(i['subagent_type']), str(i['description'])].filter(Boolean).join(': ');
     return what ? `${name} ${what}` : name;
   }
-  for (const k of [...KEY_INPUTS, 'command']) {
+  for (const k of KEY_INPUTS) {
     const v = str(i[k]);
     if (v) return `${name} ${firstLine(v)}`;
   }
@@ -147,49 +147,43 @@ interface Found {
   mtimeMs: number;
 }
 
-/** The real path of `p` when it lies inside `root` and is a regular file; null otherwise. */
-function confined(p: string, root: string): Found | null {
+/**
+ * The real path of `p` with its stats when it lies inside the real directory `root` and is a
+ * regular file (`dir`: a directory); null when it is missing, elsewhere, or another kind.
+ */
+function confined(p: string, root: string, dir = false): Found | null {
   try {
     const real = realpathSync(p);
     if (!real.startsWith(root + sep)) return null;
     const st = statSync(real);
-    return st.isFile() ? { path: real, size: st.size, mtimeMs: st.mtimeMs } : null;
+    return (dir ? st.isDirectory() : st.isFile())
+      ? { path: real, size: st.size, mtimeMs: st.mtimeMs }
+      : null;
   } catch {
     return null;
   }
 }
 
-/** Up to `length` bytes of `file` ending at `size`. */
-function readTail(file: string, size: number, length: number): Buffer {
+/** Up to `length` bytes of `file` from byte `start`; never more, even if the file grew. */
+function readAt(file: string, start: number, length: number): Buffer {
   const fd = openSync(file, 'r');
   try {
     const buf = Buffer.alloc(length);
-    const n = readSync(fd, buf, 0, length, size - length);
+    const n = readSync(fd, buf, 0, length, start);
     return buf.subarray(0, n);
   } finally {
     closeSync(fd);
   }
 }
 
+/** A meta file's fields; empty when it is absent, larger than `max`, or not a JSON object. */
 function readMeta(file: Found | null, max: number): Obj {
-  if (!file) return {};
-  // The first `max` bytes; a larger meta file fails to parse and gives null fields.
-  const len = Math.min(file.size, max);
+  if (!file || file.size > max) return {};
   try {
-    const m: unknown = JSON.parse(readTail(file.path, len, len).toString('utf8'));
+    const m: unknown = JSON.parse(readAt(file.path, 0, file.size).toString('utf8'));
     return isObj(m) ? m : {};
   } catch {
     return {};
-  }
-}
-
-/** The real `subagents/` directory beside the main file, when it is one inside `projects`. */
-function subagentsDir(main: string, ref: string, projects: string): string | null {
-  try {
-    const real = realpathSync(join(dirname(main), ref, 'subagents'));
-    return real.startsWith(projects + sep) && statSync(real).isDirectory() ? real : null;
-  } catch {
-    return null;
   }
 }
 
@@ -238,21 +232,19 @@ export function readSessionLog(
     return { ...view, reason: `No transcript ${ref}.jsonl in any project directory under ${dir}.` };
   }
 
-  const sub = subagentsDir(main.path, ref, projects);
+  // The session's own `subagents/`, itself inside projects; each file inside it.
+  const sub = confined(join(dirname(main.path), ref, 'subagents'), projects, true)?.path ?? '';
   const agents = (sub ? readdirSync(sub) : [])
     .flatMap((n) => {
       const id = AGENT_FILE.exec(n)?.[1];
-      const f = id && sub ? confined(join(sub, n), sub) : null;
+      const f = id ? confined(join(sub, n), sub) : null;
       return f && id ? [{ ...f, id }] : [];
     })
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
   const read = agents.slice(0, L.MAX_SUBAGENT_FILES);
 
   const subagents: SubagentSummary[] = read.map((f) => {
-    const m = readMeta(
-      sub === null ? null : confined(join(sub, `agent-${f.id}.meta.json`), sub),
-      L.META_MAX_BYTES,
-    );
+    const m = readMeta(confined(join(sub, `agent-${f.id}.meta.json`), sub), L.META_MAX_BYTES);
     return {
       id: f.id,
       type: str(m['agentType']),
@@ -281,7 +273,7 @@ export function readSessionLog(
     budget -= n;
     let text = '';
     try {
-      text = n > 0 ? readTail(file.path, file.size, n).toString('utf8') : '';
+      text = n > 0 ? readAt(file.path, file.size - n, n).toString('utf8') : '';
     } catch {
       /* unreadable now: reported with what was read, nothing parsed */
     }
@@ -302,11 +294,7 @@ export function readSessionLog(
     ...view,
     found: true,
     matches: matches.length,
-    // Main first, then subagents newest first.
-    files: [
-      ...files.filter((f) => f.source === 'main'),
-      ...files.filter((f) => f.source !== 'main'),
-    ],
+    files,
     subagents,
     subagentsNotRead: agents.length - read.length,
     entries,

@@ -307,7 +307,7 @@ export interface SessionLogView {
   attach: string;
   /** How many project directories hold `<ref>.jsonl`; the newest-modified one is read. */
   matches: number;
-  /** The main transcript, then each subagent file read. */
+  /** Every file read (`main` and each subagent), newest-modified first, the order the budget took. */
   files: SessionFile[];
   subagents: SubagentSummary[];
   /** Subagent files not read because of `MAX_SUBAGENT_FILES`. */
