@@ -29,6 +29,7 @@ import { CiChip, CiPanel, PrPhaseChip } from './Ci.tsx';
 import { LogRef, PrLink, PrText, commitRef } from './Links.tsx';
 import { Markdown, blockingLines, section } from './Markdown.tsx';
 import { ProgressSection, ProgressStrip, RoundIndicator } from './Progress.tsx';
+import { SessionLog } from './SessionLog.tsx';
 import {
   BlockerNotes,
   BlockerText,
@@ -505,6 +506,7 @@ export function JobDetail({
             </TableBody>
           </Table>
         )}
+        {tab === 'Session' && <SessionLog detail={detail} />}
         {tab === 'Git' && <GitTab detail={detail} />}
         {tab === 'PR' && (
           <Stack spacing={1}>

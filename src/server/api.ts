@@ -7,8 +7,8 @@ import { join, sep } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
-import { jobArtifactDir } from '../core/paths.ts';
-import { SESSION_EVENT, sessionLinks } from '../core/session.ts';
+import { claudeHome, jobArtifactDir } from '../core/paths.ts';
+import { SESSION_EVENT, sessionLinks, UUID } from '../core/session.ts';
 import { now, prPhase, STAGES, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
 import {
   allowedActions,
@@ -45,13 +45,16 @@ import {
   TIMELINE_EVENTS,
   timelineOf,
 } from './status.ts';
+import { readSessionLog } from './transcript.ts';
 import type {
   ActionRequest,
   ActionResponse,
   BoardRow,
+  ClaudeSession,
   JobDetailView,
   RoundView,
   SafeJob,
+  SessionLogView,
   SessionView,
 } from './types.ts';
 
@@ -264,6 +267,30 @@ function sessionView(events: Event[]): SessionView | null {
   };
 }
 
+/**
+ * Every claude-code session attached to the job, newest first, one per ref: the only tie between a
+ * job and a transcript. Read from all `session.attached` events, not the timeline's capped list.
+ */
+function claudeSessions(store: Store, id: string): ClaudeSession[] {
+  const out: ClaudeSession[] = [];
+  for (const e of eventsOfTypes(store.db, id, [SESSION_EVENT])) {
+    const s = sessionOf(e);
+    if (s?.provider !== 'claude-code' || !UUID.test(s.ref) || out.some((x) => x.ref === s.ref)) {
+      continue;
+    }
+    out.push({ ref: s.ref, attachedAt: e.createdAt });
+  }
+  return out;
+}
+
+/** The Session tab: the bounded tail of the newest attached claude-code session's transcript. */
+export function sessionLog(store: Store, id: string): SessionLogView {
+  getJob(store.db, id);
+  // What the job's own session runs (the /factory skill); never an instruction to the dashboard user.
+  const attach = `orch job session attach ${id} --provider claude-code`;
+  return readSessionLog(claudeHome(), claudeSessions(store, id)[0]?.ref ?? null, attach);
+}
+
 export function detail(store: Store, id: string): JobDetailView {
   const job = getJob(store.db, id);
   const artifacts = listArtifacts(store.db, id);
@@ -325,6 +352,7 @@ export function detail(store: Store, id: string): JobDetailView {
       branch: branchLink(job, events),
     },
     session: sessionView(events),
+    claudeSessions: claudeSessions(store, id),
     resume: resumeOf(job, state),
     resumeCommand: `orch factory resume ${id} --session <name>`,
     supersedes: predecessorsOf(store.db, id).map((j) => j.id),

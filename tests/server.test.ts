@@ -13,9 +13,16 @@ import { liveness } from '../src/server/status.ts';
 import { blockerOf, ciView, type Evidence, resumeOf } from '../src/server/status.ts';
 import type { Artifact, Event, VerificationRun } from '../src/storage/schema.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
-import type { ActionResponse, BoardRow, JobDetailView, SessionInfo } from '../src/server/types.ts';
+import type {
+  ActionResponse,
+  BoardRow,
+  JobDetailView,
+  SessionInfo,
+  SessionLogView,
+} from '../src/server/types.ts';
 import { listEvents } from '../src/storage/events.ts';
 import {
+  attachSession,
   claimJob,
   createJob,
   getJob,
@@ -27,6 +34,7 @@ import { jobs } from '../src/storage/schema.ts';
 import { recordCheck, startRun } from '../src/storage/verification.ts';
 import { seedDashboard, type SeededJobs } from './fixtures/dashboard.ts';
 import { orchAsync, tempDir, type TempStore, tempStore } from './helpers.ts';
+import { mainTranscript, U, user, writeAgent, writeSession } from './transcript-fixture.ts';
 
 let store: TempStore;
 let server: RunningServer;
@@ -1302,5 +1310,153 @@ describe('recorded logs on the artifact route (todo 0019)', () => {
       'https://github.com/acme/alpha/pull/9',
     );
     expect(withPr('github.com/acme/alpha', 'not a url').pr).toBeNull();
+  });
+});
+
+describe('session log route (todo 0074)', () => {
+  // tests/setup.ts points CLAUDE_CONFIG_DIR at a scratch directory for this file.
+  const claude = process.env['CLAUDE_CONFIG_DIR'] ?? '';
+  const OTHER = '22222222-3333-4444-8555-666666666666';
+  const OLDER = '33333333-4444-4555-8666-777777777777';
+  const LINK = 'agent-host-session://ahp-session/17b6e18f-4046-422b-8336-cb43a130967f';
+  let own: TempStore;
+  let srv: RunningServer;
+  const get = (path: string, headers: Record<string, string> = {}) =>
+    fetch(new URL(path, srv.url), { headers: { ...headers, Connection: 'close' } });
+  const raw = async (path: string, headers: Record<string, string> = {}) => {
+    const { request } = await import('node:http');
+    return new Promise<number>((resolve) => {
+      request({ host: '127.0.0.1', port: srv.port, path, headers }, (res) => {
+        resolve(res.statusCode ?? 0);
+        res.resume();
+      }).end();
+    });
+  };
+  const mk = (title: string, ...sessions: [string, string][]) => {
+    const job = createJob(own, {
+      title,
+      description: title,
+      repo: 'github.com/acme/alpha',
+      repoPath: claude,
+      baseBranch: 'main',
+    });
+    for (const [provider, ref] of sessions) {
+      attachSession(own, job.id, {
+        session: { provider: provider as 'claude-code', ref, cwd: null },
+      });
+    }
+    return job.id;
+  };
+  const log = async (id: string) => {
+    const r = await get(`/api/jobs/${id}/session-log`);
+    expect(r.status).toBe(200);
+    return (await r.json()) as SessionLogView;
+  };
+
+  beforeAll(async () => {
+    expect(claude).not.toBe('');
+    own = tempStore();
+    srv = await startServer({ store: own, port: 0, webRoot });
+    const project = writeSession(claude, 'E--repo', mainTranscript());
+    writeAgent(project, 'a1', user(4, 'builder starts', { isSidechain: true }), {
+      agentType: 'builder',
+      description: 'Build round 1',
+      finished: false,
+    });
+    writeSession(claude, 'E--other', user(0, 'other job secret'), OTHER);
+  });
+  afterAll(async () => {
+    await srv.close();
+    own.cleanup();
+  });
+
+  it('returns the attached session newest first, subagents merged in (AC1, AC2)', async () => {
+    // A later vscode-agents attachment is current, yet the newest claude-code one is read.
+    const id = mk('main', ['claude-code', OLDER], ['claude-code', U], ['vscode-agents', LINK]);
+    const v = await log(id);
+    expect(v).toMatchObject({ found: true, ref: U, matches: 1 });
+    expect(new Set(v.entries.map((e) => e.kind))).toEqual(
+      new Set(['user', 'assistant', 'tool', 'result', 'error']),
+    );
+    expect(v.entries.find((e) => e.kind === 'tool')?.text).toBe('Read /repo/src/a.ts');
+    expect(v.entries.find((e) => e.text === 'builder starts')?.agent).toMatchObject({
+      id: 'a1',
+      type: 'builder',
+    });
+    expect(v.subagents).toMatchObject([{ id: 'a1', finished: false }]);
+    expect(JSON.stringify(v)).not.toContain('secret reasoning');
+    // The detail lists every claude-code session, newest first.
+    expect(detail(own, id).claudeSessions.map((s) => s.ref)).toEqual([U, OLDER]);
+    expect(detail(own, id).session?.provider).toBe('vscode-agents');
+  });
+
+  it('says why when nothing is tied or found (AC3)', async () => {
+    const none = await log(mk('none'));
+    expect(none).toMatchObject({ found: false, ref: null, entries: [] });
+    expect(none.reason).toContain('No Claude Code session is recorded for this job.');
+    // Named for reference; nothing in the empty state needs the owner's token.
+    expect(none.attach).toMatch(/^orch job session attach job-[0-9a-f]{8} --provider claude-code$/);
+    expect(JSON.stringify(none)).not.toContain('--token');
+    const vscodeOnly = await log(mk('vscode', ['vscode-agents', LINK]));
+    expect(vscodeOnly).toMatchObject({ found: false, ref: null });
+    const missing = await log(mk('missing', ['claude-code', OLDER]));
+    expect(missing).toMatchObject({ found: false, ref: OLDER });
+    expect(missing.reason).toContain(`${OLDER}.jsonl`);
+  });
+
+  it("never returns another job's transcript (AC4)", async () => {
+    const mine = await log(mk('mine', ['claude-code', U]));
+    const other = await log(mk('other', ['claude-code', OTHER]));
+    expect(JSON.stringify(mine)).not.toContain('other job secret');
+    expect(other.entries.map((e) => e.text)).toEqual(['other job secret']);
+    expect(JSON.stringify(await log(mk('none 2')))).not.toContain('secret');
+  });
+
+  it('takes no file selector: extra segments 404, queries ignored, POST refused (AC4)', async () => {
+    const id = mk('selector', ['claude-code', U]);
+    expect((await get(`/api/jobs/${id}/session-log/${OTHER}`)).status).toBe(404);
+    expect((await get(`/api/jobs/${id}/session-log/..%2F..%2Fx`)).status).toBe(404);
+    const q = (await (
+      await get(`/api/jobs/${id}/session-log?ref=${OTHER}&path=../../x`)
+    ).json()) as SessionLogView;
+    expect(q.ref).toBe(U);
+    const { csrf } = (await (
+      await get('/api/session', { Origin: `http://127.0.0.1:${String(srv.port)}` })
+    ).json()) as SessionInfo;
+    const post = await fetch(new URL(`/api/jobs/${id}/session-log`, srv.url), {
+      method: 'POST',
+      headers: {
+        Origin: `http://127.0.0.1:${String(srv.port)}`,
+        'Content-Type': 'application/json',
+        'X-Orch-Csrf': csrf,
+        Connection: 'close',
+      },
+      body: '{}',
+    });
+    expect([404, 405]).toContain(post.status);
+  });
+
+  it('keeps the detail route guards and sends no-store and nosniff (AC6)', async () => {
+    const id = mk('guards', ['claude-code', U]);
+    const path = `/api/jobs/${id}/session-log`;
+    expect(await raw(path, { Host: 'evil.example' })).toBe(
+      await raw(`/api/jobs/${id}`, { Host: 'evil.example' }),
+    );
+    expect(await raw(path, { Host: 'evil.example' })).toBe(400);
+    const cross = { 'Sec-Fetch-Site': 'cross-site' };
+    expect((await get(path, cross)).status).toBe((await get(`/api/jobs/${id}`, cross)).status);
+    expect((await get(path, cross)).status).toBe(403);
+    const ok = await get(path, { 'Sec-Fetch-Site': 'same-origin' });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('cache-control')).toBe('no-store');
+    expect(ok.headers.get('x-content-type-options')).toBe('nosniff');
+    // A foreign Origin is refused outright; the page's own origin passes.
+    const foreign = await get(path, { Origin: 'http://evil.example' });
+    expect(foreign.status).toBe(403);
+    expect(await foreign.text()).not.toContain('Please build');
+    const sameOrigin = { Origin: `http://127.0.0.1:${String(srv.port)}` };
+    expect((await get(path, sameOrigin)).status).toBe(200);
+    expect((await get('/api/jobs/job-00000000/session-log')).status).toBe(404);
+    expect((await get('/api/jobs/not-an-id/session-log')).status).toBe(422);
   });
 });

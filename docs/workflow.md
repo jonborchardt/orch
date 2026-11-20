@@ -122,7 +122,8 @@ job's `scopeReworks`; with one already taken, the next `REWORK-*` moves the job 
 rework`). Code cannot tell whether a second gap is the same one, so the bound is a count. A
 registered `decision.md` records the hash of the `spec.md` registered at that moment; after a
 `REWORK-SPEC`, `complete` from `spec` is refused while `spec.md` still has that hash, and the
-challenge gate then requires a PASS for the revised spec. Reviewers count a scope gap as BLOCKING,
+challenge gate then requires a PASS for the revised spec. A human `resume` out of a spec
+escalation to a later stage is refused the same way while `spec.md` still has that hash. Reviewers count a scope gap as BLOCKING,
 which already sends the round back to build, and the spec challenger refuses a spec that drops part
 of the request unless the request or a human excluded it; see
 [the decision](decisions/2026-11-20-scope-gap-reworks-automatically.md).

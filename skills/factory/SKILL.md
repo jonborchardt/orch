@@ -171,10 +171,13 @@ Then read `plan.reason` and act on `plan.step`:
 - A session dispatched into a linked worktree (`git rev-parse --git-common-dir` is not
   `<toplevel>/.git`) resumes a job with no worktree yet (`job.worktreePath` is null) with
   `--adopt <toplevel>`. A worktree the job already has is never replaced.
-- After `start` or `resume` succeeds, record this session when the harness can name it: in VS
-  Code's Agents window call `get_current_session` and run `orch job session attach <id>
---provider vscode-agents --ref <openLink> --cwd <toplevel> --token <t>`. Navigation metadata only;
-  ownership stays the lease.
+- After `start` or `resume` succeeds, record this session when the harness can name it. First,
+  when `CLAUDE_CODE_SESSION_ID` is set in your Bash environment (Claude Code sets it), run
+  `orch job session attach <id> --provider claude-code --ref "$CLAUDE_CODE_SESSION_ID" --cwd
+<toplevel> --token <t>`: this is what lets the dashboard's Session tab show this session's
+  transcript and its subagents. Then, in VS Code's Agents window, call `get_current_session` and
+  run `orch job session attach <id> --provider vscode-agents --ref <openLink> --cwd <toplevel>
+--token <t>`. Navigation metadata only; ownership stays the lease.
 - `create-worktree`: run the listed command, then `next` again.
 - `needs-human`: release the job (`orch job release <id> --token <t>`), report
   `plan.blockedReason`, the job id, and the exact resume command; stop.

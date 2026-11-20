@@ -23,7 +23,7 @@ export interface SessionRef {
   cwd: string | null;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HOST_LINK = /^agent-host-session:\/\/[\w-]+\/[\w-]+$/;
 
 export function validateSessionRef(provider: string, ref: string, cwd?: string): SessionRef {

@@ -9,6 +9,8 @@ import { afterAll } from 'vitest';
 import { cleanupTempDirs, tempDir } from './helpers.ts';
 
 process.env['ORCH_HOME'] = tempDir('orch-test-home-');
+// The Session tab reads `<claude home>/projects/`: never the developer's real transcripts.
+process.env['CLAUDE_CONFIG_DIR'] = tempDir('orch-test-claude-');
 delete process.env['ORCH_TOKEN'];
 delete process.env['ORCH_SESSION'];
 // Never send real mail: a test that wants mail configures the fake server itself.
