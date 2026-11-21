@@ -115,7 +115,8 @@ What the code guarantees (`drive` and `runQueue` in `src/ops/run.ts`):
 - a global queue across repositories, or one repository with `orch start repo`;
 - dependencies decide readiness: the queue is `orch ticket ready`;
 - in queue mode a ticket whose repository lacks the merge opt-in is passed over and recorded as
-  skipped, never started, and the queue continues;
+  skipped, never started, and the queue continues; it stays skipped for the whole of that
+  session, `orch resume` included, so after enabling one, start a new session;
 - `orch do <ticket>` refuses to start a new job without the opt-in, but continues an existing job,
   whose merge is then blocked with `not-authorized`;
 - a ticket outcome of `done` continues to the next ready ticket, and so does `claimed` (another
@@ -174,8 +175,10 @@ The merge opt-in is off by default, per repository, and kept in your own `<confi
 never in a repository. Model overrides, `maxRounds`, `maxCiRepairs`, and `runnerClaudeArgs` go in
 the same file (`orch factory config` prints it). The controller's Claude session gets
 `--permission-mode auto` plus an allow-list for `orch`, `git`, `npm`, `npx`, `node`, and `cd`,
-never a permission bypass; if a repository's builder needs other commands, set
-`"runnerClaudeArgs": [...]` (it replaces the default list).
+never a permission bypass. A repository whose builder needs other tools (`pnpm`, `cargo`,
+`pytest`) needs them in `"runnerClaudeArgs"`, which replaces the default list. A Windows
+`claude.cmd` shim is refused, because the prompt cannot be passed through `cmd.exe` safely.
+Details and an example: [docs/workflow.md](docs/workflow.md#claude-code-configuration).
 
 ## Common operations
 
