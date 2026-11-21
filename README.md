@@ -326,9 +326,8 @@ overrides and `maxRounds`/`maxCiRepairs` go in `<config>/factory.json` (`orch fa
 - [docs/development.md](docs/development.md): stack, layout, build, tests, migrations, install
   mechanics, Windows notes, CLI reference. `CLAUDE.md` has the rules for changing the code.
 - [docs/decisions/](docs/decisions/): one file per architectural decision.
-- [docs/session-launch.md](docs/session-launch.md) and
-  [docs/phase3-validation.md](docs/phase3-validation.md): what VS Code can and cannot do about
-  independent sessions, and the concurrent-job validation that exercised it.
+- [docs/session-launch.md](docs/session-launch.md): what VS Code can and cannot do about
+  independent sessions.
 
 ## License
 
