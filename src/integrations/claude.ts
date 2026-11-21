@@ -2,6 +2,7 @@
  * Links source-controlled skills and agents into the user's global Claude Code directory.
  *
  *   <source>/skills/<name>/SKILL.md  ->  <claude>/skills/<name>   (directory junction on Windows)
+ *   <source>/.claude/skills/<name>/SKILL.md  ->  the same (the ticket skills)
  *   <source>/agents/<name>.md        ->  <claude>/agents/<name>.md (symlink, else hardlink,
  *                                                                   else a marked managed copy)
  *
@@ -102,8 +103,10 @@ function inspect(entry: Omit<LinkEntry, 'state'>): LinkEntry {
 /** Discover skills/agents under `sourceRoot` and inspect their targets under `claudeDir`. */
 export function planInstall(sourceRoot: string, claudeDir: string): LinkEntry[] {
   const entries: LinkEntry[] = [];
-  const skillsDir = join(sourceRoot, 'skills');
-  if (existsSync(skillsDir)) {
+  // `skills/` is the product skill; `.claude/skills/` holds the ticket skills (log-todo, dotodo),
+  // which stay usable in this checkout as project skills and are linked for every other repository.
+  for (const skillsDir of [join(sourceRoot, 'skills'), join(sourceRoot, '.claude', 'skills')]) {
+    if (!existsSync(skillsDir)) continue;
     for (const d of readdirSync(skillsDir, { withFileTypes: true })) {
       if (d.isDirectory() && existsSync(join(skillsDir, d.name, 'SKILL.md'))) {
         entries.push(

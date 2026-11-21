@@ -8,7 +8,9 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { FACTORY_HELP } from '../src/cli/factory.ts';
 import { runInstall } from '../src/cli/install.ts';
+import { TICKET_HELP } from '../src/cli/ticket.ts';
 import { checkArtifact } from '../src/core/artifact-rules.ts';
 import { installRoot } from '../src/core/paths.ts';
 import { MODELS, ROLES } from '../src/core/roles.ts';
@@ -193,7 +195,12 @@ describe('orch install with the real skill and agents', () => {
     const dry = runInstall({ source: root, 'claude-dir': claude, 'dry-run': true });
     expect(dry.problems).toBe(false);
     expect(dry.entries.map((e) => `${e.kind}:${e.name}`).sort()).toEqual(
-      ['skill:factory', ...ROLES.map((r) => `agent:${r.agent}`)].sort(),
+      [
+        'skill:factory',
+        'skill:log-todo',
+        'skill:dotodo',
+        ...ROLES.map((r) => `agent:${r.agent}`),
+      ].sort(),
     );
     const real = runInstall({ source: root, 'claude-dir': claude });
     expect(real.problems).toBe(false);
@@ -202,11 +209,45 @@ describe('orch install with the real skill and agents', () => {
       'name: factory',
     );
     expect(existsSync(join(claude, 'skills', 'factory', 'reference.md'))).toBe(true);
+    // The ticket skills are installed for every repository, from their project-skill location.
+    for (const name of ['log-todo', 'dotodo']) {
+      expect(readFileSync(join(claude, 'skills', name, 'SKILL.md'), 'utf8')).toContain(
+        `name: ${name}`,
+      );
+    }
     expect(frontmatter(join(claude, 'agents', 'factory-builder.md'))['name']).toBe(
       'factory-builder',
     );
     // Repeating is a no-op and the links still resolve to this repository.
     const again = runInstall({ source: root, 'claude-dir': claude });
     expect(again.entries.map((e) => e.state)).toEqual(real.entries.map(() => 'linked'));
+  });
+});
+
+describe('the todo skills use the ticket commands that exist', () => {
+  const skill = (name: string) =>
+    readFileSync(join(root, '.claude', 'skills', name, 'SKILL.md'), 'utf8');
+
+  it('every orch ticket command a skill names is in orch ticket --help', () => {
+    for (const name of ['log-todo', 'dotodo']) {
+      const used = new Set([...skill(name).matchAll(/orch ticket ([a-z]+)/g)].map((m) => m[1]));
+      expect(used.size).toBeGreaterThan(3);
+      for (const cmd of used) {
+        expect(TICKET_HELP, `${name} uses orch ticket ${String(cmd)}`).toContain(
+          `\n  ${String(cmd)} `,
+        );
+      }
+    }
+  });
+
+  it('neither skill writes the Markdown register any more, and dotodo links its job', () => {
+    for (const name of ['log-todo', 'dotodo']) {
+      expect(skill(name)).not.toMatch(/index\.mjs|INDEX\.md|todo\/NNNN/);
+    }
+    expect(existsSync(join(root, '.claude', 'skills', 'log-todo', 'index.mjs'))).toBe(false);
+    expect(skill('dotodo')).toContain('--ticket <id>');
+    expect(FACTORY_HELP).toContain('--ticket <id>');
+    // The merge policy is unchanged.
+    expect(skill('dotodo')).toContain('gh pr merge <prUrl> --merge --match-head-commit <ciHead>');
   });
 });

@@ -22,6 +22,7 @@ import { loadConfig } from './factory.ts';
 import { issue as ghIssue } from './github.ts';
 import { checkReadiness, type Readiness } from './init.ts';
 import { findJobs, jobRepository } from './repo.ts';
+import { ticketJobRequest } from './tickets.ts';
 
 export interface DispatchInput {
   /** Target repository: a path inside it. Defaults to `cwd`. */
@@ -31,6 +32,8 @@ export interface DispatchInput {
   issue?: string | undefined;
   base?: string | undefined;
   maxRounds?: number | undefined;
+  /** Ticket the job works on; its repository, title, and body are the defaults. */
+  ticket?: string | number | undefined;
   /** The initiating session's name; recorded as the actor. */
   session: string;
   cwd: string;
@@ -87,11 +90,13 @@ export function launchFor(job: Job): Launch {
 export function dispatchJob(store: Store, input: DispatchInput): DispatchResult {
   // Judge readiness against what the job will use: the primary checkout and its branch, also
   // when the target is a linked worktree. Outside any repository, readiness reports why.
-  const target = input.repo ?? input.cwd;
+  const forTicket =
+    input.ticket === undefined ? undefined : ticketJobRequest(store, input.ticket, input.repo);
+  const target = forTicket?.path ?? input.repo ?? input.cwd;
   const resolved = findProjectRoot(target) ? jobRepository(target, input.base) : undefined;
   const readiness = checkReadiness(
     input.cwd,
-    resolved?.repo.root ?? input.repo,
+    resolved?.repo.root ?? forTicket?.path ?? input.repo,
     resolved?.base ?? input.base,
   );
   if (!readiness.ready || readiness.root === null || resolved === undefined) {
@@ -120,13 +125,18 @@ export function dispatchJob(store: Store, input: DispatchInput): DispatchResult 
     if (!title) ({ title } = found); // also replaces an empty --title, as before
     description ??= `${found.url}\n\n${found.body}`;
   }
+  if (title === undefined || title === '') title = forTicket?.title;
+  description ??= forTicket?.description;
   if (!title) {
-    throw new ValidationError('Provide --title (or --issue so the title can be fetched).');
+    throw new ValidationError(
+      'Provide --title (or --issue or --ticket so the title can be fetched).',
+    );
   }
   const config = loadConfig(store);
   const job = createJob(store, {
     title,
     description,
+    ticketId: forTicket?.ticket.id,
     issueRef: issue,
     repo: repo.identity,
     repoPath: repo.root,

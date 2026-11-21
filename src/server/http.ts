@@ -18,7 +18,18 @@ import {
   WorkflowError,
 } from '../core/errors.ts';
 import { DEFAULT_PORT, webDistDir } from '../core/paths.ts';
+import { DASHBOARD_SESSION } from '../ops/actions.ts';
 import { mailWatermark, reportJobMail } from '../ops/mail.ts';
+import {
+  addTicket,
+  addTicketArea,
+  jobsOfTicket,
+  listTickets,
+  showTicket,
+  ticketAction,
+  ticketAreas,
+  ticketHistory,
+} from '../ops/tickets.ts';
 import type { Store } from '../storage/client.ts';
 import { act, artifactContent, assertJobId, board, detail, repos, sessionLog } from './api.ts';
 import type { ApiError, SessionInfo } from './types.ts';
@@ -222,6 +233,17 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
         send(res, 200, repos(store));
         return;
       }
+      // Tickets: the same operations as `orch ticket`, which do all the validation.
+      if (root === 'tickets') {
+        if (!id) send(res, 200, listTickets(store, Object.fromEntries(url.searchParams)));
+        else if (id === 'areas' && !sub) send(res, 200, ticketAreas(store));
+        else if (!sub) send(res, 200, showTicket(store, id));
+        else if (sub === 'history' && rest.length === 0) {
+          send(res, 200, ticketHistory(store, id, Object.fromEntries(url.searchParams)));
+        } else if (sub === 'jobs' && rest.length === 0) send(res, 200, jobsOfTicket(store, id));
+        else throw new HttpError(404, 'Not found');
+        return;
+      }
       if (root === 'jobs' && !id) {
         const repo = url.searchParams.get('repo') ?? undefined;
         if (repo !== undefined && repo.length > 200) throw new HttpError(400, 'repo too long');
@@ -265,6 +287,18 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
     }
     if (method === 'POST') {
       guardMutation(req);
+      if (root === 'tickets' && rest.length === 0 && (sub === undefined || sub === 'actions')) {
+        const body = await readBody(req);
+        if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+          throw new HttpError(400, 'Body must be a JSON object');
+        }
+        const raw = { actor: DASHBOARD_SESSION, ...(body as Record<string, unknown>) };
+        if (!id) send(res, 201, addTicket(store, raw));
+        else if (id === 'areas' && !sub) send(res, 201, addTicketArea(store, raw));
+        else if (sub === 'actions') send(res, 200, ticketAction(store, id, raw));
+        else throw new HttpError(404, 'Not found');
+        return;
+      }
       if (root === 'jobs' && id && sub === 'actions' && rest.length === 0) {
         const body = await readBody(req);
         const mark = mailWatermark(store);

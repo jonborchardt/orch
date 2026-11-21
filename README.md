@@ -188,6 +188,25 @@ completes it. It never forces a live lease, never launches or messages a Claude 
 reports jobs stalled in an agent stage as needing a session, with the resume command
 ([docs/workflow.md](docs/workflow.md#recovery-worker)).
 
+## Tickets
+
+`orch ticket` is a private queue of things to do, shared by every repository on the machine:
+one number sequence, global priorities, dependencies that may cross repositories, a history per
+ticket. It lives in the same database as jobs and needs nothing running.
+
+```sh
+orch ticket add "Fix verification race" --priority P1 --area core   # for the cwd's repository
+orch ticket ready                     # what can be worked on now, in order, every repository
+orch ticket blocked                   # what cannot, and why
+orch ticket show 85
+orch factory start --ticket 85 ...    # a job for the ticket: linked and marked in progress at once
+orch ticket done 85 --note "merged <pr>"
+```
+
+A ticket has at most one unfinished job; a job finishing never closes its ticket. Nothing picks
+tickets and runs them automatically. Fields, readiness rules, the HTTP API, and the one-shot import
+of a Markdown todo register are in [docs/tickets.md](docs/tickets.md).
+
 ## Email reports
 
 Optional. Put SMTP settings in `<config>/mail.env` (see [Where things live](#where-things-live));
@@ -278,13 +297,14 @@ command. Unset, nothing is sent and nothing changes.
 
 ## Where things live
 
-| Purpose   | Windows                             | macOS                                | Linux                   |
-| --------- | ----------------------------------- | ------------------------------------ | ----------------------- |
-| config    | `%APPDATA%\orch`                    | `~/Library/Application Support/orch` | `$XDG_CONFIG_HOME/orch` |
-| data      | `%LOCALAPPDATA%\orch`               | same as config                       | `$XDG_DATA_HOME/orch`   |
-| database  | `<data>\orch.sqlite`                | `<data>/orch.sqlite`                 | `<data>/orch.sqlite`    |
-| artifacts | `<data>\jobs\<id>\artifacts\`       | `<data>/jobs/<id>/artifacts/`        | same                    |
-| worktrees | `<data>\worktrees\<repo slug>\<id>` | `<data>/worktrees/<repo slug>/<id>`  | same                    |
+| Purpose   | Windows                                     | macOS                                | Linux                   |
+| --------- | ------------------------------------------- | ------------------------------------ | ----------------------- |
+| config    | `%APPDATA%\orch`                            | `~/Library/Application Support/orch` | `$XDG_CONFIG_HOME/orch` |
+| data      | `%LOCALAPPDATA%\orch`                       | same as config                       | `$XDG_DATA_HOME/orch`   |
+| database  | `<data>\orch.sqlite`                        | `<data>/orch.sqlite`                 | `<data>/orch.sqlite`    |
+| artifacts | `<data>\jobs\<id>\artifacts\`               | `<data>/jobs/<id>/artifacts/`        | same                    |
+| worktrees | `<data>\worktrees\<repo slug>\<id>`         | `<data>/worktrees/<repo slug>/<id>`  | same                    |
+| tickets   | the database; `<data>\tickets\<id>\assets\` | `<data>/tickets/<id>/assets/`        | same                    |
 
 `ORCH_HOME=<dir>` redirects all of it (tests and side-by-side campaigns use this). Model
 overrides and `maxRounds`/`maxCiRepairs` go in `<config>/factory.json` (`orch factory config`).
@@ -295,6 +315,7 @@ overrides and `maxRounds`/`maxCiRepairs` go in `<config>/factory.json` (`orch fa
 - [docs/workflow.md](docs/workflow.md): stages, transitions, artifacts, events, worktrees,
   verification evidence, GitHub integration, CI reconciliation, ownership.
 - [docs/dashboard.md](docs/dashboard.md): the dashboard's views, actions, and security model.
+- [docs/tickets.md](docs/tickets.md): the ticket queue, its CLI and HTTP API, and the import.
 - [docs/development.md](docs/development.md): stack, layout, build, tests, migrations, install
   mechanics, Windows notes, CLI reference. `CLAUDE.md` has the rules for changing the code.
 - [docs/decisions/](docs/decisions/): one file per architectural decision.

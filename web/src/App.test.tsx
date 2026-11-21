@@ -201,6 +201,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       policy: null,
       policyHead: null,
       supersededBy: null,
+      ticketId: null,
       archivedAt: null,
       mailCursor: null,
       mailThreadId: null,

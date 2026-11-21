@@ -6,10 +6,13 @@ import {
   type AnySQLiteColumn,
   index,
   integer,
+  primaryKey,
+  real,
   sqliteTable,
   text,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 import type {
   CheckStatus,
@@ -18,7 +21,88 @@ import type {
   RunStatus,
   VerificationPolicy,
 } from '../core/verification.ts';
+import type { Classified, LinkKind, Priority, TicketStatus, TicketType } from '../core/tickets.ts';
 import type { CiStatus, PrState, Stage, Status, Verdict } from '../core/workflow.ts';
+
+/**
+ * The global ticket queue: one number sequence for every repository. AUTOINCREMENT, so a number
+ * is never reused, also after the highest ticket was imported with an explicit id.
+ */
+export const tickets = sqliteTable(
+  'tickets',
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    /** Repository identity and primary checkout, resolved like a job's (ops/repo.ts). */
+    repo: text().notNull(),
+    repoPath: text().notNull(),
+    title: text().notNull(),
+    status: text().$type<TicketStatus>().notNull(),
+    type: text().$type<TicketType>().notNull(),
+    area: text().notNull(),
+    priority: text().$type<Priority>().notNull(),
+    /** Days, one of core/tickets.ts EFFORTS. */
+    effort: real().notNull(),
+    /** Set exactly when status is `duplicate`. */
+    duplicateOf: integer().references((): AnySQLiteColumn => tickets.id),
+    classified: text().$type<Classified>().notNull(),
+    /** The whole Markdown description: What, Why, checklists, Screenshot, imported Notes. */
+    body: text().notNull(),
+    /** Register this ticket was imported from (canonical directory) and its id there. */
+    importSource: text(),
+    importId: integer(),
+    revision: integer().notNull().default(1),
+    createdAt: text().notNull(),
+    updatedAt: text().notNull(),
+  },
+  (t) => [
+    index('tickets_status_idx').on(t.status),
+    index('tickets_repo_idx').on(t.repo),
+    uniqueIndex('tickets_import_idx').on(t.importSource, t.importId),
+  ],
+);
+
+/** `ticketId` depends on (or is related to) `targetId`; directed, as the ticket states it. */
+export const ticketLinks = sqliteTable(
+  'ticket_links',
+  {
+    ticketId: integer()
+      .notNull()
+      .references(() => tickets.id),
+    targetId: integer()
+      .notNull()
+      .references(() => tickets.id),
+    kind: text().$type<LinkKind>().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.ticketId, t.targetId, t.kind] }),
+    index('ticket_links_target_idx').on(t.targetId),
+  ],
+);
+
+/** Append-only ticket history. Separate from `events`, whose rows need a job and cascade with it. */
+export const ticketEvents = sqliteTable(
+  'ticket_events',
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    ticketId: integer()
+      .notNull()
+      .references(() => tickets.id),
+    type: text().notNull(),
+    payload: text({ mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    actor: text(),
+    createdAt: text().notNull(),
+  },
+  (t) => [index('ticket_events_ticket_idx').on(t.ticketId, t.id)],
+);
+
+/** Areas added after the built-in ones in core/tickets.ts DEFAULT_AREAS. */
+export const ticketAreas = sqliteTable('ticket_areas', {
+  name: text().primaryKey(),
+  description: text().notNull(),
+});
+
+export type Ticket = typeof tickets.$inferSelect;
+export type TicketEvent = typeof ticketEvents.$inferSelect;
 
 export const jobs = sqliteTable(
   'jobs',
@@ -67,6 +151,8 @@ export const jobs = sqliteTable(
     policyHead: text(),
     /** Job that replaced this one (`orch job supersede`); both histories are kept. */
     supersededBy: text().references((): AnySQLiteColumn => jobs.id),
+    /** The ticket this job works on; null for a job started without one. */
+    ticketId: integer().references(() => tickets.id),
     /** When a human archived this finished job (dashboard); null when it is not archived. */
     archivedAt: text(),
     /**
@@ -89,6 +175,10 @@ export const jobs = sqliteTable(
     // A managed worktree and a branch within a repository belong to at most one job.
     uniqueIndex('jobs_worktree_idx').on(t.worktreePath),
     uniqueIndex('jobs_repo_branch_idx').on(t.repo, t.branch),
+    // At most one unfinished job per ticket, whatever races to create it.
+    uniqueIndex('jobs_active_ticket_idx')
+      .on(t.ticketId)
+      .where(sql`${t.status} not in ('completed', 'cancelled')`),
   ],
 );
 

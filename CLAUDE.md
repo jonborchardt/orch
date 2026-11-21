@@ -40,6 +40,16 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   that names agents and models. `ops/repo.ts` is the only place that decides whether a path is a
   job's repository: by Git common directory for the job's own checkout and worktrees, by remote
   identity for another clone. Never compare `describeRepo().identity` to `job.repo` elsewhere.
+- Tickets are the global queue (`docs/tickets.md`): rules in `core/tickets.ts` (values, status
+  machine, cycle check, order, block reasons), every ticket mutation in `storage/tickets.ts`, and
+  `ops/tickets.ts` as the one entry point for both `cli/ticket.ts` and the `/api/tickets` routes,
+  so validation is never repeated in a handler. SQLite is the only source of truth: no Markdown
+  export, no dual write. A job is linked to a ticket only through `createJob`'s `ticketId` (the
+  claim runs in the job's insert transaction; `jobs_active_ticket_idx` allows one unfinished job
+  per ticket); nothing completes a ticket except `orch ticket done`. `core/todo-register.ts` and
+  `ops/ticket-import.ts` exist only for the one-shot `orch ticket import`. The skills
+  `.claude/skills/log-todo` and `.claude/skills/dotodo` call `orch ticket` only; `orch install`
+  links them globally along with `skills/factory`.
 - `skills/factory/` and `agents/` are prose for Claude, linked into `~/.claude` by `orch install`.
   They must only call `orch` commands; any rule that matters is enforced in TypeScript first and
   described in prose second. `tests/skill-contract.test.ts` keeps roles, agent frontmatter, and the

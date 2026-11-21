@@ -11,6 +11,10 @@ on the dashboard.
 without a click. Keeping it in a local skill leaves the product's promise ("humans merge") intact
 for every other repository.
 
+**Update 2026-11-20.** `orch install` now links `dotodo` (and `log-todo`) into `~/.claude`, so the
+skill, and with it this merge, is available in every repository where the owner invokes
+`/dotodo`. The conditions are unchanged, and nothing merges unless that skill is invoked.
+
 **Limits.** The conditions are prose, not TypeScript: nothing but the skill text stops a session
 from merging early. A conflict after completion is never resolved by hand; it becomes a second
 factory job that supersedes the first. `orch` learns of the merge only when the PR is next read
