@@ -213,10 +213,12 @@ Keep the `todo/` directory until the report has been checked; it is the backup.
 
 `.claude/skills/log-todo` files and maintains tickets through `orch ticket --json`: it decides the
 split, the duplicate check, and the classification; `orch` allocates ids and enforces every rule.
-`.claude/skills/dotodo` runs one ticket through the factory with `--ticket <id>`, merges under its
-unchanged rules, and closes the ticket after the merge.
+`.claude/skills/dotodo` runs one ticket through the factory with `--ticket <id>`, then calls
+`orch job merge`, which merges the PR and closes the ticket.
 
 ## What was taken from Beads
 
 [Beads](https://github.com/steveyegge/beads) (read at commit `7862410`) informed the model; none
-of it is a dependency. See `docs/decisions/2026-11-20-global-ticket-queue.md`.
+of it is a dependency. [overview.md](overview.md#compared-with-beads) compares the two: what is the
+same, what differs, and why. The functions that were read are listed in
+`docs/decisions/2026-11-20-global-ticket-queue.md`.
