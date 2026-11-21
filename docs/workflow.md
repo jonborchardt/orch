@@ -417,7 +417,11 @@ to it. A person then decides a `needs-human` job on the dashboard (Approve to a 
 rework, Request review, Accept policy, Accept delivery, Cancel) and runs `orch do <ticket>`, which
 continues the same job; `orch start` afterwards goes on with the queue. Deciding with
 `orch factory resume <job> --to <stage>` instead leaves that session's lease on the job, so pass
-`--session orch-runner` there or `orch do` reports the job as held until the lease lapses.
+`--release` there (it gives the job up again at once, `token: null`) or `orch do` reports the job
+as held until the lease lapses. To continue a spec the challenger rejected twice, edit
+`<artifactDir>/spec.md`, choose Resume at spec (or `orch factory resume <job> --to spec --release`),
+and run `orch do <ticket>`: after a human resume to spec, a spec.md that differs from its
+registered content is registered by the next plan and challenged again.
 
 `orch stop next` is read at the ticket boundary. `orch stop` (or Ctrl+C) terminates the Claude
 process the controller started, releases the job in the state it was in, and leaves the session

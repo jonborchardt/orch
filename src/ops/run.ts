@@ -9,6 +9,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { OrchError, OwnershipError, ToolError, ValidationError } from '../core/errors.ts';
+import { jobArtifactDir } from '../core/paths.ts';
 import { ticketKey } from '../core/tickets.ts';
 import { now, TERMINAL_STATUSES } from '../core/workflow.ts';
 import {
@@ -24,7 +25,7 @@ import { claimJob, getJob, recordEvent, releaseJob } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { ticketJobs } from '../storage/tickets.ts';
 import { dispatchJob } from './dispatch.ts';
-import { loadConfig, resumeFactoryJob } from './factory.ts';
+import { loadConfig, resumeFactoryJob, specResumeSteps } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
 import { reconcileCi } from './github.ts';
 import { mailWatermark, reportJobMail } from './mail.ts';
@@ -502,7 +503,9 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
           'needs-human',
           `job ${jobId} waits for a person at ${after.returnStage ?? 'an unknown stage'}: ${blockedReason(store, jobId)}`,
           jobId,
-          `decide it on the dashboard (orch ui), then orch do ${key}`,
+          after.returnStage === 'spec'
+            ? specResumeSteps(jobId, jobArtifactDir(jobId, store.paths), ticketId)
+            : `decide it on the dashboard (orch ui), then orch do ${key}`,
         );
       }
       const m = await merge(run, jobId);
