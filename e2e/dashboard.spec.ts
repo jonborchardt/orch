@@ -669,3 +669,33 @@ test('API refuses cross-origin mutations even from the browser', async ({ page }
   expect(result.status).toBe(403);
   expect(result.body.error.message).toContain('CSRF');
 });
+
+test('tickets: the queue lists the seeded tickets, one opens, and the list comes back', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('link', { name: 'Tickets' })
+    .click();
+  await expect(page).toHaveURL(/#\/tickets$/);
+  const table = page.getByRole('table', { name: 'Tickets' });
+  await expect(table.getByRole('row')).toHaveCount(3); // header + 2 tickets
+  await expect(page.getByRole('region', { name: 'Factory status' })).toContainText('idle');
+  await expect(table.getByText('depends on 0001, which is open')).toBeVisible();
+  await table.getByRole('link', { name: 'Seeded ticket two' }).click();
+  await expect(page).toHaveURL(/#\/tickets\/2$/);
+  await expect(page.getByRole('heading', { name: 'Seeded ticket two' })).toBeVisible();
+  // The dependency is a link to the other ticket, whose checklist renders as a read-only box.
+  await page.getByRole('region', { name: 'Links' }).getByRole('link', { name: /0001/ }).click();
+  await expect(page.getByRole('heading', { name: 'Seeded ticket one' })).toBeVisible();
+  await expect(page.getByRole('checkbox')).toBeDisabled();
+  await page.getByRole('link', { name: '← Tickets' }).click();
+  await expect(table.getByRole('row')).toHaveCount(3);
+  // The existing section is one click away and unchanged.
+  await page
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('link', { name: 'Jobs' })
+    .click();
+  await expect(page.getByRole('table', { name: 'Factory jobs' })).toBeVisible();
+});

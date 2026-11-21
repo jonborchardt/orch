@@ -9,6 +9,17 @@ import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 
 export type SafeJob = Omit<Job, 'ownerToken'>;
 export type { Flake };
+// The ticket and controller views the dashboard reads; web/ imports them from here only.
+export type { Area, BlockReason, Priority, TicketStatus, TicketType } from '../core/tickets.ts';
+export type { RunnerStatus } from '../ops/run.ts';
+export type {
+  TicketDetail,
+  TicketJob,
+  TicketList,
+  TicketSummary,
+  TicketView,
+} from '../ops/tickets.ts';
+export type { TicketEvent } from '../storage/schema.ts';
 
 /**
  * Execution state, distinct from the workflow stage. `running` means the status is running AND
@@ -161,6 +172,8 @@ export interface BoardRow {
   /** Job that replaced this one, and jobs this one replaced (`orch job supersede`). */
   supersededBy: string | null;
   supersedes: string[];
+  /** The ticket this job works on; null for a job started without one. */
+  ticketId: number | null;
   /** When a human archived this finished job; archived rows are hidden from the default views. */
   archivedAt: string | null;
   ci: CiView;

@@ -6,8 +6,8 @@ question to decide. Jobs are attempts to do one. There is no server, no synchron
 file in any repository; `orch ticket` works with nothing else running.
 
 `orch start` and `orch do <id>` run tickets from this queue in a foreground controller
-([workflow.md](workflow.md#factory-controller)). What is not built: any background scheduler, and
-a ticket page in the dashboard.
+([workflow.md](workflow.md#factory-controller)). The dashboard's Tickets section shows and edits
+the same queue ([dashboard.md](dashboard.md)). What is not built: any background scheduler.
 
 ## Identity
 
@@ -160,6 +160,11 @@ same-origin `Origin`, `Content-Type: application/json`, and the CSRF token from 
 
 Errors use the dashboard's mapping: 404 no such ticket, 422 invalid input, 409 a refused status
 change or a stale `revision`. Creating a job for a ticket and attaching assets are CLI only.
+
+Two read-only additions serve the dashboard's Tickets section: `GET /api/runner` returns what
+`orch status` prints (there is no route that starts, stops, or resumes the controller), and each
+row of `GET /api/jobs` carries its `ticketId`, so a ticket's job is found without a request per
+ticket.
 
 ## Assets and privacy
 

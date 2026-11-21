@@ -2,6 +2,7 @@ import {
   Alert,
   AppBar,
   Box,
+  Button,
   Chip,
   FormControl,
   InputLabel,
@@ -18,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { BoardRow } from '../../src/server/types.ts';
 import { JobBoard } from './JobBoard.tsx';
 import { type DetailActivity, JobDetail } from './JobDetail.tsx';
+import { NO_FILTERS, type TicketFilters, TicketsPage } from './Tickets.tsx';
 import { ApiFailure, fetchBoard, fetchRepos } from './api.ts';
 
 function useHashRoute(): string {
@@ -33,6 +35,12 @@ function useHashRoute(): string {
   }, []);
   return hash;
 }
+
+/** The top-level sections. A new one is an entry here and a branch where `main` is rendered. */
+const SECTIONS = [
+  { label: 'Jobs', href: '#/' },
+  { label: 'Tickets', href: '#/tickets' },
+] as const;
 
 const STATUS_FILTERS = [
   'current',
@@ -101,6 +109,9 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const [now, setNow] = useState(() => Date.now());
   const [inFlight, setInFlight] = useState(0);
   const [detailActivity, setDetailActivity] = useState<DetailActivity>('loading');
+  const [ticketFilters, setTicketFilters] = useState<TicketFilters>(NO_FILTERS);
+  const ticketMatch = /^#\/tickets(?:\/(\d{1,9}))?\/?$/.exec(hash);
+  const section = ticketMatch ? 'Tickets' : 'Jobs';
 
   const load = useCallback(() => {
     setInFlight((n) => n + 1);
@@ -122,6 +133,8 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   }, [repo]);
 
   useEffect(() => {
+    // The Tickets section polls what it shows itself; the job board rests meanwhile.
+    if (section !== 'Jobs') return;
     load();
     const timer = setInterval(() => {
       if (!document.hidden) load();
@@ -129,7 +142,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
     return () => {
       clearInterval(timer);
     };
-  }, [load, refreshMs]);
+  }, [load, refreshMs, section]);
 
   const jobMatch = /^#\/jobs\/(job-[0-9a-f]{8})$/.exec(hash);
   const visible = useMemo(
@@ -148,9 +161,11 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   );
   // A background poll after the first load; never shown alongside a first-load bar.
   const boardPolling = inFlight > 0 && rows !== null;
-  const refreshing = jobMatch
-    ? detailActivity === 'refreshing' || (detailActivity === 'idle' && boardPolling)
-    : boardPolling;
+  const refreshing = ticketMatch
+    ? false
+    : jobMatch
+      ? detailActivity === 'refreshing' || (detailActivity === 'idle' && boardPolling)
+      : boardPolling;
 
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -171,31 +186,47 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           >
             orch factory
           </Typography>
-          <Stack direction="row" spacing={0.5} aria-label="Summary">
-            {CHIPS.map((c) => {
-              const pressed = status === c.filter;
-              return (
-                <Chip
-                  key={c.filter}
-                  label={counts ? `${String(counts[c.filter])} ${c.label}` : c.label}
-                  color={c.color}
-                  variant={counts?.[c.filter] ? 'filled' : 'outlined'}
-                  aria-pressed={pressed}
-                  onClick={() => {
-                    setStatus(pressed ? 'current' : c.filter);
-                  }}
-                  // A full ring in the text colour reads on filled and outlined chips, light or dark.
-                  sx={
-                    pressed
-                      ? { outline: '2px solid', outlineColor: 'text.primary', outlineOffset: 2 }
-                      : undefined
-                  }
-                />
-              );
-            })}
-          </Stack>
+          <Box component="nav" aria-label="Sections" sx={{ display: 'flex', gap: 0.5 }}>
+            {SECTIONS.map((s) => (
+              <Button
+                key={s.label}
+                href={s.href}
+                variant={s.label === section ? 'outlined' : 'text'}
+                color="inherit"
+                aria-current={s.label === section ? 'page' : undefined}
+              >
+                {s.label}
+              </Button>
+            ))}
+          </Box>
+          {/* Job counts and filters belong to the Jobs section only. */}
+          {!ticketMatch && (
+            <Stack direction="row" spacing={0.5} aria-label="Summary">
+              {CHIPS.map((c) => {
+                const pressed = status === c.filter;
+                return (
+                  <Chip
+                    key={c.filter}
+                    label={counts ? `${String(counts[c.filter])} ${c.label}` : c.label}
+                    color={c.color}
+                    variant={counts?.[c.filter] ? 'filled' : 'outlined'}
+                    aria-pressed={pressed}
+                    onClick={() => {
+                      setStatus(pressed ? 'current' : c.filter);
+                    }}
+                    // A full ring in the text colour reads on filled and outlined chips, light or dark.
+                    sx={
+                      pressed
+                        ? { outline: '2px solid', outlineColor: 'text.primary', outlineOffset: 2 }
+                        : undefined
+                    }
+                  />
+                );
+              })}
+            </Stack>
+          )}
           {/* Board-only controls, wrapping as one group; detail routes have nothing to filter. */}
-          {!jobMatch && (
+          {!jobMatch && !ticketMatch && (
             <Box sx={{ ml: 'auto', display: 'flex', flexWrap: 'wrap', columnGap: 1.5, rowGap: 2 }}>
               <TextField
                 size="small"
@@ -256,13 +287,20 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           {refreshing && <LinearProgress aria-label="Refreshing" sx={{ height: 4 }} />}
         </Box>
       </AppBar>
-      {error && (
+      {error && !ticketMatch && (
         <Alert severity="error" sx={{ m: 1 }} role="alert">
           {error}
         </Alert>
       )}
       <Box component="main" sx={{ flex: 1 }}>
-        {jobMatch ? (
+        {ticketMatch ? (
+          <TicketsPage
+            id={ticketMatch[1] === undefined ? null : Number(ticketMatch[1])}
+            refreshMs={refreshMs}
+            filters={ticketFilters}
+            onFilters={setTicketFilters}
+          />
+        ) : jobMatch ? (
           <JobDetail id={jobMatch[1] ?? ''} refreshMs={refreshMs} onActivity={setDetailActivity} />
         ) : rows === null ? (
           // A failed first load shows only the error alert above, not a bar that never ends.

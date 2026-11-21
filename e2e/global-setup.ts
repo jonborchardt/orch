@@ -18,6 +18,7 @@ import {
 } from '../tests/fixtures/dashboard.ts';
 import { assistant, user, writeAgent, writeSession } from '../tests/transcript-fixture.ts';
 import { openStore } from '../src/storage/client.ts';
+import { createTicket } from '../src/storage/tickets.ts';
 
 /** Environment variable naming this run's state file; set here, read by the spec and teardown. */
 export const STATE_ENV = 'ORCH_E2E_STATE';
@@ -39,6 +40,20 @@ export default async function globalSetup(): Promise<void> {
   };
   for (const d of Object.values(repos)) mkdirSync(d, { recursive: true });
   const ids = seedDashboard(store, repos);
+  // Two tickets for the Tickets section; no job is linked, so the board's seeded rows stay as they are.
+  const first = createTicket(store, {
+    title: 'Seeded ticket one',
+    repo: 'github.com/acme/alpha',
+    repoPath: repos.alpha,
+    priority: 'P1',
+    body: '## What\n\n- [ ] a checklist item\n',
+  });
+  createTicket(store, {
+    title: 'Seeded ticket two',
+    repo: 'github.com/acme/beta',
+    repoPath: repos.beta,
+    dependsOn: [first.id],
+  });
   store.close();
   // A scratch Claude home: the Session tab never reads the developer's real transcripts.
   const claude = join(home, 'claude');

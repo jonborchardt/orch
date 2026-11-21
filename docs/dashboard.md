@@ -14,6 +14,13 @@ orch ui --port 0 --open # free port, open the browser
 ORCH_HOME=/tmp/demo npm run ui:seed && ORCH_HOME=/tmp/demo orch ui   # representative demo data
 ```
 
+**Sections.** The app bar has two: **Jobs** (`#/`, and `#/jobs/<id>` for one job) and **Tickets**
+(`#/tickets`, and `#/tickets/<id>` for one ticket). Each is a link, so every view can be opened,
+reloaded, and bookmarked by its URL. The job counts and the job filters show only in Jobs; a
+section polls only what it shows, so the ticket queue is not read while Jobs is open and the job
+board rests while Tickets is. A further section is one entry in `SECTIONS` in `web/src/App.tsx`
+and one branch where the page body is chosen.
+
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
 worktree, review round, reviews, elapsed time, last update, PR link and CI rollup. Elapsed is
 wall-clock time from job creation until it completed or was cancelled (until now while active),
@@ -363,6 +370,62 @@ user confirms a forced takeover, which rotates the token. Every action records a
 events and answers with the fact that no session is running the job plus the exact
 `orch factory resume` command; the dashboard never pretends to wake a Claude session.
 
+**Tickets** (`#/tickets`) is the global queue of [tickets.md](tickets.md), read and changed
+through the same `/api/tickets` operations as `orch ticket`. Nothing about readiness, order,
+lifecycle, or dependency cycles is decided in the browser: the page shows the `ready`,
+`blockedBy`, and `activeJob` the server computed, and every write is one ticket action that the
+server validates.
+
+- **Factory status** heads the page: what `orch status` prints, from `GET /api/runner`
+  (`runnerStatus`, read-only). It says whether a controller is `running`, `interrupted`, or
+  `idle`; the ticket, job, stage, and repository in flight (links to both); what it waits for; a
+  requested stop (`now`, or after this ticket); what happens next; and how the last finished
+  session ended, with its done and attempted counts. Under it is the highest-priority ready
+  ticket and the number ready. That is the head of the queue, not a promise: the controller
+  passes over a repository without the merge opt-in. There is no control here; the controller is
+  started, stopped, and resumed from the CLI only.
+- **The list** has Queue, ID, Title, Repository, Priority, State, Area / Type, Job, and Blocked
+  by. Queue is the ticket's position in `GET /api/tickets?view=order`, the server's proposed
+  order of the open tickets. **Show** picks `current` (the default: tickets in progress, then the
+  open ones in queue order), `ready`, `blocked`, one lifecycle status, or `all`; Repository,
+  Priority, Area, and Type narrow it, and Search matches the id and the title. The filters are
+  kept while a ticket or a job is open. Priority is a select in the row: changing it is an `edit`
+  with the ticket's revision, after which the queue is read again, so the order shown is always
+  the server's.
+- **State** is derived, never stored. An open ticket is `ready` or `blocked`, and a blocked one
+  lists the server's reasons in Blocked by, with the ticket or job each names as a link. A ticket
+  in progress shows what its job is doing, from the job's own liveness on the board (`running`,
+  `stale`, `idle`, `needs human`, `failed`, `interrupted`), or `awaiting CI` while that job is in
+  the ci stage. With no unfinished job it is `awaiting integration` (the last job finished and
+  its PR is not merged), `merged, not closed` (the PR merged but did not close the ticket: an
+  unchecked checklist item or an unverified merge), or plain `in progress` (marked by hand).
+  `done`, `dropped`, and `duplicate` are the lifecycle status. The Job column names the job the
+  state was read from: its stage while it is unfinished, how it ended otherwise.
+- **New ticket** takes a title, repository, type, area, priority, effort, and a Markdown
+  description, and opens the ticket it created. Creation needs a checkout path, so Repository
+  offers the checkouts of existing tickets and jobs; the first ticket of a repository is filed
+  with `orch ticket add` from inside it.
+
+**Ticket detail** (`#/tickets/<id>`) shows the title, id, state, repository, status, priority,
+type, area, effort, and, when blocked, the reasons. **Edit** turns the title, priority, type,
+area, effort, and the Markdown description into one form with Save and Cancel; Save sends a
+single `edit` with only the fields that changed and the revision the form was opened at. The
+description is rendered with the dashboard's Markdown subset; task items (`- [ ]`, `- [x]`) show
+as read-only boxes and are changed by editing the Markdown. Start, Done, Drop, Mark duplicate,
+and Reopen are offered by status and run the ticket's lifecycle action (Drop and Mark duplicate
+ask first; Start marks the ticket in progress and starts no job); a transition the server refuses
+is shown in its own words. Links lists what the ticket depends on, what it blocks, and what it is
+related to, each a link; a ticket id and Add dependency or Add related adds one, and a chip's
+delete removes it. Jobs lists every job that worked on the ticket with its stage, status, PR
+state, and supersession, each linked to its job detail; a job's header links back to its ticket.
+History is the ticket's events, oldest first.
+
+A write based on an outdated revision is refused by the server (409) and never applied over the
+other change. An action then shows the refusal and the current ticket. An edit keeps the draft,
+shows the current ticket beside it, and says nothing was saved; saving again applies the user's
+own changed fields to the current revision. Polling replaces only what was read from the server:
+an open draft is never touched by it.
+
 **Security.** The server binds `127.0.0.1` only, checks the `Host` header against its own
 loopback origins (DNS rebinding), rejects cross-site `Sec-Fetch-Site`, and for state-changing
 requests requires a same-origin `Origin`, `Content-Type: application/json`, and a per-process
@@ -384,4 +447,6 @@ carry a CSP, `nosniff`, and `no-store`.
 free port, and hands the URL and seeded ids to the workers through a state file under that home,
 so two runs on one machine never share a port, a database, or a state file. `ORCH_E2E_PORT` pins
 the port (a busy port is reported, never silently replaced by another server) and
-`ORCH_E2E_KEEP=1` leaves the scratch home in place for inspection.
+`ORCH_E2E_KEEP=1` leaves the scratch home in place for inspection. The Tickets section is covered
+by `web/src/Tickets.test.tsx` (against a stand-in for the ticket API), `tests/ticket-server.test.ts`
+(the real routes, `/api/runner` included), and one Playwright walk through two seeded tickets.

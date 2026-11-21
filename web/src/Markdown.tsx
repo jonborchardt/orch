@@ -2,8 +2,8 @@ import { Box, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 
 /**
- * Just enough Markdown for factory artifacts: headings, bullet and numbered lists, fenced code,
- * paragraphs, and the VERDICT / DECISION / BLOCKING marker lines. No HTML is ever interpreted.
+ * Just enough Markdown for factory artifacts and ticket bodies: headings, bullet and numbered
+ * lists, read-only task items (`- [ ]`, `- [x]`), fenced code, paragraphs, and the VERDICT / DECISION / BLOCKING marker lines. No HTML is ever interpreted.
  */
 export function Markdown({ text }: { text: string }) {
   const out: ReactNode[] = [];
@@ -82,11 +82,26 @@ export function Markdown({ text }: { text: string }) {
       }
       push(
         <Box component={ordered ? 'ol' : 'ul'} sx={{ my: 0.5, pl: 3 }}>
-          {items.map((it, n) => (
-            <li key={n}>
-              <Inline text={it} />
-            </li>
-          ))}
+          {items.map((it, n) => {
+            // A task item: shown as a read-only box. Changing one is an edit of the Markdown.
+            const task = /^\[([ xX])\]\s+(.*)$/.exec(it);
+            return task ? (
+              <Box component="li" key={n} sx={{ listStyle: 'none', ml: -2.5 }}>
+                <input
+                  type="checkbox"
+                  checked={task[1] !== ' '}
+                  disabled
+                  readOnly
+                  aria-label={task[1] === ' ' ? 'Not done' : 'Done'}
+                />{' '}
+                <Inline text={task[2] ?? ''} />
+              </Box>
+            ) : (
+              <li key={n}>
+                <Inline text={it} />
+              </li>
+            );
+          })}
         </Box>,
       );
       continue;

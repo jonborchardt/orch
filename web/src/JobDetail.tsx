@@ -43,6 +43,7 @@ import {
 import { ApiFailure, fetchDetail } from './api.ts';
 import { STATE, ago, verdictColor } from './format.ts';
 import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
+import { ticketHref, ticketKey } from './ticketState.ts';
 
 /** What the detail page's own fetch is doing, for the app bar's shared indicator. */
 export type DetailActivity = 'loading' | 'refreshing' | 'idle';
@@ -560,6 +561,11 @@ function JobHeader({ detail, error }: { detail: JobDetailView; error: string | n
   const prNumber = job.prUrl ? /\/pull\/(\d+)\/?$/.exec(job.prUrl)?.[1] : undefined;
   const delivery = [
     <span key="repo">{job.repo}</span>,
+    job.ticketId !== null && (
+      <Link key="ticket" href={ticketHref(job.ticketId)}>
+        ticket {ticketKey(job.ticketId)}
+      </Link>
+    ),
     job.branch &&
       (links.branch ? (
         <Link

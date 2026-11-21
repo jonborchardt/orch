@@ -132,6 +132,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       elapsedMs: span(job.createdAt, end),
       pr: { url: job.prUrl, state: job.prState, phase: prPhase(job, ci.completion) },
       supersededBy: job.supersededBy,
+      ticketId: job.ticketId,
       archivedAt: job.archivedAt,
       supersedes: predecessors.get(job.id) ?? [],
       ci,
