@@ -49,7 +49,7 @@ tests/           Vitest suites, mirror src/; helpers.ts (fixtures), drive.ts (st
 e2e/             Playwright browser checks for the dashboard (playwright.config.ts)
 scripts/         seed-dashboard.ts (demo data into a scratch ORCH_HOME)
 docs/                workflow.md, dashboard.md, development.md (this file), session-launch.md,
-                 phase3-validation.md, decisions/ (one file per decision; decisions.md explains)
+                 decisions/ (one file per decision; decisions.md explains)
 .github/workflows/ci.yml
 ```
 
