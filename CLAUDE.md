@@ -86,11 +86,22 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   storage. `web/` is the React + MUI client with its own `tsconfig.json`; it imports only
   `src/server/types.ts` and `src/ops/actions.ts` types from `src/`.
 - The CLI is one-shot: open the store, do one operation, print, exit. No daemons, timers, or
-  background work. There are two exceptions, both opt-in and never required for jobs to run:
-  `orch ui`, which serves the dashboard until interrupted, and the recovery worker
+  background work. There are three exceptions, all opt-in and never required for jobs to run:
+  `orch ui`, which serves the dashboard until interrupted; the recovery worker
   (`orch recover run`, or `orch recover start` to detach it), which repeats one-shot passes that
-  continue only `ci`-stage jobs no live session owns. It never launches or messages a Claude
-  session (decision 2026-11-16-opt-in-recovery-worker).
+  continue only `ci`-stage jobs no live session owns and never launches or messages a Claude
+  session (decision 2026-11-16-opt-in-recovery-worker); and the factory controller
+  (`orch start`, `orch do`, `orch resume`), a foreground process that exists only while its
+  command runs.
+- Only the factory controller starts a Claude process, and only through `launchClaude` in
+  `src/integrations/claude-session.ts`: one headless `/factory <job>` child at a time, for the
+  ticket it is working on (decision 2026-11-21-foreground-factory-runner). `src/ops/run.ts`
+  sequences existing operations (`listTickets`, `dispatchJob`, `resumeFactoryJob`, `reconcileCi`,
+  `mergeJob`) and re-reads the job row at every step; it implements no stage, skips no gate, and
+  never calls `gh` or `orch ticket done` itself. Its own state is the single-writer files of
+  `src/ops/runner-state.ts`, never a table and never a copy of job or ticket state. Do not detach
+  it, start it from the dashboard or another command, message a session, run two tickets at once,
+  or signal a PID read from a file.
 
 ## Schema changes
 

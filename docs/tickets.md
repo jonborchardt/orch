@@ -5,9 +5,9 @@ database as jobs. A ticket is the unit of "something to do": a bug, a feature, a
 question to decide. Jobs are attempts to do one. There is no server, no synchronisation, and no
 file in any repository; `orch ticket` works with nothing else running.
 
-What is not built: `orch start`, `orch do <id>`, `orch stop next`, any scheduler or loop that picks
-tickets and runs them, merging by the factory, and a ticket page in the dashboard. The model below
-is what those would be built on.
+`orch start` and `orch do <id>` run tickets from this queue in a foreground controller
+([workflow.md](workflow.md#factory-controller)). What is not built: any background scheduler, and
+a ticket page in the dashboard.
 
 ## Identity
 

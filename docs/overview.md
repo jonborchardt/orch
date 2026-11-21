@@ -3,8 +3,9 @@
 `orch` has three parts that hand work to each other: a **ticket queue** (what there is to do), the
 **factory** (one attempt to do it, ending in a pull request whose checks pass), and the **merge**
 (getting that pull request into the base branch and closing the ticket). This page explains how
-they connect, and how the ticket queue compares with [Beads](https://github.com/steveyegge/beads),
-the issue tracker its model borrows from.
+they connect, how the ticket queue compares with [Beads](https://github.com/steveyegge/beads),
+the issue tracker its model borrows from, and how the merge and the unattended controller compare
+with agent-orchestrator and Gas Town.
 
 The details live elsewhere: [tickets.md](tickets.md) for the queue,
 [workflow.md](workflow.md) for stages, gates, and merging, [dashboard.md](dashboard.md) for the UI.
@@ -137,8 +138,82 @@ distribution, and what "done" means is not.
 If you need tickets shared between people or machines, an issue hierarchy, or a tracker that works
 without the factory, Beads is the better fit. `orch` does not try to cover that.
 
+## Compared with agent-orchestrator and Gas Town
+
+Two other projects run coding agents and get their work merged:
+[agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator) (AO) and
+[Gas Town](https://github.com/gastownhall/gastown). `orch`'s merge took three ideas from them and
+no code; the exact functions are listed in
+[decisions/2026-11-20-orch-job-merge.md](decisions/2026-11-20-orch-job-merge.md). The controller
+(`orch start`) took nothing from either: it was designed from `orch`'s own pieces, and this
+comparison was written afterwards.
+
+What follows is from their source as read on 2026-11-20, AO at commit `7919c96` (backend and docs
+only) and Gas Town at `94cc822`. Both change quickly, so check them before relying on a detail.
+One thing to know about Gas Town at that commit: its README and design docs describe a strict Go
+merge engine (commit-pinned re-checks, a merge-slot lock, batch-then-bisect), and that engine is in
+the tree, but nothing outside its own package and tests calls it. The path that runs is an agent
+following a written procedure, and that is what the tables describe.
+
+### What is the same
+
+| idea                                         | in AO                                                                | in Gas Town                                                    | in orch                                                           |
+| -------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
+| One worktree and branch per unit of work     | a session's worktree                                                 | a worker's worktree                                            | a job's worktree                                                  |
+| Merge only the commit that was looked at     | the caller's expected head against the stored, fresh, and CI heads   | proof afterwards that the target contains the submitted commit | `gh pr merge --match-head-commit <ciHead>`                        |
+| Unknown is not ready                         | pending or unknown CI blocks; mergeability must be exactly mergeable | (no equivalent on the running path)                            | `UNKNOWN` mergeability is `waiting`, never a merge                |
+| Prove the merge, then close the work         | (the provider's answer is taken as proof)                            | `gt mq post-merge`: prove, close the request, close the issue  | read the PR again; record and close the ticket only when `MERGED` |
+| Every step tolerates "already done"          | a merge made elsewhere is picked up by the next poll                 | each close accepts an already-closed item                      | `already_merged` records what GitHub did and merges nothing       |
+| The agent that merges never fixes a conflict | the owning worker is told to rebase                                  | the merging agent hands a task to a worker                     | a new job re-lands the work                                       |
+| Uncommitted work is never thrown away        | a dirty worktree is not removed                                      | workers with uncommitted work are skipped on shutdown          | nothing in `ops/` deletes uncommitted work                        |
+
+### Merging: what is different, and why
+
+| topic               | AO                                                                                                           | Gas Town                                                                                                                         | orch                                                                                                                   | why                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Who merges          | a person asks (the app, or `ao pr merge`); a ready PR only raises a notification                             | a dedicated agent session per repository, running `git` and `gh` itself from a written procedure                                 | one deterministic operation, `mergeJob`, behind the dashboard button, `orch job merge`, and the controller             | A rule that matters is enforced in code. An unattended run cannot wait for a click, and a procedure an agent reads is not a gate |
+| Permission to do so | nothing merges automatically, so there is no setting                                                         | automatic once a repository is added; a required review is opt-in                                                                | off until `orch factory config merge enable` for that repository; a dashboard click needs no opt-in                    | "Humans merge" stays true everywhere the user has not said otherwise                                                             |
+| Evidence required   | a fresh read of GitHub: checks passing for that head, no changes requested, no unresolved comment, mergeable | a rehearsal merge and the repository's commands, run locally by the agent, which may merge past a failure it judges pre-existing | the job completed on GitHub's passing verdict for one commit, after `orch` ran the checks and the reviews and approval | Evidence here is executed by `orch` and bound to a commit before the merge is even asked for; nothing is judged at merge time    |
+| Merge method        | squash by default; merge or rebase on request                                                                | a merge commit pushed straight to the target branch; a PR merge only in its PR mode                                              | a merge commit of the PR, never squash or rebase                                                                       | The verified commit itself must end up in the base. A squash or rebase lands a commit nobody checked                             |
+| After the merge     | the provider's response is recorded; a failed local write is repaired by the next poll                       | a deterministic command proves the commit is in the target, then closes                                                          | the PR is read again whatever `gh` exited with; one transaction records it and closes the ticket                       | A timeout after a successful merge is a success, and a crash before the write is repaired by calling again                       |
+| A conflict          | the worker is messaged once to rebase; its branch goes on                                                    | a worker resolves on the same branch; its tests and the next rehearsal check it                                                  | one re-land job through every stage; the old job is superseded; a second conflict stops                                | A resolution is new code, so it gets the same specification, verification, and review, and it is bounded                         |
+| Queue               | none; GitHub's compare-and-swap, and GitHub's merge queue for stacked PRs                                    | requests scored by priority and age, one merging agent per repository                                                            | none                                                                                                                   | The controller runs one ticket at a time and each merge is pinned at GitHub; a queue would guard nothing                         |
+| The work item       | the tracker issue is never closed or commented on                                                            | the source issue is closed once the merge is proved                                                                              | the ticket closes only on a verified merge with no unchecked box left                                                  | Closing is a claim about the work, so it needs the same proof as the merge                                                       |
+
+### Running unattended: what is different, and why
+
+| topic                 | AO                                                                                                     | Gas Town                                                                                                            | orch                                                                                                                      | why                                                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| What keeps running    | a daemon owned by the desktop app                                                                      | a daemon plus supervising agents that watch the workers and each other                                              | nothing: `orch start` is a foreground command and everything ends with it                                                 | One person's machine. A process the user started and can see cannot leave an agent working unnoticed                                 |
+| How much at once      | many sessions; no overall limit found                                                                  | many workers; an optional scheduler caps them                                                                       | one ticket at a time                                                                                                      | Serial work means no merge queue, few conflicts, and one verification run at a time on a single machine                              |
+| How a session starts  | an interactive terminal session, about fifty agent CLIs, `--permission-mode auto` unless set otherwise | an interactive tmux session, `--dangerously-skip-permissions` by default, the confirmation dialogs answered for it  | a headless `claude -p` child, `--permission-mode auto` with a short allow-list, never a bypass; Claude Code only          | Nobody is there to answer a prompt, so the session gets exactly what the factory needs and no more                                   |
+| What decides a step   | an orchestrating agent, from its prompt                                                                | agents, from written procedures ("agent decides, Go transports")                                                    | `orch factory next` returns the step; transitions and gates are TypeScript                                                | A stage counts only when its artifact and evidence were validated by code, not when an agent reports it                              |
+| Talking to a session  | CI failures, review comments, and conflicts are typed into the owning session                          | mail, and nudges typed into the session                                                                             | never; a session reads notices on its next `orch factory next`                                                            | Typing into a session is not something `orch` can do reliably, and a job must not depend on a message arriving                       |
+| A failing check       | sent to the worker again for every new failure, without a limit                                        | the merging agent decides whether the branch caused it                                                              | one bounded re-run, then a recorded rework through build and review, limited by `maxCiRepairs`                            | A repair is new code and is reviewed; a budget turns an endless loop into a ticket that waits for a person                           |
+| A quiet session       | left alone; an agent or a person interrupts or kills it                                                | flagged after 30 minutes without an update; dead workers are restarted; a stale supervisor is nudged, then replaced | left alone; only the process ending ends the wait, and two exits without progress stop the ticket                         | Silence is not evidence of failure: a builder or a test run can be quiet for a long time                                             |
+| After a crash         | live sessions are adopted; dead ones stay stopped until a person resumes the same conversation         | a dead worker is restarted in its worktree and continues from its assigned work                                     | `orch resume` re-reads the ticket's jobs and starts a new session on the same job; refused while the old one may be alive | State is in the job row and its artifacts, not in a conversation, so any session can continue and only the stage in flight is redone |
+| Stopping              | interrupt or kill one session                                                                          | stop everything, shut down with a grace period, or freeze every session in place                                    | `orch stop next` finishes the ticket in flight; `orch stop` ends the session and keeps the job                            | The useful stop for a queue is "after this one"; neither cancels work                                                                |
+| Where a person stands | notified: needs input, ready to merge                                                                  | opt-in review and per-item flags                                                                                    | a `needs-human` stage that the job cannot leave by itself, and that stops the queue                                       | A decision that needs a person is a state the workflow enforces, not a notification that can be missed                               |
+
+### The short version
+
+AO is a desktop product for supervising many agent sessions at once: it watches GitHub, feeds
+failures and review comments back into each session, and leaves the merge to a person. Gas Town is
+a town of long-lived agents that assign, supervise, and merge each other's work, with a daemon to
+keep them alive and deterministic commands at a few critical points. `orch` is neither: it is one
+strict pipeline per ticket, where code decides every step and holds every gate, agents only do the
+work inside a stage, and the merge is a checked operation rather than a judgement.
+
+That buys evidence and predictability and gives up breadth. If you want many agents working at
+once, agents other than Claude Code, a live view of every session, or review comments fed back to
+the agent automatically, AO does that and `orch` does not. If you want a self-running system that
+restarts and nudges its own agents and merges locally without a pull request, Gas Town does that
+and `orch` does not.
+
 ## What is not built
 
-Nothing picks a ticket and starts a job on its own: there is no `orch start`, no scheduler, and no
-merge queue. Each step above is one command that someone, or a skill, runs. Nothing runs on the
+Nothing picks a ticket and starts a job in the background: there is no scheduler and no merge
+queue. Each step above is one command that someone, or a skill, runs, or that `orch start` runs
+in the foreground for as long as that command is running
+([workflow.md](workflow.md#factory-controller)). Nothing runs on the
 merged result either: "verified" means GitHub merged the commit that passed its checks.

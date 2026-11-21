@@ -62,6 +62,16 @@ merging; unknown is never ready) and gastownhall/gastown at `94cc822` (`internal
 work item, each step tolerating "already done"; `recheckMRStillMergeable` in
 `internal/refinery/engineer.go`: re-check branch, target, and commit before acting).
 
+**Where it differs from them.** In agent-orchestrator a merge is always a person's request and
+squashes by default; here it may run unattended where the repository is opted in, and is always a
+merge commit of the verified head. In gastown the merge is made by an agent following a written
+procedure, gated by commands that agent runs and interprets, and the proof comes afterwards; here
+the decision is a pure function over evidence `orch` executed beforehand. (At `94cc822` the
+`engineer.go` re-check cited above is part of an engine nothing outside its package calls; the idea
+was taken from it all the same.) Neither sends a conflict back through specification and review as
+a new job. The full comparison, with the reason for each difference, is in
+[../overview.md](../overview.md#compared-with-agent-orchestrator-and-gas-town).
+
 **Limits.** "Verified" means GitHub merged the head CI passed on; nothing runs on the merged
 result. Anyone who can run `orch` can opt a repository in: the opt-in separates repositories, not
 people. GitHub review requirements are enforced by GitHub alone and surface as a refused merge.

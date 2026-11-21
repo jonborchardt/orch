@@ -1,0 +1,242 @@
+/**
+ * What the foreground factory controller (`orch start`) keeps outside the database: who holds the
+ * controller, what the session was asked to do, and whether a stop was requested. Job stage,
+ * ticket status, CI, and merge evidence stay where they are; nothing here repeats them.
+ *
+ * Kept under the data directory (`runnerPaths`), each with one writer: the lock (generations
+ * taken by exclusive creation, see `acquireRunnerLock`), the session record (that controller, replaced atomically),
+ * and the two stop requests (`orch stop`). A heartbeat can therefore never overwrite a stop.
+ */
+import { randomBytes } from 'node:crypto';
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { uptime } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { ValidationError } from '../core/errors.ts';
+import { runnerPaths, type RuntimePaths } from '../core/paths.ts';
+import { freshRecord } from './recover.ts';
+import { alive, sleep } from './verify-lock.ts';
+
+export const TICKET_OUTCOMES = [
+  'done',
+  'needs-human',
+  'blocked',
+  'refused',
+  'claimed',
+  'stopped',
+] as const;
+/**
+ * `done`: the ticket's lifecycle says done (a verified merge closed it, now or earlier).
+ * `needs-human`: its job waits for a person. `blocked`: started, and cannot go on without one
+ * (cancelled, unverified merge, second conflict, a budget spent). `refused`: nothing was started.
+ * `claimed`: another process created the ticket's job first. `stopped`: `orch stop` interrupted it.
+ */
+export type TicketOutcome = (typeof TICKET_OUTCOMES)[number];
+
+export interface TicketResult {
+  ticketId: number;
+  title: string;
+  repo: string;
+  /** The job that was run or merged last; null when none was created. */
+  jobId: string | null;
+  outcome: TicketOutcome;
+  reason: string;
+  /** Re-land jobs run for it in this session. */
+  relands: number;
+  /** What a person does about it, when something is left to do. */
+  next: string | null;
+}
+
+export interface RunnerSession {
+  pid: number;
+  startedAt: string;
+  beatAt: string;
+  /** `queue`: `orch start`. `ticket`: `orch do <id>`. */
+  mode: 'queue' | 'ticket';
+  /** Queue scope: the root of the one repository, or null for every repository. */
+  repo: string | null;
+  /** The ticket `orch do` was given. */
+  ticket: number | null;
+  /** The ticket and job in flight. */
+  ticketId: number | null;
+  jobId: string | null;
+  /** The Claude process started for that job, until its exit was seen. */
+  child: { pid: number; startedAt: string } | null;
+  results: TicketResult[];
+  /** Tickets passed over without an attempt, with why. */
+  skipped: { ticketId: number; reason: string }[];
+  /** Set when the session ended on its own terms; an interrupted session has none. */
+  finished: { at: string; reason: string } | null;
+}
+
+const bootMs = (nowMs: number) => nowMs - uptime() * 1000;
+
+export function readSession(paths: RuntimePaths): RunnerSession | null {
+  try {
+    const s = JSON.parse(readFileSync(runnerPaths(paths).state, 'utf8')) as RunnerSession;
+    return typeof s.pid === 'number' && typeof s.startedAt === 'string' ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Replace the session record in one step: a reader sees the old record or the new one. */
+export function writeSession(paths: RuntimePaths, session: RunnerSession): void {
+  const file = runnerPaths(paths).state;
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${String(process.pid)}.tmp`;
+  writeFileSync(tmp, JSON.stringify(session, null, 2) + '\n');
+  // Windows refuses the rename while a reader has the target open; that lasts milliseconds.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, file);
+      return;
+    } catch (err) {
+      if (attempt >= 20) throw err;
+      sleep(25);
+    }
+  }
+}
+
+interface LockRecord {
+  pid: number;
+  startedAt: string;
+  /** The holder gave the lock up (it may still be running, as in tests). */
+  released?: boolean;
+}
+
+const lockFile = (paths: RuntimePaths, generation: number) =>
+  join(runnerPaths(paths).lock, String(generation));
+
+/** The highest lock generation taken so far; 0 when there is none. */
+function topGeneration(paths: RuntimePaths): number {
+  let names: string[];
+  try {
+    names = readdirSync(runnerPaths(paths).lock);
+  } catch {
+    return 0;
+  }
+  return Math.max(0, ...names.map(Number).filter((n) => Number.isInteger(n) && n > 0));
+}
+
+/** The live controller holding `generation`, or null when its holder is gone or gave it up. */
+function holderOf(paths: RuntimePaths, generation: number): LockRecord | null {
+  let rec: Partial<LockRecord>;
+  try {
+    rec = JSON.parse(readFileSync(lockFile(paths, generation), 'utf8')) as Partial<LockRecord>;
+  } catch {
+    return null; // generations appear whole (linked into place), so this one is damaged
+  }
+  const { pid, startedAt } = rec;
+  if (typeof pid !== 'number' || typeof startedAt !== 'string' || rec.released === true)
+    return null;
+  if (!alive(pid)) return null;
+  const session = readSession(paths);
+  const beatAt = session?.pid === pid ? session.beatAt : undefined;
+  const nowMs = Date.now();
+  return freshRecord({ pid, startedAt, beatAt }, nowMs, bootMs(nowMs)) ? { pid, startedAt } : null;
+}
+
+/**
+ * The PID of the live controller, or null. The holder of the highest generation is the only
+ * candidate; it is stale when its process is gone, it predates the last boot, it released the
+ * lock, or its session has not beaten for HEARTBEAT_STALE_SECONDS (a reused PID).
+ */
+export function controllerPid(paths: RuntimePaths): number | null {
+  const top = topGeneration(paths);
+  return top === 0 ? null : (holderOf(paths, top)?.pid ?? null);
+}
+
+/**
+ * Become the one controller, or throw while a live one exists. Returns the release function.
+ *
+ * The lock is a sequence of generations, `<data>/runner-lock/<n>`. A starter that finds
+ * generation n stale takes over by creating n + 1, and creating a file that already exists
+ * fails: of any number of starters judging the same stale lock, exactly one gets the next
+ * generation, and the others find a live holder when they look again. Nothing is ever removed
+ * or overwritten by a competitor, so there is no moment at which a fresh lock can be taken away.
+ *
+ * ponytail: one small file per controller session is kept for good. Removing old generations
+ * would free their numbers for a starter still acting on an earlier look; prune only with a
+ * rule that cannot do that.
+ */
+export function acquireRunnerLock(paths: RuntimePaths): () => void {
+  const dir = runnerPaths(paths).lock;
+  mkdirSync(dir, { recursive: true });
+  const mine: LockRecord = { pid: process.pid, startedAt: new Date().toISOString() };
+  // Written in full first and linked into place, so a generation is never seen half written.
+  const tmp = join(dir, `tmp-${String(process.pid)}-${randomBytes(4).toString('hex')}`);
+  writeFileSync(tmp, JSON.stringify(mine));
+  try {
+    for (;;) {
+      const top = topGeneration(paths);
+      const holder = top === 0 ? null : holderOf(paths, top);
+      if (holder !== null) {
+        throw new ValidationError(
+          `A factory controller is already running (PID ${String(holder.pid)}). ` +
+            'See orch status; stop it with orch stop next or orch stop.',
+        );
+      }
+      const file = lockFile(paths, top + 1);
+      try {
+        linkSync(tmp, file);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        continue; // another starter took this generation: look at it
+      }
+      return () => {
+        // Only the holder replaces its own generation, and in one step.
+        const done = `${tmp}-released`;
+        writeFileSync(done, JSON.stringify({ ...mine, released: true }));
+        renameSync(done, file);
+      };
+    }
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+export interface StopRequests {
+  /** Finish the current ticket, then exit (`orch stop next`). */
+  next: boolean;
+  /** End the current execution now, leaving the job resumable (`orch stop`). */
+  now: boolean;
+}
+
+export function stopRequests(paths: RuntimePaths): StopRequests {
+  const files = runnerPaths(paths);
+  return { next: existsSync(files.stopNext), now: existsSync(files.stopNow) };
+}
+
+export function requestStop(paths: RuntimePaths, which: keyof StopRequests): void {
+  const files = runnerPaths(paths);
+  const file = which === 'next' ? files.stopNext : files.stopNow;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, new Date().toISOString() + '\n');
+}
+
+export function clearStop(paths: RuntimePaths, which: keyof StopRequests): void {
+  const files = runnerPaths(paths);
+  rmSync(which === 'next' ? files.stopNext : files.stopNow, { force: true });
+}
+
+/**
+ * Whether the Claude process a dead controller left behind may still be running. Only the PID
+ * and the boot time are known, so a reused PID reads as alive: the caller refuses rather than
+ * start a second agent on the job, and `orch resume --force` is the person's answer.
+ */
+export function childMayBeAlive(session: RunnerSession, nowMs = Date.now()): boolean {
+  const child = session.child;
+  if (!child || !alive(child.pid)) return false;
+  const started = Date.parse(child.startedAt);
+  return Number.isNaN(started) || started >= bootMs(nowMs) - 60_000;
+}

@@ -240,6 +240,59 @@ claim by any other session resets the count. After a successful probe the next p
 smallest CI `waitSeconds`, at least 60 s. The worker never launches, resumes, or messages a Claude
 session and never removes a worktree.
 
+## Factory controller
+
+Opt-in, foreground, and gone when its command exits (decision
+2026-11-21-foreground-factory-runner). `orch start` works the ready queue, `orch start repo` only
+the repository of the current directory, `orch do <ticket>` one ticket, `orch resume` an
+interrupted session. One controller per installation; a second start is refused.
+
+For each ticket, `runTicket` (`src/ops/run.ts`) reads the ticket's jobs and takes the first row
+that applies:
+
+| The ticket has                                       | The controller                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------------------- |
+| status `done`                                        | reports it done                                                     |
+| an unfinished job                                    | continues that job                                                  |
+| status `open`, no unfinished job                     | creates a job (`dispatchJob --ticket`), if merging is enabled there |
+| status `in-progress`, last job completed             | merges it (`mergeJob`), which also records a merge already made     |
+| status `in-progress`, last job cancelled             | stops: a cancelled job is never replaced (`orch ticket reopen`)     |
+| a blocked dependency, a question, a missing checkout | refuses with the ticket's own block reasons                         |
+
+A job runs as session `orch-runner`. In an agent stage the controller claims it, makes sure the
+worktree exists, and starts `claude -p "/factory <job>"` there with `ORCH_SESSION=orch-runner`;
+when the process exits it reads the job row, whatever the exit code. In `ci` with a PR it reads
+GitHub itself with `orch gh ci`'s operation, sleeping the returned `waitSeconds` between reads, and
+starts a session again only if the verdict sent the job back to build. A job in `needs-human` or
+cancelled ends the ticket. A completed job goes to `mergeJob`:
+
+| `mergeJob` says                                    | The controller                                    |
+| -------------------------------------------------- | ------------------------------------------------- |
+| `merged` / `already_merged`, verified, ticket done | the ticket is done; next ticket                   |
+| the same, not verified, or the ticket stays open   | blocked (unchecked boxes are named)               |
+| `reland`                                           | runs the re-land job the same way, then merges it |
+| `waiting`, `error`                                 | tries again every 30 s, five times                |
+| `blocked` (second conflict, head changed, refused) | blocked, with the code and reason                 |
+
+Budgets: two sessions in a row that exit without changing the job's stage, round, CI repairs, or
+artifacts; 60 CI reads; five unreadable answers from GitHub. A spent budget, a blocked ticket, or
+a job waiting for a person ends the whole session with the ticket, the job, the reason, and the
+command that continues it; the queue never moves on past it. Exit status is 1 in that case.
+
+`orch stop next` is read at the ticket boundary. `orch stop` (or Ctrl+C) terminates the Claude
+process the controller started, releases the job in the state it was in, and leaves the session
+for `orch resume`; with no controller alive it discards an interrupted session instead. Neither
+cancels anything.
+
+State lives in `<data>/runner-lock/` (one small file per session; the highest number is the
+current lock), `runner.json`, `runner.stop-next`, and `runner.stop-now`.
+`runner.json` holds what the session was asked to do and which ticket, job, and child PID are in
+flight; everything else `orch status` prints is read from the job row. After a crash,
+`orch resume` re-runs `runTicket` for the ticket in flight, which continues the same job or
+finishes the same merge, and then goes on as the session was configured. It refuses while the
+recorded child PID is alive (`--force` when that PID is another program); `orch start` and
+`orch do` refuse while an interrupted session exists.
+
 ## Session notices
 
 A running session is never messaged; it learns of outside events on its next `orch factory
