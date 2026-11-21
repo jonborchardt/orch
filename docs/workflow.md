@@ -284,7 +284,8 @@ process the controller started, releases the job in the state it was in, and lea
 for `orch resume`; with no controller alive it discards an interrupted session instead. Neither
 cancels anything.
 
-State lives in `<data>/runner.lock`, `runner.json`, `runner.stop-next`, and `runner.stop-now`.
+State lives in `<data>/runner-lock/` (one small file per session; the highest number is the
+current lock), `runner.json`, `runner.stop-next`, and `runner.stop-now`.
 `runner.json` holds what the session was asked to do and which ticket, job, and child PID are in
 flight; everything else `orch status` prints is read from the job row. After a crash,
 `orch resume` re-runs `runTicket` for the ticket in flight, which continues the same job or

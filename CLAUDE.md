@@ -98,7 +98,7 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   ticket it is working on (decision 2026-11-21-foreground-factory-runner). `src/ops/run.ts`
   sequences existing operations (`listTickets`, `dispatchJob`, `resumeFactoryJob`, `reconcileCi`,
   `mergeJob`) and re-reads the job row at every step; it implements no stage, skips no gate, and
-  never calls `gh` or `orch ticket done` itself. Its own state is the four single-writer files of
+  never calls `gh` or `orch ticket done` itself. Its own state is the single-writer files of
   `src/ops/runner-state.ts`, never a table and never a copy of job or ticket state. Do not detach
   it, start it from the dashboard or another command, message a session, run two tickets at once,
   or signal a PID read from a file.

@@ -5,7 +5,8 @@
  * (tests/claude-session.test.ts starts real processes; tests/run-ci.test.ts drives a real job to
  * the ci stage). GitHub is the stateful shim; nothing reaches the network.
  */
-import { rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -666,7 +667,7 @@ describe('one controller at a time', () => {
     expect(controllerPid(store.paths)).toBeNull();
 
     writeFileSync(
-      runnerPaths(store.paths).lock,
+      join(runnerPaths(store.paths).lock, '7'),
       JSON.stringify({ pid: DEAD_PID, startedAt: new Date().toISOString() }),
     );
     expect(controllerPid(store.paths)).toBeNull();
@@ -677,8 +678,9 @@ describe('one controller at a time', () => {
 
   it('a lock whose live PID stopped beating long ago (a reused PID) is stale', () => {
     const old = new Date(Date.now() - 3 * 3600_000).toISOString();
+    mkdirSync(runnerPaths(store.paths).lock, { recursive: true });
     writeFileSync(
-      runnerPaths(store.paths).lock,
+      join(runnerPaths(store.paths).lock, '7'),
       JSON.stringify({ pid: process.pid, startedAt: old }),
     );
     expect(controllerPid(store.paths)).toBeNull();

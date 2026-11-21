@@ -127,7 +127,8 @@ export function recoveryPaths(paths: RuntimePaths = runtimePaths()): {
 }
 
 /**
- * The foreground factory controller's files (`orch start`): the lock one live controller holds,
+ * The foreground factory controller's files (`orch start`): the directory of lock generations
+ * (the live controller holds the highest),
  * the session record only that controller writes, and the two stop requests only `orch stop`
  * creates. One writer per file, so no update is ever lost to another process.
  */
@@ -138,7 +139,7 @@ export function runnerPaths(paths: RuntimePaths = runtimePaths()): {
   stopNow: string;
 } {
   return {
-    lock: join(paths.data, 'runner.lock'),
+    lock: join(paths.data, 'runner-lock'),
     state: join(paths.data, 'runner.json'),
     stopNext: join(paths.data, 'runner.stop-next'),
     stopNow: join(paths.data, 'runner.stop-now'),

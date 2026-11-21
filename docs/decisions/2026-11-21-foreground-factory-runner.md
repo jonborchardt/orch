@@ -39,9 +39,11 @@ at a time, or supervising any process other than the one child it started.
   `orch factory resume` is then a renewal, and after a crash the next controller renews the same
   lease without `--force`. Whenever the controller gives a job up unfinished it releases it, so a
   person's `/factory <job>` can take it at once.
-- **State outside the database** is four files in the data directory, one writer each
-  (`src/ops/runner-state.ts`): `runner.lock` (the live controller; created with `wx`, so two
-  starts cannot both hold it; stale when its PID is gone, predates the boot, or stopped beating),
+- **State outside the database** lives in the data directory, one writer per file
+  (`src/ops/runner-state.ts`): `runner-lock/<n>` (lock generations: the live controller holds
+  the highest; a starter that finds generation n stale takes over by creating n + 1 exclusively,
+  so of any number of starters exactly one succeeds and no starter ever removes a lock; a holder
+  is stale when its PID is gone, predates the boot, stopped beating, or released),
   `runner.json` (the session's intent: mode, repository scope, explicit ticket, the ticket, job,
   and child PID in flight, results; replaced by rename), and `runner.stop-next` /
   `runner.stop-now` (written only by `orch stop`). A heartbeat therefore cannot erase a stop
@@ -67,8 +69,11 @@ starts and can see is the smallest thing that removes that step while keeping th
 decision 51: there is still no invisible session, since the controller prints what it starts and
 `orch status` names the child, and still no supervisor, since everything ends with the command.
 
-**Limits.** Only the launch itself was exercised against the real `claude` (2.1.323, Windows): a
-complete unattended `/factory` run under the default permission arguments is not covered by the
-suite, which replaces the child. A Claude installed as a `.cmd` shim is refused, because the prompt
+**Limits.** The suite replaces the child. One real run was made by hand (2026-11-20, `claude`
+2.1.323, Windows, a disposable repository): `orch start` took a ticket through every stage, a
+passing GitHub check, a verified merge, and the ticket's completion in ten minutes with the
+default permission arguments and nobody intervening. In that run the session saw CI pass itself,
+so the controller's own CI reads, the re-land, and stop and resume are covered by tests only. A
+Claude installed as a `.cmd` shim is refused, because the prompt
 cannot be passed through `cmd.exe` safely. The child-alive check knows only a PID and the boot
 time; a reused PID reads as alive until `--force`.

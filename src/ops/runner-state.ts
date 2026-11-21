@@ -3,13 +3,23 @@
  * controller, what the session was asked to do, and whether a stop was requested. Job stage,
  * ticket status, CI, and merge evidence stay where they are; nothing here repeats them.
  *
- * Four files under the data directory (`runnerPaths`), each with one writer: the lock (the live
- * controller, created exclusively), the session record (that controller, replaced atomically),
+ * Kept under the data directory (`runnerPaths`), each with one writer: the lock (generations
+ * taken by exclusive creation, see `acquireRunnerLock`), the session record (that controller, replaced atomically),
  * and the two stop requests (`orch stop`). A heartbeat can therefore never overwrite a stop.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { uptime } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
 import { runnerPaths, type RuntimePaths } from '../core/paths.ts';
@@ -100,76 +110,99 @@ export function writeSession(paths: RuntimePaths, session: RunnerSession): void 
 interface LockRecord {
   pid: number;
   startedAt: string;
+  /** The holder gave the lock up (it may still be running, as in tests). */
+  released?: boolean;
 }
 
-function readLock(file: string): { text: string; rec: LockRecord | null } | null {
-  let text: string;
+const lockFile = (paths: RuntimePaths, generation: number) =>
+  join(runnerPaths(paths).lock, String(generation));
+
+/** The highest lock generation taken so far; 0 when there is none. */
+function topGeneration(paths: RuntimePaths): number {
+  let names: string[];
   try {
-    text = readFileSync(file, 'utf8');
+    names = readdirSync(runnerPaths(paths).lock);
   } catch {
+    return 0;
+  }
+  return Math.max(0, ...names.map(Number).filter((n) => Number.isInteger(n) && n > 0));
+}
+
+/** The live controller holding `generation`, or null when its holder is gone or gave it up. */
+function holderOf(paths: RuntimePaths, generation: number): LockRecord | null {
+  let rec: Partial<LockRecord>;
+  try {
+    rec = JSON.parse(readFileSync(lockFile(paths, generation), 'utf8')) as Partial<LockRecord>;
+  } catch {
+    return null; // generations appear whole (linked into place), so this one is damaged
+  }
+  const { pid, startedAt } = rec;
+  if (typeof pid !== 'number' || typeof startedAt !== 'string' || rec.released === true)
     return null;
-  }
-  try {
-    const rec = JSON.parse(text) as Partial<LockRecord>;
-    if (typeof rec.pid === 'number' && typeof rec.startedAt === 'string') {
-      return { text, rec: { pid: rec.pid, startedAt: rec.startedAt } };
-    }
-  } catch {
-    /* partly written */
-  }
-  return { text, rec: null };
+  if (!alive(pid)) return null;
+  const session = readSession(paths);
+  const beatAt = session?.pid === pid ? session.beatAt : undefined;
+  const nowMs = Date.now();
+  return freshRecord({ pid, startedAt, beatAt }, nowMs, bootMs(nowMs)) ? { pid, startedAt } : null;
 }
 
 /**
- * The PID of the live controller, or null. A lock whose process is gone, that predates the last
- * boot, or whose session has not beaten for HEARTBEAT_STALE_SECONDS (a reused PID) is stale.
+ * The PID of the live controller, or null. The holder of the highest generation is the only
+ * candidate; it is stale when its process is gone, it predates the last boot, it released the
+ * lock, or its session has not beaten for HEARTBEAT_STALE_SECONDS (a reused PID).
  */
 export function controllerPid(paths: RuntimePaths): number | null {
-  const lock = readLock(runnerPaths(paths).lock)?.rec;
-  if (!lock || !alive(lock.pid)) return null;
-  const session = readSession(paths);
-  const beatAt = session?.pid === lock.pid ? session.beatAt : undefined;
-  const nowMs = Date.now();
-  return freshRecord({ ...lock, beatAt }, nowMs, bootMs(nowMs)) ? lock.pid : null;
+  const top = topGeneration(paths);
+  return top === 0 ? null : (holderOf(paths, top)?.pid ?? null);
 }
 
 /**
- * Become the one controller, or throw while a live one exists. The lock is created exclusively,
- * so of two simultaneous starts one fails here. Returns the release function.
+ * Become the one controller, or throw while a live one exists. Returns the release function.
+ *
+ * The lock is a sequence of generations, `<data>/runner-lock/<n>`. A starter that finds
+ * generation n stale takes over by creating n + 1, and creating a file that already exists
+ * fails: of any number of starters judging the same stale lock, exactly one gets the next
+ * generation, and the others find a live holder when they look again. Nothing is ever removed
+ * or overwritten by a competitor, so there is no moment at which a fresh lock can be taken away.
+ *
+ * ponytail: one small file per controller session is kept for good. Removing old generations
+ * would free their numbers for a starter still acting on an earlier look; prune only with a
+ * rule that cannot do that.
  */
 export function acquireRunnerLock(paths: RuntimePaths): () => void {
-  const file = runnerPaths(paths).lock;
-  mkdirSync(dirname(file), { recursive: true });
-  const mine = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
-  const release = () => {
-    if (readLock(file)?.text === mine) rmSync(file, { force: true });
-  };
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      writeFileSync(file, mine, { flag: 'wx' });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      const pid = controllerPid(paths);
-      if (pid !== null) {
+  const dir = runnerPaths(paths).lock;
+  mkdirSync(dir, { recursive: true });
+  const mine: LockRecord = { pid: process.pid, startedAt: new Date().toISOString() };
+  // Written in full first and linked into place, so a generation is never seen half written.
+  const tmp = join(dir, `tmp-${String(process.pid)}-${randomBytes(4).toString('hex')}`);
+  writeFileSync(tmp, JSON.stringify(mine));
+  try {
+    for (;;) {
+      const top = topGeneration(paths);
+      const holder = top === 0 ? null : holderOf(paths, top);
+      if (holder !== null) {
         throw new ValidationError(
-          `A factory controller is already running (PID ${String(pid)}). ` +
+          `A factory controller is already running (PID ${String(holder.pid)}). ` +
             'See orch status; stop it with orch stop next or orch stop.',
         );
       }
-      // A dead controller's lock: remove it only if it is still the one we judged.
-      const found = readLock(file);
-      if (found && controllerPid(paths) === null && readLock(file)?.text === found.text) {
-        rmSync(file, { force: true });
+      const file = lockFile(paths, top + 1);
+      try {
+        linkSync(tmp, file);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        continue; // another starter took this generation: look at it
       }
-      continue;
+      return () => {
+        // Only the holder replaces its own generation, and in one step.
+        const done = `${tmp}-released`;
+        writeFileSync(done, JSON.stringify({ ...mine, released: true }));
+        renameSync(done, file);
+      };
     }
-    // ponytail: two starters that both judged one dead lock stale can each create a lock, the
-    // second after removing the first's. Looking again after a pause leaves exactly one of them
-    // holding it; a lock in a directory handle would need native code.
-    sleep(100);
-    if (readLock(file)?.text === mine) return release;
+  } finally {
+    rmSync(tmp, { force: true });
   }
-  throw new ValidationError('Another factory controller is starting; see orch status.');
 }
 
 export interface StopRequests {
