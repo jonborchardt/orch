@@ -486,11 +486,10 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     const blocked = [...detail.events].reverse().find((e) => e.type === 'job.blocked');
     plan.blockedReason = (blocked?.payload['reason'] as string | null | undefined) ?? null;
     plan.reason =
-      job.returnStage === 'spec'
-        ? 'A human must decide. Report the blocking reason and stop. To continue: ' +
-          `${specResumeSteps(id, detail.artifactDir, job.ticketId)}.`
-        : 'A human must decide. Report the blocking reason and stop. To continue after the decision: ' +
-          `orch factory resume ${id} --session <name> [--to ${job.returnStage ?? '<stage>'}]`;
+      'A human must decide. Report the blocking reason and stop. To continue' +
+      (job.returnStage === 'spec'
+        ? `: ${specResumeSteps(id, detail.artifactDir, job.ticketId)}.`
+        : ` after the decision: orch factory resume ${id} --session <name> [--to ${job.returnStage ?? '<stage>'}]`);
     plan.commands = [`orch job show ${id}`];
     return plan;
   }
