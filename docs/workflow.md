@@ -923,8 +923,9 @@ the database, so the guard can run from any checkout without touching the shared
   activity, not its last write: a session that reads, reasons, or runs a long test suite without
   editing keeps its checkout. A session that died without `SessionEnd` lets both lapse, after
   which the next session reclaims; the old session's next write is then refused instead of racing.
-  The shipped command runs this checkout's own source when `src/cli/checkout.ts` exists, otherwise
-  the installed `orch` if it has the `checkout` command, and otherwise prints a warning and exits
+  The shipped command runs this checkout's own source when `src/cli/checkout.ts` exists and the
+  checkout's dependencies are installed (`node_modules/drizzle-orm`; a factory job worktree has
+  the source but no `node_modules`), otherwise the installed `orch` if it has the `checkout` command, and otherwise prints a warning and exits
   1: Claude Code shows the warning and lets the edit through, so a session on a branch without the
   guard sees that it is unprotected rather than being locked out or silently exposed (Claude Code
   keeps the hook configuration it loaded at startup across branch switches, and an exit 2 from any
