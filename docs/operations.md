@@ -427,9 +427,11 @@ failure the skill escalated. End to end:
      **Accept verification policy**, **Accept delivery** (only for a `ci` escalation where GitHub
      reported no checks or the PR was merged by hand), or **Cancel**; for a base conflict in
      `approve`, `pr`, or `ci`, or on a completed job's open PR, **Fix merge conflicts**;
-   - or the CLI: `orch factory resume <job> --to <stage> --session orch-runner`. Pass
-     `--session orch-runner`: the resume leaves its session's lease on the job, and under any
-     other name `orch do` reports the job as held until the lease lapses.
+   - or the CLI: `orch factory resume <job> --to <stage> --release`. Pass `--release`: without
+     it the resume leaves its session's lease on the job, and `orch do` reports the job as held
+     until the lease lapses. For a spec the challenger rejected twice, edit
+     `<artifactDir>/spec.md` first and resume at `spec`; the next plan registers the edit and
+     re-challenges it.
 5. Continue: `orch do <ticket>` runs the same job from the chosen stage; `orch start` afterwards
    goes on with the queue.
 

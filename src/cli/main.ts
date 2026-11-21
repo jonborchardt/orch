@@ -172,6 +172,7 @@ export async function main(argv: string[]): Promise<number> {
         'no-ui': bool,
         fingerprint: str,
         adopt: str,
+        release: bool,
         // job session attach
         provider: str,
         ref: str,
