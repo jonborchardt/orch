@@ -346,7 +346,8 @@ overrides and `maxRounds`/`maxCiRepairs` go in `<config>/factory.json` (`orch fa
 
 - `orch <command> --help` for every command and option.
 - [docs/overview.md](docs/overview.md): how tickets, the factory, and the merge fit together, and
-  how the ticket queue compares with Beads.
+  how `orch` compares with Beads (tickets) and with agent-orchestrator and Gas Town (merging and
+  running unattended), with the reason for each difference.
 - [docs/workflow.md](docs/workflow.md): stages, transitions, artifacts, events, worktrees,
   verification evidence, GitHub integration, CI reconciliation, ownership.
 - [docs/dashboard.md](docs/dashboard.md): the dashboard's views, actions, and security model.

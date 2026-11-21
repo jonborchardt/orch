@@ -69,6 +69,15 @@ starts and can see is the smallest thing that removes that step while keeping th
 decision 51: there is still no invisible session, since the controller prints what it starts and
 `orch status` names the child, and still no supervisor, since everything ends with the command.
 
+**Compared with other projects.** Nothing here was taken from another project: the controller
+was built from `orch`'s own operations, and agent-orchestrator and gastown were read for this
+purpose only afterwards. Both keep a daemon running, run many sessions at once, start interactive
+sessions, and talk to them while they work; gastown also restarts and nudges sessions it judges
+stalled and starts Claude with permissions bypassed. This controller does none of that, for the
+reasons above: a foreground command, one ticket, a headless session with a short allow-list, no
+messages, and no judgement about a quiet session. What each of them does instead, and why `orch`
+differs, is in [../overview.md](../overview.md#compared-with-agent-orchestrator-and-gas-town).
+
 **Limits.** The suite replaces the child. One real run was made by hand (2026-11-20, `claude`
 2.1.323, Windows, a disposable repository): `orch start` took a ticket through every stage, a
 passing GitHub check, a verified merge, and the ticket's completion in ten minutes with the
