@@ -156,8 +156,12 @@ export function controllerPid(paths: RuntimePaths): number | null {
   return top === 0 ? null : (holderOf(paths, top)?.pid ?? null);
 }
 
+/** The release function of a held lock; `owned()` says whether its generation is still the top. */
+export type RunnerLock = (() => void) & { owned(): boolean };
+
 /**
- * Become the one controller, or throw while a live one exists. Returns the release function.
+ * Become the one controller, or throw while a live one exists. Returns the release function,
+ * with `owned()`: false once a higher generation exists, which is for good (numbers only grow).
  *
  * The lock is a sequence of generations, `<data>/runner-lock/<n>`. A starter that finds
  * generation n stale takes over by creating n + 1, and creating a file that already exists
@@ -169,7 +173,7 @@ export function controllerPid(paths: RuntimePaths): number | null {
  * would free their numbers for a starter still acting on an earlier look; prune only with a
  * rule that cannot do that.
  */
-export function acquireRunnerLock(paths: RuntimePaths): () => void {
+export function acquireRunnerLock(paths: RuntimePaths): RunnerLock {
   const dir = runnerPaths(paths).lock;
   mkdirSync(dir, { recursive: true });
   const mine: LockRecord = { pid: process.pid, startedAt: new Date().toISOString() };
@@ -186,19 +190,21 @@ export function acquireRunnerLock(paths: RuntimePaths): () => void {
             'See orch status; stop it with orch stop next or orch stop.',
         );
       }
-      const file = lockFile(paths, top + 1);
+      const generation = top + 1;
+      const file = lockFile(paths, generation);
       try {
         linkSync(tmp, file);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
         continue; // another starter took this generation: look at it
       }
-      return () => {
+      const release = () => {
         // Only the holder replaces its own generation, and in one step.
         const done = `${tmp}-released`;
         writeFileSync(done, JSON.stringify({ ...mine, released: true }));
         renameSync(done, file);
       };
+      return Object.assign(release, { owned: () => topGeneration(paths) === generation });
     }
   } finally {
     rmSync(tmp, { force: true });
