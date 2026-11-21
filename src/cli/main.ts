@@ -22,6 +22,7 @@ import type { TicketList } from '../ops/tickets.ts';
 import { mailWatermark, reportJobMail } from '../ops/mail.ts';
 import { RECOVER_HELP, runRecover } from './recover.ts';
 import { formatTicketList, runTicket, TICKET_HELP } from './ticket.ts';
+import { RUN_COMMANDS, RUN_HELP, runRunner } from './run.ts';
 import { runUi, UI_HELP } from './ui.ts';
 import { runVerify, VERIFY_HELP } from './verify.ts';
 import { runWorktree, WORKTREE_HELP } from './worktree.ts';
@@ -34,8 +35,17 @@ Typical workflow:
   orch factory list          Every job with its state, owner, and attention needed
   orch factory status <id>   One job's current step, agents, artifacts, and commands (read-only)
   orch ui                    Watch jobs in the local dashboard
+  orch start                 Work the ticket queue unattended: run, verify, merge, next ticket
 
 Commands:
+  start [repo]           Run the factory controller in the foreground: take ready tickets (of
+                         every repository, or only this one), run each job with /factory in a
+                         headless Claude Code session, merge verified work, continue
+  do <ticket-id>         The same for exactly one ticket
+  stop [next]            Stop the controller now (the job is kept, never cancelled), or with
+                         next: after the current ticket
+  status                 The controller, its ticket and job, and what happens next
+  resume                 Continue an interrupted controller session (orch start --help)
   factory <subcommand>   The primary interface: start, plan, resume, dispatch, and list factory
                          jobs for the /factory skill (orch factory --help)
   ticket <subcommand>    The global ticket queue: add, list, ready, show, edit, start, done,
@@ -68,8 +78,9 @@ Options:
       --json             Machine-readable output (errors go to stderr as JSON)
 
 orch is a one-shot CLI: it opens the shared SQLite database, performs one deterministic
-operation, prints the result, and exits. The only long-running commands are orch ui and the
-opt-in orch recover worker; jobs never need either to be running.
+operation, prints the result, and exits. The only long-running commands are orch ui, the
+opt-in orch recover worker, and the factory controller (orch start, do, resume), which runs in
+the foreground until its session ends; jobs never need any of them to be running.
 `;
 
 const SUBCOMMAND_HELP: Record<string, string> = {
@@ -84,6 +95,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   recover: RECOVER_HELP,
   mail: MAIL_HELP,
   ticket: TICKET_HELP,
+  ...Object.fromEntries(RUN_COMMANDS.map((c) => [c, RUN_HELP])),
 };
 
 const str = { type: 'string' } as const;
@@ -280,6 +292,15 @@ export async function main(argv: string[]): Promise<number> {
       }
       case 'ui':
         return await runUi(o);
+      case 'start':
+      case 'do':
+      case 'stop':
+      case 'status':
+      case 'resume': {
+        const { text, data, exitCode } = await runRunner(command, rest, { json, force: o.force });
+        print(json ? data : text, json);
+        return exitCode;
+      }
       case 'recover':
         print(await runRecover(rest, o, process.argv[1] ?? ''), json);
         return 0;

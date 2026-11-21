@@ -126,6 +126,25 @@ export function recoveryPaths(paths: RuntimePaths = runtimePaths()): {
   };
 }
 
+/**
+ * The foreground factory controller's files (`orch start`): the lock one live controller holds,
+ * the session record only that controller writes, and the two stop requests only `orch stop`
+ * creates. One writer per file, so no update is ever lost to another process.
+ */
+export function runnerPaths(paths: RuntimePaths = runtimePaths()): {
+  lock: string;
+  state: string;
+  stopNext: string;
+  stopNow: string;
+} {
+  return {
+    lock: join(paths.data, 'runner.lock'),
+    state: join(paths.data, 'runner.json'),
+    stopNext: join(paths.data, 'runner.stop-next'),
+    stopNow: join(paths.data, 'runner.stop-now'),
+  };
+}
+
 /** Per-job artifact directory (spec.md, build.md, round-N/...). Distinct from any worktree. */
 export function jobArtifactDir(jobId: string, paths: RuntimePaths = runtimePaths()): string {
   return join(paths.data, 'jobs', jobId, 'artifacts');

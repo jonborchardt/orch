@@ -76,7 +76,28 @@ export interface FactoryConfig {
    * human click. Empty by default; changed with `orch factory config merge enable|disable`.
    */
   mergeRepos: string[];
+  /**
+   * Permission arguments `orch start` passes to its `claude -p` child, replacing
+   * DEFAULT_RUNNER_CLAUDE_ARGS (a repository whose checks need other tools lists them here).
+   */
+  runnerClaudeArgs: string[];
 }
+
+/**
+ * The smallest set a headless /factory session was found to need: classifier-approved edits plus
+ * the shell commands the skill and its builder run. Never a blanket permission bypass.
+ */
+export const DEFAULT_RUNNER_CLAUDE_ARGS: readonly string[] = [
+  '--permission-mode',
+  'auto',
+  '--allowedTools',
+  'Bash(orch *)',
+  'Bash(git *)',
+  'Bash(npm *)',
+  'Bash(npx *)',
+  'Bash(node *)',
+  'Bash(cd *)',
+];
 
 export const DEFAULT_CONFIG: FactoryConfig = {
   models: {},
@@ -84,6 +105,7 @@ export const DEFAULT_CONFIG: FactoryConfig = {
   maxRounds: 3,
   maxCiRepairs: 2,
   mergeRepos: [],
+  runnerClaudeArgs: [...DEFAULT_RUNNER_CLAUDE_ARGS],
 };
 
 /** Validate a parsed factory.json. Unknown keys are rejected so typos do not pass silently. */
@@ -150,6 +172,15 @@ export function parseConfig(raw: unknown): FactoryConfig {
           );
         }
         config.mergeRepos = value as string[];
+        break;
+      }
+      case 'runnerClaudeArgs': {
+        if (!Array.isArray(value) || !value.every((v) => typeof v === 'string' && v !== '')) {
+          throw new ValidationError(
+            'factory.json: "runnerClaudeArgs" must be an array of claude command-line arguments',
+          );
+        }
+        config.runnerClaudeArgs = value as string[];
         break;
       }
       default:

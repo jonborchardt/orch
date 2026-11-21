@@ -139,6 +139,8 @@ without the factory, Beads is the better fit. `orch` does not try to cover that.
 
 ## What is not built
 
-Nothing picks a ticket and starts a job on its own: there is no `orch start`, no scheduler, and no
-merge queue. Each step above is one command that someone, or a skill, runs. Nothing runs on the
+Nothing picks a ticket and starts a job in the background: there is no scheduler and no merge
+queue. Each step above is one command that someone, or a skill, runs, or that `orch start` runs
+in the foreground for as long as that command is running
+([workflow.md](workflow.md#factory-controller)). Nothing runs on the
 merged result either: "verified" means GitHub merged the commit that passed its checks.

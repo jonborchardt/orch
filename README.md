@@ -208,9 +208,37 @@ orch ticket done 85 --note "merged <pr>"   # or close it by hand
 ```
 
 A ticket has at most one unfinished job; a job finishing never closes its ticket (a verified merge
-through `orch job merge` or the dashboard does, unless checklist items remain). Nothing picks
-tickets and runs them automatically. Fields, readiness rules, the HTTP API, and the one-shot import
+through `orch job merge` or the dashboard does, unless checklist items remain). Fields, readiness rules, the HTTP API, and the one-shot import
 of a Markdown todo register are in [docs/tickets.md](docs/tickets.md).
+
+## Run the queue unattended
+
+`orch start` is a foreground controller: while it runs, it takes the best ready ticket, runs its
+job with the `/factory` skill in a headless Claude Code session (`claude -p`), waits for CI, merges
+the verified PR, and takes the next ticket. Nothing keeps running after the command exits.
+
+```sh
+orch factory config merge enable --repo <path>   # once per repository: let orch merge its PRs
+orch start                # every repository's ready tickets, best first, one at a time
+orch start repo           # only the repository containing the current directory
+orch do 85                # one ticket: start its job, continue it, or merge it
+orch status               # controller, ticket, job, what it waits on, what happens next
+orch stop next            # finish the current ticket, start no other, exit
+orch stop                 # end the current session now; the job is kept, never cancelled
+orch resume               # continue an interrupted session: same scope, ticket, job, stop request
+```
+
+A ticket counts as done only when the PR merged at the commit CI passed on and the ticket's own
+lifecycle closed it. The controller stops at the first ticket it could not finish (the job needs a
+person, was cancelled, conflicts twice, or a small retry budget is spent) and prints what to do;
+it does not go on to other work. Tickets of a repository without the merge opt-in are reported
+and passed over. `Ctrl+C` is `orch stop`.
+
+It needs `claude` on PATH as the native executable, signed in, with the `factory` skill installed
+(`orch install`). The session gets `--permission-mode auto` plus an allow-list for `orch`, `git`,
+`npm`, `npx`, `node`, and `cd`, never a permission bypass; if a repository's builder needs other
+commands, set `"runnerClaudeArgs": [...]` in `<config>/factory.json` (it replaces the default
+list). Details: [docs/workflow.md](docs/workflow.md#factory-controller).
 
 ## Email reports
 
