@@ -584,12 +584,3 @@ require it), no replies read. A mail is sent at most once: a failed send is reco
 a `mail.failed` event, warned about on stderr, and never retried, and it never fails or undoes the
 command. Unset, nothing is sent and nothing changes. Internals:
 [workflow.md](workflow.md#status-mail).
-
-## The dashboard in one paragraph
-
-`orch ui` serves a loopback-only dashboard over the same database. The **Jobs** section is the
-board and each job's detail (Overview, Spec, Build, Reviews, Findings, Decision, Artifacts, Events,
-Session, Git, Verification, PR) with the human decisions the workflow allows. The **Tickets**
-section is the global queue with filters, search, creation, priority changes, and each ticket's
-detail, links, jobs, and history, headed by a read-only factory status strip. It starts, stops,
-and resumes nothing: the controller is CLI only. Details: [dashboard.md](dashboard.md).

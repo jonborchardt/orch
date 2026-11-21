@@ -155,45 +155,11 @@ enforces about the relationship:
 
 ## The life of a ticket
 
-```
-orch ticket add            ticket: open
-        │
-orch ticket ready          open, not a question, dependencies done, no unfinished job,
-        │                  repository checkout present
-        │
-orch factory start         job created; in the same transaction the ticket becomes
-  --ticket <id>            in-progress and is linked to the job (orch start and orch do
-                           create it the same way, through orch factory dispatch)
-        │
-/factory                   spec → build → simplify → review → approve → pr → ci
-        │                  every stage gated by orch on a validated artifact and a
-        │                  verification run for the exact commit
-        │
-job completed              PR ready for review, GitHub's required checks passed on ciHead
-        │                  the ticket is still in-progress
-        │
-orch job merge <job>       reads the PR fresh, merges exactly ciHead as a merge commit,
-  or dashboard Merge       reads GitHub again to confirm, records the merge commit
-        │
-ticket: done               in the same transaction as the merge record, when the merged
-                           head is the verified one and no `- [ ]` item is left
-```
-
-What can interrupt that path:
-
-- **The PR conflicts with the base.** `orch job merge` creates one re-land job on the same ticket
-  and marks the old job superseded. The re-land runs the factory again. If it conflicts too,
-  nothing more is created and a person decides.
-- **The ticket has unchecked checklist items.** The merge is recorded and the ticket stays
-  in-progress, with the reason noted once. Tick what was delivered and run `orch job merge` again,
-  or close it with `orch ticket done`.
-- **GitHub merged a different head than CI passed on.** The merge is recorded as
-  `verified: false`, the ticket stays open, and the command exits 1.
-- **The repository is not opted in.** `orch job merge` refuses (`not-authorized`). The dashboard's
-  Merge still works, because a click is a person's decision.
-
-The `/dotodo` skill is this whole path as one instruction: start the factory for a ticket, tick the
-delivered boxes, call `orch job merge`, and report. It adds no rules of its own.
+A ticket goes from `open` through a claim (`in-progress`, linked to its job), the gated `/factory`
+stages, and a verified merge to `done`; a completed job leaves the ticket `in-progress` until that
+merge is recorded. Every step, and what can interrupt it (a conflict, unchecked checklist items, an
+unverified head, a repository not opted in), is in
+[workflow.md](workflow.md#the-ticket-lifecycle-end-to-end).
 
 ## Who decides what
 
@@ -235,37 +201,18 @@ events are evidence; nothing decides from them
 
 ## Ownership and leases
 
-A job has at most one owner. `orch job claim` (or `orch factory start`/`resume`) atomically takes
-it and returns a token; the lease lasts 30 minutes by default and every successful mutation by
-the holder renews it. There is no daemon renewing anything: a session that goes quiet lets its
-lease lapse, and another session may then take over, which rotates the token so the previous
-owner's commands fail with exit 4. The controller runs jobs as session `orch-runner`, and its
-Claude child claims under the same name, so the child renews the controller's claim instead of
-meeting a foreign lease. Whenever the controller leaves a job it releases it; a job another
-session holds is left exactly as it is. Short operations (dashboard actions, `orch job merge`,
-`orch job supersede`) claim for one episode and release. Checkouts have a separate, cooperative
-lease for edits. Details: [workflow.md](workflow.md#ownership-and-resumability).
+A job has at most one owner, holding a token and a lease (30 minutes by default) that only its own
+mutations renew; a lapsed lease may be taken over, which rotates the token so the old owner gets
+exit 4. The controller and its Claude child share session `orch-runner` and release a job when they
+leave it. Details: [workflow.md](workflow.md#ownership-and-resumability).
 
 ## Verification boundaries
 
-What counts as evidence, and what does not:
-
-- **The policy is the base's.** `orch verify` runs the `factory.json` at the merge base of the job
-  branch: code the job did not write. A job's edit to it changes nothing until a person accepts
-  it. The commands are argument arrays resolved on `PATH`; nothing from a title, description,
-  issue, or the dashboard is executed.
-- **Evidence is bound to a commit.** A run is valid only for the HEAD and tree it ran on, in a
-  clean worktree, under the same policy fingerprint, with every required check passed. Gates
-  recompute that at every step; no flag skips one.
-- **Labels are not prevention.** Changes to tests, CI, dependencies, and the policy are labelled
-  and must be named in the review and the PR, but the policy fixes which commands run, not what
-  the job's scripts do.
-- **CI is GitHub's.** The `ci` stage completes only on GitHub's passing verdict for the exact PR
-  head, read by `orch`; a merge counts only at that head.
-- **Isolation is advisory at the filesystem level.** `orch` refuses to count writes outside a
-  clean worktree at a recorded HEAD as progress, but cannot stop a process from making them.
-
-Details: [workflow.md](workflow.md#verification-evidence).
+`orch verify` runs the `factory.json` at the merge base (code the job did not write), and a run is
+evidence only for the clean HEAD, tree, and policy it ran on; gates recompute that at every step.
+CI counts only as GitHub's verdict for the exact PR head. Sensitive changes are labelled, not
+prevented, and filesystem isolation is advisory. Details:
+[workflow.md](workflow.md#verification-evidence).
 
 ## Events and artifacts
 
@@ -281,25 +228,13 @@ read them.
 
 ## Crash recovery and reconciliation
 
-Nothing in `orch` holds state in memory that matters after the process ends. What survives a
-crash is the database, the artifact files, Git, the runner files, and GitHub, and each recovery
-path re-reads them rather than trusting what was in flight:
-
-- **A job** resumes from its row: `/factory <id>` or `orch factory resume` takes over the lapsed
-  lease, recreates a missing worktree on the surviving branch, re-verifies every registered
-  artifact, and continues from the stage it was in. A `running` stage taken over becomes
-  `interrupted` and must be explicitly restarted.
-- **A base integration** left `started` is reconciled from Git on the next call: a half-done merge
-  is aborted, a merge that completed but was never recorded is recorded, and nothing is blindly
-  retried ([workflow.md](workflow.md#worktrees)).
-- **A merge** is reconciled from GitHub: every call starts from a fresh read, so a timeout or a
-  crash between GitHub's merge and the local write is finished by calling again
-  ([workflow.md](workflow.md#verified-integration-and-reconciliation)).
-- **The controller** is resumed with `orch resume`, which re-runs the ticket in flight from its
-  durable state and refuses while the Claude child it started may still be alive
-  ([operations.md](operations.md#stop-stop-next-and-resume)).
-- **A `ci`-stage job** whose session died during a network outage can be continued by the opt-in
-  recovery worker ([workflow.md](workflow.md#recovery-worker)).
+Nothing that matters is held in memory: every recovery path re-reads the database, artifacts, Git,
+the runner files, and GitHub rather than trusting what was in flight. A job resumes from its row
+([workflow.md](workflow.md#ownership-and-resumability)), a base integration from Git
+([workflow.md](workflow.md#worktrees)), a merge from GitHub
+([workflow.md](workflow.md#verified-integration-and-reconciliation)), the controller with
+`orch resume` ([operations.md](operations.md#stop-stop-next-and-resume)), and a `ci`-stage job
+through the opt-in [recovery worker](workflow.md#recovery-worker).
 
 ## The dashboard
 
