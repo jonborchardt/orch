@@ -6,8 +6,10 @@ question to decide. Jobs are attempts to do one. There is no server, no synchron
 file in any repository; `orch ticket` works with nothing else running.
 
 `orch start` and `orch do <id>` run tickets from this queue in a foreground controller
-([workflow.md](workflow.md#factory-controller)). The dashboard's Tickets section shows and edits
-the same queue ([dashboard.md](dashboard.md)). What is not built: any background scheduler.
+([workflow.md](workflow.md#factory-controller); operating it: [operations.md](operations.md)).
+The dashboard's Tickets section shows and edits the same queue ([dashboard.md](dashboard.md)).
+How a ticket relates to its jobs is drawn in [overview.md](overview.md#tickets-and-jobs). What is
+not built: any background scheduler.
 
 ## Identity
 
@@ -119,7 +121,7 @@ number of jobs over time (a cancelled attempt, a re-land), and jobs without a ti
   `ticket.job-merged` event says why, once; a ticket already done, dropped, or duplicate is not
   touched. Nothing ticks a box for you, and a ticket is never marked done and reopened: tick what
   was delivered and run `orch job merge <job>` again, or `orch ticket done`
-  ([workflow.md](workflow.md#merging)).
+  ([workflow.md](workflow.md#verified-integration-and-reconciliation)).
 - `orch ticket start <id>` only marks a ticket in progress (work done by hand); it creates no job.
 
 `orch ticket jobs <id>` lists a ticket's jobs; `orch job show <job>` includes `job.ticketId`.

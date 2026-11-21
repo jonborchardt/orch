@@ -1,4 +1,4 @@
-# Independent session launch: capability assessment and evidence (Phase 3, B01)
+# Independent session launch: capability assessment and evidence
 
 What the installed VS Code and Claude Code can and cannot do about starting an independent agent
 session for a factory job, established from the official documentation and from experiments run on

@@ -1,83 +1,134 @@
 # agent-orchestrator (`orch`)
 
-A local software factory for Claude Code. You describe a change in a VS Code chat; an independent
-Claude session specifies it, implements it in its own Git worktree, runs the repository's own
-checks, gets it reviewed by specialised subagents, and opens a **draft** pull request whose
-required GitHub checks pass. You merge. Several jobs, in several repositories, can run at once from
-one machine, and a stopped job resumes from saved state.
+`orch` is a local software factory for Claude Code. You keep one ticket queue for all your
+repositories; `orch` takes the best ready ticket, has an independent Claude Code session specify
+it, build it in its own Git worktree, run the repository's own checks, and get it reviewed by
+specialised subagents, then waits for GitHub's required checks on the exact pull-request head,
+merges that head, closes the ticket, and takes the next one.
 
-`orch` is the small deterministic part: a one-shot CLI over one SQLite database that holds job
-state, decides which step is legal next, validates every artifact, runs the verification policy,
-and records evidence pinned to commits. Claude Code sessions and their subagents do all the
-creative work and interact with state only through the CLI. Nothing runs in the background
-unless you opt in: the dashboard (`orch ui`) and the recovery worker (`orch recover start`) are
-optional, and no job needs either.
+It exists because one agent writing code is not evidence that the code is right. `orch` is the
+small deterministic part that makes the work checkable: a one-shot CLI over one SQLite database
+that decides which step is legal next, validates every artifact, runs the verification itself,
+and records evidence pinned to commits. Claude Code does the creative work and changes state only
+through that CLI.
 
-## Why
-
-- **Deterministic core, agentic edges.** Workflow rules live in TypeScript and are tested; prose
-  for Claude describes them second. A stage completes only when its required artifact exists,
-  validates, and describes the commit that is still HEAD.
-- **Evidence, not claims.** Verification is executed by `orch`, running commands from a policy the
-  job did not write (the scripts and tests those commands run are the job's branch, so changes to
-  them are labelled for review, not trusted);
-  reviews are recorded against a clean commit; delivery ends with GitHub's verdict for the exact PR
-  head. A draft PR is not "done" until its required checks pass.
-- **Humans keep merge authority.** The factory never merges and never force-pushes. It marks its
-  draft PR ready for review only once `orch gh ci` reads passing required checks for the PR head,
-  and parks on a human decision when it cannot proceed honestly. A human merges on GitHub, or by
-  clicking Merge in the dashboard (`orch ui`), which merges exactly the verified head; Refresh PR
-  records a merge done on GitHub. `orch job merge <id>` runs the same checked merge without a
-  click, only for a repository you opted in (`orch factory config merge enable`; off by default),
-  confirms the result with GitHub, records the merge commit, and closes the job's ticket when no
-  checklist item is left unchecked ([docs/workflow.md](docs/workflow.md#merging)). Nothing removes a job's worktree on its own: once the PR is
-  merged, the dashboard offers Remove worktree (or run `orch worktree remove`, no token needed for
-  a finished job); the branch is kept. A PR a human merges while CI is still running completes the
-  job when it is the verified, approved head.
-- **Resumable from persisted state.** Jobs recover from the database, the artifact directory, and
-  Git; never from a surviving conversation.
-- **Local-first.** One developer, one machine, Windows first, cross-platform by default; the only
-  runtime dependency is Drizzle over Node's built-in SQLite.
-
-## How it works
-
-```
-VS Code Agents window, any repository
-  └─ /factory skill (skills/factory)        asks `orch factory next` what to do, then does it
-       ├─ orch factory / job / worktree / verify / gh      one-shot CLI: open DB, one operation, exit
-       │    └─ src/core (rules)  src/storage (SQLite)  src/ops (Git, GitHub, gates)
-       └─ subagents (agents/*.md)              spec writer, challenger, builder, reviewers, approver, in the job worktree
-
-orch ui (optional, 127.0.0.1)                  the same database, read-only plus a few human actions
-orch recover start (optional)                  continues ci-stage jobs after a network outage
+```mermaid
+flowchart LR
+    A["Tickets"] --> B["Factory"] --> C["Review + CI"] --> D["Verified merge"]
+    D -->|"Next ready ticket"| A
 ```
 
-A job moves `spec → build → simplify → review → approve → pr → ci → completed`. Any stage can escalate to
-`needs-human`; review rounds and CI repair cycles are bounded; `rework` sends a failed CI run or a
-conflicting base integration back to `build`, where the fix is reviewed and approved again.
+## Key capabilities
 
-| Stage      | Who                                                   | Produces                                                   | `orch` requires before the next stage                                                                                                                                                |
-| ---------- | ----------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `spec`     | `factory-spec-writer`, then `factory-spec-challenger` | `spec.md`, `spec-review-N.md`                              | Goal, Scope, Acceptance criteria; the latest challenge says `VERDICT: PASS` for the current `spec.md`                                                                                |
-| `build`    | `factory-builder`                                     | commits, an `orch verify` run, `build.md`                  | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD                                                                                         |
-| `simplify` | `factory-simplifier`, then `factory-builder`          | `round-N/simplify-review.md`, fixes, `round-N/simplify.md` | both files registered; `simplify.md` against a clean, verified HEAD                                                                                                                  |
-| `review`   | 3 reviewers (7 for UI changes)                        | `round-N/review-*.md`, `consolidated.md`                   | all three always-on verdicts recorded against the HEAD `simplify.md` (or, without one, `build.md`) describes; `BLOCKING: 0` to advance                                               |
-| `approve`  | `factory-approver`                                    | `decision.md`                                              | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid. A scope gap (`REWORK-BUILD`, `REWORK-SPEC`) goes back to `build` or `spec` once on its own |
-| `pr`       | the coordinator                                       | base integrated, pushed branch, draft PR                   | only clean base-integration merges since the approval; verified HEAD; policy unchanged                                                                                               |
-| `ci`       | the coordinator + `orch gh ci`                        | GitHub's verdict for the PR head                           | the job's own PR; checks passed for that commit, still the approved one (plus clean base merges)                                                                                     |
+- **Global ticket management.** One queue across every repository on the machine: priorities,
+  types, areas, efforts, dependencies that may cross repositories, history, and computed
+  readiness ([docs/tickets.md](docs/tickets.md)).
+- **Autonomous ticket execution.** `orch start` works the ready queue in the foreground, one
+  ticket at a time, launching `claude -p "/factory <job>"` for each job.
+- **A multi-stage engineering workflow.** Eight stages, `spec` to `completed`, each gated by
+  TypeScript on a validated artifact and a verification run for the exact commit
+  ([docs/workflow.md](docs/workflow.md#the-ticket-lifecycle-end-to-end)).
+- **Independent review and rework.** A spec challenger, a simplifier, three always-on reviewers
+  (security, correctness, code quality) plus four UI reviewers when the diff renders UI, and an
+  approver; findings send the job back to build, within a budget.
+- **CI verification and repair.** GitHub's verdict for the PR head is read and acted on: one
+  re-run per head, then a bounded repair cycle through build, review, and approval.
+- **Verified PR integration.** A merge commit at the CI-verified head only, confirmed by reading
+  GitHub again; the ticket closes in the same transaction, and only when nothing is left on it.
+- **Recovery and human escalation.** State lives in the database, artifacts, and Git, never in a
+  conversation; every retry is bounded; a decision only a person can make is a `needs-human`
+  stage the job cannot leave by itself ([docs/operations.md](docs/operations.md)).
+- **Dashboard and CLI.** `orch ui` shows jobs, tickets, the controller's status, and the human
+  decisions; the CLI does everything else ([docs/dashboard.md](docs/dashboard.md)).
 
-An independent spec challenger (Sonnet) reviews `spec.md` before anything is built; the writer
-revises once on CHANGES, and a second CHANGES escalates. After every build, a read-only
-simplifier (Sonnet) lists over-engineering in the diff and the builder applies the findings that
-make sense, recording each declined one with its reason. Reviewers are security (Opus),
-correctness, and code quality (Sonnet); ui-design, ux,
-accessibility, and web-platform join when the diff touches rendered UI. Models per role are
-configurable. The full rules, artifact formats, event list, and CI decision table are in
-[docs/workflow.md](docs/workflow.md).
+## How it fits together
+
+`orch` is the control plane; Claude Code is the execution plane; GitHub holds the pull request
+and its checks.
+
+```mermaid
+flowchart TD
+    U["You"]
+    subgraph ORCH["orch: control plane"]
+        UI["CLI and dashboard"]
+        R["Foreground controller: orch start, do, resume"]
+        G["Gates: transitions, artifacts, verification, merge decision"]
+        DB[("SQLite: tickets, jobs, events, evidence")]
+    end
+    subgraph EXEC["Claude Code: execution plane"]
+        C["claude -p /factory job"]
+        F["The /factory skill and its subagents"]
+        W["Isolated Git worktree per job"]
+    end
+    subgraph GH["GitHub"]
+        PR["Pull request"]
+        CI["Required checks"]
+    end
+    U -->|"tickets and decisions"| UI
+    U -->|"start, stop, resume"| R
+    UI --> G
+    R -->|"select ready ticket, resolve job"| DB
+    R -->|"launch, then read the job row"| C
+    C --> F
+    F -->|"edits, commits"| W
+    F -->|"every state change is an orch command"| G
+    G --> DB
+    G -->|"push, draft PR"| PR
+    PR --> CI
+    G -->|"read verdict for the exact head; merge that head"| PR
+```
+
+The controller never performs a stage: it launches `/factory`, and the skill runs the stages by
+calling `orch`, whose gates decide. SQLite is authoritative for tickets, jobs, events, artifacts,
+verification runs, and leases; GitHub for the PR, its checks, and the merge; small runner files
+for the controller's own lock and stop requests. The full authority table and architecture are in
+[docs/overview.md](docs/overview.md).
+
+## The autonomous loop
+
+```mermaid
+flowchart TD
+    S["orch start, or orch start repo"] --> L{"Controller lock free?"}
+    L -->|"No"| X0["Refused: a controller is running"]
+    L -->|"Yes"| N{"Stop next requested?"}
+    N -->|"Yes"| E["Exit"]
+    N -->|"No"| Q{"Next ready ticket?"}
+    Q -->|"None left"| E
+    Q -->|"Repository not opted in to merging"| P["Record as skipped, pass over"]
+    P --> Q
+    Q -->|"Yes"| J["Resolve the job: continue it, create it, or go to its merge"]
+    J --> F["Launch claude -p /factory job; on exit read the job row"]
+    F --> CI["ci stage: the controller reads GitHub's verdict"]
+    CI -->|"sent back to build"| F
+    CI --> M["mergeJob: merge the verified head"]
+    M -->|"conflict: one re-land job"| F
+    M --> O{"Ticket outcome"}
+    O -->|"done, or claimed by another process"| N
+    O -->|"blocked, needs-human, refused"| X["End the run with the reason; runner.stopped on the job"]
+    O -->|"stopped by orch stop"| Z["Exit; orch resume continues"]
+```
+
+What the code guarantees (`drive` and `runQueue` in `src/ops/run.ts`):
+
+- one controller per installation, enforced by a lock; a second `orch start` is refused;
+- one ticket at a time;
+- a global queue across repositories, or one repository with `orch start repo`;
+- dependencies decide readiness: the queue is `orch ticket ready`;
+- in queue mode a ticket whose repository lacks the merge opt-in is passed over and recorded as
+  skipped, never started, and the queue continues;
+- `orch do <ticket>` refuses to start a new job without the opt-in, but continues an existing job,
+  whose merge is then blocked with `not-authorized`;
+- a ticket outcome of `done` continues to the next ready ticket, and so does `claimed` (another
+  process created its job meanwhile; that ticket is passed over); `blocked`, `needs-human`, or
+  `refused` ends the run with that reason; `stopped` ends it as a resumable stop; `orch stop next`
+  ends it before the next ticket, and so does an empty ready queue;
+- `orch do <ticket>` runs that one ticket and exits, whatever its outcome;
+- it is not a daemon: nothing keeps running after the command exits.
 
 ## Install
 
-Requirements: Node.js 24+, Git, the GitHub CLI (`gh auth login`), Claude Code in VS Code.
+Requirements: Node.js 24+, Git, the GitHub CLI (`gh auth login`), Claude Code (the native
+`claude` executable on PATH, signed in, for `orch start`; VS Code for interactive sessions).
 
 ```sh
 git clone https://github.com/jonborchardt/orch && cd orch
@@ -100,6 +151,7 @@ orch init --from-package-json      # proposes npm run check / build from package
 cat factory.json                   # executables on PATH, argument arrays, no shell strings
 git add factory.json && git commit -m "Add factory verification policy" && git push
 orch init --check                  # READY, or exactly what is missing
+orch factory config merge enable --repo ~/code/my-app   # let orch merge this repository's verified PRs
 ```
 
 ```json
@@ -118,109 +170,24 @@ plan reports `policy.authorization: required`, and a human accepts or rejects th
 dashboard. A repository with no policy cannot pass the gates until one is committed on the base
 branch. Details: [docs/workflow.md](docs/workflow.md#verification-evidence).
 
-## Start a job
+The merge opt-in is off by default, per repository, and kept in your own `<config>/factory.json`,
+never in a repository. Model overrides, `maxRounds`, `maxCiRepairs`, and `runnerClaudeArgs` go in
+the same file (`orch factory config` prints it). The controller's Claude session gets
+`--permission-mode auto` plus an allow-list for `orch`, `git`, `npm`, `npx`, `node`, and `cd`,
+never a permission bypass; if a repository's builder needs other commands, set
+`"runnerClaudeArgs": [...]` (it replaces the default list).
 
-In a Claude Code session opened in the repository:
-
-```
-/factory Add a feature to export reports as CSV      start a job for this repository
-/factory job-1a2b3c4d                                continue or adopt a job
-/factory status job-1a2b3c4d                         report without changing anything
-```
-
-The session claims the job (a 30-minute lease, renewed by every command it runs), creates a worktree
-under the runtime data directory on branch `factory/<id>-<slug>`, and loops on
-`orch factory next <id> --json`, which returns the plan: the step, the agents to launch with their
-models, the artifact each must write, the worktree state, and the exact `orch` commands to run.
-Every state change is a CLI call `orch` validates. The same loop works from a shell without Claude
-(`orch factory start`, `next`, `resume`; see `orch factory --help`). Every job needs its request:
-`--description`, or `--issue` so the description is fetched from the issue; a job with a missing or
-blank description is refused (exit 2) and nothing is created.
-
-Run a single job in the interactive session: it shows progress and you can type to it. A headless
-`claude -p` session cannot be messaged; use headless sessions or dispatch for several jobs at once.
-Either way, `orch factory next` shows the session outside events on its next call (base moved, PR
-merged, cancelled) and any message left with `orch job notice post <id> --message "<text>"`, until
-the session acknowledges it ([docs/workflow.md](docs/workflow.md#session-notices)).
-
-## Dispatch several jobs at once
-
-From one session in VS Code's Agents window:
-
-```
-/factory dispatch #123 in E:\code\repo-b, #45 in ..\repo-c, and this repository: add CSV export
-```
-
-For each target the skill runs `orch factory dispatch`, which checks the repository the way
-`orch init --check` does and creates the job (nothing else: no claim, no worktree, no session), then
-asks VS Code's `create_session` tool for an independent session on that repository with its own
-worktree. The child's `/factory <id>` adopts that worktree as the job's and runs the job; the parent
-goes back to its own work. Repeating a dispatch for the same repository and issue returns the
-existing job. `orch factory list` shows one row per job with its stage, status, whether a human is needed
-(ACTION), PR, and title; `--json` adds the owner, the attached session, and the resume command for
-jobs no live session holds. The host
-cannot be pointed at an existing worktree, which is why `orch` lets it create one
-([docs/session-launch.md](docs/session-launch.md)).
-
-## Inspect and resume
+## Common operations
 
 ```sh
-orch factory list                     # every job, every repository
-orch factory status job-1a2b3c4d      # where it is, what blocks it, next step, numbered commands
-orch job events job-1a2b3c4d          # the audit log
-orch verify show job-1a2b3c4d         # latest verification run and whether it still counts
-orch ui                               # dashboard at http://127.0.0.1:4777/ (optional)
-```
-
-The dashboard's Session tab shows the recent turns of the job's Claude Code session and its
-subagents, read from the session's own transcript once `/factory` has attached it
-(`orch job session attach --provider claude-code`).
-
-A job whose session stopped keeps its state. `/factory <id>` in any session resumes it: it takes
-over the lapsed lease (a live one needs `--force`, which rotates the token so the old session's
-commands fail, and the skill forces only when the previous session has clearly died), recreates the worktree if it is gone, re-verifies every registered artifact, and
-continues from the plan. A job in `needs-human` waits: the dashboard offers the decisions the
-workflow allows (resume at a stage, request review or rework, accept a proposed policy,
-accept a delivery that GitHub reported no checks for, cancel), each recorded with a reason, and
-never pretends to wake a session. Details: [docs/dashboard.md](docs/dashboard.md).
-
-A network outage can stop the session driving a job. `orch recover start` (opt-in; `stop`,
-`status`, `run --once`) continues the jobs `orch` can finish by itself: a `ci`-stage job with a PR
-and no live owner is resumed as session `orch-recovery` once GitHub answers again, and `orch gh ci`
-completes it. It never forces a live lease, never launches or messages a Claude session, and
-reports jobs stalled in an agent stage as needing a session, with the resume command
-([docs/workflow.md](docs/workflow.md#recovery-worker)).
-
-## Tickets
-
-`orch ticket` is a private queue of things to do, shared by every repository on the machine:
-one number sequence, global priorities, dependencies that may cross repositories, a history per
-ticket. It lives in the same database as jobs and needs nothing running.
-
-```sh
+# tickets
 orch ticket add "Fix verification race" --priority P1 --area core   # for the cwd's repository
+orch ticket dep add 85 62             # 0085 waits until 0062 is done
 orch ticket ready                     # what can be worked on now, in order, every repository
 orch ticket blocked                   # what cannot, and why
 orch ticket show 85
-orch factory start --ticket 85 ...    # a job for the ticket: linked and marked in progress at once
-orch job merge <job-id>               # where opted in: merge the PR and close the ticket
-orch ticket done 85 --note "merged <pr>"   # or close it by hand
-```
 
-A ticket has at most one unfinished job; a job finishing never closes its ticket (a verified merge
-through `orch job merge` or the dashboard does, unless checklist items remain). The dashboard's
-Tickets section shows the same queue with its blockers and the controller's status, and edits
-tickets through the same operations. Fields, readiness rules, the HTTP API, and the one-shot import
-of a Markdown todo register are in [docs/tickets.md](docs/tickets.md).
-
-## Run the queue unattended
-
-`orch start` is a foreground controller: while it runs, it takes the best ready ticket, runs its
-job with the `/factory` skill in a headless Claude Code session (`claude -p`), waits for CI, merges
-the verified PR, and takes the next ticket. Nothing keeps running after the command exits.
-
-```sh
-orch factory config merge enable --repo <path>   # once per repository: let orch merge its PRs
+# the controller
 orch start                # every repository's ready tickets, best first, one at a time
 orch start repo           # only the repository containing the current directory
 orch do 85                # one ticket: start its job, continue it, or merge it
@@ -228,57 +195,30 @@ orch status               # controller, ticket, job, what it waits on, what happ
 orch stop next            # finish the current ticket, start no other, exit
 orch stop                 # end the current session now; the job is kept, never cancelled
 orch resume               # continue an interrupted session: same scope, ticket, job, stop request
+
+# jobs
+orch factory list                     # every job, every repository
+orch factory status job-1a2b3c4d      # where it is, what blocks it, next step, numbered commands
+orch job events job-1a2b3c4d          # the audit log, runner.session and runner.stopped included
+orch job merge job-1a2b3c4d           # where opted in: merge the verified PR and close the ticket
+orch ui                               # dashboard at http://127.0.0.1:4777/
 ```
 
-A ticket counts as done only when the PR merged at the commit CI passed on and the ticket's own
-lifecycle closed it. The controller stops at the first ticket it could not finish (the job needs a
-person, was cancelled, conflicts twice, or a small retry budget is spent) and prints what to do;
-it does not go on to other work. Why it stopped is recorded on the job (`runner.stopped`, next to
-a `runner.session` event per Claude session) and the job is released: decide a job that needs a
-person on the dashboard, then `orch do <ticket>` continues the same job. Tickets of a repository
-without the merge opt-in are reported and passed over. `Ctrl+C` is `orch stop`.
+A job can also run without the controller. In a Claude Code session in the repository,
+`/factory Add CSV export` starts a job and `/factory job-1a2b3c4d` continues one; from VS Code's
+Agents window, `/factory dispatch ...` starts several jobs in independent sessions; the `/dotodo`
+skill runs one ticket and merges it. How each works, and what happens at every step of a
+controller run, is in [docs/operations.md](docs/operations.md). A job that stops records why on
+itself (`runner.stopped`, next to a `runner.session` event per Claude session); decide a job that
+needs a person on the dashboard, then `orch do <ticket>` continues the same job.
 
-It needs `claude` on PATH as the native executable, signed in, with the `factory` skill installed
-(`orch install`). The session gets `--permission-mode auto` plus an allow-list for `orch`, `git`,
-`npm`, `npx`, `node`, and `cd`, never a permission bypass; if a repository's builder needs other
-commands, set `"runnerClaudeArgs": [...]` in `<config>/factory.json` (it replaces the default
-list). Details: [docs/workflow.md](docs/workflow.md#factory-controller).
-
-## Email reports
-
-Optional. Put SMTP settings in `<config>/mail.env` (see [Where things live](#where-things-live));
-an environment variable of the same name overrides each line:
-
-```sh
-MAIL_SMTP_HOST=smtp.example.com
-MAIL_SMTP_PORT=465            # implicit TLS (SMTPS) only; default 465
-MAIL_USER=bot@example.com
-MAIL_PASSWORD=app-password
-MAIL_FROM=bot@example.com     # default MAIL_USER
-MAIL_TO=you@example.com       # the only recipient
-MAIL_SUBJECT_PREFIX=[orch]    # default [orch]
-```
-
-The file holds a password in plain text: keep it out of every repository and readable only by
-you. With it set, every `orch` command that changes a job's state (and each dashboard action and
-recovery pass) sends one mail summarising those changes: the job's stage, status, PR, each event
-with its reason, and `orch factory status <id>`. When the job needs something, the mail leads with
-it: why it stopped, the recorded reason, and the next command or dashboard decision. Reported events are job creation, stage start,
-completion, and failure, blocking, resume, rework, cancellation, completion, interruption, and
-failed recovery attempts, and likely flaky verification failures (naming the test); CI polls,
-pushes, and verification runs themselves are not mailed. All mails of a
-job share one subject (`[orch] <id>: <title>`) and reply to the previous one, so a mail client
-shows them as one conversation. `orch mail report "<subject>" (--text "<body>" | --text-file <file>) [--reply-to <id>]`
-sends any text the same way and prints `SENT <message-id>`.
-
-Limits: one recipient, plain text, implicit TLS only (no STARTTLS/587, so not providers that
-require it), no replies read. A mail is sent at most once: a failed send is recorded on the job as
-a `mail.failed` event, warned about on stderr, and never retried, and it never fails or undoes the
-command. Unset, nothing is sent and nothing changes.
+Optional email reports of every job change: [docs/operations.md](docs/operations.md#email-reports).
 
 ## What `orch` automates and enforces
 
 - Job state, leases, tokens, and the audit log; one owner per job; stale commands fail with exit 4.
+- Ticket readiness and claiming: a job is created for a ticket only in the transaction that marks
+  the ticket in progress, and a unique index allows one unfinished job per ticket.
 - Artifact validation (location, structure, marker line) and registration pinned to the worktree
   HEAD; replacing registered evidence needs `--replace` and is logged.
 - Verification: the committed policy, run in the clean worktree, logs saved per check; its validity
@@ -290,9 +230,12 @@ command. Unset, nothing is sent and nothing changes.
   instead of using it up.
 - Delivery: only an approved commit (plus clean base merges) is pushed or counts as delivered; the
   draft PR is created or reused, never duplicated; the job completes only inside `orch gh ci` after
-  GitHub reports passing required checks for that exact head on the job's own PR; failed checks
-  get one re-run, then a repair cycle through build, review, and approval (bounded by
-  `maxCiRepairs`).
+  GitHub reports passing required checks for that exact head on the job's own PR, and `orch` then
+  marks the PR ready; failed checks get one re-run, then a repair cycle through build, review, and
+  approval (bounded by `maxCiRepairs`).
+- Merging, where you opted in: `gh pr merge --merge --match-head-commit <ciHead>`, confirmed by a
+  second read of GitHub; a conflict becomes one re-land job; the ticket closes only on a verified
+  merge with no unchecked checklist item.
 - Sensitive changes (tests, CI, dependencies, the policy, and files the policy's commands run
   directly) are labelled and must be named in the consolidated review and the PR body. Labelling is
   not prevention: the policy fixes which commands run, not what the job's scripts do.
@@ -302,25 +245,27 @@ command. Unset, nothing is sent and nothing changes.
 
 ## What still needs a human
 
-- Merging (on GitHub, or Merge in the dashboard). Marking a PR ready when `gh pr ready` failed
-  (reported, not retried; Refresh PR records it afterwards). Fixing GitHub
-  Actions itself (billing, runners, a workflow that never
-  reports): `orch` escalates after one re-run.
+- Merging a repository you have not opted in (on GitHub, or Merge in the dashboard). Marking a PR
+  ready when `gh pr ready` failed (reported, not retried; Refresh PR records it afterwards). Fixing
+  GitHub Actions itself (billing, runners, a workflow that never reports): `orch` escalates after
+  one re-run.
 - Accepting a verification policy a job proposed, or onboarding a repository that has none.
 - Deciding on an approver's `ESCALATE`, a review round that still requests changes at the limit, a
-  spent CI repair budget, a PR closed or moved outside the job.
-- Restarting a stopped session: `orch` records that a lease lapsed; something must run `/factory
-<id>` again (any session, or the dashboard's copyable command). The opt-in recovery worker
-  continues only the `ci` stage on its own.
+  spent CI repair budget, a second merge conflict, a PR closed or moved outside the job.
+- Restarting after a stop: `orch do <ticket>` or `orch resume` for the controller, `/factory <id>`
+  in any session otherwise. The opt-in recovery worker (`orch recover start`) continues only the
+  `ci` stage on its own.
+- Ending a Claude process that outlived a crashed controller: `orch resume` refuses while it may be
+  alive and never signals or adopts it.
 - Anything cooperative: subagents staying inside the worktree, reviewers reading the logs they are
   given, the parent recording the child session before the child claims the job. These are stated in
   prose and verified after the fact (fingerprints, dirty-file lists), not prevented.
 
 ## Limitations
 
-- `orch` never starts, stops, or steers a Claude session. Dispatch relies on VS Code's documented
-  `create_session`; outside the Agents window it prints the command for a human to run. Archiving a
-  dispatched session in VS Code removes that session's worktree, which is the job's worktree.
+- The controller starts and stops headless Claude Code sessions (`claude -p`), one at a time, and
+  never messages or steers one. Dispatch relies on VS Code's documented `create_session`; outside
+  the Agents window it prints the command for a human to run.
 - GitHub only, through `gh`; checks and commit statuses; one automatic re-run per commit; a job
   that "was not started" by Actions is indistinguishable from a failed check until a human reads the
   log, so it costs one repair cycle before escalation.
@@ -328,34 +273,39 @@ command. Unset, nothing is sent and nothing changes.
 - Private repositories on GitHub's free plan hide the required-check configuration (HTTP 403), so
   every reported check must pass there.
 - The dashboard is single-user and loopback-only; it has no authentication because it has no
-  network exposure.
+  network exposure. It cannot start, stop, or resume the controller.
 - Ownership is advisory at the filesystem level: a process pointed at the wrong directory can
   write anywhere; `orch` refuses to count such writes as progress but cannot stop them.
+- The boundaries that are design choices (no daemon, one ticket at a time, bounded retries, no
+  adoption of surviving processes, ...) and why: [docs/operations.md](docs/operations.md#intentional-limitations).
 
 ## Where things live
 
-| Purpose   | Windows                                     | macOS                                | Linux                   |
-| --------- | ------------------------------------------- | ------------------------------------ | ----------------------- |
-| config    | `%APPDATA%\orch`                            | `~/Library/Application Support/orch` | `$XDG_CONFIG_HOME/orch` |
-| data      | `%LOCALAPPDATA%\orch`                       | same as config                       | `$XDG_DATA_HOME/orch`   |
-| database  | `<data>\orch.sqlite`                        | `<data>/orch.sqlite`                 | `<data>/orch.sqlite`    |
-| artifacts | `<data>\jobs\<id>\artifacts\`               | `<data>/jobs/<id>/artifacts/`        | same                    |
-| worktrees | `<data>\worktrees\<repo slug>\<id>`         | `<data>/worktrees/<repo slug>/<id>`  | same                    |
-| tickets   | the database; `<data>\tickets\<id>\assets\` | `<data>/tickets/<id>/assets/`        | same                    |
+| Purpose   | Windows                                                                     | macOS                                | Linux                   |
+| --------- | --------------------------------------------------------------------------- | ------------------------------------ | ----------------------- |
+| config    | `%APPDATA%\orch`                                                            | `~/Library/Application Support/orch` | `$XDG_CONFIG_HOME/orch` |
+| data      | `%LOCALAPPDATA%\orch`                                                       | same as config                       | `$XDG_DATA_HOME/orch`   |
+| database  | `<data>\orch.sqlite`                                                        | `<data>/orch.sqlite`                 | `<data>/orch.sqlite`    |
+| artifacts | `<data>\jobs\<id>\artifacts\`                                               | `<data>/jobs/<id>/artifacts/`        | same                    |
+| worktrees | `<data>\worktrees\<repo slug>\<id>`                                         | `<data>/worktrees/<repo slug>/<id>`  | same                    |
+| tickets   | the database; `<data>\tickets\<id>\assets\`                                 | `<data>/tickets/<id>/assets/`        | same                    |
+| runner    | `<data>\runner-lock\`, `runner.json`, `runner.stop-next`, `runner.stop-now` | the same under `<data>/`             | same                    |
 
-`ORCH_HOME=<dir>` redirects all of it (tests and side-by-side campaigns use this). Model
-overrides and `maxRounds`/`maxCiRepairs` go in `<config>/factory.json` (`orch factory config`).
+`ORCH_HOME=<dir>` redirects all of it (tests and side-by-side campaigns use this).
 
-## More
+## Documentation
 
 - `orch <command> --help` for every command and option.
-- [docs/overview.md](docs/overview.md): how tickets, the factory, and the merge fit together, and
-  how `orch` compares with Beads (tickets) and with agent-orchestrator and Gas Town (merging and
-  running unattended), with the reason for each difference.
-- [docs/workflow.md](docs/workflow.md): stages, transitions, artifacts, events, worktrees,
-  verification evidence, GitHub integration, CI reconciliation, ownership.
-- [docs/dashboard.md](docs/dashboard.md): the dashboard's views, actions, and security model.
+- [docs/overview.md](docs/overview.md): the architecture: control and execution planes, sources of
+  truth, tickets and jobs, ownership, verification boundaries, recovery, and how `orch` compares
+  with Beads, agent-orchestrator, and Gas Town.
+- [docs/workflow.md](docs/workflow.md): the ticket lifecycle end to end, stages, transitions,
+  artifacts, events, worktrees, verification evidence, CI reconciliation, merging, the controller,
+  ownership.
+- [docs/operations.md](docs/operations.md): operating the factory, stop and resume, diagnosing
+  blocked tickets, needs-human, recovery budgets, limitations, metrics, email reports.
 - [docs/tickets.md](docs/tickets.md): the ticket queue, its CLI and HTTP API, and the import.
+- [docs/dashboard.md](docs/dashboard.md): the dashboard's views, actions, and security model.
 - [docs/development.md](docs/development.md): stack, layout, build, tests, migrations, install
   mechanics, Windows notes, CLI reference. `CLAUDE.md` has the rules for changing the code.
 - [docs/decisions/](docs/decisions/): one file per architectural decision.
