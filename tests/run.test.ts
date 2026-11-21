@@ -5,14 +5,12 @@
  * (tests/claude-session.test.ts starts real processes; tests/run-ci.test.ts drives a real job to
  * the ci stage). GitHub is the stateful shim; nothing reaches the network.
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { eq } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runnerPaths } from '../src/core/paths.ts';
-import type { ClaudeChild, LaunchInput } from '../src/integrations/claude-session.ts';
 import { cancelJob } from '../src/ops/actions.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { setMergeAuthorization } from '../src/ops/merge.ts';
@@ -21,7 +19,6 @@ import {
   resumeSession,
   RUNNER_SESSION,
   runnerStatus,
-  type RunSummary,
   startSession,
   stopSession,
 } from '../src/ops/run.ts';
@@ -34,13 +31,28 @@ import {
   stopRequests,
   writeSession,
 } from '../src/ops/runner-state.ts';
-import { addTicket, showTicket, ticketAction } from '../src/ops/tickets.ts';
-import { appendEvent } from '../src/storage/events.ts';
+import { addTicket, ticketAction } from '../src/ops/tickets.ts';
 import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
-import { type Job, jobs } from '../src/storage/schema.ts';
-import { ticketJobs } from '../src/storage/tickets.ts';
-import { makePolicyRepo } from './drive.ts';
-import { type GhShim, ghShim, type TempStore, tempStore } from './helpers.ts';
+import {
+  beta,
+  clone,
+  DEAD_PID,
+  done,
+  editPr,
+  finish,
+  hanging,
+  idle,
+  jobsOf,
+  launcher,
+  merges,
+  one,
+  OTHER,
+  queue,
+  quick,
+  status,
+  store,
+  ticket,
+} from './run-fixture.ts';
 
 // Lets one test create a competing job in the instant before the controller's own dispatch.
 const race = vi.hoisted(() => ({ before: undefined as (() => void) | undefined }));
@@ -56,133 +68,9 @@ vi.mock('../src/ops/dispatch.ts', async (original) => {
     },
   };
 });
-
-const SHA = 'a'.repeat(40);
-const OTHER = 'b'.repeat(40);
-const DEAD_PID = 2 ** 31 - 1;
-
-let store: TempStore;
-let clone: string;
-let bare: string;
-let beta: { clone: string; bare: string };
-let shim: GhShim;
-let n = 0;
-
-beforeAll(() => {
-  shim = ghShim('acme/alpha');
-  Object.assign(process.env, shim.env);
-  ({ clone, bare } = makePolicyRepo());
-  beta = makePolicyRepo('git@github.com:acme/beta.git');
-});
-afterAll(() => {
-  delete process.env['ORCH_GH_SHIM'];
-  delete process.env['ORCH_GH_SHIM_STATE'];
-  shim.cleanup();
-  for (const d of [clone, bare, beta.clone, beta.bare]) rmSync(d, { recursive: true, force: true });
-});
 beforeEach(() => {
-  shim.reset();
-  store = tempStore();
-  n = 0;
   race.before = undefined;
-  setMergeAuthorization(store, clone, true);
 });
-afterEach(() => {
-  store.cleanup();
-});
-
-const ticket = (title: string, o: Record<string, unknown> = {}) =>
-  addTicket(store, { title, repo: clone, ...o }).id;
-const status = (id: number) => showTicket(store, id).ticket.status;
-const jobsOf = (id: number) => ticketJobs(store.db, id);
-const merges = () => shim.read().calls.filter((c) => c[0] === 'pr' && c[1] === 'merge');
-const editPr = (job: Job, patch: Record<string, unknown>) => {
-  shim.write({
-    prs: shim.read().prs.map((p) => (p['url'] === job.prUrl ? { ...p, ...patch } : p)),
-  });
-};
-
-/** What a session that ran the job to the end leaves: completed on a passing verdict, PR open. */
-function finish(job: Job, pr: Record<string, unknown> = {}): Job {
-  n += 1;
-  const url = `https://github.com/acme/alpha/pull/${String(n)}`;
-  const branch = job.branch ?? `factory/${job.id}`;
-  const ts = new Date().toISOString();
-  store.db
-    .update(jobs)
-    .set({
-      stage: 'completed',
-      status: 'completed',
-      branch,
-      prUrl: url,
-      prState: 'ready',
-      ciStatus: 'passing',
-      ciHead: SHA,
-      completedAt: ts,
-      ownerSession: null,
-      ownerToken: null,
-      leaseExpiresAt: null,
-    })
-    .where(eq(jobs.id, job.id))
-    .run();
-  appendEvent(store.db, job.id, 'job.completed', { prUrl: url, head: SHA }, null, ts);
-  shim.write({
-    prs: [
-      ...shim.read().prs,
-      {
-        number: n,
-        url,
-        state: 'OPEN',
-        isDraft: false,
-        baseRefName: 'main',
-        headRefName: branch,
-        headRefOid: SHA,
-        mergeable: 'MERGEABLE',
-        title: job.title,
-        statusCheckRollup: [],
-        isCrossRepository: false,
-        ...pr,
-      },
-    ],
-  });
-  return getJob(store.db, job.id);
-}
-
-type Act = (job: Job, input: LaunchInput) => void;
-const idle: Act = () => undefined;
-const done: Act = (job) => {
-  finish(job);
-};
-
-interface Launcher {
-  launch: (input: LaunchInput) => ClaudeChild;
-  calls: (LaunchInput & { jobId: string })[];
-}
-
-/** A stand-in for the Claude child: the n-th launch runs the n-th act (the last one repeats). */
-function launcher(...acts: Act[]): Launcher {
-  const calls: Launcher['calls'] = [];
-  return {
-    calls,
-    launch: (input) => {
-      const jobId = /job-[0-9a-f]{8}/.exec(input.prompt)?.[0] ?? '';
-      calls.push({ ...input, jobId });
-      (acts[Math.min(calls.length, acts.length) - 1] ?? idle)(getJob(store.db, jobId), input);
-      return {
-        pid: DEAD_PID,
-        startedAt: new Date().toISOString(),
-        done: Promise.resolve({ code: 0, signal: null, error: null }),
-        kill: () => undefined,
-      };
-    },
-  };
-}
-
-const quick = { sleep: () => Promise.resolve(), pollMs: 1 };
-const queue = (l: Launcher, repo: string | null = null): Promise<RunSummary> =>
-  startSession(store, { mode: 'queue', repo }, { launch: l.launch, ...quick });
-const one = (l: Launcher, id: number): Promise<RunSummary> =>
-  startSession(store, { mode: 'ticket', ticket: id }, { launch: l.launch, ...quick });
 
 describe('orch start: the queue', () => {
   it('runs ready tickets best first, merges each verified PR, and ends when none is left', async () => {
@@ -463,29 +351,6 @@ describe('stop and resume', () => {
     // Honoured and gone: the next session starts clean.
     expect(stopRequests(store.paths)).toEqual({ next: false, now: false });
   });
-
-  /** A child that runs until it is killed; launching it asks the controller to stop now. */
-  function hanging(): Launcher & { killed: number } {
-    const l = launcher() as Launcher & { killed: number };
-    l.killed = 0;
-    l.launch = (input) => {
-      const jobId = /job-[0-9a-f]{8}/.exec(input.prompt)?.[0] ?? '';
-      l.calls.push({ ...input, jobId });
-      let end: (e: { code: null; signal: string; error: null }) => void = () => undefined;
-      const exited = new Promise<{ code: null; signal: string; error: null }>((r) => (end = r));
-      requestStop(store.paths, 'now');
-      return {
-        pid: DEAD_PID,
-        startedAt: new Date().toISOString(),
-        done: exited,
-        kill: () => {
-          l.killed += 1;
-          end({ code: null, signal: 'SIGTERM', error: null });
-        },
-      };
-    };
-    return l;
-  }
 
   it('stop ends the session now, keeps the job, and resume continues the same job and scope', async () => {
     const first = ticket('First', { priority: 'P1' });

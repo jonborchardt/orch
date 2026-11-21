@@ -36,6 +36,7 @@ const EVENT_EMOJI: Record<string, string> = {
   'recovery.failed': EMOJI.failure,
   'job.interrupted': EMOJI.failure,
   'job.blocked': EMOJI.waiting,
+  'runner.stopped': EMOJI.waiting,
   'stage.completed': EMOJI.success,
   'job.completed': EMOJI.success,
   'job.cancelled': EMOJI.cancelled,
@@ -58,8 +59,9 @@ export function stageLines(job: { stage: Stage; status: Status }): string[] {
 }
 
 /**
- * State changes, errors, and likely-flaky verification failures. Anything else (CI polls, pushes,
- * verification runs) is not mailed.
+ * State changes, errors, likely-flaky verification failures, and the factory controller giving a
+ * ticket up (`runner.stopped`). Anything else (CI polls, pushes, verification runs, the
+ * controller's Claude sessions) is not mailed.
  */
 export const REPORTED_EVENTS: readonly string[] = [
   'job.created',
@@ -74,6 +76,7 @@ export const REPORTED_EVENTS: readonly string[] = [
   'job.interrupted',
   'recovery.failed',
   'verification.flaky',
+  'runner.stopped',
 ];
 
 /** The thread's subject without the configured prefix, which `sendReport` adds. */

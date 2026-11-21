@@ -8,7 +8,7 @@
  */
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { OrchError, ToolError, ValidationError } from '../core/errors.ts';
+import { OrchError, OwnershipError, ToolError, ValidationError } from '../core/errors.ts';
 import { ticketKey } from '../core/tickets.ts';
 import { now, TERMINAL_STATUSES } from '../core/workflow.ts';
 import {
@@ -19,8 +19,8 @@ import {
 } from '../integrations/claude-session.ts';
 import { listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import { latestEventsByJob } from '../storage/events.ts';
-import { claimJob, getJob, releaseJob } from '../storage/jobs.ts';
+import { latestEventsByJob, listEvents } from '../storage/events.ts';
+import { claimJob, getJob, recordEvent, releaseJob } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { ticketJobs } from '../storage/tickets.ts';
 import { dispatchJob } from './dispatch.ts';
@@ -98,18 +98,67 @@ interface Run {
   pause(ms: number): Promise<unknown>;
 }
 
-type JobRun = { kind: 'finished' } | { kind: 'stopped' } | { kind: 'blocked'; reason: string };
+/** `code` says which budget or refusal stopped the job; it goes on `runner.stopped`. */
+interface Blocked {
+  kind: 'blocked';
+  code: string;
+  reason: string;
+}
+type JobRun = { kind: 'finished' } | { kind: 'stopped' } | Blocked;
 
-/** Give a job the controller holds back, as it is, so any session can resume it. Never throws. */
-function handBack(store: Store, jobId: string): void {
+/**
+ * What the controller itself did to a job, on the job's own event log: `runner.session` (one
+ * Claude child, from start to exit) and `runner.stopped` (the controller gave the ticket up
+ * without completing it). They describe the controller, never the job's stage or status.
+ */
+interface Note {
+  type: 'runner.session' | 'runner.stopped';
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Leave a job as it is for whoever continues it: as its owner, record `note` when there is one,
+ * then release. Only a job the controller holds or nobody holds is touched; one another session
+ * holds is theirs, and nothing is written to it. Returns why it could not be done, or null:
+ * never throws, so evidence cannot change what happened to the ticket.
+ */
+function leave(store: Store, jobId: string, note?: (job: Job) => Note | null): string | null {
   try {
     const job = getJob(store.db, jobId);
-    if (job.ownerSession !== RUNNER_SESSION || TERMINAL_STATUSES.includes(job.status)) return;
+    if (job.ownerSession !== null && job.ownerSession !== RUNNER_SESSION) return null;
+    const n = note?.(job) ?? null;
+    if (n === null && job.ownerSession === null) return null;
     const { token } = claimJob(store, jobId, { session: RUNNER_SESSION });
-    releaseJob(store, jobId, { token });
-  } catch {
-    /* another session took it meanwhile: theirs now */
+    try {
+      if (n !== null) recordEvent(store, jobId, { token }, n.type, n.payload);
+    } finally {
+      releaseJob(store, jobId, { token });
+    }
+    return null;
+  } catch (err) {
+    return (err as Error).message;
   }
+}
+
+function leaveJob(run: Run, jobId: string, note?: (job: Job) => Note | null): void {
+  const problem = leave(run.store, jobId, note);
+  if (problem !== null) run.log(`  job ${jobId}: could not be recorded and released: ${problem}`);
+}
+
+/** Events that follow a stop without anything having happened to the job. */
+const AFTER_STOP = /^(job\.(claimed|released)|mail\.)/;
+
+/** The same stop is already the last thing on record: `orch do` again changed nothing. */
+function sameStop(store: Store, jobId: string, code: string, reason: string): boolean {
+  const events = listEvents(store.db, jobId, 20).reverse();
+  const i = events.findIndex((e) => e.type === 'runner.stopped');
+  const last = events[i];
+  if (last === undefined) return false;
+  return (
+    last.payload['code'] === code &&
+    last.payload['reason'] === reason &&
+    events.slice(0, i).every((e) => AFTER_STOP.test(e.type))
+  );
 }
 
 /** What a Claude session must change for its run to count as progress. */
@@ -129,8 +178,16 @@ function promptFor(job: Job): string {
   );
 }
 
+interface ChildRun {
+  exit: ChildExit;
+  /** Ended by a stop request, not on its own. */
+  stopped: boolean;
+  /** 0 when the process never started. */
+  pid: number;
+}
+
 /** One Claude session on the job, from claim to exit. Throws when another session holds the job. */
-async function runChild(run: Run, job: Job): Promise<ChildExit | 'stopped'> {
+async function runChild(run: Run, job: Job): Promise<ChildRun> {
   const { store, session } = run;
   // Claim under the controller's name and make sure the worktree exists: the child's own
   // `orch factory resume` then renews this claim instead of meeting a foreign lease.
@@ -162,7 +219,7 @@ async function runChild(run: Run, job: Job): Promise<ChildExit | 'stopped'> {
   }
   session.child = null;
   run.save();
-  return stopped ? 'stopped' : exit;
+  return { exit, stopped, pid: child.pid };
 }
 
 /**
@@ -194,6 +251,7 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
         if (failures >= TRANSIENT_ATTEMPTS) {
           return {
             kind: 'blocked',
+            code: 'github-unreadable',
             reason: `GitHub could not be read ${String(failures)} times in a row: ${err.message}`,
           };
         }
@@ -202,6 +260,7 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
     }
     return {
       kind: 'blocked',
+      code: 'ci-pending',
       reason: `CI was still pending after ${String(CI_MAX_POLLS)} observations by the controller`,
     };
   } finally {
@@ -232,22 +291,42 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
     if (idle >= MAX_IDLE_LAUNCHES) {
       return {
         kind: 'blocked',
+        code: 'no-progress',
         reason:
           `the Claude session ended ${String(idle)} times without moving the job ` +
           `(still ${job.stage}/${job.status})`,
       };
     }
     const before = progressOf(store, job);
-    const exit = await runChild(run, job);
-    if (exit === 'stopped') return { kind: 'stopped' };
+    const startedMs = Date.now();
+    const { exit, stopped, pid } = await runChild(run, job);
     const after = getJob(store.db, jobId);
-    // The exit code is a hint; the job row is the outcome.
+    const moved = progressOf(store, after) !== before;
+    // The exit code is a hint; the job row is the outcome. `exited` says only that the process
+    // ended on its own, and `moved` only that the job is somewhere else than before.
+    leaveJob(run, jobId, () => ({
+      type: 'runner.session',
+      payload: {
+        outcome: stopped ? 'stopped' : exit.error !== null ? 'failed' : 'exited',
+        exitCode: exit.code,
+        signal: exit.signal,
+        error: exit.error,
+        pid: pid === 0 ? null : pid,
+        seconds: Math.round((Date.now() - startedMs) / 1000),
+        moved,
+        stage: after.stage,
+        status: after.status,
+      },
+    }));
+    if (stopped) return { kind: 'stopped' };
     run.log(
       `  claude: exited (${exit.error ?? `code ${String(exit.code ?? exit.signal)}`}); ` +
         `job is ${after.stage}/${after.status}`,
     );
-    if (exit.error !== null) return { kind: 'blocked', reason: `claude: ${exit.error}` };
-    idle = progressOf(store, after) === before ? idle + 1 : 0;
+    if (exit.error !== null) {
+      return { kind: 'blocked', code: 'claude-failed', reason: `claude: ${exit.error}` };
+    }
+    idle = moved ? 0 : idle + 1;
   }
 }
 
@@ -264,10 +343,7 @@ export function mergeNotEnabled(
 }
 
 type MergeRun =
-  | { kind: 'done' }
-  | { kind: 'reland'; jobId: string }
-  | { kind: 'stopped' }
-  | { kind: 'blocked'; reason: string };
+  { kind: 'done' } | { kind: 'reland'; jobId: string } | { kind: 'stopped' } | Blocked;
 
 /** `mergeJob` until it gives an answer that is not "try again", within a small budget. */
 async function merge(run: Run, jobId: string): Promise<MergeRun> {
@@ -279,22 +355,32 @@ async function merge(run: Run, jobId: string): Promise<MergeRun> {
       case 'already_merged':
         // Merged is not enough: only the head CI passed on counts, and only the ticket's own
         // lifecycle says it is done.
-        if (!m.verified) return { kind: 'blocked', reason: `unverified merge: ${m.reason}` };
+        if (!m.verified) {
+          return {
+            kind: 'blocked',
+            code: 'unverified-merge',
+            reason: `unverified merge: ${m.reason}`,
+          };
+        }
         if (m.ticket?.completed) return { kind: 'done' };
         return {
           kind: 'blocked',
+          code: 'ticket-open',
           reason: `merged, but the ticket stays ${m.ticket?.status ?? 'open'}: ${m.ticket?.reason ?? 'not closed'}`,
         };
       case 'reland':
         if (m.relandJob !== null) return { kind: 'reland', jobId: m.relandJob };
-        return { kind: 'blocked', reason: m.reason };
-      case 'blocked':
-        return { kind: 'blocked', reason: `${m.code ?? 'blocked'}: ${m.reason}` };
+        return { kind: 'blocked', code: 'reland-refused', reason: m.reason };
+      case 'blocked': {
+        const code = m.code ?? 'merge-blocked';
+        return { kind: 'blocked', code, reason: `${code}: ${m.reason}` };
+      }
       case 'waiting':
       case 'error':
         if (attempt >= TRANSIENT_ATTEMPTS) {
           return {
             kind: 'blocked',
+            code: 'merge-no-answer',
             reason: `merge gave no answer in ${String(attempt)} attempts: ${m.reason}`,
           };
         }
@@ -322,13 +408,28 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
   const { ticket } = showTicket(store, ticketId);
   const key = ticket.key;
   let relands = 0;
+  // Every way out of the ticket passes here, so this is where a job the controller gives up is
+  // handed back: with a `runner.stopped` event when it was not completed and not stopped on
+  // request. A cancelled job already says why it ended.
   const out = (
     outcome: TicketOutcome,
     reason: string,
     jobId: string | null,
     next: string | null = null,
+    code: string = outcome,
   ): TicketResult => {
     run.log(`  ticket ${key}: ${outcome}: ${reason}`);
+    if (jobId !== null && outcome === 'stopped') leaveJob(run, jobId);
+    if (jobId !== null && (outcome === 'blocked' || outcome === 'needs-human')) {
+      leaveJob(run, jobId, (job) =>
+        job.status === 'cancelled' || sameStop(store, jobId, code, reason)
+          ? null
+          : {
+              type: 'runner.stopped',
+              payload: { outcome, code, reason, stage: job.stage, status: job.status, next },
+            },
+      );
+    }
     return {
       ticketId,
       title: ticket.title,
@@ -389,13 +490,9 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       run.save();
       const r = await runJob(run, jobId);
       if (r.kind === 'stopped') {
-        handBack(store, jobId);
         return out('stopped', 'stopped on request; the job is kept as it is', jobId, 'orch resume');
       }
-      if (r.kind === 'blocked') {
-        handBack(store, jobId);
-        return out('blocked', r.reason, jobId, retry);
-      }
+      if (r.kind === 'blocked') return out('blocked', r.reason, jobId, retry, r.code);
       const after = getJob(store.db, jobId);
       if (after.status === 'cancelled') {
         return out('blocked', `job ${jobId} was cancelled`, jobId, `orch ticket reopen ${key}`);
@@ -412,15 +509,16 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       if (m.kind === 'done') return out('done', `merged and verified (job ${jobId})`, jobId);
       if (m.kind === 'stopped') return out('stopped', 'stopped on request', jobId, 'orch resume');
       if (m.kind === 'blocked')
-        return out('blocked', m.reason, jobId, `orch do ${key} tries again`);
+        return out('blocked', m.reason, jobId, `orch do ${key} tries again`, m.code);
       relands += 1;
       jobId = m.jobId;
       run.log(`  job ${jobId}: re-land`);
     }
   } catch (err) {
     if (!(err instanceof OrchError)) throw err;
-    handBack(store, jobId);
-    return out('blocked', err.message, jobId, retry);
+    // A job another session holds is left alone: `leave` writes nothing to it.
+    const code = err instanceof OwnershipError ? 'ownership' : 'error';
+    return out('blocked', err.message, jobId, retry, code);
   }
 }
 
@@ -706,8 +804,9 @@ export function stopSession(store: Store, which: keyof StopRequests, waitMs = 30
     );
   }
   const release = acquireRunnerLock(paths);
+  let kept: string | null = null;
   try {
-    if (session.jobId !== null) handBack(store, session.jobId);
+    if (session.jobId !== null) kept = leave(store, session.jobId);
     writeSession(paths, {
       ...session,
       child: null,
@@ -723,7 +822,8 @@ export function stopSession(store: Store, which: keyof StopRequests, waitMs = 30
     pid: null,
     message:
       'The interrupted session was discarded. Its job is kept as it was' +
-      (session.ticketId === null ? '.' : `; orch do ${ticketKey(session.ticketId)} continues it.`),
+      (session.ticketId === null ? '.' : `; orch do ${ticketKey(session.ticketId)} continues it.`) +
+      (kept === null ? '' : ` The job's lease could not be released: ${kept}`),
   };
 }
 

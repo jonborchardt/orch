@@ -278,6 +278,36 @@ Budgets: two sessions in a row that exit without changing the job's stage, round
 artifacts; 60 CI reads; five unreadable answers from GitHub. A spent budget, a blocked ticket, or
 a job waiting for a person ends the whole session with the ticket, the job, the reason, and the
 command that continues it; the queue never moves on past it. Exit status is 1 in that case.
+The budgets are counted in the running controller only: `orch do` or `orch resume` starts them
+again, which takes a person each time. Nothing waits between two sessions, and nothing ends a
+session for running long.
+
+What the controller did is also written to the job's own events, as `orch-runner`, so it outlasts
+`runner.json` (which the next session replaces) and shows in `orch job events`, the dashboard's
+Events tab, and, for a stop, the status mail (decision 2026-11-21-runner-evidence-on-the-job):
+
+| Event            | Written                                                                    | Payload                                                                                                                                                   |
+| ---------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runner.session` | each time a Claude process the controller started has ended                | `outcome` (`exited` on its own, `stopped` by `orch stop`, `failed` to start), `exitCode`, `signal`, `error`, `pid`, `seconds`, `moved`, `stage`, `status` |
+| `runner.stopped` | when a ticket ends `blocked` or `needs-human` and its job is not cancelled | `outcome`, `code`, `reason`, `stage`, `status`, `next` (the command that continues it)                                                                    |
+
+`exited` with `exitCode` 0 says only that the process ended; `moved` says whether the job's
+stage, round, CI repairs, or artifacts changed during it. `runner.stopped` describes the
+controller, not the job: the job keeps the stage and status it had, and `code` says what stopped
+the ticket: `no-progress`, `claude-failed`, `ci-pending`, `github-unreadable`, `needs-human`,
+`unverified-merge`, `ticket-open`, `merge-no-answer`, a `mergeJob` block code (`second-conflict`,
+`head-changed`, `pr-draft`, ...), or `error` (an `orch` operation refused). A stop on request (`orch stop`,
+`orch stop next`, Ctrl+C) writes no `runner.stopped`. Asking again when nothing happened since
+(the same code and reason are the job's last news) adds no second one.
+
+Whenever the controller leaves a job it releases it, a job waiting in `needs-human` included, even
+when the session that escalated exited without releasing. It records and releases only a job it
+holds or nobody holds: a job another session holds is left exactly as it is, with nothing written
+to it. A person then decides a `needs-human` job on the dashboard (Approve to a stage, Request
+rework, Request review, Accept policy, Accept delivery, Cancel) and runs `orch do <ticket>`, which
+continues the same job; `orch start` afterwards goes on with the queue. Deciding with
+`orch factory resume <job> --to <stage>` instead leaves that session's lease on the job, so pass
+`--session orch-runner` there or `orch do` reports the job as held until the lease lapses.
 
 `orch stop next` is read at the ticket boundary. `orch stop` (or Ctrl+C) terminates the Claude
 process the controller started, releases the job in the state it was in, and leaves the session
