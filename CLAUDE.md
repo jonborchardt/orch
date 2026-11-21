@@ -83,7 +83,10 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
 - `src/server/` is the dashboard: `http.ts` (node:http on 127.0.0.1 only, Host/Origin/CSRF
   guards, static files from `web/dist`), `api.ts` (read models; `safeJob` strips `ownerToken`),
   `status.ts` (liveness, blockers, CI view derived from rows), `types.ts` (shared with `web/src`). Writes go through `ops/actions.ts`, never straight to
-  storage. `web/` is the React + MUI client with its own `tsconfig.json`; it imports only
+  storage. The Tickets section (`web/src/Tickets.tsx`, `TicketDetail.tsx`) only shows what
+  `/api/tickets` computed and posts ticket actions; `web/src/ticketState.ts` is presentation, never
+  a readiness or lifecycle rule. `GET /api/runner` is `runnerStatus` and nothing else: no route
+  starts, stops, or resumes the controller. `web/` is the React + MUI client with its own `tsconfig.json`; it imports only
   `src/server/types.ts` and `src/ops/actions.ts` types from `src/`.
 - The CLI is one-shot: open the store, do one operation, print, exit. No daemons, timers, or
   background work. There are three exceptions, all opt-in and never required for jobs to run:

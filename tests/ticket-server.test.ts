@@ -3,9 +3,10 @@ import { get as httpGet } from 'node:http';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { requestStop, writeSession } from '../src/ops/runner-state.ts';
 import type { TicketDetail, TicketList, TicketView } from '../src/ops/tickets.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
-import type { ApiError } from '../src/server/types.ts';
+import type { ApiError, BoardRow, RunnerStatus } from '../src/server/types.ts';
 import { createJob } from '../src/storage/jobs.ts';
 import { makeRepo, tempDir, type TempStore, tempStore } from './helpers.ts';
 
@@ -200,5 +201,48 @@ describe('ticket API', () => {
     });
     expect(foreignHost).toBe(400);
     expect((await body<TicketList>(get('/api/tickets'))).total).toBe(3);
+  });
+
+  it('serves the controller status read-only, and names the ticket of each job on the board', async () => {
+    expect(await body<RunnerStatus>(get('/api/runner'))).toMatchObject({
+      state: 'idle',
+      current: null,
+      stop: { next: false, now: false },
+      last: null,
+    });
+    const [job] = await body<{ id: string }[]>(get('/api/tickets/1/jobs'));
+    // One request ties every job to its ticket: the Tickets view never asks per row.
+    const rows = await body<BoardRow[]>(get('/api/jobs'));
+    expect(rows.map((r) => [r.id, r.ticketId])).toEqual([[job?.id, 1]]);
+
+    // A controller that died at ticket 1, with a stop left for it: what `orch status` prints.
+    const at = new Date().toISOString();
+    writeSession(store.paths, {
+      pid: process.pid,
+      startedAt: at,
+      beatAt: at,
+      mode: 'queue',
+      repo: null,
+      ticket: null,
+      ticketId: 1,
+      jobId: job?.id ?? null,
+      child: null,
+      results: [],
+      skipped: [],
+      finished: null,
+    });
+    requestStop(store.paths, 'next');
+    expect(await body<RunnerStatus>(get('/api/runner'))).toMatchObject({
+      state: 'interrupted',
+      pid: null,
+      mode: 'queue',
+      stop: { next: true, now: false },
+      current: { ticket: '0001', job: job?.id, stage: 'spec', waiting: 'agent' },
+    });
+    // Visibility only: nothing under /api/runner starts, stops, or resumes anything.
+    expect((await post('/api/runner', {})).status).toBe(404);
+    expect((await post('/api/runner/stop', {})).status).toBe(404);
+    expect((await get('/api/runner/stop')).status).toBe(404);
+    expect((await body<RunnerStatus>(get('/api/runner'))).stop).toEqual({ next: true, now: false });
   });
 });

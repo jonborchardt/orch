@@ -208,7 +208,9 @@ orch ticket done 85 --note "merged <pr>"   # or close it by hand
 ```
 
 A ticket has at most one unfinished job; a job finishing never closes its ticket (a verified merge
-through `orch job merge` or the dashboard does, unless checklist items remain). Fields, readiness rules, the HTTP API, and the one-shot import
+through `orch job merge` or the dashboard does, unless checklist items remain). The dashboard's
+Tickets section shows the same queue with its blockers and the controller's status, and edits
+tickets through the same operations. Fields, readiness rules, the HTTP API, and the one-shot import
 of a Markdown todo register are in [docs/tickets.md](docs/tickets.md).
 
 ## Run the queue unattended

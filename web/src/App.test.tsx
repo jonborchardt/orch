@@ -78,6 +78,7 @@ function row(over: Partial<BoardRow>): BoardRow {
     pr: { url: null, state: null, phase: 'no-pr' },
     supersededBy: null,
     supersedes: [],
+    ticketId: null,
     archivedAt: null,
     ci: noCi(),
     progress: progress(1, 'current', 'Build'),
@@ -4249,5 +4250,25 @@ describe('reference helpers (R2, R4, R8)', () => {
     );
     for (const bad of ['javascript:alert(1)', 'http://github.com/x', 'data:text/html,x', 'x', null])
       expect(httpsHref(bad)).toBeNull();
+  });
+});
+
+describe('job to ticket', () => {
+  it('links a job that works on a ticket to that ticket, and no other job', async () => {
+    data.detail = detail({ job: { ...detail().job, ticketId: 85 } });
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    const view = mount();
+    const header = await screen.findByTestId('job-header');
+    expect(within(header).getByRole('link', { name: 'ticket 0085' })).toHaveAttribute(
+      'href',
+      '#/tickets/85',
+    );
+    view.unmount();
+    data.detail = detail();
+    mount();
+    expect(
+      within(await screen.findByTestId('job-header')).queryByRole('link', { name: /ticket/ }),
+    ).toBeNull();
   });
 });

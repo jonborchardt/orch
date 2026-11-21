@@ -20,6 +20,7 @@ import {
 import { DEFAULT_PORT, webDistDir } from '../core/paths.ts';
 import { DASHBOARD_SESSION } from '../ops/actions.ts';
 import { mailWatermark, reportJobMail } from '../ops/mail.ts';
+import { runnerStatus } from '../ops/run.ts';
 import {
   addTicket,
   addTicketArea,
@@ -231,6 +232,11 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
       }
       if (root === 'repos' && !id) {
         send(res, 200, repos(store));
+        return;
+      }
+      // What `orch status` prints. Read-only: the controller is started and stopped from the CLI.
+      if (root === 'runner' && !id) {
+        send(res, 200, runnerStatus(store));
         return;
       }
       // Tickets: the same operations as `orch ticket`, which do all the validation.

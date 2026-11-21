@@ -3,10 +3,16 @@ import type {
   ActionRequest,
   ActionResponse,
   ApiError,
+  Area,
   BoardRow,
   JobDetailView,
+  RunnerStatus,
   SessionInfo,
   SessionLogView,
+  TicketDetail,
+  TicketEvent,
+  TicketList,
+  TicketView,
 } from '../../src/server/types.ts';
 
 export class ApiFailure extends Error {
@@ -55,13 +61,10 @@ export function fetchSession(): Promise<SessionInfo> {
   return session;
 }
 
-export async function postAction(
-  id: string,
-  body: ActionRequest,
-  retry = true,
-): Promise<ActionResponse> {
+/** A state-changing request: JSON body, the CSRF token, and one retry with a fresh token. */
+async function post<T>(path: string, body: unknown, retry = true): Promise<T> {
   const { csrf } = await fetchSession();
-  const res = await fetch(`/api/jobs/${id}/actions`, {
+  const res = await fetch(path, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -71,14 +74,34 @@ export async function postAction(
     body: JSON.stringify(body),
   });
   try {
-    return await parse<ActionResponse>(res);
+    return await parse<T>(res);
   } catch (err) {
     // The token is per `orch ui` process: a page left open across a restart holds a dead one.
     // The server refused before acting, so fetching the new token and resending once is safe.
     if (retry && err instanceof ApiFailure && err.message === 'Invalid CSRF token') {
       session = undefined;
-      return postAction(id, body, false);
+      return post<T>(path, body, false);
     }
     throw err;
   }
 }
+
+export const postAction = (id: string, body: ActionRequest) =>
+  post<ActionResponse>(`/api/jobs/${id}/actions`, body);
+
+/** `order` is the server's proposed order of the open tickets; `all` is every ticket by id. */
+export const fetchTickets = (view: 'all' | 'order') =>
+  getJson<TicketList>(`/api/tickets?view=${view}`);
+export const fetchTicket = (id: number) => getJson<TicketDetail>(`/api/tickets/${String(id)}`);
+export const fetchTicketHistory = (id: number) =>
+  getJson<TicketEvent[]>(`/api/tickets/${String(id)}/history`);
+export const fetchAreas = () => getJson<Area[]>('/api/tickets/areas');
+export const fetchRunner = () => getJson<RunnerStatus>('/api/runner');
+/** `repo` is a path inside the repository; the server resolves and validates everything. */
+export const createTicket = (body: Record<string, unknown>) =>
+  post<TicketView>('/api/tickets', body);
+/** One `orch ticket` mutation; `revision` makes the server refuse a ticket changed since. */
+export const ticketAction = (
+  id: number,
+  body: { action: string; revision: number } & Record<string, unknown>,
+) => post<TicketView>(`/api/tickets/${String(id)}/actions`, body);
