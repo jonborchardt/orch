@@ -433,6 +433,48 @@ finishes the same merge, and then goes on as the session was configured. It refu
 recorded child PID is alive (`--force` when that PID is another program); `orch start` and
 `orch do` refuse while an interrupted session exists.
 
+Tickets passed over for a missing merge opt-in are part of the saved session: `orch resume`
+continues that session and keeps skipping them, also after
+`orch factory config merge enable` for their repository. A new session reconsiders them: let the
+session end (or discard an interrupted one with `orch stop`), then `orch start` again.
+
+### Claude Code configuration
+
+The controller starts the `claude` it finds on PATH, with the prompt and the permission rules as
+separate arguments. That needs a real executable: on Windows a `claude.cmd` or `.bat` shim (what
+an npm global install provides) is started by `cmd.exe`, which parses its command line as text,
+and a multi-line prompt and rules such as `Bash(orch *)` cannot be passed through it safely. Such
+a shim is refused before anything starts. Install the native build (`claude.exe`) and put it
+first on PATH (`orch doctor` checks that a `claude` is found). It must be signed in (run `claude`
+once), and the `factory` skill and agents must be installed (`orch install`).
+
+The session's permissions are `runnerClaudeArgs` in the user's `<config>/factory.json`. The
+default is what a Node repository's factory run needs:
+
+```json
+{
+  "runnerClaudeArgs": [
+    "--permission-mode",
+    "auto",
+    "--allowedTools",
+    "Bash(orch *)",
+    "Bash(git *)",
+    "Bash(npm *)",
+    "Bash(npx *)",
+    "Bash(node *)",
+    "Bash(cd *)"
+  ]
+}
+```
+
+A repository whose builder runs other tools should have them added. A command outside the list
+is left to auto mode's judgement, and in a headless session nobody is there to approve one it
+declines, so the job can stop moving. For example `"Bash(pnpm *)"`, `"Bash(cargo *)"`,
+or `"Bash(pytest *)"`. The setting replaces the default list, so repeat the entries you still
+want; it applies to every repository the controller works on, and it is never read from a
+repository. `orch verify` runs a repository's own checks whatever is listed here: the allow-list
+is only about what the agents may run while they work.
+
 ## Session notices
 
 A running session is never messaged; it learns of outside events on its next `orch factory

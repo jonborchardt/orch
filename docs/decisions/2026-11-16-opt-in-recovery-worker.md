@@ -47,3 +47,12 @@ episodes never interleave. A record dated more than a minute in the future (cloc
 stale too. Known limit: a worker that dies without removing its PID file leaves a window, until its
 heartbeat goes stale and with no reboot in between, in which an unrelated process reusing that PID
 is reported as the worker (`stop` would then signal it).
+
+**Later note (2026-11-21).** "`orch` never starts a Claude process" was true of all of `orch` when
+this was written and is still true of the recovery worker, which is unchanged: it continues only
+`ci`-stage jobs and reports the rest. It is no longer true of `orch` as a whole. The foreground
+factory controller (`orch start`, `orch do`, `orch resume`) starts one headless `/factory <job>`
+child for the ticket it is working on (decision 2026-11-21-foreground-factory-runner). The concern
+above, a second invisible session beside one that may still be open, is met there differently:
+the controller runs in the foreground, claims the job before starting the child, names the child
+in `orch status`, and refuses to start another while the first may be alive.

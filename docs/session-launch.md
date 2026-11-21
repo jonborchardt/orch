@@ -11,6 +11,16 @@ session for a factory job, established from the official documentation and from 
 | Claude Code VS Code ext. | anthropic.claude-code 2.1.322                        |
 | Initiating session       | VS Code Agents window, Claude harness, in a worktree |
 
+> **Later note (2026-11-21).** This page records what was established on 2026-11-14 for
+> _dispatch_: one session handing a job to another, visible session. Its conclusion still holds
+> for dispatch and for the recovery worker, neither of which starts a Claude process. Since then
+> one component does: the foreground factory controller (`orch start`, `orch do`, `orch resume`)
+> starts a headless `claude -p "/factory <job>"` child for the ticket it is working on, the kind
+> listed below as "Headless CLI". It is not an Agents-window session, cannot be messaged, and
+> lives only while the controller's command runs. See
+> [decisions/2026-11-21-foreground-factory-runner.md](decisions/2026-11-21-foreground-factory-runner.md)
+> and [workflow.md](workflow.md#factory-controller). The text below is unchanged.
+
 ## Session kinds, and which one a factory job needs
 
 | Kind                                         | Independent of the parent? | In the Agents window? | Can be given a cwd / prompt?                                 |
