@@ -119,6 +119,10 @@ describe('a job for a ticket', () => {
     expect(() => startJob(store, { ticket: dep.id, session: 's', cwd: beta })).toThrow(
       /belongs to github.com\/acme\/alpha/,
     );
+    // Nor from a directory that is no repository at all: the ticket names where to go.
+    expect(() => startJob(store, { ticket: dep.id, session: 's', cwd: tempDir() })).toThrow(
+      /belongs to github.com\/acme\/alpha \(.*\); .* is not inside a Git repository\. Run from that repository/,
+    );
     expect(listJobs(store.db)).toHaveLength(count);
     for (const id of [blocked.id, question.id, dep.id]) {
       expect(showTicket(store, id).ticket).toMatchObject({ status: 'open', revision: 1 });

@@ -407,6 +407,11 @@ export function addTicketAsset(
   return showTicket(store, n);
 }
 
+/** Whether `path` is inside the ticket's repository (its checkout, a worktree, a clone of its remote). */
+export function ticketIsAt(ticket: Pick<Ticket, 'repo' | 'repoPath'>, path: string): boolean {
+  return existsSync(path) && findProjectRoot(path) !== undefined && inRepositoryAt(path)(ticket);
+}
+
 export interface TicketJobRequest {
   ticket: LinkedTicket;
   /** Path to resolve the job's repository from. */
@@ -429,10 +434,12 @@ export function ticketJobRequest(
   const key = ticketKey(ticket.id);
   const problem = repoProblemOf()(ticket);
   let path = ticket.repoPath;
-  if (target !== undefined && findProjectRoot(target) !== undefined) {
-    if (!inRepositoryAt(target)(ticket)) {
+  if (target !== undefined) {
+    // The ticket decides the repository; a caller standing anywhere else is told where to go.
+    if (!ticketIsAt(ticket, target)) {
       throw new ValidationError(
-        `Ticket ${key} belongs to ${ticket.repo} (${ticket.repoPath}), not the repository at ${target}. ` +
+        `Ticket ${key} belongs to ${ticket.repo} (${ticket.repoPath}); ${target} is ` +
+          `${findProjectRoot(target) === undefined ? 'not inside a Git repository' : 'another repository'}. ` +
           'Run from that repository or pass --repo <path> inside it. Nothing was created.',
       );
     }

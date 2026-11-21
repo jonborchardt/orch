@@ -15,6 +15,7 @@ import {
   ticketAction,
   ticketAreas,
   ticketHistory,
+  ticketIsAt,
   type TicketList,
 } from '../ops/tickets.ts';
 import type { Store } from '../storage/client.ts';
@@ -151,8 +152,11 @@ export function runTicket(
       return {
         ticket: listTickets(store, { ...filters, view: 'ready', limit: 1 }).tickets[0] ?? null,
       };
-    case 'show':
-      return showTicket(store, id());
+    case 'show': {
+      // `here`: the cwd is inside the ticket's repository, so a job for it can start from here.
+      const shown = showTicket(store, id());
+      return { ...shown, here: ticketIsAt(shown.ticket, process.cwd()) };
+    }
     case 'history':
       return ticketHistory(store, id(), { limit: o.limit });
     case 'jobs':

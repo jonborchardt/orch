@@ -103,7 +103,8 @@ number of jobs over time (a cancelled attempt, a re-land), and jobs without a ti
   a ticket. In the one transaction that inserts the job, the ticket is checked (open or
   in-progress, not a question, dependencies done, no unfinished job), marked `in-progress`, and
   linked. If anything fails, neither the job nor the claim exists. The ticket's title and body are
-  the default title and description. `start` must run inside the ticket's repository; `dispatch`
+  the default title and description. `start` must run inside the ticket's repository (from another repository, or outside any, it is
+  refused with the ticket's repository and path); `dispatch`
   defaults to it.
 - A partial unique index (`jobs_active_ticket_idx`, on `ticketId` where the job is not completed or
   cancelled) makes a second unfinished job for a ticket impossible, whatever races.
@@ -119,7 +120,8 @@ number of jobs over time (a cancelled attempt, a re-land), and jobs without a ti
 
 `orch ticket --help` is the reference. All commands take `--json`; lists print
 `{ "total": n, "tickets": [...] }` (rows without the body), `show` prints
-`{ ticket, dependents, jobs, assets, assetDir }`, and a mutation prints the ticket. Exit codes are
+`{ ticket, dependents, jobs, assets, assetDir, here }` (`here`: the cwd is inside the ticket's
+repository), and a mutation prints the ticket. Exit codes are
 the usual ones: 1 validation or a refused status change, 2 usage, 3 no such ticket, 4 stale
 revision.
 

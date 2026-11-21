@@ -22,6 +22,10 @@ skill does, after the merge.
 `orch ticket show <id> --json`. Stop, changing nothing, and say why when:
 
 - there is no such id (exit 3), or `ticket.status` is not `open` or `in-progress`;
+- `here` is `false`: this session is not inside the ticket's repository (another repository, or no
+  Git checkout at all). The ticket decides where the work happens, never the current directory:
+  tell the user the ticket belongs to `ticket.repo` and to run `/dotodo <id>` from a session opened
+  in `ticket.repoPath`. Do not `cd` there, and do not start the job with `--repo`;
 - `ticket.type` is `question` (a decision, not code);
 - `ticket.blockedBy` names a dependency that is not `done`, or a repository that is not available;
 - `ticket.activeJob` is set: a job is already working on it. Continue that job with `/factory <job>`

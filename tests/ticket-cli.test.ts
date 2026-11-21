@@ -155,6 +155,10 @@ describe('orch ticket', () => {
       ok<TicketView>(outside, 'edit', '0007', '--body-file', file, '--priority', 'p2').body,
     ).toBe('## What\n\nFrom a file.');
     const shown = ok<TicketDetail>(outside, 'show', '#7');
+    // `here` tells a skill whether the cwd is the ticket's repository (ticket 7 is alpha's).
+    expect(ok<{ here: boolean }>(outside, 'show', '7').here).toBe(false);
+    expect(ok<{ here: boolean }>(beta, 'show', '7').here).toBe(false);
+    expect(ok<{ here: boolean }>(alpha, 'show', '7').here).toBe(true);
     expect(shown).toMatchObject({
       ticket: { priority: 'P2', revision: 3 },
       dependents: [8],
