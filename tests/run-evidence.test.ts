@@ -4,12 +4,12 @@
  * same job, and a resume in the middle of a re-land. The Claude child is the stand-in of
  * tests/run-fixture.ts; tests/run-repair.test.ts drives a real job through a CI repair.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { REPORTED_EVENTS } from '../src/core/mail-report.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
-import { resumeSession, RUNNER_SESSION } from '../src/ops/run.ts';
+import { resumeSession, RUNNER_SESSION, startSession } from '../src/ops/run.ts';
 import { readSession } from '../src/ops/runner-state.ts';
 import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
 import {
@@ -33,6 +33,22 @@ import {
   store,
   ticket,
 } from './run-fixture.ts';
+
+// Lets one test make every event the controller records fail, as a full disk would.
+const broken = vi.hoisted(() => ({ on: false }));
+vi.mock('../src/storage/jobs.ts', async (original) => {
+  const real = await original<typeof import('../src/storage/jobs.ts')>();
+  return {
+    ...real,
+    recordEvent: (...args: Parameters<typeof real.recordEvent>) => {
+      if (broken.on) throw new Error('disk full');
+      return real.recordEvent(...args);
+    },
+  };
+});
+beforeEach(() => {
+  broken.on = false;
+});
 
 const sessions = (jobId: string) => eventsOf(jobId, 'runner.session');
 const stops = (jobId: string) => eventsOf(jobId, 'runner.stopped');
@@ -163,6 +179,67 @@ describe('runner.stopped: the controller gave the ticket up', () => {
     // The same refusal again is the same stop: nothing is added.
     await one(launcher(idle), id);
     expect(stops(job.id)).toHaveLength(1);
+  });
+
+  it('a Claude that cannot be started is recorded as claude-failed, once, and the job released', async () => {
+    const id = ticket('No claude');
+    let launches = 0;
+    const launch = () => {
+      launches += 1;
+      return {
+        pid: 0,
+        startedAt: new Date().toISOString(),
+        done: Promise.resolve({ code: null, signal: null, error: 'spawn claude ENOENT' }),
+        kill: () => undefined,
+      };
+    };
+
+    const s = await one({ launch, calls: [] }, id);
+
+    const job = jobsOf(id)[0];
+    const jobId = job?.id ?? '';
+    // Not retried: a second launch would fail the same way.
+    expect(launches).toBe(1);
+    expect(s.tickets[0]).toMatchObject({ outcome: 'blocked', jobId });
+    expect(sessions(jobId).map((e) => e.payload)).toMatchObject([
+      { outcome: 'failed', exitCode: null, error: 'spawn claude ENOENT', pid: null, moved: false },
+    ]);
+    expect(stops(jobId).map((e) => e.payload)).toMatchObject([
+      {
+        outcome: 'blocked',
+        code: 'claude-failed',
+        reason: s.tickets[0]?.reason,
+        stage: 'spec',
+      },
+    ]);
+    expect(job).toMatchObject({ stage: 'spec', ownerSession: null, ownerToken: null });
+    expect(status(id)).toBe('in-progress');
+    expect(merges()).toHaveLength(0);
+  });
+
+  it('an event that cannot be written still releases the job and leaves the ticket blocked', async () => {
+    const id = ticket('Disk full');
+    const log: string[] = [];
+    broken.on = true;
+
+    // The session escalates and exits holding the job; neither event about it can be recorded.
+    const s = await startSession(
+      store,
+      { mode: 'ticket', ticket: id },
+      { launch: launcher(escalate).launch, log: (line) => log.push(line), ...quick },
+    );
+
+    const job = jobsOf(id)[0];
+    const jobId = job?.id ?? '';
+    expect(s).toMatchObject({ completed: 0, blocked: 1 });
+    expect(s.tickets[0]).toMatchObject({ outcome: 'needs-human', jobId });
+    expect([...stops(jobId), ...sessions(jobId)]).toHaveLength(0);
+    expect(job).toMatchObject({ stage: 'needs-human', ownerSession: null, ownerToken: null });
+    expect(
+      log.filter((l) => l.includes('could not be recorded and released: disk full')),
+    ).toHaveLength(2);
+    expect(status(id)).toBe('in-progress');
+    expect(merges()).toHaveLength(0);
   });
 
   it('writes nothing to a job another live session holds, and leaves its lease', async () => {
