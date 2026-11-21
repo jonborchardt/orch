@@ -8,16 +8,24 @@
  * are rewritten through that map (text inside bodies is left as written). Running it again for a
  * register that was imported in full changes nothing.
  */
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { NotFoundError, ValidationError } from '../core/errors.ts';
 import { canonicalPath, findProjectRoot, ticketAssetDir } from '../core/paths.ts';
-import { DEFAULT_AREAS, ticketKey, type TicketStatus } from '../core/tickets.ts';
-import { parseAreas, parseTodo, TODO_FILE, validateRegister } from '../core/todo-register.ts';
+import { DEFAULT_AREAS, type Priority, ticketKey, type TicketStatus } from '../core/tickets.ts';
+import {
+  parseAreas,
+  parseTodo,
+  type RegisterTodo,
+  TODO_FILE,
+  validateRegister,
+} from '../core/todo-register.ts';
 import { TERMINAL_STATUSES } from '../core/workflow.ts';
 import type { Store } from '../storage/client.ts';
 import {
+  importedFingerprints,
   importedFrom,
   type ImportRow,
   importTickets,
@@ -62,6 +70,17 @@ export interface ImportReport {
     related: number;
     duplicates: number;
   };
+  /** One row per todo, in register order, with links already mapped to global ids. */
+  tickets: {
+    importId: number;
+    id: number;
+    title: string;
+    status: TicketStatus;
+    priority: Priority;
+    dependsOn: number[];
+    related: number[];
+    duplicateOf: number | null;
+  }[];
   areasAdded: string[];
   jobs: {
     /** Jobs whose title names exactly one todo of this register: associated. */
@@ -87,6 +106,19 @@ export function todoIdsInTitle(title: string): number[] {
   if (lead) ids.add(Number(lead[1]));
   for (const m of title.matchAll(/\((\d{4})\)/g)) ids.add(Number(m[1]));
   return [...ids];
+}
+
+/**
+ * Canonical hash of one register entry: every frontmatter value and the body, independent of the
+ * file name, key spacing, and line endings. Stored on the ticket's `ticket.imported` event.
+ */
+export function fingerprint(todo: RegisterTodo): string {
+  const canonical = JSON.stringify(
+    Object.entries(todo)
+      .filter(([key]) => key !== 'file')
+      .sort(([a], [b]) => (a < b ? -1 : 1)),
+  );
+  return createHash('sha256').update(canonical).digest('hex');
 }
 
 export function importRegister(store: Store, input: ImportInput): ImportReport {
@@ -127,15 +159,26 @@ export function importRegister(store: Store, input: ImportInput): ImportReport {
   const registerIds = todos.map((t) => t.id);
   const before = importedFrom(store.db, source);
   const alreadyImported = before.size > 0;
-  if (
-    alreadyImported &&
-    !(before.size === todos.length && registerIds.every((id) => before.has(id)))
-  ) {
-    throw new ValidationError(
-      `${source} was imported before (${String(before.size)} tickets) but now holds ${String(todos.length)} todos ` +
-        'that do not match. The database is the source of truth after an import: add or change tickets ' +
-        'with orch ticket, not in the register. Nothing was changed.',
-    );
+  const prints = new Map(todos.map((t) => [t.id, fingerprint(t)]));
+  if (alreadyImported) {
+    // A repeat is a no-op only for the register exactly as it was imported: same todos, and
+    // each one's content (every frontmatter value and the body) unchanged.
+    const was = importedFingerprints(store.db, source);
+    const list = (ids: number[]) => ids.map(ticketKey).join(', ');
+    const differences = [
+      ['changed', registerIds.filter((id) => before.has(id) && was.get(id) !== prints.get(id))],
+      ['added', registerIds.filter((id) => !before.has(id))],
+      ['removed', [...before.keys()].filter((id) => !prints.has(id)).sort((a, b) => a - b)],
+    ] as const;
+    const found = differences.filter(([, ids]) => ids.length > 0);
+    if (found.length > 0) {
+      throw new ValidationError(
+        `${source} was imported before (${String(before.size)} tickets) and has changed since: ` +
+          `${found.map(([what, ids]) => `${what} ${list(ids)}`).join('; ')}. The database is the ` +
+          'source of truth after an import: make the change with orch ticket, not in the register. ' +
+          'Nothing was changed.',
+      );
+    }
   }
 
   const top = maxTicketId(store.db);
@@ -156,6 +199,7 @@ export function importRegister(store: Store, input: ImportInput): ImportReport {
   const rows: ImportRow[] = todos.map((t) => ({
     id: to(t.id),
     importId: t.id,
+    fingerprint: prints.get(t.id) ?? '',
     title: t.title,
     status: t.status,
     type: t.type,
@@ -251,6 +295,16 @@ export function importRegister(store: Store, input: ImportInput): ImportReport {
       related: rows.reduce((n, r) => n + r.related.length, 0),
       duplicates: rows.filter((r) => r.duplicateOf !== null).length,
     },
+    tickets: rows.map((r) => ({
+      importId: r.importId,
+      id: r.id,
+      title: r.title,
+      status: r.status,
+      priority: r.priority,
+      dependsOn: r.dependsOn,
+      related: r.related,
+      duplicateOf: r.duplicateOf,
+    })),
     areasAdded: alreadyImported ? [] : newAreas.map((a) => a.name),
     jobs: alreadyImported ? { linked: [], ambiguous: [], unresolved: [] } : jobs,
     assets: alreadyImported ? [] : assets,

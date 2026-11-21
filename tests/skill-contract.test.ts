@@ -195,7 +195,12 @@ describe('orch install with the real skill and agents', () => {
     const dry = runInstall({ source: root, 'claude-dir': claude, 'dry-run': true });
     expect(dry.problems).toBe(false);
     expect(dry.entries.map((e) => `${e.kind}:${e.name}`).sort()).toEqual(
-      ['skill:factory', ...ROLES.map((r) => `agent:${r.agent}`)].sort(),
+      [
+        'skill:factory',
+        'skill:log-todo',
+        'skill:dotodo',
+        ...ROLES.map((r) => `agent:${r.agent}`),
+      ].sort(),
     );
     const real = runInstall({ source: root, 'claude-dir': claude });
     expect(real.problems).toBe(false);
@@ -204,6 +209,12 @@ describe('orch install with the real skill and agents', () => {
       'name: factory',
     );
     expect(existsSync(join(claude, 'skills', 'factory', 'reference.md'))).toBe(true);
+    // The ticket skills are installed for every repository, from their project-skill location.
+    for (const name of ['log-todo', 'dotodo']) {
+      expect(readFileSync(join(claude, 'skills', name, 'SKILL.md'), 'utf8')).toContain(
+        `name: ${name}`,
+      );
+    }
     expect(frontmatter(join(claude, 'agents', 'factory-builder.md'))['name']).toBe(
       'factory-builder',
     );

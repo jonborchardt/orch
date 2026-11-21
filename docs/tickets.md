@@ -185,13 +185,21 @@ orch ticket import --json              # the import, in one transaction
   second unfinished job for one ticket, and job ids merely mentioned in a body are reported under
   `jobs.ambiguous` or `jobs.unresolved` and not linked.
 - Assets named `NNNN-*` are copied to the ticket's asset directory.
-- The register's files are only read. Running the import again for a register that was imported
-  in full changes nothing (`alreadyImported: true`); a register that changed since is refused.
+- The report lists every todo under `tickets` (register id, ticket id, title, status, priority,
+  mapped `dependsOn`, `related`, `duplicateOf`) next to the counts, so a dry run can be reconciled
+  against the register before anything is written.
+- The register's files are only read. Each ticket's `ticket.imported` row stores a fingerprint of
+  its todo (every frontmatter value and the body). Running the import again for a register that is
+  exactly as it was imported changes nothing (`alreadyImported: true`); one with a changed, added,
+  or removed todo is refused, naming the ids.
   After the import the database is the only source of truth: there is no export and no sync.
 
 Keep the `todo/` directory until the report has been checked; it is the backup.
 
 ## Skills
+
+`orch install` links both skills into `~/.claude/skills` next to `factory`, so `/log-todo` and
+`/dotodo` work in every repository; in this checkout they are also project skills.
 
 `.claude/skills/log-todo` files and maintains tickets through `orch ticket --json`: it decides the
 split, the duplicate check, and the classification; `orch` allocates ids and enforces every rule.

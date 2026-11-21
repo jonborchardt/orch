@@ -34,7 +34,24 @@ export function openStore(
   client.exec('PRAGMA foreign_keys = ON');
   const db = drizzle({ client });
   // Idempotent: records applied migrations in __drizzle_migrations and applies only new ones.
-  migrate(db, { migrationsFolder: migrations });
+  // Processes that open a new or just-upgraded database at the same moment all read "not applied"
+  // and all run the migration; every one but the first fails on its first statement (the table
+  // or column exists) and rolls back. By then the winner has committed, so a second pass finds
+  // nothing to do. A loser can also be refused at once with "database is locked" (its read
+  // transaction cannot be upgraded while the winner writes; busy_timeout does not apply), so each
+  // retry waits a little longer. A failure that outlasts the retries is a real one.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      migrate(db, { migrationsFolder: migrations });
+      break;
+    } catch (err) {
+      if (attempt === 5) {
+        client.close();
+        throw err;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100 * attempt);
+    }
+  }
   return {
     db,
     paths,

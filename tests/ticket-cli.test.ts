@@ -38,6 +38,8 @@ const failure = (cwd: string, ...args: string[]) => {
 
 describe('orch ticket', () => {
   it('numbers concurrent creations from several repositories without a duplicate', async () => {
+    // The database does not exist yet: every process also races to create and migrate it
+    // (the retry in openStore; this failed on CI before it).
     const results = await Promise.all(
       Array.from({ length: 6 }, (_, i) =>
         orchAsync(home, i % 2 ? alpha : beta, [

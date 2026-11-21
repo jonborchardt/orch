@@ -149,6 +149,14 @@ describe('import', () => {
       alreadyImported: false,
       idsPreserved: true,
       idMap: { '0001': 1, '0002': 2, '0003': 3, '0004': 4, '0005': 5 },
+      // Enough to reconcile by hand: every todo with its status and mapped links.
+      tickets: [
+        { importId: 1, id: 1, title: 'Quoted: title', status: 'done', priority: 'P1' },
+        { importId: 2, id: 2, status: 'open', dependsOn: [1], related: [1, 3] },
+        { importId: 3, id: 3, status: 'duplicate', duplicateOf: 1 },
+        { importId: 4, id: 4, status: 'dropped', dependsOn: [] },
+        { importId: 5, id: 5, status: 'in-progress', dependsOn: [2] },
+      ],
       counts: {
         tickets: 5,
         byStatus: { done: 1, open: 1, duplicate: 1, dropped: 1, 'in-progress': 1 },
@@ -206,10 +214,84 @@ describe('import', () => {
     expect(again).toMatchObject({ alreadyImported: true, idMap: { '0005': 5 }, areasAdded: [] });
     expect(store.db.select().from(tickets).all()).toEqual(rows);
     expect(store.db.select().from(ticketEvents).all()).toEqual(events);
-    // A register that changed after its import is a conflict, not a second source of truth.
-    write(6);
-    expect(() => run()).toThrow(/was imported before \(5 tickets\) but now holds 6/);
-    expect(store.db.select().from(tickets).all()).toEqual(rows);
+    // Rewriting a file with the same content (other line endings, key spacing) is still a no-op.
+    const file = join(dir, '0002-todo.md');
+    const original = readFileSync(file, 'utf8');
+    writeFileSync(file, original.replace(/\n/g, '\r\n').replace('priority: P2', 'priority:  P2'));
+    expect(run().alreadyImported).toBe(true);
+    writeFileSync(file, original);
+  });
+
+  it('a register that changed after its import is refused, whatever changed', () => {
+    seed();
+    run();
+    const rows = store.db.select().from(tickets).all();
+    const events = store.db.select().from(ticketEvents).all();
+    const restore = () => {
+      for (const f of readdirSync(dir)) if (f !== 'areas.md') rmSync(join(dir, f));
+      seed();
+    };
+    // Same ids and the same number of files each time, except the last two cases.
+    const changes: [() => void, RegExp][] = [
+      [
+        () => {
+          write(2, {
+            depends_on: [1],
+            related: [1, 3],
+            area: 'video',
+            body: `${BODY}- [ ] one more\n`,
+          });
+        },
+        /changed 0002\./,
+      ],
+      [
+        () => {
+          write(4, { status: 'dropped', type: 'chore', priority: 'P1' });
+        },
+        /changed 0004\./,
+      ],
+      [
+        () => {
+          write(4, { status: 'done', type: 'chore' });
+        },
+        /changed 0004\./,
+      ],
+      [
+        () => {
+          write(5, { status: 'in-progress', depends_on: [1], effort: 0.25 });
+        },
+        /changed 0005\./,
+      ],
+      [
+        () => {
+          write(2, { depends_on: [1], related: [1], area: 'video' });
+          write(4, { status: 'dropped', type: 'chore', title: 'Renamed' });
+        },
+        /changed 0002, 0004\./,
+      ],
+      [
+        () => {
+          write(6);
+        },
+        /added 0006\./,
+      ],
+      [
+        () => {
+          rmSync(join(dir, '0005-todo.md'));
+          write(2, { related: [1, 3], area: 'video' });
+        },
+        /changed 0002; removed 0005\./,
+      ],
+    ];
+    for (const [change, why] of changes) {
+      change();
+      expect(() => run()).toThrow(why);
+      expect(() => run({ dryRun: true })).toThrow(/has changed since/);
+      expect(store.db.select().from(tickets).all()).toEqual(rows);
+      expect(store.db.select().from(ticketEvents).all()).toEqual(events);
+      restore();
+      expect(run().alreadyImported).toBe(true);
+    }
   });
 
   it('a later register with colliding ids gets new ones, with references rewritten', () => {
@@ -267,6 +349,7 @@ describe('import', () => {
   it('a failure inside the transaction rolls every row back', () => {
     const row = {
       importId: 1,
+      fingerprint: 'f',
       title: 't',
       status: 'open' as const,
       type: 'bug' as const,

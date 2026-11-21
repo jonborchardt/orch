@@ -42,7 +42,8 @@ Commands:
   doctor                 Check the local environment (Node, Git, Claude Code, paths)
   init                   Write a repository's factory.json verification policy, or --check its
                          readiness (orch init --help)
-  install [--dry-run]    Link skills/ and agents/ into ~/.claude (--claude-dir, --source)
+  install [--dry-run]    Link skills/, .claude/skills/, and agents/ into ~/.claude
+                         (--claude-dir, --source)
   ui [--port <n>] [--open]
                          Serve the local dashboard on loopback (long-running, optional)
   recover start|stop|status|run [--once]

@@ -3,7 +3,7 @@
  * association of one register in a single immediate transaction. Any conflict throws before or
  * during it, so a failed import leaves nothing behind and consumes no ticket number.
  */
-import { eq, inArray, max } from 'drizzle-orm';
+import { and, eq, inArray, max } from 'drizzle-orm';
 
 import { ValidationError } from '../core/errors.ts';
 import type { Area, Classified, Priority, TicketStatus, TicketType } from '../core/tickets.ts';
@@ -11,13 +11,15 @@ import { ticketKey } from '../core/tickets.ts';
 import { now } from '../core/workflow.ts';
 import type { Db, Store } from './client.ts';
 import { linkJobToTicket } from './jobs.ts';
-import { ticketAreas, ticketLinks, tickets } from './schema.ts';
+import { ticketAreas, ticketEvents, ticketLinks, tickets } from './schema.ts';
 import { appendTicketEvent, listAreas } from './tickets.ts';
 
 export interface ImportRow {
   /** The global id the ticket gets, and its id in the register. */
   id: number;
   importId: number;
+  /** Hash of the register entry as it was read; a repeat import compares against it. */
+  fingerprint: string;
   title: string;
   status: TicketStatus;
   type: TicketType;
@@ -52,6 +54,22 @@ export function importedFrom(db: Db, source: string): Map<number, number> {
     .where(eq(tickets.importSource, source))
     .all();
   return new Map(rows.flatMap((r) => (r.importId === null ? [] : [[r.importId, r.id]])));
+}
+
+/** The fingerprint each ticket of `source` was imported with, by register id. */
+export function importedFingerprints(db: Db, source: string): Map<number, string> {
+  const rows = db
+    .select({ importId: tickets.importId, payload: ticketEvents.payload })
+    .from(ticketEvents)
+    .innerJoin(tickets, eq(tickets.id, ticketEvents.ticketId))
+    .where(and(eq(tickets.importSource, source), eq(ticketEvents.type, 'ticket.imported')))
+    .all();
+  return new Map(
+    rows.flatMap((r) => {
+      const print = r.payload['fingerprint'];
+      return r.importId !== null && typeof print === 'string' ? [[r.importId, print]] : [];
+    }),
+  );
 }
 
 export function takenTicketIds(db: Db, ids: readonly number[]): number[] {
@@ -132,7 +150,12 @@ export function importTickets(store: Store, batch: ImportBatch): { job: string; 
           r.id,
           {
             type: 'ticket.imported',
-            payload: { source: batch.source, importId: r.importId, status: r.status },
+            payload: {
+              source: batch.source,
+              importId: r.importId,
+              status: r.status,
+              fingerprint: r.fingerprint,
+            },
           },
           batch.actor ?? null,
           ts,

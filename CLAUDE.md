@@ -47,8 +47,9 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   export, no dual write. A job is linked to a ticket only through `createJob`'s `ticketId` (the
   claim runs in the job's insert transaction; `jobs_active_ticket_idx` allows one unfinished job
   per ticket); nothing completes a ticket except `orch ticket done`. `core/todo-register.ts` and
-  `ops/ticket-import.ts` exist only for the one-shot `orch ticket import`. The repository-local
-  skills `.claude/skills/log-todo` and `.claude/skills/dotodo` call `orch ticket` only.
+  `ops/ticket-import.ts` exist only for the one-shot `orch ticket import`. The skills
+  `.claude/skills/log-todo` and `.claude/skills/dotodo` call `orch ticket` only; `orch install`
+  links them globally along with `skills/factory`.
 - `skills/factory/` and `agents/` are prose for Claude, linked into `~/.claude` by `orch install`.
   They must only call `orch` commands; any rule that matters is enforced in TypeScript first and
   described in prose second. `tests/skill-contract.test.ts` keeps roles, agent frontmatter, and the
