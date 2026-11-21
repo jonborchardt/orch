@@ -102,7 +102,10 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   sequences existing operations (`listTickets`, `dispatchJob`, `resumeFactoryJob`, `reconcileCi`,
   `mergeJob`) and re-reads the job row at every step; it implements no stage, skips no gate, and
   never calls `gh` or `orch ticket done` itself. Its own state is the single-writer files of
-  `src/ops/runner-state.ts`, never a table and never a copy of job or ticket state. Do not detach
+  `src/ops/runner-state.ts`, never a table and never a copy of job or ticket state. What it did to
+  a job it records on that job as `runner.session` and `runner.stopped` events (decision
+  2026-11-21-runner-evidence-on-the-job), from the one exit of `runTicket`, only on a job it holds
+  or nobody holds; they are evidence, and nothing may decide from them. Do not detach
   it, start it from the dashboard or another command, message a session, run two tickets at once,
   or signal a PID read from a file.
 

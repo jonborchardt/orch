@@ -233,8 +233,10 @@ orch resume               # continue an interrupted session: same scope, ticket,
 A ticket counts as done only when the PR merged at the commit CI passed on and the ticket's own
 lifecycle closed it. The controller stops at the first ticket it could not finish (the job needs a
 person, was cancelled, conflicts twice, or a small retry budget is spent) and prints what to do;
-it does not go on to other work. Tickets of a repository without the merge opt-in are reported
-and passed over. `Ctrl+C` is `orch stop`.
+it does not go on to other work. Why it stopped is recorded on the job (`runner.stopped`, next to
+a `runner.session` event per Claude session) and the job is released: decide a job that needs a
+person on the dashboard, then `orch do <ticket>` continues the same job. Tickets of a repository
+without the merge opt-in are reported and passed over. `Ctrl+C` is `orch stop`.
 
 It needs `claude` on PATH as the native executable, signed in, with the `factory` skill installed
 (`orch install`). The session gets `--permission-mode auto` plus an allow-list for `orch`, `git`,
