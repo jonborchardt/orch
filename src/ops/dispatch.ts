@@ -34,6 +34,8 @@ export interface DispatchInput {
   maxRounds?: number | undefined;
   /** Ticket the job works on; its repository, title, and body are the defaults. */
   ticket?: string | number | undefined;
+  /** A re-land: the finished job this one replaces, superseded in the creating transaction. */
+  supersedes?: { id: string; token: string | undefined } | undefined;
   /** The initiating session's name; recorded as the actor. */
   session: string;
   cwd: string;
@@ -144,6 +146,7 @@ export function dispatchJob(store: Store, input: DispatchInput): DispatchResult 
     maxRounds: input.maxRounds ?? config.maxRounds,
     maxCiRepairs: config.maxCiRepairs,
     actor: input.session,
+    supersedes: input.supersedes,
   });
   return { job, duplicate: false, readiness, launch: launchFor(job) };
 }

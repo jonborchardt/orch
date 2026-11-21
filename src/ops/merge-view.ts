@@ -7,6 +7,7 @@
 import { type Commit, changesBetween, commitsBetween } from '../git/worktree.ts';
 import type { Store } from '../storage/client.ts';
 import { eventsOfTypes } from '../storage/events.ts';
+import { mergeEvidence } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { listRuns } from '../storage/verification.ts';
 
@@ -15,6 +16,10 @@ export interface MergeView {
   prUrl: string | null;
   /** GitHub's PR head at merge time, from `pr.merged` (ok) or `pr.observed` (merged); null if unknown. */
   head: string | null;
+  /** The commit GitHub created on the base, from the recorded merge evidence; null if unknown. */
+  mergeCommit: string | null;
+  /** Whether the merged head was the CI-verified one; null when no evidence was recorded. */
+  verified: boolean | null;
   /** Whether a head and its recorded merge base resolved, so `commits` and `changedFiles` are the job's. */
   historyKnown: boolean;
   commits: Commit[];
@@ -55,10 +60,13 @@ export function mergeView(
   const changes =
     historyHead && mergeBase ? changesBetween(job.repoPath, mergeBase, historyHead) : null;
   const wtHead = sha(worktree?.head);
+  const evidence = mergeEvidence(store.db, job.id);
   return {
     base: job.baseBranch,
     prUrl: job.prUrl,
     head,
+    mergeCommit: sha(evidence?.['mergeCommit']),
+    verified: typeof evidence?.['verified'] === 'boolean' ? evidence['verified'] : null,
     historyKnown: commits !== null && changes !== null,
     commits: commits && changes ? commits : [],
     changedFiles: commits && changes ? changes.map((c) => c.path) : [],

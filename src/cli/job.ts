@@ -2,6 +2,7 @@
 
 import { UsageError } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
+import { ticketKey } from '../core/tickets.ts';
 import {
   type Action,
   ACTIONS,
@@ -16,6 +17,7 @@ import {
 import { SESSION_PROVIDERS, type SessionProvider, validateSessionRef } from '../core/session.ts';
 import { postNotice, supersede } from '../ops/actions.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
+import { mergeJob, type MergeResult } from '../ops/merge.ts';
 import { findJobs, jobRepository } from '../ops/repo.ts';
 import { jobUsage } from '../ops/usage.ts';
 import { repointRepo } from '../ops/worktree.ts';
@@ -84,6 +86,13 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   repo <id> [--repo <path>] --token <t>     confirm the checkout's current remote identity
   supersede <id> --by <new-id> --session <name> [--force]
             record that <new-id> replaced <id> (same repository; both histories are kept)
+  merge <id> [--session <name>] [--force]
+            merge the completed job's PR as a merge commit at its CI-verified head, confirm it
+            with GitHub, record the merge commit, and close the job's ticket when nothing is left
+            on it. Needs the repository opted in (orch factory config merge enable); a PR GitHub
+            already merged is recorded without that. Safe to repeat. Prints an outcome: merged,
+            already_merged, waiting, reland, blocked, or error; exit 0 only for the first two,
+            and only when the merged head is the CI-verified one (verified: true)
   session attach <id> --provider <${SESSION_PROVIDERS.join('|')}> --ref <link|uuid> [--cwd <dir>] [--token <t>]
             record the execution session driving the job (metadata; the owner's token is
             required while the job is claimed, none while it is unowned)
@@ -95,6 +104,31 @@ export const JOB_HELP = `Usage: orch job <command> [options]
 
 --token defaults to $ORCH_TOKEN, --session to $ORCH_SESSION. Add --json for machine output.
 `;
+
+/** `orch job merge` text: the outcome and its reason first, then the evidence. */
+export function formatMerge(r: MergeResult): string {
+  const lines = [
+    `${r.outcome.toUpperCase()}${r.code ? ` (${r.code})` : ''}: ${r.reason}`,
+    `job           ${r.jobId}`,
+    `pr            ${r.prUrl ?? '(none)'} -> ${r.base}`,
+    `verified head ${r.verifiedHead ?? '(none)'}`,
+  ];
+  if (r.prHead !== null) lines.push(`pr head       ${r.prHead}`);
+  if (r.mergeCommit !== null) lines.push(`merge commit  ${r.mergeCommit}`);
+  if (r.ticket !== null) {
+    lines.push(`ticket        ${ticketKey(r.ticket.id)} ${r.ticket.status}`);
+  } else if (r.ticketId !== null) lines.push(`ticket        ${ticketKey(r.ticketId)}`);
+  if (r.relandJob !== null) lines.push(`re-land job   ${r.relandJob}`);
+  return lines.join('\n');
+}
+
+/**
+ * Exit 0 only when the PR is merged at the CI-verified head and recorded. A merge recorded as
+ * unverified is still reconciled, but it is not a successful integration: exit 1.
+ */
+export function mergeExitCode(r: MergeResult): number {
+  return (r.outcome === 'merged' || r.outcome === 'already_merged') && r.verified ? 0 : 1;
+}
 
 function summary(job: Job, store: Store, extra: Record<string, unknown> = {}) {
   return {
@@ -211,6 +245,12 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
         }),
         store,
       );
+    case 'merge':
+      // A name of its own per process, so two merges of one job never share a lease.
+      return mergeJob(store, id(), {
+        session: session ?? `orch-merge-${String(process.pid)}`,
+        force: o.force,
+      });
     case 'session': {
       if (rest[0] !== 'attach') throw new UsageError('Usage: orch job session attach <id> ...');
       const jobId = need(rest[1], '<id>');

@@ -23,3 +23,10 @@ command, so the factory skill and agents, which can only call `orch`, still cann
 **Why.** Merging stays a human decision; the button only removes the trip to GitHub, and it
 merges exactly the commit the passing verdict was recorded for. Keeping it out of the CLI keeps
 the factory's own path unable to merge, and `tests/audit.test.ts` holds both limits.
+
+**Update 2026-11-20.** The "there is no CLI command" clause is superseded on purpose by
+`2026-11-20-orch-job-merge.md`: `orch job merge <id>` now exists, for unattended runs, and is
+refused unless the user opted that repository in locally (off by default). The dashboard's Merge is
+unchanged for the person clicking it and needs no opt-in; both run the same operation, `mergeJob`
+in `src/ops/merge.ts`, which is now `mergePr`'s only caller. The conditions above still hold and
+were added to, not relaxed; the merge is recorded only after GitHub confirms it.

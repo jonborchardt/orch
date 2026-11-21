@@ -253,15 +253,16 @@ describe('invariant 15: the code never force-pushes; only the gh wrapper marks r
       } else {
         expect(text, `${f} matches ${ready.source}`).not.toMatch(ready);
       }
-      // `gh pr merge` exists exactly once, in mergePr, reached only by the dashboard's human Merge
-      // (decision 2026-11-15-humans-merge-from-the-dashboard).
+      // `gh pr merge` exists exactly once, in mergePr, and `mergeJob` (ops/merge.ts) is its only
+      // caller: the one operation behind the dashboard's Merge and `orch job merge`
+      // (decision 2026-11-20-orch-job-merge).
       const merge = /'pr',\s*'merge'/;
       if (f === join(src, 'integrations', 'github.ts')) {
         expect(text.match(new RegExp(merge, 'g'))).toHaveLength(1);
       } else {
         expect(text, `${f} matches ${merge.source}`).not.toMatch(merge);
       }
-      if (f !== join(src, 'integrations', 'github.ts') && f !== join(src, 'ops', 'actions.ts')) {
+      if (f !== join(src, 'integrations', 'github.ts') && f !== join(src, 'ops', 'merge.ts')) {
         expect(text, `${f} uses mergePr`).not.toMatch(/\bmergePr\b/);
       }
     }

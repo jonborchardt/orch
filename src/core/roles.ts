@@ -71,6 +71,11 @@ export interface FactoryConfig {
   maxRounds: number;
   /** Default CI repair cycles (failed required checks -> builder -> re-review -> push) per job. */
   maxCiRepairs: number;
+  /**
+   * Repository identities (`github.com/owner/name`) where `orch job merge` may merge without a
+   * human click. Empty by default; changed with `orch factory config merge enable|disable`.
+   */
+  mergeRepos: string[];
 }
 
 export const DEFAULT_CONFIG: FactoryConfig = {
@@ -78,6 +83,7 @@ export const DEFAULT_CONFIG: FactoryConfig = {
   uiPatterns: DEFAULT_UI_PATTERNS,
   maxRounds: 3,
   maxCiRepairs: 2,
+  mergeRepos: [],
 };
 
 /** Validate a parsed factory.json. Unknown keys are rejected so typos do not pass silently. */
@@ -135,6 +141,15 @@ export function parseConfig(raw: unknown): FactoryConfig {
           throw new ValidationError('factory.json: "maxCiRepairs" must be an integer from 0 to 10');
         }
         config.maxCiRepairs = value;
+        break;
+      }
+      case 'mergeRepos': {
+        if (!Array.isArray(value) || !value.every((v) => typeof v === 'string' && v !== '')) {
+          throw new ValidationError(
+            'factory.json: "mergeRepos" must be an array of repository identities',
+          );
+        }
+        config.mergeRepos = value as string[];
         break;
       }
       default:

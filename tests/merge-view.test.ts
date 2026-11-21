@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { PrState } from '../src/core/workflow.ts';
 import { changesBetween, commitsBetween } from '../src/git/worktree.ts';
 import { detail } from '../src/server/api.ts';
-import { getJob, recordPrState } from '../src/storage/jobs.ts';
+import { getJob, recordMerge, recordPrState } from '../src/storage/jobs.ts';
 import { jobs } from '../src/storage/schema.ts';
 import { type Ctx, head, start, verify } from './drive.ts';
 import { commitFile, gitIn, makeRepoWithOrigin, type TempStore, tempStore } from './helpers.ts';
@@ -80,11 +80,12 @@ describe('detail().merge', () => {
     commitFile(clone, 'later.txt', 'later\n', 'Later work on main');
     gitIn(clone, 'push', '-q', 'origin', 'main');
     const merged = head(c.wt);
-    recordPrState(
+    const mergeCommit = gitIn(clone, 'rev-parse', 'HEAD~1');
+    recordMerge(
       store,
       c.id,
       { token: c.token },
-      { event: 'pr.merged', head: merged, error: null },
+      { head: merged, mergeCommit, verified: true, reason: null },
     );
 
     const d = detail(store, c.id);
@@ -93,6 +94,8 @@ describe('detail().merge', () => {
       base: 'main',
       prUrl: PR,
       head: merged,
+      mergeCommit,
+      verified: true,
       historyKnown: true,
       commits: [
         { sha: merged, subject: 'Add b' },

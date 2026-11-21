@@ -10,10 +10,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { FACTORY_HELP } from '../src/cli/factory.ts';
 import { runInstall } from '../src/cli/install.ts';
+import { JOB_HELP } from '../src/cli/job.ts';
 import { TICKET_HELP } from '../src/cli/ticket.ts';
 import { checkArtifact } from '../src/core/artifact-rules.ts';
 import { installRoot } from '../src/core/paths.ts';
 import { MODELS, ROLES } from '../src/core/roles.ts';
+import { MERGE_BLOCKS } from '../src/core/workflow.ts';
+import { MERGE_OUTCOMES } from '../src/ops/merge.ts';
 import { tempDir } from './helpers.ts';
 
 const root = installRoot();
@@ -247,7 +250,22 @@ describe('the todo skills use the ticket commands that exist', () => {
     expect(existsSync(join(root, '.claude', 'skills', 'log-todo', 'index.mjs'))).toBe(false);
     expect(skill('dotodo')).toContain('--ticket <id>');
     expect(FACTORY_HELP).toContain('--ticket <id>');
-    // The merge policy is unchanged.
-    expect(skill('dotodo')).toContain('gh pr merge <prUrl> --merge --match-head-commit <ciHead>');
+  });
+
+  it('dotodo merges only through orch job merge and knows every outcome it can print', () => {
+    const text = skill('dotodo');
+    expect(text).toContain('orch job merge <job> --json');
+    expect(JOB_HELP).toContain('\n  merge <id> ');
+    // No merge rule or gh merge command of its own: those live in mergeDecision and mergePr.
+    expect(text).not.toMatch(/match-head-commit|headRefOid|mergeable/);
+    expect(text).toContain('Never run `gh pr merge`');
+    for (const outcome of MERGE_OUTCOMES) expect(text).toContain(`\`${outcome}\``);
+    const codes = [...text.matchAll(/`code: ([a-z-]+)`/g)].map((m) => m[1]);
+    expect(codes).toEqual(['not-authorized', 'second-conflict']);
+    for (const code of codes) expect(MERGE_BLOCKS).toContain(code);
+    // The opt-in is the user's: the skill names the command and is told not to run it.
+    expect(text).toContain('orch factory config merge enable');
+    expect(text).toContain('do not run it yourself');
+    expect(FACTORY_HELP).toContain('config merge enable|disable|status');
   });
 });

@@ -328,13 +328,18 @@ checks are pending or failing, it is never the primary control, and it refuses a
 job as completed by human close-out rather than as a passing build. It does not merge or mark the
 PR ready.
 
-**Merge** is a plain Cancel / Merge confirm naming the PR and the short head SHA. The server reads
-the PR from GitHub again and merges only if it is open, not a draft, its head is still `ciHead`,
-and GitHub reports it `MERGEABLE`; otherwise it refuses and nothing is called. A merge GitHub
-refuses (for example a repository that disallows merge commits) is recorded as `pr.merged` with
+**Merge** is a plain Cancel / Merge confirm naming the PR and the short head SHA. It runs the same
+operation as `orch job merge` (`mergeJob`, see [workflow.md](workflow.md#merging)), as a human's
+decision: no repository opt-in is needed, and a conflict is refused here instead of re-landed (Fix
+merge conflicts does that). The server reads the PR from GitHub again and merges only if it is the
+job's own PR, open, not a draft, its head is still `ciHead`, and GitHub reports it `MERGEABLE`;
+otherwise it refuses and nothing is called. After the merge it reads the PR once more and records
+what GitHub confirms: the merge commit (shown on the Git tab next to the merged head) and, when the
+job has a ticket with no unchecked checklist item, the ticket's completion. A merge GitHub refuses
+(for example a repository that disallows merge commits) is recorded as `pr.merged` with
 `ok: false` and gh's message, and `prState` stays `ready`. It never deletes the branch, bypasses
-protection, or queues an auto-merge, and there is no CLI equivalent
-(`docs/decisions/2026-11-15-humans-merge-from-the-dashboard.md`). **Refresh PR** re-reads the PR
+protection, or queues an auto-merge. The button is not offered for a superseded job
+(`docs/decisions/2026-11-20-orch-job-merge.md`). **Refresh PR** re-reads the PR
 and records only its state, never the CI verdict, stage, or status; a PR merged on GitHub by hand
 shows as merged after it, and on a ci escalation that makes Accept delivery available. Nothing
 polls GitHub: the board's periodic refresh re-reads the database only.

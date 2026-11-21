@@ -19,3 +19,7 @@ skill, and with it this merge, is available in every repository where the owner 
 from merging early. A conflict after completion is never resolved by hand; it becomes a second
 factory job that supersedes the first. `orch` learns of the merge only when the PR is next read
 (the dashboard's Refresh PR).
+
+**Superseded 2026-11-20** by `2026-11-20-orch-job-merge.md`. The skill no longer runs `gh` or
+holds merge conditions: it calls `orch job merge`, which enforces them in TypeScript and merges
+only where the repository is opted in. The limit above ("the conditions are prose") is gone.
