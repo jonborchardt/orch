@@ -476,4 +476,37 @@ describe('the shipped hook command (.claude/settings.json)', () => {
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain('installed orch handled checkout hook');
   });
+
+  /** A job worktree: this repository's source, but no node_modules to run it with. */
+  const sourceWithoutDeps = () => {
+    const dir = tempDir('orch-co-nodeps-');
+    dirs.push(dir);
+    mkdirSync(join(dir, 'src', 'cli'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'cli', 'checkout.ts'), '');
+    expect(existsSync(join(dir, 'node_modules'))).toBe(false);
+    return dir;
+  };
+
+  it('uses the installed orch when the checkout has source but no dependencies', (ctx) => {
+    if (noBash) return ctx.skip(skipReason);
+    const newOrch = fakeOrch(
+      'case "$2" in list) exit 0;; hook) cat >/dev/null; echo "installed orch handled $1 $2"; exit 0;; esac; exit 2',
+    );
+    const r = run(sourceWithoutDeps(), newOrch, pre('A', join(repo, 'a.ts')));
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('installed orch handled checkout hook');
+    expect(r.err).not.toContain('ERR_MODULE_NOT_FOUND');
+  });
+
+  it('warns INACTIVE when the checkout has no dependencies and no capable orch', (ctx) => {
+    if (noBash) return ctx.skip(skipReason);
+    const dir = sourceWithoutDeps();
+    for (const script of ['exit 127', 'echo "UsageError: Unknown command: checkout" >&2; exit 2']) {
+      const r = run(dir, fakeOrch(script), pre('A', join(repo, 'a.ts')));
+      expect(r.code, r.err).toBe(1);
+      expect(r.err).toContain('INACTIVE');
+      expect(r.err).not.toContain('ERR_MODULE_NOT_FOUND');
+    }
+    expect(listCheckouts(paths())).toEqual([]);
+  });
 });

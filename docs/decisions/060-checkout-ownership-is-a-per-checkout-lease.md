@@ -47,7 +47,12 @@ non-blocking hook error and the edit proceeds, so the absence of protection is v
 locking the session out. Rejected: exit 2 on absence (blocks all work on every older branch) and
 exit 0 (invisible). Shell-form hooks run through Git Bash on Windows, which Claude Code needs
 anyway; `tests/checkout.test.ts` runs the shipped command through `bash` against this checkout,
-a fake pre-checkout `orch`, and a fake capable one.
+a fake pre-checkout `orch`, and a fake capable one. Later, factory job worktrees (which have the
+source but no `node_modules`) failed every hook with `ERR_MODULE_NOT_FOUND` for `drizzle-orm`, so
+the source runs only when `src/cli/checkout.ts` exists and the checkout's dependencies are
+installed (`node_modules/drizzle-orm` exists); otherwise the installed `orch` takes over. This is a
+file test, not "try the source, then fall back": a source run that fails cannot be told apart from
+a real refusal (exit 2) or a real error, and retrying after it would run the hook twice.
 
 **Liveness without a daemon (safety review).** A lease renewed only by Edit/Write let an active
 session lose its checkout: thirty minutes of reading, reasoning, or one long `npm run check` with
