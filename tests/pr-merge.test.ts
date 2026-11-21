@@ -62,7 +62,20 @@ describe('dashboard merge', () => {
       ciHead: sha,
       ciStatus: 'passing',
     });
-    expect(events(c, 'pr.merged')).toEqual([{ head: sha, ok: true, error: null }]);
+    // The evidence is what GitHub confirmed after the merge, not the command's exit status.
+    expect(events(c, 'pr.merged')).toEqual([
+      {
+        head: sha,
+        ok: true,
+        error: null,
+        mergeCommit: 'c'.repeat(40),
+        verifiedHead: sha,
+        verified: true,
+        base: 'main',
+        prUrl: URL,
+        ticketId: null,
+      },
+    ]);
     expect(detail(store, c.id).prPhase).toBe('merged');
     // Once merged, the worktree can go.
     expect(detail(store, c.id).actions).toEqual(['remove-worktree', 'archive']);

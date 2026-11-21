@@ -247,7 +247,7 @@ export function ciSummary(
   if (ci.completion === 'ci') {
     const guidance: Partial<Record<PrPhase, string>> = {
       'ready-to-merge':
-        'Ready to merge: a human merges (Merge here, or on GitHub); the factory never does.',
+        'Ready to merge: Merge here or on GitHub, or orch job merge where the repository is opted in; the factory never does.',
       merged: 'Merged.',
       closed: 'The PR was closed without merging.',
       'ready-mark-failed': `Ready marking failed: run gh pr ready ${job.prUrl ?? ''}, then Refresh PR.`,

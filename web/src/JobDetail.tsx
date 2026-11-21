@@ -695,6 +695,8 @@ function GitTab({ detail }: { detail: JobDetailView }) {
             </>
           )}
           {merge.head && <> at {commit(merge.head)}</>}
+          {merge.mergeCommit && <>, merge commit {commit(merge.mergeCommit)}</>}
+          {merge.verified === false && <> (not the CI-verified head)</>}
         </Typography>
       )}
       {worktree ? (

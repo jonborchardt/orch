@@ -244,7 +244,8 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default; paginated in
  * pages of 100 under `--paginate --slurp`), `protection`, `rules`, `logs` (keyed by job id), or
  * `api` (keyed by path), `rate_limit` (the recovery worker's probe), else HTTP 404. `gh run rerun` succeeds and is only logged; `gh pr ready`
- * takes the PR out of draft; `gh pr merge` sets it MERGED.
+ * takes the PR out of draft; `gh pr merge` sets it MERGED with `mergeOid` as its merge commit.
+ * `failAfter` fails a command after it took effect (a timeout that followed a merge).
  */
 const GH_SHIM_SOURCE = String.raw`
 const fs = require('node:fs');
@@ -279,7 +280,7 @@ else if (a === 'pr' && b === 'view') {
   if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.isDraft = false; out(''); }
 } else if (a === 'pr' && b === 'merge') {
   const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
-  if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.state = 'MERGED'; out(''); }
+  if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.state = 'MERGED'; pr.mergeCommit = { oid: state.mergeOid || 'c'.repeat(40) }; out(''); }
 } else if (a === 'api') {
   const path = b.replace(/^\//, '').split('?')[0];
   // --paginate --slurp: pages of 100, returned as one array, like gh does.
@@ -315,6 +316,7 @@ else if (a === 'pr' && b === 'view') {
   });
   out(state.repo.url + '/pull/' + n + '\n');
 } else { process.stderr.write('shim: unknown command ' + args.join(' ')); code = 1; }
+if (state.failAfter && (a + ' ' + b).startsWith(state.failAfter)) { process.stderr.write('shim: timed out'); code = 1; }
 fs.writeFileSync(file, JSON.stringify(state));
 process.exit(code);
 `;
@@ -334,6 +336,10 @@ export interface ShimState {
   calls: string[][];
   /** Fail every command whose first two words start with this (e.g. "repo view", "api repos/"). */
   fail?: string | undefined;
+  /** Like `fail`, but the command takes effect first. */
+  failAfter?: string | undefined;
+  /** Merge commit `gh pr merge` gives the PR (default: forty `c`). */
+  mergeOid?: string | undefined;
   repo: { nameWithOwner: string; url: string; defaultBranchRef: { name: string } | null };
   issue: Record<string, unknown>;
   prs: Record<string, unknown>[];

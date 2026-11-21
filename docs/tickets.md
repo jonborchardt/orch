@@ -108,10 +108,18 @@ number of jobs over time (a cancelled attempt, a re-land), and jobs without a ti
   defaults to it.
 - A partial unique index (`jobs_active_ticket_idx`, on `ticketId` where the job is not completed or
   cancelled) makes a second unfinished job for a ticket impossible, whatever races.
-- A re-land created by the dashboard's Fix merge conflicts keeps the ticket of the job it replaces.
-- A job finishing never closes its ticket. The factory completes before the PR is merged, so
-  closing is the explicit `orch ticket done`, which the `dotodo` skill runs after GitHub reports
-  the merge.
+- A re-land (created by `orch job merge` or the dashboard's Fix merge conflicts when the PR
+  conflicts) keeps the ticket of the job it replaces.
+- A job finishing never closes its ticket: the factory completes before the PR is merged. Two
+  things close one: the explicit `orch ticket done`, and a verified merge recorded by
+  `orch job merge` or the dashboard's Merge. The merge closes the ticket in the transaction that
+  records it (`ticket.completed` with the job, PR, head, and merge commit) only when the merged
+  head is the CI-verified one, the job was not superseded, no other job is working on the ticket,
+  and the body has no unchecked task item (`- [ ]`). Otherwise the status is left alone and a
+  `ticket.job-merged` event says why, once; a ticket already done, dropped, or duplicate is not
+  touched. Nothing ticks a box for you, and a ticket is never marked done and reopened: tick what
+  was delivered and run `orch job merge <job>` again, or `orch ticket done`
+  ([workflow.md](workflow.md#merging)).
 - `orch ticket start <id>` only marks a ticket in progress (work done by hand); it creates no job.
 
 `orch ticket jobs <id>` lists a ticket's jobs; `orch job show <job>` includes `job.ticketId`.

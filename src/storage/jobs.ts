@@ -44,7 +44,7 @@ import { findArtifact, listArtifacts, upsertArtifact, validateArtifact } from '.
 import type { Db, Store } from './client.ts';
 import { appendEvent, eventsOfTypes, latestEventsByJob, listEvents } from './events.ts';
 import { type Artifact, type Event, type Job, jobs, type Review, reviews } from './schema.ts';
-import { claimTicketForJob } from './tickets.ts';
+import { claimTicketForJob, settleTicketForMerge, type TicketMergeOutcome } from './tickets.ts';
 
 export interface CreateJobInput {
   title: string;
@@ -59,6 +59,11 @@ export interface CreateJobInput {
   actor?: string | undefined;
   /** Ticket the job works on: claimed (checked, marked in progress, linked) in the same transaction. */
   ticketId?: number | undefined;
+  /**
+   * The finished job this one re-lands (same repository, not superseded yet): marked superseded by
+   * the new job in the same transaction, as its owner, so neither exists without the other.
+   */
+  supersedes?: { id: string; token: string | undefined } | undefined;
 }
 
 export interface Auth {
@@ -116,6 +121,22 @@ export function createJob(store: Store, input: CreateJobInput): Job {
         input.actor ?? null,
         ts,
       );
+      if (input.supersedes) {
+        const old = getJob(tx, input.supersedes.id);
+        checkAuth(old, { token: input.supersedes.token });
+        if (old.repo !== input.repo) {
+          throw new ValidationError(
+            `${old.id} belongs to ${old.repo}, not ${input.repo}. Nothing was created.`,
+          );
+        }
+        if (old.supersededBy !== null) {
+          throw new ValidationError(
+            `${old.id} is already superseded by ${old.supersededBy}. Nothing was created.`,
+          );
+        }
+        const superseded = { type: 'job.superseded', payload: { by: id, previous: null } };
+        apply(tx, old, { supersededBy: id }, ts, [superseded], old.ownerSession);
+      }
       return row;
     },
     { behavior: 'immediate' },
@@ -727,20 +748,20 @@ export type PrObservation =
       /** GitHub's `mergeable` (MERGEABLE, CONFLICTING, UNKNOWN), when read. */
       mergeable?: string | null | undefined;
     }
-  | { event: 'pr.merged'; head: string; error: string | null };
+  /** A merge GitHub refused; a merge it confirmed is `recordMerge`. */
+  | { event: 'pr.merged'; head: string; error: string };
 
 /**
- * Record what GitHub said about the PR, or a dashboard merge attempt. Patches only `prState`
- * (`merged` only on a successful merge); never the CI verdict, stage, or status.
+ * Record what GitHub said about the PR, or a refused merge attempt. Patches only `prState`, and
+ * only from an observation; never the CI verdict, stage, or status.
  */
 export function recordPrState(store: Store, id: string, auth: Auth, o: PrObservation): Job {
   return mutate(store, id, auth, (job) => {
     if (!job.prUrl) throw new ValidationError('No PR recorded for this job.');
     if (o.event === 'pr.merged') {
-      const ok = o.error === null;
       return {
-        patch: ok ? { prState: 'merged' } : {},
-        events: [{ type: 'pr.merged', payload: { head: o.head, ok, error: o.error } }],
+        patch: {},
+        events: [{ type: 'pr.merged', payload: { head: o.head, ok: false, error: o.error } }],
       };
     }
     return {
@@ -753,6 +774,97 @@ export function recordPrState(store: Store, id: string, auth: Auth, o: PrObserva
       ],
     };
   });
+}
+
+/** A merge GitHub confirmed for the job's PR. */
+export interface ConfirmedMerge {
+  /** The PR head GitHub merged. */
+  head: string | null;
+  /** The commit GitHub created on the base. */
+  mergeCommit: string;
+  /** `head` is the job's `ciHead`, recorded by a passing CI verdict. */
+  verified: boolean;
+  /** Why not, when `verified` is false. */
+  reason: string | null;
+}
+
+export interface MergeRecord {
+  /** A `pr.merged` evidence event was (or would be) appended; false when it already existed. */
+  recorded: boolean;
+  /** What happened to the job's ticket; null for a job without one. */
+  ticket: TicketMergeOutcome | null;
+  /** Anything was (or would be) written. */
+  changed: boolean;
+}
+
+/** What recording `m` for `job` writes: the evidence event unless it is there, and the ticket's part. */
+function planMerge(tx: Db, job: Job, m: ConfirmedMerge, ts: string, write: boolean) {
+  if (!job.prUrl) throw new ValidationError('No PR recorded for this job.');
+  const have = eventsOfTypes(tx, job.id, ['pr.merged']).some(
+    (e) => e.payload['ok'] === true && e.payload['mergeCommit'] === m.mergeCommit,
+  );
+  const events = have
+    ? []
+    : [
+        {
+          type: 'pr.merged',
+          payload: {
+            head: m.head,
+            ok: true,
+            error: null,
+            mergeCommit: m.mergeCommit,
+            verifiedHead: job.ciHead,
+            verified: m.verified,
+            base: job.baseBranch,
+            prUrl: job.prUrl,
+            ticketId: job.ticketId,
+          },
+        },
+      ];
+  const ticket =
+    job.ticketId === null
+      ? null
+      : settleTicketForMerge(
+          tx,
+          job.ticketId,
+          { job, prUrl: job.prUrl, ...m },
+          job.ownerSession,
+          ts,
+          write,
+        );
+  const record: MergeRecord = {
+    recorded: !have,
+    ticket,
+    changed: !have || job.prState !== 'merged' || ticket?.changed === true,
+  };
+  return { events, record };
+}
+
+/** What `recordMerge` would write for this merge, without writing: nothing when `changed` is false. */
+export function pendingMerge(db: Db, id: string, m: ConfirmedMerge): MergeRecord {
+  return planMerge(db, getJob(db, id), m, now(), false).record;
+}
+
+/**
+ * Record a merge GitHub confirmed, in one transaction: `prState: merged`, the evidence event
+ * (`pr.merged` with the merged head, the merge commit, the verified head, and the base), and the
+ * job's ticket (`settleTicketForMerge`). Repeating it for the same merge commit appends nothing;
+ * a ticket that could not be closed earlier is closed once what kept it open is gone. Never
+ * changes stage, status, or the CI verdict.
+ */
+export function recordMerge(store: Store, id: string, auth: Auth, m: ConfirmedMerge): MergeRecord {
+  return mutateReturning(store, id, auth, (job, tx, ts) => {
+    const { events, record } = planMerge(tx, job, m, ts, true);
+    return { patch: { prState: 'merged' }, events, value: record };
+  });
+}
+
+/** The newest recorded merge evidence of a job (`recordMerge`), or null. */
+export function mergeEvidence(db: Db, id: string): Record<string, unknown> | null {
+  const e = eventsOfTypes(db, id, ['pr.merged']).find(
+    (x) => x.payload['ok'] === true && typeof x.payload['mergeCommit'] === 'string',
+  );
+  return e?.payload ?? null;
 }
 
 /** The session recorded by a `session.attached` event, or null when the payload is unusable. */

@@ -9,13 +9,14 @@ Takes one ticket id from orch's ticket queue (see the `log-todo` skill and `orch
 runs one factory job for it, merges the PR when everything passed, and closes the ticket. One id per
 invocation, in this session.
 
-This skill is the only thing here that merges. The `factory` skill's rules stay as written while the
-job runs (it never merges, never resolves a conflict by hand); `dotodo` acts only after the job is
-`completed` (decision 2026-11-18-dotodo-merges-outside-the-factory).
+This skill does not merge by itself and holds no merge rules: `orch job merge` does both, and only
+where the user opted the repository in (decision 2026-11-20-orch-job-merge). The `factory` skill's
+rules stay as written while the job runs (it never merges, never resolves a conflict by hand);
+`dotodo` acts only after the job is `completed`.
 
 Tickets live in orch's database, not in the repository: read and change them only with
-`orch ticket ... --json`, from any checkout or worktree. A job finishing never closes a ticket; this
-skill does, after the merge.
+`orch ticket ... --json`, from any checkout or worktree. A job finishing never closes a ticket; a
+verified merge does, through `orch job merge`, unless checklist items are still unchecked.
 
 ## 1. Check the ticket
 
@@ -49,12 +50,7 @@ skill does, after the merge.
 
 ## 3. Read the outcome
 
-`orch job show <job> --json`. Merge only when all of these hold; they are what the dashboard's own
-Merge button requires:
-
-- `stage` and `status` are `completed`, by a CI verdict (`ciHead` is set, not a human acceptance);
-- `ciStatus` is `passing`; `prState` is `ready`; `prUrl` is set.
-
+`orch job show <job> --json`. Go on to step 4 only when `stage` and `status` are `completed`.
 Anything else:
 
 | outcome                                                                 | do                                                                                                           |
@@ -63,51 +59,51 @@ Anything else:
 | the spec stage finds the work is already on `main`                      | `orch factory cancel` with that reason; `orch ticket done <id> --note "<the commit or PR that fixed it>"`    |
 | cancelled for any other reason                                          | ticket stays `in-progress` with an `orch ticket note`; report and stop                                       |
 
-## 4. Merge
+## 4. Tick what the PR covered
+
+A merge closes the ticket only when no checklist item in its body is unchecked, and orch never ticks
+one. So before merging: take `ticket.body` from `orch ticket show <id> --json`, tick every box in
+What that this PR delivers, and write it back with `orch ticket edit <id> --body-file -`. Leave a
+box unticked when it is not code in this PR (a rerun, a setting on GitHub): the ticket then stays
+`in-progress` after the merge, which is correct.
+
+## 5. Merge
 
 ```sh
-gh pr view <prUrl> --json state,isDraft,mergeable,headRefOid
+orch job merge <job> --json
 ```
 
-- `OPEN`, not draft, `headRefOid` equal to the job's `ciHead`, `MERGEABLE`:
-  `gh pr merge <prUrl> --merge --match-head-commit <ciHead>`. A merge commit, never squash or rebase,
-  never `--admin`, never `--delete-branch`.
-- `UNKNOWN`: GitHub is still computing; look again after a minute, three times at most.
-- head differs from `ciHead`: commits nobody verified. No merge; `orch ticket note`; report and stop.
-- `CONFLICTING`: step 5.
+That one command checks every merge rule against GitHub's fresh state, merges the CI-verified head
+as a merge commit, confirms the result with GitHub, records the merge commit, and closes the ticket
+when nothing is left on it. It is safe to run again after any failure. Never run `gh pr merge`,
+`gh pr view`, or `orch ticket done` in its place. Act on `outcome`:
 
-Leave the branch, the worktree, the primary checkout and `dist/` alone.
+| `outcome`        | do                                                                                                                                                                                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `merged`         | step 6                                                                                                                                                                                                                                         |
+| `already_merged` | step 6 (GitHub had merged it; the record is complete now)                                                                                                                                                                                      |
+| `waiting`        | GitHub is still computing mergeability: run the command again after a minute, three times at most, then report and stop                                                                                                                        |
+| `reland`         | the PR conflicts. orch created `relandJob` on the same ticket and superseded this job: run `/factory <relandJob>` to its end, then repeat steps 3 to 5 for it. Never resolve the conflict by hand. Tell the user the old PR is left open       |
+| `blocked`        | no merge. `code: not-authorized`: tell the user merging is not enabled for this repository and that `orch factory config merge enable` turns it on; do not run it yourself. Any other `code`: `orch ticket note <id> "<reason>"`. Report, stop |
+| `error`          | a tool or GitHub failure: run the command once more; if it repeats, report `reason` and stop                                                                                                                                                   |
 
-## 5. A conflict goes back through the factory
+`code: second-conflict` means the re-land conflicted too: no third job. Leave the branch, the
+worktree, the primary checkout and `dist/` alone.
 
-Never resolve it by hand: a resolution is new code and gets the same verification and review. Start a
-second factory job, again with `--ticket <id>` (the first job is finished, so the ticket is free; same
-title with `(re-land)` appended), whose description is the original one plus:
-`Re-land the work of <old job> (PR <url>, branch <branch>) on the current main: start from that
-branch's changes, resolve the conflicts with main, keep the original scope.` Then:
+## 6. Report
 
-1. `orch job supersede <old job> --by <new job> --session <s>`.
-2. When the new job reaches step 3's merge conditions, merge its PR (step 4), then
-   `gh pr close <old prUrl> --comment "Superseded by <new prUrl>."`.
-3. A second conflict: no third job. `orch ticket note`; report and stop.
-
-## 6. Close
-
-1. Confirm `gh pr view <prUrl> --json state,mergeCommit` says `MERGED`.
-2. Tick every checklist box in What that the PR covered: take `ticket.body` from
-   `orch ticket show <id> --json`, change the boxes, and write it back with
-   `orch ticket edit <id> --body-file -`. If boxes remain that are not code (a rerun, a setting on
-   GitHub), the ticket stays `in-progress` with an `orch ticket note` listing them; otherwise
-   `orch ticket done <id> --note "merged <prUrl> (job <job>)"`.
-3. Report: ticket id and final status, job id, PR URL, merge commit, review rounds, and anything left
-   for the user. The dashboard shows the merge after Refresh PR.
+From the merge result: ticket id and final status (`ticket.completed`; when false, `ticket.reason`
+and `ticket.remaining` say what is left for the user), job id, PR URL, `mergeCommit`, review rounds,
+whether `verified` is true, and any superseded PR the user may want to close.
 
 ## Common mistakes
 
-- Merging a PR whose job ended any way other than `completed` on a passing CI verdict.
-- Marking the ticket done before GitHub says `MERGED`.
+- Merging with `gh`, or closing the ticket with `orch ticket done` after a merge: both are
+  `orch job merge`'s job, and it alone knows whether the merge was verified.
+- Enabling merge authorization yourself, or working around a `blocked` outcome.
+- Ticking a checklist box the PR did not deliver so that the ticket closes.
 - Fixing a conflict in the worktree, or pushing to the PR branch, yourself.
-- `gh pr ready`, `gh run rerun`, `--admin`, force-push, deleting a branch or worktree.
+- `gh pr ready`, `gh pr close`, `gh run rerun`, `--admin`, force-push, deleting a branch or worktree.
 - Starting the factory job without `--ticket <id>`: the job would not be linked, and the ticket
   would not be claimed.
 - Writing a file under `todo/`: it is a read-only archive of the imported register.

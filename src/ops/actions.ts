@@ -4,28 +4,22 @@
  * Nothing here wakes a Claude session; the result always says the job must be resumed.
  * `cancelJob` is shared with `orch factory cancel`, where the caller is a session of its own.
  */
-import { OwnershipError, ValidationError } from '../core/errors.ts';
-import { leaseExpired } from '../core/ownership.ts';
+import { ValidationError } from '../core/errors.ts';
 import {
   cannotAcceptDelivery,
   cannotMerge,
   cannotRefreshPr,
   type Completion,
-  completionOf,
-  now,
   type Stage,
   TERMINAL_STATUSES,
 } from '../core/workflow.ts';
-import { type GhPr, mergePr, prWorkflowState, viewPr } from '../integrations/github.ts';
+import { prWorkflowState, viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
 import { policyFingerprint } from '../core/verification.ts';
-import { latestEventsByJob } from '../storage/events.ts';
 import {
-  claimJob,
   getJob,
   postNotice as storeNotice,
   recordPrState,
-  releaseJob,
   setArchived,
   supersedeJob,
   transitionJob,
@@ -33,9 +27,11 @@ import {
 import type { Job } from '../storage/schema.ts';
 import { authorizePolicy } from '../storage/verification.ts';
 import { ghCwd } from './github.ts';
+import { type LeaseMode, withLease } from './lease.ts';
+import { completionFor, mergeJob, type MergeResult, relandJob, ticketText } from './merge.ts';
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
-import { dispatchJob, launchFor } from './dispatch.ts';
+import { launchFor } from './dispatch.ts';
 import {
   type BaseConflicts,
   baseConflicts,
@@ -163,57 +159,6 @@ function target(action: DashboardAction, job: Job, to: Stage | undefined): Stage
   return stage;
 }
 
-/**
- * Who is asking for a short episode. `dashboard` is the human UI (and `orch job supersede`): a
- * live lease is a validation refusal, and a job waiting in needs-human is exempt because its
- * session is idle. `session` is a CLI caller that is itself a session: any live lease held by
- * another session is an ownership refusal (exit 4) unless the caller forces the takeover.
- */
-export type LeaseMode = 'dashboard' | 'session';
-
-/**
- * A short ownership episode: claim the job as `session` for one minute, run `fn` with the token,
- * release. A live lease held by another session is respected unless the caller forces the
- * takeover or, in `dashboard` mode, the job is waiting in needs-human.
- */
-function withLease<T>(
-  store: Store,
-  before: Job,
-  session: string,
-  force: boolean | undefined,
-  fn: (token: string) => T,
-  mode: LeaseMode = 'dashboard',
-): T {
-  const waiting = mode === 'dashboard' && before.stage === 'needs-human';
-  const liveOwner =
-    before.ownerSession !== null && before.ownerSession !== session && !leaseExpired(before, now());
-  if (liveOwner && !waiting && !force) {
-    const held =
-      `Session ${String(before.ownerSession)} holds a live lease on this job` +
-      (before.status === 'running' ? ' and reports it running' : '');
-    if (mode === 'session') {
-      throw new OwnershipError(
-        `${held}. Use that session, wait for the lease to lapse, or pass --force to take it over.`,
-      );
-    }
-    throw new ValidationError(
-      `${held}. Use that session, wait for the lease to lapse, or confirm a forced takeover.`,
-    );
-  }
-  const { token } = claimJob(store, before.id, {
-    session,
-    force: force ?? (liveOwner && waiting),
-    leaseMinutes: 1,
-  });
-  try {
-    return fn(token);
-  } finally {
-    // Give the job up so a real session can resume it; a dashboard is not a worker. A cancel or
-    // accepted delivery already released it in the write that finished it.
-    if (getJob(store.db, before.id).ownerToken === token) releaseJob(store, before.id, { token });
-  }
-}
-
 export interface CancelInput {
   session: string;
   /** Recorded verbatim on the `job.cancelled` event. */
@@ -313,37 +258,31 @@ export function supersede(store: Store, id: string, input: SupersedeInput): Job 
   return getJob(store.db, id);
 }
 
-/** How the job completed, from its newest `job.completed` event. */
-function completionFor(store: Store, job: Job): Completion {
-  const completed = latestEventsByJob(store.db, [job.id], ['job.completed'])
-    .get(job.id)
-    ?.get('job.completed');
-  return completionOf(job.stage, completed?.payload);
-}
-
-/** Why GitHub's view of the PR does not back merging `head`, with what a human can do, or null. */
-function mergeRefusal(pr: GhPr, head: string): string | null {
-  if (pr.state !== 'OPEN') return `GitHub reports it ${pr.state}; Refresh PR records that here`;
-  if (pr.isDraft) return 'it is a draft on GitHub; mark it ready there, then Refresh PR';
-  if (pr.headSha !== head) {
-    return (
-      `its head is ${pr.headSha?.slice(0, 7) ?? '?'}, not the verified ${head.slice(0, 7)}; ` +
-      'the new commits have no verdict here, so review and merge them on GitHub'
-    );
+/** What a human at the dashboard can do about a merge `mergeJob` did not make. */
+function mergeAdvice(r: MergeResult): string {
+  if (r.outcome === 'waiting') return r.reason.replace('try again', 'try Merge again');
+  switch (r.code) {
+    case 'pr-draft':
+      return 'it is a draft on GitHub; mark it ready there, then Refresh PR';
+    case 'pr-closed':
+      return `${r.reason}; Refresh PR records that here`;
+    case 'head-changed':
+      return (
+        `its head is ${r.prHead?.slice(0, 7) ?? '?'}, not the verified ` +
+        `${r.verifiedHead?.slice(0, 7) ?? '?'}; the new commits have no verdict here, so review ` +
+        'and merge them on GitHub'
+      );
+    case 'conflict':
+      return 'GitHub reports it CONFLICTING; resolve the conflict on GitHub, then merge there';
+    default:
+      return r.reason;
   }
-  if (pr.mergeable === 'CONFLICTING') {
-    return 'GitHub reports it CONFLICTING; resolve the conflict on GitHub, then merge there';
-  }
-  if (pr.mergeable !== 'MERGEABLE') {
-    return `GitHub reports it ${pr.mergeable ?? 'UNKNOWN'} (still computing); try Merge again shortly`;
-  }
-  return null;
 }
 
 /**
- * Merge (a human's click, never a session) or re-read the PR. Merge re-reads GitHub first and
- * merges only the head the passing verdict was recorded for, as a merge commit; a merge GitHub
- * refuses is recorded and its message returned as the error. Nothing here changes stage or status.
+ * Merge (a human's click) or re-read the PR. Merge is `mergeJob`, the operation `orch job merge`
+ * runs, asked not to re-land (Fix merge conflicts does that here); what it did not merge is
+ * returned as the error, with what a human can do. Nothing here changes stage or status.
  */
 function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
   const merge = input.action === 'merge';
@@ -353,21 +292,31 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
   if (refused)
     throw new ValidationError(`Cannot ${merge ? 'merge' : 'refresh the PR'}: ${refused}.`);
   const url = before.prUrl ?? '';
-  const head = before.ciHead ?? '';
-  const { error, message } = withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
-    if (!merge) {
+  if (!merge) {
+    const message = withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
       const { pr, state } = observePr(store, before, token);
-      return { error: null, message: `GitHub reports ${url} as ${state ?? pr.state}.` };
-    }
-    const pr = viewPr(url, ghCwd(before));
-    const why = mergeRefusal(pr, head);
-    if (why) throw new ValidationError(`Cannot merge ${url}: ${why}.`);
-    const failed = mergePr(url, head, ghCwd(before));
-    recordPrState(store, before.id, { token }, { event: 'pr.merged', head, error: failed });
-    return { error: failed, message: `Merged ${url} at ${head.slice(0, 7)}.` };
+      return `GitHub reports ${url} as ${state ?? pr.state}.`;
+    });
+    return { job: withoutToken(getJob(store.db, before.id)), message };
+  }
+  const r = mergeJob(store, before.id, {
+    session: DASHBOARD_SESSION,
+    force: input.force,
+    mode: 'dashboard',
+    reland: false,
   });
-  if (error !== null) throw new ValidationError(`gh pr merge failed: ${error}`);
-  return { job: withoutToken(getJob(store.db, before.id)), message };
+  if (r.outcome !== 'merged' && r.outcome !== 'already_merged') {
+    throw new ValidationError(
+      r.code === 'github-refused' || r.outcome === 'error'
+        ? r.reason
+        : `Cannot merge ${url}: ${mergeAdvice(r)}.`,
+    );
+  }
+  const did = r.outcome === 'merged' ? 'Merged' : 'GitHub had already merged';
+  return {
+    job: withoutToken(getJob(store.db, before.id)),
+    message: `${did} ${url} at ${r.prHead?.slice(0, 7) ?? '?'}.${ticketText(r.ticket)}`,
+  };
 }
 
 /** Re-read the job's PR and record what GitHub reports, including whether it is mergeable. */
@@ -387,9 +336,9 @@ function observePr(store: Store, job: Job, token: string) {
 const resumeCommand = (id: string): string => `orch factory resume ${id} --session <name>`;
 
 /**
- * A completed job whose open PR GitHub reports CONFLICTING cannot transition, so it is replaced,
- * as the dotodo skill does: re-read the PR, create a `(re-land)` job (nothing else: no claim,
- * worktree, or session), then record the old job as superseded by it.
+ * A completed job whose open PR GitHub reports CONFLICTING cannot transition, so it is replaced:
+ * re-read the PR, then create a `(re-land)` job that supersedes this one in the same transaction
+ * (`relandJob`; nothing else: no claim, worktree, or session).
  */
 function reland(store: Store, before: Job, force: boolean | undefined): ActionResult {
   const url = before.prUrl ?? '';
@@ -401,30 +350,7 @@ function reland(store: Store, before: Job, force: boolean | undefined): ActionRe
           'not OPEN and CONFLICTING. No job was created.',
       );
     }
-    const sentence =
-      `Re-land the work of ${before.id} (PR ${url}, branch ${before.branch ?? '?'}) on the current ` +
-      `${before.baseBranch}: start from that branch's changes, resolve the conflicts with ` +
-      `${before.baseBranch}, keep the original scope.`;
-    const { job } = dispatchJob(store, {
-      repo: before.repoPath,
-      base: before.baseBranch,
-      // The re-land works on the same ticket; `before` is finished, so the ticket is free.
-      ticket: before.ticketId ?? undefined,
-      title: `${before.title} (re-land)`,
-      description: before.description ? `${before.description}\n\n${sentence}` : sentence,
-      session: DASHBOARD_SESSION,
-      cwd: before.repoPath,
-    });
-    try {
-      supersedeJob(store, before.id, { token }, job.id);
-    } catch (err) {
-      const why = err instanceof Error ? err.message : String(err);
-      throw new ValidationError(
-        `Created ${job.id}, but recording ${before.id} as superseded by it failed: ${why} ` +
-          `Run orch job supersede ${before.id} --by ${job.id} --session <name>, or cancel ${job.id}.`,
-      );
-    }
-    return job;
+    return relandJob(store, before, token, DASHBOARD_SESSION);
   });
   const launch = launchFor(created);
   return {

@@ -128,6 +128,17 @@ export function ticketTransition(status: TicketStatus, action: LifecycleAction):
 }
 
 /**
+ * Text of every unchecked Markdown task item (`- [ ] ...`) in a ticket body, in order. A merge
+ * never closes a ticket while one remains, wherever in the body it is: nothing here judges
+ * whether the merged code covered it.
+ */
+export function uncheckedItems(body: string): string[] {
+  return [...body.matchAll(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[ \][ \t]*(.*)$/gm)].map((m) =>
+    (m[1] ?? '').trim(),
+  );
+}
+
+/**
  * The path `from -> ... -> to` through existing dependencies, when there is one: adding
  * "`to` depends on `from`" would then close a cycle. `deps` maps a ticket to what it depends on.
  */

@@ -23,6 +23,7 @@ import {
   type TicketStatus,
   ticketTransition,
   type TicketType,
+  uncheckedItems,
   validateFields,
 } from '../core/tickets.ts';
 import { now, TERMINAL_STATUSES } from '../core/workflow.ts';
@@ -549,4 +550,99 @@ export function claimTicketForJob(
   }
   events.push({ type: 'ticket.job-linked', payload: { job: job.id } });
   applyTicket(tx, ticket, patch, events, actor, ts);
+}
+
+/** A job's PR that GitHub reports merged, as the ticket needs to know it. */
+export interface TicketMerge {
+  job: Pick<Job, 'id' | 'supersededBy'>;
+  prUrl: string;
+  /** The PR head GitHub merged. */
+  head: string | null;
+  mergeCommit: string;
+  /** The merged head is the one the job's passing CI verdict was recorded for. */
+  verified: boolean;
+  /** Why not, when `verified` is false. */
+  reason: string | null;
+}
+
+export interface TicketMergeOutcome {
+  id: number;
+  status: TicketStatus;
+  /** The ticket is done after this call (by this merge now or earlier, or by someone else). */
+  completed: boolean;
+  /** Why the merge did not close it; null when it is done. */
+  reason: string | null;
+  /** Unchecked checklist items that keep it open. */
+  remaining: string[];
+  /** This call wrote to the ticket (or would, when planning). */
+  changed: boolean;
+}
+
+/**
+ * Inside the transaction that records a job's merge: close the job's ticket when the merge was
+ * verified, the job was not superseded, no other job is working on the ticket, and no checklist
+ * item is unchecked; otherwise leave its status alone and record once why (`ticket.job-merged`).
+ * A ticket someone already closed, dropped, or marked duplicate is never touched. Safe to repeat:
+ * the same state writes nothing the second time. `write: false` only reports what would happen.
+ */
+export function settleTicketForMerge(
+  tx: Db,
+  ticketId: number,
+  m: TicketMerge,
+  actor: string | null,
+  ts: string,
+  write = true,
+): TicketMergeOutcome {
+  const ticket = getTicket(tx, ticketId);
+  const out = (o: Partial<TicketMergeOutcome>): TicketMergeOutcome => ({
+    id: ticketId,
+    status: ticket.status,
+    completed: false,
+    reason: null,
+    remaining: [],
+    changed: false,
+    ...o,
+  });
+  if (ticket.status === 'done') return out({ completed: true });
+  if (ticket.status !== 'open' && ticket.status !== 'in-progress') {
+    return out({ reason: `ticket ${ticketKey(ticketId)} is ${ticket.status}; left as it is` });
+  }
+  const other = activeJobOf(tx, ticketId);
+  const remaining = uncheckedItems(ticket.body);
+  const reason = !m.verified
+    ? (m.reason ?? 'the merged head is not the verified one')
+    : m.job.supersededBy !== null
+      ? `job ${m.job.id} was superseded by ${m.job.supersededBy}`
+      : other !== null
+        ? `job ${other} is still working on the ticket`
+        : remaining.length > 0
+          ? `${String(remaining.length)} unchecked checklist item(s) remain: ${remaining.join('; ')}`
+          : null;
+  const evidence = { job: m.job.id, prUrl: m.prUrl, head: m.head, mergeCommit: m.mergeCommit };
+  if (reason === null) {
+    const event = {
+      type: 'ticket.completed',
+      payload: {
+        from: ticket.status,
+        to: 'done',
+        ...evidence,
+        note: `merged ${m.prUrl} (job ${m.job.id})`,
+      },
+    };
+    if (write) applyTicket(tx, ticket, { status: 'done', duplicateOf: null }, [event], actor, ts);
+    return out({ status: 'done', completed: true, changed: true });
+  }
+  // Said once per reason: a retry with nothing new to say leaves the history alone.
+  const said = tx
+    .select()
+    .from(ticketEvents)
+    .where(and(eq(ticketEvents.ticketId, ticketId), eq(ticketEvents.type, 'ticket.job-merged')))
+    .all()
+    .some((e) => e.payload['job'] === m.job.id && e.payload['reason'] === reason);
+  const listed = m.verified && other === null && m.job.supersededBy === null ? remaining : [];
+  if (!said && write) {
+    const payload = { ...evidence, verified: m.verified, reason, remaining: listed };
+    applyTicket(tx, ticket, {}, [{ type: 'ticket.job-merged', payload }], actor, ts);
+  }
+  return out({ reason, remaining: listed, changed: !said });
 }

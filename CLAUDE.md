@@ -46,10 +46,19 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   so validation is never repeated in a handler. SQLite is the only source of truth: no Markdown
   export, no dual write. A job is linked to a ticket only through `createJob`'s `ticketId` (the
   claim runs in the job's insert transaction; `jobs_active_ticket_idx` allows one unfinished job
-  per ticket); nothing completes a ticket except `orch ticket done`. `core/todo-register.ts` and
-  `ops/ticket-import.ts` exist only for the one-shot `orch ticket import`. The skills
-  `.claude/skills/log-todo` and `.claude/skills/dotodo` call `orch ticket` only; `orch install`
-  links them globally along with `skills/factory`.
+  per ticket); nothing completes a ticket except `orch ticket done` and a verified merge recorded
+  by `recordMerge`. `core/todo-register.ts` and `ops/ticket-import.ts` exist only for the one-shot
+  `orch ticket import`. The skills `.claude/skills/log-todo` and `.claude/skills/dotodo` call
+  `orch` only (`dotodo` merges through `orch job merge`, never `gh`); `orch install` links them
+  globally along with `skills/factory`.
+- Merging is one operation: `mergeJob` in `src/ops/merge.ts`, the only caller of `mergePr`, behind
+  both `orch job merge` and the dashboard's Merge (decision 2026-11-20-orch-job-merge). Its rule
+  is the pure `mergeDecision` in `core/workflow.ts`, fed GitHub's fresh answer; add a merge
+  condition there, never in a caller or a skill. A merge counts only once a second read of the PR
+  says MERGED, and `recordMerge` in `storage/jobs.ts` writes the evidence and the ticket's
+  completion in one transaction. Callers other than the dashboard need the repository in the
+  user's `mergeRepos` (`orch factory config merge`); never read that from a repository file. No
+  merge queue, lock, or polling; a completed job stays completed.
 - `skills/factory/` and `agents/` are prose for Claude, linked into `~/.claude` by `orch install`.
   They must only call `orch` commands; any rule that matters is enforced in TypeScript first and
   described in prose second. `tests/skill-contract.test.ts` keeps roles, agent frontmatter, and the

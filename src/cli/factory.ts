@@ -12,6 +12,7 @@ import {
   resumeFactoryJob,
   startJob,
 } from '../ops/factory.ts';
+import { mergeAuthorization, setMergeAuthorization } from '../ops/merge.ts';
 import type { Store } from '../storage/client.ts';
 import { int, need, oneOf } from './args.ts';
 
@@ -66,6 +67,11 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
   check-readonly <id> --fingerprint <f>
                               Exit 1 if the worktree changed since the plan was taken
   config                      Effective role -> model configuration and its file location
+  config merge enable|disable|status [--repo <path>]
+                              Whether orch job merge may merge PRs of that repository (default:
+                              this one) without a human click. Off until enabled; stored per
+                              repository identity in your own factory.json, never in a repository.
+                              It lifts no gate: every merge check still has to pass
 
 --session defaults to $ORCH_SESSION, else to a newly generated unique id. start, dispatch, resume,
 and cancel print the session they ran as; pass it back as --session on later commands.
@@ -155,8 +161,19 @@ export function runFactory(
     }
     case 'check-readonly':
       return checkReadonly(store, needId(), need(o.fingerprint, '--fingerprint <f>'));
-    case 'config':
-      return { file: configPath(store), ...loadConfig(store) };
+    case 'config': {
+      if (id === undefined) return { file: configPath(store), ...loadConfig(store) };
+      const action = args[2];
+      if (id !== 'merge' || !['enable', 'disable', 'status'].includes(action ?? '')) {
+        throw new UsageError(
+          'Usage: orch factory config [merge enable|disable|status [--repo <path>]]',
+        );
+      }
+      const path = o.repo ?? process.cwd();
+      return action === 'status'
+        ? mergeAuthorization(store, path)
+        : setMergeAuthorization(store, path, action === 'enable');
+    }
     case undefined:
       throw new UsageError(FACTORY_HELP);
     default:

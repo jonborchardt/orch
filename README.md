@@ -27,7 +27,10 @@ optional, and no job needs either.
   draft PR ready for review only once `orch gh ci` reads passing required checks for the PR head,
   and parks on a human decision when it cannot proceed honestly. A human merges on GitHub, or by
   clicking Merge in the dashboard (`orch ui`), which merges exactly the verified head; Refresh PR
-  records a merge done on GitHub. Nothing removes a job's worktree on its own: once the PR is
+  records a merge done on GitHub. `orch job merge <id>` runs the same checked merge without a
+  click, only for a repository you opted in (`orch factory config merge enable`; off by default),
+  confirms the result with GitHub, records the merge commit, and closes the job's ticket when no
+  checklist item is left unchecked ([docs/workflow.md](docs/workflow.md#merging)). Nothing removes a job's worktree on its own: once the PR is
   merged, the dashboard offers Remove worktree (or run `orch worktree remove`, no token needed for
   a finished job); the branch is kept. A PR a human merges while CI is still running completes the
   job when it is the verified, approved head.
@@ -200,10 +203,12 @@ orch ticket ready                     # what can be worked on now, in order, eve
 orch ticket blocked                   # what cannot, and why
 orch ticket show 85
 orch factory start --ticket 85 ...    # a job for the ticket: linked and marked in progress at once
-orch ticket done 85 --note "merged <pr>"
+orch job merge <job-id>               # where opted in: merge the PR and close the ticket
+orch ticket done 85 --note "merged <pr>"   # or close it by hand
 ```
 
-A ticket has at most one unfinished job; a job finishing never closes its ticket. Nothing picks
+A ticket has at most one unfinished job; a job finishing never closes its ticket (a verified merge
+through `orch job merge` or the dashboard does, unless checklist items remain). Nothing picks
 tickets and runs them automatically. Fields, readiness rules, the HTTP API, and the one-shot import
 of a Markdown todo register are in [docs/tickets.md](docs/tickets.md).
 

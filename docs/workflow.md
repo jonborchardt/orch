@@ -384,17 +384,98 @@ branch with the same base is reused instead of creating a duplicate. The PR is r
 (`prUrl`, `prState`) together with the CI rollup (`ciStatus`: `none`, `pending`, `passing`,
 `failing`) but no head (`ciHead` is written by `orch gh ci` alone). `orch` never force-pushes, and marks the
 PR ready only after `orch gh ci` completes the job; a recorded draft PR is not a passing CI run, which is what the `ci` stage then establishes.
-No `orch` command merges: the only merge is a human clicking Merge in `orch ui` for a job completed
-on a passing verdict, which merges exactly `ciHead`
-(`docs/decisions/2026-11-15-humans-merge-from-the-dashboard.md`). After completion, `prState`
-(`draft`, `ready`, `merged`, `closed`) changes only from GitHub's answer: `orch gh pr status <id>
---token` and the dashboard's Refresh PR record `prState` alone (event `pr.observed`) and keep the
-completed verdict's `ciHead` and `ciStatus`; a merge is never inferred.
+The factory never merges; merging a completed job is the separate operation described under
+[Merging](#merging). After completion, `prState` (`draft`, `ready`, `merged`, `closed`) changes
+only from GitHub's answer: `orch gh pr status <id> --token` and the dashboard's Refresh PR record
+`prState` alone (event `pr.observed`) and keep the completed verdict's `ciHead` and `ciStatus`; a
+merge is never inferred.
 `orch gh ci` reads check runs and statuses with `gh api` for the head SHA (not the PR rollup), the
 base branch's protection and rulesets for the required list, and Actions job logs for failures.
 
 Tests never call GitHub: setting `ORCH_GH_SHIM=<file.cjs>` makes `orch` run `node <file> <args>`
 instead of `gh`, and the suite uses a stateful shim plus a local bare repository as `origin`.
+
+## Merging
+
+A completed job is not a merged one, and a merged PR is not a closed ticket. Merging is one
+operation, `mergeJob` in `src/ops/merge.ts`, reached by the dashboard's Merge and by:
+
+```sh
+orch job merge <id> [--json] [--session <name>] [--force]
+orch factory config merge enable|disable|status [--repo <path>]
+```
+
+**Authorization.** A click on the dashboard's Merge is a human's decision and needs nothing else.
+`orch job merge` is refused (`blocked`, `not-authorized`) unless the repository was opted in with
+`orch factory config merge enable`. The opt-in is a list of repository identities (`mergeRepos`)
+in your own `factory.json` in the orch config directory (`orch factory config` prints its path): off
+by default, per repository, never read from a repository, and never set by `orch install`, a
+migration, or a job. It lifts no gate below. Recording a merge GitHub already made needs no opt-in.
+
+**Eligibility.** Every call reads the PR from GitHub and decides from that answer and the job row
+(`mergeDecision` in `src/core/workflow.ts`); nothing recorded earlier about the PR is trusted. A
+new merge needs all of:
+
+- the PR belongs to the job's repository, targets `job.baseBranch` (whatever that branch is; the
+  repository's default branch is never substituted), and comes from `job.branch`, not a fork;
+- the job is `completed` by a passing CI verdict (`ciHead` set, `ciStatus` `passing`; not a human
+  close-out, not a merge before CI) and no job superseded it;
+- the PR is open, not a draft, its head is exactly `ciHead`, and GitHub reports it `MERGEABLE`.
+
+The merge is `gh pr merge <url> --merge --match-head-commit <ciHead>`: a merge commit GitHub
+refuses if the head moved. There is no `--admin`, `--auto`, squash, rebase, or branch deletion, so
+branch protection decides; a refusal is reported with gh's message and recorded (`pr.merged`,
+`ok: false`).
+
+**Outcomes** (`outcome` in the JSON; the text output starts with it). The command exits 0 only for
+the first two.
+
+| `outcome`        | meaning                                                                                            |
+| ---------------- | -------------------------------------------------------------------------------------------------- |
+| `merged`         | this call merged the PR, GitHub confirmed it, and the evidence is recorded                         |
+| `already_merged` | GitHub had merged it before (an earlier call, the dashboard, a person); the record is complete now |
+| `waiting`        | GitHub reports mergeability `UNKNOWN`; nothing was attempted or held, call again                   |
+| `reland`         | the PR conflicts; `relandJob` was created to replace this job                                      |
+| `blocked`        | refused, with a `code`; calling again changes nothing until that state does                        |
+| `error`          | a tool or GitHub failure left the outcome unknown; calling again is safe                           |
+
+`blocked` codes: `no-pr`, `not-completed`, `wrong-completion`, `no-ci-evidence`, `superseded`,
+`wrong-repository`, `wrong-base`, `wrong-head-branch`, `pr-closed`, `pr-draft`, `head-changed`,
+`not-authorized`, `conflict` (only where re-landing was not asked for: the dashboard's Merge),
+`second-conflict`, `reland-refused`, `github-refused`. The result also carries `jobId`, `ticketId`,
+`prUrl`, `base`, `prHead`, `verifiedHead`, `mergeCommit`, `verified`, `ticket`, and `relandJob`.
+
+**Evidence and retries.** GitHub is the authority on whether a merge happened. After the merge
+command, whatever it exited with, the PR is read again, and only `MERGED` with a merge commit is
+recorded: `prState` `merged` and one `pr.merged` event with the merged head, the merge commit, the
+verified head, `verified` (the two heads are equal), the base, the PR URL, and the ticket id.
+Because every call starts from GitHub's answer, a call after a timeout, a crash between the merge
+and the write, or a merge made elsewhere records it and merges nothing; a repeated call after that
+writes nothing at all. A PR merged at a head other than `ciHead` is recorded as observed with
+`verified: false`. Nothing is run on the merged result: verified means GitHub merged the commit CI
+passed on.
+
+**The ticket.** In the transaction that records the merge, the job's ticket is closed when the
+merge is verified, the job is not superseded, no other job is working on the ticket, and its body
+has no unchecked Markdown task item (`- [ ]`). Otherwise its status stays as it is and the reason
+is recorded once on the ticket (`ticket.job-merged`, listing the remaining items); a ticket someone
+already closed, dropped, or marked duplicate is not touched. orch never ticks a box: tick what was
+delivered (`orch ticket edit`) and run `orch job merge` again, or close the ticket with
+`orch ticket done`.
+
+**Conflicts.** A completed job cannot rework, so a `CONFLICTING` PR is re-landed: one new job with
+`(re-land)` in its title, the same ticket, and the old job marked superseded, all in the
+transaction that creates it. It goes through the whole factory and is merged like any job. The
+superseded job never merges and its PR is left open (orch closes no PRs). A re-land that conflicts
+again is `second-conflict`: no third job.
+
+**Ownership.** The read and the decision need no lease, so a refusal or a wait claims nothing. A
+step that writes claims the job for one short episode under the caller's session (the dashboard,
+or a per-process `orch-merge-<pid>`), reads GitHub again inside it, and releases; another
+session's live lease is exit 4. There is no merge queue, lock, or background service: merges of
+different jobs are independent, GitHub serializes them, and whatever runs jobs unattended calls
+this one command and retries on `waiting`
+(`docs/decisions/2026-11-20-orch-job-merge.md`).
 
 ## Verification evidence
 

@@ -577,16 +577,173 @@ export function prPhase(
  * live state is checked again when the merge is requested.
  */
 export function cannotMerge(
-  job: Pick<JobState, 'stage' | 'prUrl' | 'prState' | 'ciStatus' | 'ciHead'>,
+  job: Pick<Job, 'stage' | 'prUrl' | 'prState' | 'ciStatus' | 'ciHead' | 'supersededBy'>,
   completion: Completion,
 ): string | null {
   if (job.stage !== 'completed') return 'only a completed job can be merged';
   if (completion !== 'ci') return 'only a job completed on a passing CI verdict can be merged';
   if (!job.prUrl || !job.ciHead) return 'no PR head has been recorded';
+  if (job.supersededBy) return `${job.supersededBy} superseded this job; merge that one`;
   if (job.prState !== 'ready')
     return `the PR is ${job.prState ?? 'in an unknown state'}, not ready`;
   if (job.ciStatus !== 'passing') return `CI is ${job.ciStatus ?? 'not observed'}, not passing`;
   return null;
+}
+
+/** Why a merge is refused; each is a state someone has to change before a retry can differ. */
+export const MERGE_BLOCKS = [
+  'no-pr',
+  'not-completed',
+  'wrong-completion',
+  'no-ci-evidence',
+  'superseded',
+  'wrong-repository',
+  'wrong-base',
+  'wrong-head-branch',
+  'pr-closed',
+  'pr-draft',
+  'head-changed',
+  'not-authorized',
+  'conflict',
+  'second-conflict',
+  'reland-refused',
+  'github-refused',
+] as const;
+export type MergeBlock = (typeof MERGE_BLOCKS)[number];
+
+/** What GitHub says about the PR right now (a `GhPr`; restated here so this module stays pure). */
+export interface LivePr {
+  url: string;
+  /** OPEN, MERGED, or CLOSED. */
+  state: string;
+  isDraft: boolean;
+  /** Repository the PR belongs to, in the form of `job.repo`. */
+  repo: string;
+  /** The head branch lives in another repository (a fork). */
+  isCrossRepository: boolean;
+  baseRefName: string;
+  headRefName: string;
+  headSha: string | null;
+  mergeable: string | null;
+}
+
+export type MergeStep =
+  /** GitHub already reports the PR merged: record it. `verified` when the merged head is `ciHead`. */
+  | { step: 'record'; verified: boolean; reason: string | null }
+  | { step: 'merge'; head: string }
+  | { step: 'wait'; reason: string }
+  | { step: 'reland'; reason: string }
+  | { step: 'blocked'; code: MergeBlock; reason: string };
+
+export interface MergeFacts {
+  completion: Completion;
+  /** The caller may start a merge: a human at the dashboard, or a repository opted in locally. */
+  authorized: boolean;
+  /** This job already replaced another one, so a conflict here is the second. */
+  isReland: boolean;
+}
+
+/**
+ * The one rule for merging a job's PR, from the job row and GitHub's fresh answer; nothing stored
+ * about the PR is trusted. Identity comes first, so nothing is recorded or merged for a PR that is
+ * not the job's own; a PR GitHub already merged is then only recorded (no authorization needed);
+ * everything after that guards a new merge of exactly `ciHead`.
+ */
+export function mergeDecision(
+  job: Pick<
+    Job,
+    'stage' | 'repo' | 'baseBranch' | 'branch' | 'ciStatus' | 'ciHead' | 'supersededBy'
+  >,
+  pr: LivePr,
+  facts: MergeFacts,
+): MergeStep {
+  const blocked = (code: MergeBlock, reason: string): MergeStep => ({
+    step: 'blocked',
+    code,
+    reason,
+  });
+  const short = (sha: string | null) => sha?.slice(0, 7) ?? '?';
+  if (pr.repo !== job.repo) {
+    return blocked(
+      'wrong-repository',
+      `${pr.url} belongs to ${pr.repo}, not the job's ${job.repo}`,
+    );
+  }
+  if (pr.baseRefName !== job.baseBranch) {
+    return blocked(
+      'wrong-base',
+      `${pr.url} targets ${pr.baseRefName}, not the job's base ${job.baseBranch}`,
+    );
+  }
+  if (pr.isCrossRepository || pr.headRefName !== job.branch) {
+    return blocked(
+      'wrong-head-branch',
+      `${pr.url} is from ${pr.isCrossRepository ? 'a fork, ' : ''}${pr.headRefName}, not the job's branch ${job.branch ?? '(none)'}`,
+    );
+  }
+  if (job.stage !== 'completed') {
+    return blocked('not-completed', `the job is in ${job.stage}; only a completed job is merged`);
+  }
+  const evidence =
+    facts.completion === 'ci' && job.ciStatus === 'passing' && job.ciHead !== null
+      ? job.ciHead
+      : null;
+  if (pr.state === 'MERGED') {
+    const verified = evidence !== null && pr.headSha === evidence;
+    return {
+      step: 'record',
+      verified,
+      reason: verified
+        ? null
+        : evidence === null
+          ? 'the PR is merged, but the job has no passing CI verdict of its own to compare with'
+          : `the PR was merged at ${short(pr.headSha)}, not the verified ${short(evidence)}`,
+    };
+  }
+  if (facts.completion !== 'ci') {
+    return blocked(
+      'wrong-completion',
+      'the job was not completed by a passing CI verdict (a human closed it out, or merged first)',
+    );
+  }
+  if (evidence === null) {
+    return blocked(
+      'no-ci-evidence',
+      `no passing CI verdict is recorded for a PR head (CI is ${job.ciStatus ?? 'not observed'})`,
+    );
+  }
+  if (job.supersededBy !== null) {
+    return blocked('superseded', `${job.supersededBy} superseded this job; its PR must not merge`);
+  }
+  if (pr.state !== 'OPEN') return blocked('pr-closed', `GitHub reports the PR ${pr.state}`);
+  if (pr.isDraft) return blocked('pr-draft', 'the PR is a draft on GitHub');
+  if (pr.headSha !== evidence) {
+    return blocked(
+      'head-changed',
+      `the PR head is ${short(pr.headSha)}, not the verified ${short(evidence)}: commits nobody verified`,
+    );
+  }
+  if (!facts.authorized) {
+    return blocked(
+      'not-authorized',
+      `merging without a human click is not enabled for ${job.repo}; enable it with orch factory config merge enable --repo <path>`,
+    );
+  }
+  if (pr.mergeable === 'CONFLICTING') {
+    return facts.isReland
+      ? blocked(
+          'second-conflict',
+          `the re-land conflicts with ${job.baseBranch} again; no third job is started`,
+        )
+      : { step: 'reland', reason: `GitHub reports the PR CONFLICTING with ${job.baseBranch}` };
+  }
+  if (pr.mergeable !== 'MERGEABLE') {
+    return {
+      step: 'wait',
+      reason: `GitHub reports mergeability ${pr.mergeable ?? 'UNKNOWN'} (still computing); try again shortly`,
+    };
+  }
+  return { step: 'merge', head: evidence };
 }
 
 /**

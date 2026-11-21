@@ -11,12 +11,13 @@ import { FACTORY_HELP, runFactory } from './factory.ts';
 import { GH_HELP, runGh } from './gh.ts';
 import { formatInit, INIT_HELP, runInit } from './init.ts';
 import { formatInstall, runInstall } from './install.ts';
-import { JOB_HELP, runJob } from './job.ts';
+import { formatMerge, JOB_HELP, mergeExitCode, runJob } from './job.ts';
 import { MAIL_HELP, runMail } from './mail.ts';
 import { formatFactoryList, formatPlan, print, printError } from './output.ts';
 import type { HookOutcome } from '../ops/checkout.ts';
 import type { FactoryRow } from '../ops/dispatch.ts';
 import type { Plan } from '../ops/factory.ts';
+import type { MergeResult } from '../ops/merge.ts';
 import type { TicketList } from '../ops/tickets.ts';
 import { mailWatermark, reportJobMail } from '../ops/mail.ts';
 import { RECOVER_HELP, runRecover } from './recover.ts';
@@ -218,9 +219,16 @@ export async function main(argv: string[]): Promise<number> {
         print(json ? checks : formatChecks(checks), json);
         return checks.some((c) => c.status === 'fail') ? 1 : 0;
       }
-      case 'job':
-        print(await withStore(json, (store) => runJob(store, rest, o)), json);
-        return 0;
+      case 'job': {
+        const result = await withStore(json, (store) => runJob(store, rest, o));
+        if (rest[0] !== 'merge') {
+          print(result, json);
+          return 0;
+        }
+        const merged = result as MergeResult;
+        print(json ? merged : formatMerge(merged), json);
+        return mergeExitCode(merged);
+      }
       case 'factory': {
         const result = await withStore(json, (store) => runFactory(store, rest, o));
         const sub = rest[0];
