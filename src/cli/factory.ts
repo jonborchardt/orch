@@ -31,6 +31,7 @@ export interface FactoryOptions {
   'no-ui'?: boolean;
   fingerprint?: string;
   adopt?: string;
+  release?: boolean;
   ticket?: string;
 }
 
@@ -57,10 +58,11 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
                               PR, age, title; --json adds owner, session, resume command
   next <id> [--ui|--no-ui]    What to do now (read-only): step, agents (with models), artifacts,
                               exact commands. status <id> is an alias of next with the same options
-  resume <id> [--session <name>] [--to <stage>] [--force] [--ui|--no-ui] [--adopt <worktree>]
+  resume <id> [--session <name>] [--to <stage> [--release]] [--force] [--ui|--no-ui] [--adopt <worktree>]
                               Adopt an interrupted or orphaned job from persisted state; --adopt
                               records an existing worktree of the repository (the one this session
-                              runs in) when the job has none yet
+                              runs in) when the job has none yet; --release (needs --to) gives the
+                              job up again at once, so orch do can continue it (token: null)
   cancel <id> --reason <r> [--session <name>] [--force]
                               Cancel the job in one short episode as this session; exit 4 when
                               another session holds a live lease, unless --force takes it over
@@ -141,6 +143,9 @@ export function runFactory(
       return planJobFresh(store, needId(), { ui });
     case 'resume': {
       const jobId = needId();
+      if (o.release && o.to === undefined) {
+        throw new UsageError('--release needs --to <stage>: it gives up the job after a decision');
+      }
       const session = needSession();
       const resumed = resumeFactoryJob(store, jobId, {
         session,
@@ -148,6 +153,7 @@ export function runFactory(
         force: o.force,
         ui,
         adopt: o.adopt,
+        release: o.release,
       });
       return { session, ...resumed };
     }

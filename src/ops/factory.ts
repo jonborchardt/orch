@@ -13,6 +13,7 @@ import { type Flake, integrateFirst, integrateFirstAdvice } from '../core/flake.
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import type { SensitiveReport } from '../core/sensitive.ts';
+import { ticketKey } from '../core/tickets.ts';
 import {
   detectUi,
   type FactoryConfig,
@@ -43,7 +44,7 @@ import type { WorktreeInfo } from '../git/worktree.ts';
 import { validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { eventsOfTypes } from '../storage/events.ts';
-import { claimJob, createJob, getJob, jobDetail, resumeJob } from '../storage/jobs.ts';
+import { claimJob, createJob, getJob, jobDetail, releaseJob, resumeJob } from '../storage/jobs.ts';
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
 import { latestRun, listIntegrations } from '../storage/verification.ts';
 import { issue as ghIssue } from './github.ts';
@@ -263,6 +264,39 @@ export function fingerprint(info: WorktreeInfo): string {
   return h.digest('hex').slice(0, 16);
 }
 
+const CHANGED_SINCE_REGISTRATION = 'content changed since registration';
+
+/**
+ * The steps that continue a spec escalation, shared by the escalate reason, the needs-human
+ * plan, and the controller's `next:` hint so they never disagree.
+ */
+export function specResumeSteps(id: string, artifactDir: string, ticketId: number | null): string {
+  const run = ticketId === null ? `/factory ${id}` : `orch do ${ticketKey(ticketId)}`;
+  return (
+    `1. edit ${join(artifactDir, 'spec.md')}; 2. choose Resume at spec on the dashboard (orch ui), ` +
+    `or run orch factory resume ${id} --to spec --release; 3. run ${run}`
+  );
+}
+
+/**
+ * Whether spec.md on disk differs from its registered content after a human `resume --to spec`
+ * newer than the registration of the latest challenge (`reviewed`).
+ */
+function humanSpecEdit(events: Event[], reviewed: string, checks: ArtifactCheck[]): boolean {
+  const challengedAt = events.findLast(
+    (e) =>
+      (e.type === 'artifact.registered' || e.type === 'artifact.replaced') &&
+      e.payload['path'] === reviewed,
+  )?.id;
+  const resumedAt = events.findLast(
+    (e) => e.type === 'job.resumed' && e.payload['to'] === 'spec',
+  )?.id;
+  if (challengedAt === undefined || resumedAt === undefined || resumedAt < challengedAt) {
+    return false;
+  }
+  return checks.some((c) => c.path === 'spec.md' && c.problem === CHANGED_SINCE_REGISTRATION);
+}
+
 function checkArtifacts(store: Store, job: Job, artifacts: Artifact[]): ArtifactCheck[] {
   const dir = jobArtifactDir(job.id, store.paths);
   return artifacts.map((a) => {
@@ -273,7 +307,7 @@ function checkArtifacts(store: Store, job: Job, artifacts: Artifact[]): Artifact
           path: a.path,
           stage: a.stage,
           ok: false,
-          problem: 'content changed since registration',
+          problem: CHANGED_SINCE_REGISTRATION,
         };
       }
       return { path: a.path, stage: a.stage, ok: true };
@@ -452,8 +486,10 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     const blocked = [...detail.events].reverse().find((e) => e.type === 'job.blocked');
     plan.blockedReason = (blocked?.payload['reason'] as string | null | undefined) ?? null;
     plan.reason =
-      'A human must decide. Report the blocking reason and stop. To continue after the decision: ' +
-      `orch factory resume ${id} --session <name> [--to ${job.returnStage ?? '<stage>'}]`;
+      'A human must decide. Report the blocking reason and stop. To continue' +
+      (job.returnStage === 'spec'
+        ? `: ${specResumeSteps(id, detail.artifactDir, job.ticketId)}.`
+        : ` after the decision: orch factory resume ${id} --session <name> [--to ${job.returnStage ?? '<stage>'}]`);
     plan.commands = [`orch job show ${id}`];
     return plan;
   }
@@ -534,8 +570,19 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         task('spec', 'spec.md');
         plan.reason = `Revise spec.md once to answer the material objections in ${reviewed}, then it is challenged again.`;
         plan.commands = [...start, add('spec.md', true), next];
+      } else if (current && humanSpecEdit(detail.events, reviewed, plan.artifacts)) {
+        // A human resumed to spec after the second CHANGES and edited spec.md: register it so
+        // the next plan re-challenges it. An agent's own edit has no newer human resume.
+        task('spec', 'spec.md');
+        plan.reason =
+          `A human resumed the job to spec after ${reviewed} and edited spec.md; register the edit ` +
+          'as it is (do not rewrite it), then it is challenged again.';
+        plan.commands = [...start, add('spec.md', true), next];
       } else if (current) {
-        plan.reason = `The spec challenger asked for changes twice; escalate with the objections in ${reviewed}. After a human resume, edit spec.md first; the next plan re-challenges it.`;
+        plan.reason =
+          `The spec challenger asked for changes twice; escalate with the objections in ${reviewed}. ` +
+          `To continue, a human: ${specResumeSteps(id, detail.artifactDir, job.ticketId)}. ` +
+          'The next plan registers the edit and re-challenges it.';
         plan.commands = [
           `orch job transition ${id} escalate --reason "spec challenger requested changes twice; see ${reviewed}"${tok}`,
         ];
@@ -797,9 +844,13 @@ export interface ResumeInput {
    * once the job has a worktree, so a session may always pass its own.
    */
   adopt?: string | undefined;
+  /** Release the job once resumed, so the controller (`orch do`) can claim it at once. */
+  release?: boolean | undefined;
 }
 
 export interface ResumeResult extends StartResult {
+  /** Whether `release` gave the job up again; then the token is null. */
+  released: boolean;
   /** Whether a different session previously owned the job. */
   tookOver: boolean;
   previousOwner: string | null;
@@ -807,11 +858,20 @@ export interface ResumeResult extends StartResult {
   adopted: 'adopted' | 'kept-existing' | null;
 }
 
+/** A resume that may have released the job: the token is null when it did. */
+export type ReleasedResume = Omit<ResumeResult, 'token'> & { token: string | null };
+
 /**
  * Adopt a job from persisted state: claim (or take over a lapsed lease), return interrupted work
  * to pending, make sure the worktree exists, verify artifacts, and plan the next step.
  */
-export function resumeFactoryJob(store: Store, id: string, input: ResumeInput): ResumeResult {
+export function resumeFactoryJob(
+  store: Store,
+  id: string,
+  input: ResumeInput & { release?: false | undefined },
+): ResumeResult;
+export function resumeFactoryJob(store: Store, id: string, input: ResumeInput): ReleasedResume;
+export function resumeFactoryJob(store: Store, id: string, input: ResumeInput): ReleasedResume {
   const before = getJob(store.db, id);
   const previousOwner = before.ownerSession;
   const { token } = resumeJob(store, id, {
@@ -820,7 +880,7 @@ export function resumeFactoryJob(store: Store, id: string, input: ResumeInput): 
     force: input.force,
   });
   let job = getJob(store.db, id);
-  let adopted: ResumeResult['adopted'] = null;
+  let adopted: ReleasedResume['adopted'] = null;
   if (job.stage !== 'needs-human' && job.stage !== 'completed' && job.status !== 'cancelled') {
     if (input.adopt !== undefined && job.worktreePath === null) {
       job = adoptWorktree(store, id, { token }, input.adopt).job;
@@ -830,9 +890,12 @@ export function resumeFactoryJob(store: Store, id: string, input: ResumeInput): 
       job = createWorktree(store, id, { token }).job;
     }
   }
+  const released = input.release === true;
+  if (released) job = releaseJob(store, id, { token });
   return {
     plan: planJob(store, id, { ui: input.ui }),
-    token,
+    token: released ? null : token,
+    released,
     job,
     tookOver: previousOwner !== null && previousOwner !== input.session,
     previousOwner,

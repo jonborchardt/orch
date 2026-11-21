@@ -288,6 +288,18 @@ describe('a job that needs a person', () => {
     ]);
     expect(stops(jobId)[0]?.payload['reason']).toContain('two designs are possible');
     expect(stops(jobId)[0]?.payload['next']).toContain(`orch do ${key(id)}`);
+    // Escalated from spec: the hint names the steps that work (todo 0107), in both places.
+    for (const next of [s.tickets[0]?.next, stops(jobId)[0]?.payload['next']]) {
+      for (const part of [
+        'spec.md',
+        'Resume at spec',
+        '--to spec --release',
+        `orch do ${key(id)}`,
+      ]) {
+        expect(next).toContain(part);
+      }
+      expect(next).not.toContain('orch job release');
+    }
     // Escalated, not finished; and the runner's lease is gone although the session kept it.
     expect(getJob(store.db, jobId)).toMatchObject({
       stage: 'needs-human',
