@@ -44,7 +44,7 @@ whatever runs jobs unattended later calls it too. The rule it applies, `mergeDec
 - **No queue, no lock, no daemon.** Each call reads the PR and decides without owning the job;
   only a step that writes claims it for one short episode and reads GitHub again inside it.
   `UNKNOWN` mergeability returns `waiting` at once. The command exits 0 only for `merged` and
-  `already_merged`.
+  `already_merged` with `verified: true`; a merge recorded as unverified exits 1.
 
 **Why.** Unattended runs need a merge that does not depend on a click, and the previous answer
 (the `dotodo` skill running `gh` itself) kept the rules in prose where nothing enforced them.

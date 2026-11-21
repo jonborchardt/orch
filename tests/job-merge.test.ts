@@ -765,6 +765,22 @@ describe('orch job merge', () => {
     expect(cli(['job', 'merge']).code).toBe(2);
   });
 
+  it('an unverified merge is reconciled but exits 1, on the first call and on a repeat', () => {
+    const job = completed();
+    githubMerged(job, OTHER);
+    for (let i = 0; i < 2; i++) {
+      const r = cli(['--json', 'job', 'merge', job.id]);
+      expect(r.code).toBe(1);
+      expect(json<MergeResult>(r)).toMatchObject({
+        outcome: 'already_merged',
+        verified: false,
+        mergeCommit: MERGE_COMMIT,
+      });
+    }
+    expect(events(job, 'pr.merged')).toHaveLength(1);
+    expect(cli(['job', 'merge', job.id]).out).toMatch(/^ALREADY_MERGED: .*Not verified/);
+  });
+
   it('waiting and blocked exit 1 with the outcome on stdout', () => {
     const job = completed();
     editPr(job, { mergeable: 'UNKNOWN' });

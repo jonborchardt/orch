@@ -87,6 +87,9 @@ when nothing is left on it. It is safe to run again after any failure. Never run
 | `blocked`        | no merge. `code: not-authorized`: tell the user merging is not enabled for this repository and that `orch factory config merge enable` turns it on; do not run it yourself. Any other `code`: `orch ticket note <id> "<reason>"`. Report, stop |
 | `error`          | a tool or GitHub failure: run the command once more; if it repeats, report `reason` and stop                                                                                                                                                   |
 
+`merged` and `already_merged` are a success only with `verified: true` (exit 0). With
+`verified: false` (exit 1) the PR was merged at a head CI did not pass on: report that and stop.
+
 `code: second-conflict` means the re-land conflicted too: no third job. Leave the branch, the
 worktree, the primary checkout and `dist/` alone.
 

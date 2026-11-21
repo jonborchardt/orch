@@ -428,7 +428,7 @@ branch protection decides; a refusal is reported with gh's message and recorded 
 `ok: false`).
 
 **Outcomes** (`outcome` in the JSON; the text output starts with it). The command exits 0 only for
-the first two.
+the first two, and only with `verified: true`: a merge recorded as unverified exits 1.
 
 | `outcome`        | meaning                                                                                            |
 | ---------------- | -------------------------------------------------------------------------------------------------- |
