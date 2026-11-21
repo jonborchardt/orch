@@ -1,7 +1,9 @@
 # Dashboard (`orch ui`)
 
 The optional local dashboard: what it shows, how its status is derived, its security model, and
-how it is tested.
+how it is tested. The dashboard manages and observes work; the CLI and Claude Code sessions remain
+where work is executed. It has no controller start, stop, or resume control, no analytics or usage
+view, and no chat with an agent. Operating the factory: [operations.md](operations.md).
 
 ## Dashboard
 
@@ -121,7 +123,9 @@ but a session may have claimed it again (to observe CI), so the board always sen
 it over; the server decides as for any action, and the board reloads afterwards.
 Nothing archives automatically.
 
-**Job detail** (`#/jobs/<id>`): next step and agents from the plan, the request, and tabs for the
+**Job detail** (`#/jobs/<id>`) has twelve tabs, in this order (`TABS` in `web/src/tabs.ts`):
+Overview, Spec, Build, Reviews, Findings, Decision, Artifacts, Events, Session (the Claude Code
+transcripts), Git, Verification, and PR. It shows the next step and agents from the plan, the request, and tabs for the
 spec, build summary, review history per round (the job's current round is labelled
 `Round N (current)`; one collapsed panel per reviewer whose header shows the reviewer, verdict,
 and summary; expand it for the full review text), consolidated
@@ -378,17 +382,22 @@ server validates.
 
 - **Factory status** heads the page: what `orch status` prints, from `GET /api/runner`
   (`runnerStatus`, read-only). It says whether a controller is `running`, `interrupted`, or
-  `idle`; the ticket, job, stage, and repository in flight (links to both); what it waits for; a
-  requested stop (`now`, or after this ticket); what happens next; and how the last finished
-  session ended, with its done and attempted counts. Under it is the highest-priority ready
-  ticket and the number ready. That is the head of the queue, not a promise: the controller
-  passes over a repository without the merge opt-in. There is no control here; the controller is
-  started, stopped, and resumed from the CLI only.
+  `idle`; its mode (one ticket for `orch do`, or the queue of one repository or of every
+  repository); the ticket, job, stage, status, and repository in flight (links to both); what it
+  waits for (`agent`, `ci`, `merge`, or a person); a requested stop (`now`, or after this ticket);
+  what happens next, in one sentence; and how the last finished session ended, with its reason and
+  its done-of-attempted counts. Under it is the highest-priority ready ticket and the number
+  ready. That is the head of the queue, not a promise: the controller passes over a repository
+  without the merge opt-in. There is no control here; the controller is started, stopped, and
+  resumed from the CLI only. The strip does not list Claude sessions: each child's outcome is a
+  `runner.session` event, and a stop's reason a `runner.stopped` event, on the job's Events tab
+  ([operations.md](operations.md#runner-events-on-the-job)).
 - **The list** has Queue, ID, Title, Repository, Priority, State, Area / Type, Job, and Blocked
   by. Queue is the ticket's position in `GET /api/tickets?view=order`, the server's proposed
   order of the open tickets. **Show** picks `current` (the default: tickets in progress, then the
-  open ones in queue order), `ready`, `blocked`, one lifecycle status, or `all`; Repository,
-  Priority, Area, and Type narrow it, and Search matches the id and the title. The filters are
+  open ones in queue order), `ready`, `blocked`, `in-progress`, `done`, `dropped`, `duplicate`,
+  or `all`; Repository, Priority, Area, and Type narrow it, and Search matches the key (`0085`),
+  the id (`#85`), and the title. The filters are
   kept while a ticket or a job is open. Priority is a select in the row: changing it is an `edit`
   with the ticket's revision, after which the queue is read again, so the order shown is always
   the server's.
@@ -415,8 +424,9 @@ as read-only boxes and are changed by editing the Markdown. Start, Done, Drop, M
 and Reopen are offered by status and run the ticket's lifecycle action (Drop and Mark duplicate
 ask first; Start marks the ticket in progress and starts no job); a transition the server refuses
 is shown in its own words. Links lists what the ticket depends on, what it blocks, and what it is
-related to, each a link; a ticket id and Add dependency or Add related adds one, and a chip's
-delete removes it. Jobs lists every job that worked on the ticket with its stage, status, PR
+related to, each a link; a ticket id and Add dependency or Add related adds one, and the delete on
+a Depends on or Related chip removes it (Blocks chips have none: that link belongs to the other
+ticket). Jobs lists every job that worked on the ticket with its stage, status, PR
 state, and supersession, each linked to its job detail; a job's header links back to its ticket.
 History is the ticket's events, oldest first.
 

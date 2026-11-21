@@ -1,7 +1,113 @@
 # Workflow internals
 
-The rules `orch` enforces for a job, in detail. `README.md` gives the overview; this file is
-the reference for stages, artifacts, evidence, worktrees, GitHub, and ownership.
+The rules `orch` enforces for a job, in detail. `README.md` gives the overview and
+[overview.md](overview.md) the architecture; this file is the reference for stages, artifacts,
+evidence, worktrees, GitHub, and ownership. [operations.md](operations.md) is how to run it.
+
+## The ticket lifecycle end to end
+
+How a ticket becomes merged software, in order. Each step links to its detailed rules.
+
+1. **Creation.** `orch ticket add` (or the dashboard's New ticket) files a ticket in one
+   repository with a global id, a type (`bug`, `feature`, `chore`, `question`), an area, a priority
+   (`P1`–`P4`), an effort, and a Markdown body ([tickets.md](tickets.md#fields)).
+2. **Priority and dependencies.** `orch ticket edit --priority` and `orch ticket dep add` shape the
+   proposed order: dependencies first, then priority, effort, area, id
+   ([tickets.md](tickets.md#order-and-readiness)).
+3. **Readiness.** A ticket is ready when it is `open`, not a `question`, every dependency is
+   `done`, no unfinished job is linked to it, and its repository checkout exists. Anything else is
+   blocked, with a reason per blocker. In the controller's global queue a ready ticket of a
+   repository without the merge opt-in is passed over.
+4. **Claim.** Creating the job (`orch factory start --ticket`, `orch factory dispatch --ticket`, or
+   the controller's dispatch) checks the ticket, marks it `in-progress`, and links it, in the
+   transaction that inserts the job; a partial unique index allows one unfinished job per ticket
+   ([tickets.md](tickets.md#tickets-and-jobs)).
+5. **Job create or recover.** The controller (`runTicket`) continues the ticket's unfinished job if
+   there is one, merges its last job if that one completed, and creates a job only for an `open`
+   ticket. A cancelled job is never replaced automatically ([Factory controller](#factory-controller)).
+   The job gets an isolated worktree on `factory/<id>-<slug>` ([Worktrees](#worktrees)).
+6. **Specification.** `factory-spec-writer` writes `spec.md` (Goal, Scope, Acceptance criteria).
+7. **Specification challenge.** `factory-spec-challenger` judges it against the request and the
+   repository's conventions; one revision on `CHANGES`, and a second `CHANGES` escalates
+   ([Spec challenge](#workflow)).
+8. **Build.** `factory-builder` implements in the worktree and commits.
+9. **Verification.** `orch verify` runs the repository's committed `factory.json` checks in the
+   clean worktree and records the run for that exact commit
+   ([Verification evidence](#verification-evidence)). `build.md` is registered against that HEAD.
+10. **Simplify.** `factory-simplifier` lists over-engineering in the diff; the builder applies what
+    makes sense, verifies again, and records each declined finding.
+11. **Review.** `security`, `correctness`, and `code-quality` always review. `ui-design`, `ux`,
+    `accessibility`, and `web-platform` join when the diff matches `uiPatterns` (by default
+    `DEFAULT_UI_PATTERNS` in `src/core/roles.ts`: `.tsx`, `.jsx`, `.vue`, `.svelte`, `.astro`,
+    `.html`, `.htm`, and style-sheet files, and images under `public/`, `static/`, or `assets/`). A
+    consolidation records `BLOCKING: <n>` ([Review rounds](#workflow)).
+12. **Rework.** Blocking findings or a `CHANGES` verdict send the job back to build, until a
+    rejection in round `maxRounds` escalates. A scope gap at approval reworks once on its own.
+13. **Approval.** `factory-approver` writes `decision.md`: `APPROVE`, `ESCALATE`, `REWORK-BUILD`,
+    or `REWORK-SPEC`.
+14. **PR.** The coordinator integrates the base, pushes the approved commit, and creates or reuses
+    a draft PR ([GitHub integration](#github-integration)).
+15. **CI.** `orch gh ci` reads GitHub's verdict for the exact PR head: completes the job on
+    passing required checks and marks the PR ready, re-runs a failure once per head, then repairs
+    through build within `maxCiRepairs`, or escalates ([CI reconciliation](#ci-reconciliation)).
+16. **Merge.** `mergeJob` merges the PR at the CI-verified head as a merge commit and confirms it
+    with a second read; a conflict becomes one re-land job ([Merging](#merging)).
+17. **Settlement.** In the transaction that records the merge, the ticket becomes `done` only if
+    the merged head is the verified one and nothing is left on the ticket
+    ([Verified integration and reconciliation](#verified-integration-and-reconciliation)).
+18. **Next ticket.** The controller takes the next ready ticket, or ends the run
+    ([Factory controller](#factory-controller)).
+
+Any stage can escalate to `needs-human`, which waits for a person's decision
+([operations.md](operations.md#resolving-needs-human)).
+
+```mermaid
+flowchart TD
+    A["Ticket claimed: job created or continued"] --> W["Isolated worktree, branch factory/id-slug"]
+    W --> S["spec: spec-writer writes spec.md"]
+    S --> SC{"spec-challenger verdict"}
+    SC -->|"CHANGES, first time"| S
+    SC -->|"CHANGES again"| H["needs-human: a person decides"]
+    SC -->|"PASS"| B["build: builder commits; orch verify runs factory.json"]
+    B -->|"verification fails: one fix, then escalate"| H
+    B --> SI["simplify: simplifier reviews the diff; builder applies, verifies"]
+    SI --> RV["review: security, correctness, code-quality; four UI reviewers when UI changed"]
+    RV --> RB{"All PASS and BLOCKING: 0?"}
+    RB -->|"No, rounds left"| B
+    RB -->|"No, round maxRounds"| H
+    RB -->|"Yes"| AP{"approve: decision.md"}
+    AP -->|"REWORK-BUILD, first scope gap"| B
+    AP -->|"REWORK-SPEC, first scope gap"| S
+    AP -->|"ESCALATE, or a second scope gap"| H
+    AP -->|"APPROVE"| PR["pr: integrate base, push, draft PR"]
+    PR --> CI{"ci: GitHub verdict for the exact PR head"}
+    CI -->|"failed, first time for this head"| RR["Re-run the failed jobs once"]
+    RR --> CI
+    CI -->|"failed again, repairs left"| B
+    CI -->|"repairs spent, no checks, PR closed, head moved"| H
+    CI -->|"passing"| C["completed: PR marked ready"]
+    C --> M{"mergeJob at the verified head"}
+    M -->|"conflict, first time"| RL["One re-land job, same ticket, all stages again"]
+    M -->|"second conflict, head changed, unverified"| BL["blocked: a person decides"]
+    M -->|"merged, verified, nothing left on the ticket"| D["Ticket done"]
+```
+
+Every failure path ends in a bounded loop or with a person. Stages, who works in each, and what
+`orch` requires before the next one:
+
+| Stage      | Who                                                   | Produces                                                   | `orch` requires before the next stage                                                                                                                                                |
+| ---------- | ----------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `spec`     | `factory-spec-writer`, then `factory-spec-challenger` | `spec.md`, `spec-review-N.md`                              | Goal, Scope, Acceptance criteria; the latest challenge says `VERDICT: PASS` for the current `spec.md`                                                                                |
+| `build`    | `factory-builder`                                     | commits, an `orch verify` run, `build.md`                  | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD                                                                                         |
+| `simplify` | `factory-simplifier`, then `factory-builder`          | `round-N/simplify-review.md`, fixes, `round-N/simplify.md` | both files registered; `simplify.md` against a clean, verified HEAD                                                                                                                  |
+| `review`   | 3 reviewers (7 for UI changes)                        | `round-N/review-*.md`, `consolidated.md`                   | all three always-on verdicts recorded against the HEAD `simplify.md` (or, without one, `build.md`) describes; `BLOCKING: 0` to advance                                               |
+| `approve`  | `factory-approver`                                    | `decision.md`                                              | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid. A scope gap (`REWORK-BUILD`, `REWORK-SPEC`) goes back to `build` or `spec` once on its own |
+| `pr`       | the coordinator                                       | base integrated, pushed branch, draft PR                   | only clean base-integration merges since the approval; verified HEAD; policy unchanged                                                                                               |
+| `ci`       | the coordinator + `orch gh ci`                        | GitHub's verdict for the PR head                           | the job's own PR; checks passed for that commit, still the approved one (plus clean base merges)                                                                                     |
+
+Default models per role: spec writer, builder, security reviewer, and approver Opus; spec
+challenger, simplifier, and the other reviewers Sonnet. They are configurable in
+`<config>/factory.json` (`models`).
 
 ## Workflow
 
@@ -271,7 +377,7 @@ cancelled ends the ticket. A completed job goes to `mergeJob`:
 | `merged` / `already_merged`, verified, ticket done | the ticket is done; next ticket                   |
 | the same, not verified, or the ticket stays open   | blocked (unchecked boxes are named)               |
 | `reland`                                           | runs the re-land job the same way, then merges it |
-| `waiting`, `error`                                 | tries again every 30 s, five times                |
+| `waiting`, `error`                                 | five attempts in total, 30 s apart                |
 | `blocked` (second conflict, head changed, refused) | blocked, with the code and reason                 |
 
 Budgets: two sessions in a row that exit without changing the job's stage, round, CI repairs, or
@@ -280,7 +386,8 @@ a job waiting for a person ends the whole session with the ticket, the job, the 
 command that continues it; the queue never moves on past it. Exit status is 1 in that case.
 The budgets are counted in the running controller only: `orch do` or `orch resume` starts them
 again, which takes a person each time. Nothing waits between two sessions, and nothing ends a
-session for running long.
+session for running long. Every budget, durable or controller-local, is in one table in
+[operations.md](operations.md#recovery-budgets).
 
 What the controller did is also written to the job's own events, as `orch-runner`, so it outlasts
 `runner.json` (which the next session replaces) and shows in `orch job events`, the dashboard's
@@ -295,10 +402,13 @@ Events tab, and, for a stop, the status mail (decision 2026-11-21-runner-evidenc
 stage, round, CI repairs, or artifacts changed during it. `runner.stopped` describes the
 controller, not the job: the job keeps the stage and status it had, and `code` says what stopped
 the ticket: `no-progress`, `claude-failed`, `ci-pending`, `github-unreadable`, `needs-human`,
-`unverified-merge`, `ticket-open`, `merge-no-answer`, a `mergeJob` block code (`second-conflict`,
-`head-changed`, `pr-draft`, ...), or `error` (an `orch` operation refused). A stop on request (`orch stop`,
-`orch stop next`, Ctrl+C) writes no `runner.stopped`. Asking again when nothing happened since
-(the same code and reason are the job's last news) adds no second one.
+`unverified-merge`, `ticket-open`, `reland-refused`, `merge-no-answer`, `ownership` (another
+session held the job), `error` (any other `orch` refusal), any `mergeJob` block code
+(`MERGE_BLOCKS` in `src/core/workflow.ts`, listed under [Merging](#merging)), or `merge-blocked`
+when `mergeJob` blocked without a code. A stop on request (`orch stop`, `orch stop next`, Ctrl+C)
+writes no `runner.stopped`, and neither does a cancelled job. Asking again when nothing happened
+since (the same code and reason are the job's last news) adds no second one. What each code
+means and how to act on it: [operations.md](operations.md#runner-events-on-the-job).
 
 Whenever the controller leaves a job it releases it, a job waiting in `needs-human` included, even
 when the session that escalated exited without releasing. It records and releases only a job it
@@ -354,8 +464,8 @@ carries the ack; `plan.noticeAck` is null when nothing is unacknowledged or the 
 
 ## Status mail
 
-Optional (decision 2026-11-17-mail-reports-built-in-smtp-client; settings in the README's "Email
-reports"). `src/integrations/mail.ts` is the generic sender: config from `<config>/mail.env` and
+Optional (decision 2026-11-17-mail-reports-built-in-smtp-client; settings in
+[operations.md](operations.md#email-reports)). `src/integrations/mail.ts` is the generic sender: config from `<config>/mail.env` and
 `MAIL_*`, and a `node:tls` SMTP client (implicit TLS, AUTH PLAIN or LOGIN, one base64 UTF-8 text
 part, no retry). `orch mail report` exposes it without opening the database.
 
@@ -560,6 +670,54 @@ different jobs are independent, GitHub serializes them, and whatever runs jobs u
 this one command and retries on `waiting`
 (`docs/decisions/2026-11-20-orch-job-merge.md`).
 
+### Verified integration and reconciliation
+
+**A merged PR is not automatically a verified successful integration.** It is one only when
+GitHub merged exactly the head whose required checks passed (`ciHead`), as a merge commit, on the
+job's own PR into the job's base branch, and the job was completed by that CI verdict. Code that
+passes locally is not enough either: the gates require `orch verify` for the commit, the reviews
+and approval for it, and GitHub's verdict for the PR head, in that order.
+
+**Why reconciliation, not a transaction.** GitHub and the local SQLite database are two systems,
+and no transaction spans both: a timeout, a dropped connection, or a crash can fall between
+GitHub accepting a merge and `orch` writing it down. `orch` does not pretend otherwise. GitHub is
+the authority on the PR, every call starts from a fresh read of it (`mergeDecision`), and every
+step is safe to repeat: the merge is pinned with `--match-head-commit`, a merge GitHub already
+made is recorded instead of attempted, `recordMerge` writes the evidence and the ticket's
+settlement in one local transaction, and a second call over a complete record writes nothing. So
+the answer to any interruption is to call again (`orch job merge`, the dashboard's Merge,
+`orch do`, or `orch resume`).
+
+The cases, as implemented in `src/ops/merge.ts`:
+
+| case                                                         | what happens                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gh pr merge` times out after GitHub accepted the merge      | gh's exit status is only a hint: the PR is read again. `MERGED` with a merge commit is recorded as `merged`. If that read fails too, the outcome is `error` and nothing is recorded; the next call sees `MERGED` and records it as `already_merged`. `MERGED` without a merge commit yet is `error`: call again.                                                                                                           |
+| the controller crashes after the merge, before the write     | nothing local says merged. `orch resume` re-runs the ticket: it is in progress and its last job completed, so it goes to `mergeJob`, which reads `MERGED` and records `already_merged`, with the ticket's settlement, in one transaction.                                                                                                                                                                                  |
+| the PR is already merged (a person on GitHub, the dashboard) | `already_merged`: recorded without the opt-in, nothing merged. It is `verified: true` only when the merged head equals `ciHead` and the job completed on a CI verdict; otherwise it is recorded as observed with `verified: false`, the ticket stays open, and `orch job merge` exits 1 (the controller: `unverified-merge`).                                                                                              |
+| the PR head changed after CI passed                          | an open PR whose head is not `ciHead` is `blocked` / `head-changed` and nothing is called: those commits were never verified. If the head moves between the read and the merge, `--match-head-commit` makes GitHub refuse it (`github-refused`). A head that moved while the job was still in `ci` escalated there.                                                                                                        |
+| the PR conflicts with the base                               | `orch job merge` and the controller create a re-land job; the dashboard's Merge refuses with `conflict` (Fix merge conflicts re-lands instead). A completed job cannot rework, so the conflict is resolved as new code in a new job.                                                                                                                                                                                       |
+| a re-land produces a new job                                 | one transaction creates `<title> (re-land)` on the same ticket and marks the old job `supersededBy` it. The re-land runs every stage and is merged like any job; the superseded job is `blocked` / `superseded` forever and its PR is left open. A re-land that conflicts again is `second-conflict`: no third job. An interrupted re-land is simply the ticket's unfinished job, continued by `orch do` or `orch resume`. |
+
+**Ticket settlement** (`settleTicketForMerge` in `src/storage/tickets.ts`, called by `recordMerge`
+in `src/storage/jobs.ts` inside the merge's transaction):
+
+- a ticket already `done` is reported complete and left as it is; a `dropped` or `duplicate`
+  ticket is never touched;
+- an `open` or `in-progress` ticket becomes `done`, with a `ticket.completed` event carrying the
+  job, the PR, the head, and the merge commit, only when the merged head is the verified one, the
+  job is not superseded, no other unfinished job works on the ticket, and the body has no
+  unchecked checklist item;
+- an unchecked item is any Markdown list item with an empty box, anywhere in the body
+  (`uncheckedItems` in `src/core/tickets.ts`): optional leading spaces or tabs, a `-`, `*`, `+`, or
+  numbered (`1.` or `1)`) marker, then `[ ]`;
+- otherwise the ticket's status stays as it is and one `ticket.job-merged` event records why (the
+  verified flag, the reason, the remaining items); the same job and reason are not recorded twice.
+
+orch never ticks a box. Tick what was delivered (`orch ticket edit <id> --body-file <file>`) and
+run `orch job merge <job>` again, which settles the ticket without merging anything, or close it
+with `orch ticket done <id>`.
+
 ## Verification evidence
 
 `orch verify <id>` is the only source of automated validation evidence. It runs the repository's
@@ -699,48 +857,6 @@ Several VS Code sessions may run at once, so each job has at most one owner.
   supersede, recording PR state) claims it first.
 
 ### Checkout ownership (cooperative)
-
-A job lease protects the job record; it does not stop two Claude Code sessions from editing the
-same checkout, which is how the intermittent failures in decision 45 happened. `orch
-checkout` adds a lease per **checkout**, identified by its Git directory (`.git` for the primary
-checkout, `.git/worktrees/<name>` for each linked worktree, compared canonically so case, 8.3
-aliases, and junctions are one checkout and two repositories that merely share a directory name are
-not). Claims live as JSON files under `<data>/checkouts/`, never inside a repository and never in
-the database, so the guard can run from any checkout without touching the shared store.
-
-- `orch checkout claim --session <s> [--path <p>] [--lease <min>] [--force]` takes or renews the
-  checkout containing `<p>`; exit 4 while another session's lease is live. `--force` takes it over
-  deliberately. `status` and `list` are read-only; `release [--all]` gives claims back.
-- `orch checkout hook` is a Claude Code hook. This repository ships it in `.claude/settings.json`:
-  `PreToolUse` on `Edit|Write|MultiEdit|NotebookEdit` claims the checkout that contains the file
-  and exits 2 (the tool call is refused, with the holder and the recovery command as the reason)
-  while another live session holds it; `SessionStart` only reports a live holder as context, so a
-  read-only session never claims anything; `SessionEnd` releases the session's claims. A write
-  to a file Git ignores (a local scratch or archive directory) is in no commit, so it is
-  neither claimed nor refused. The claim
-  records the session's transcript file (`transcript_path` in the hook payload), which Claude Code
-  appends to on every turn and tool call, so the holder stays live for 30 minutes after its last
-  activity, not its last write: a session that reads, reasons, or runs a long test suite without
-  editing keeps its checkout. A session that died without `SessionEnd` lets both lapse, after
-  which the next session reclaims; the old session's next write is then refused instead of racing.
-  The shipped command runs this checkout's own source when `src/cli/checkout.ts` exists, otherwise
-  the installed `orch` if it has the `checkout` command, and otherwise prints a warning and exits
-  1: Claude Code shows the warning and lets the edit through, so a session on a branch without the
-  guard sees that it is unprotected rather than being locked out or silently exposed (Claude Code
-  keeps the hook configuration it loaded at startup across branch switches, and an exit 2 from any
-  cause would refuse every write). To protect every repository, add the same three entries to
-  `~/.claude/settings.json` with the installed `orch` (`orch checkout hook`) instead of the
-  source path.
-
-This detects accidental sharing of one checkout between sessions. It is not filesystem isolation:
-Bash commands are not hooked, a process that writes without asking is not stopped, and the hook
-session id is Claude Code's, unrelated to the `--session` names used for job leases. Hooks run
-with Claude Code's own environment, so claims go to the `ORCH_HOME` Claude Code was started with
-(by default the user's data directory), not one set inside a Bash command; sessions see each
-other's claims only when they share that location. Two sessions reclaiming one lapsed claim in the
-same instant is last-writer-wins, and the loser's next write is refused.
-
-## Checkout ownership (cooperative)
 
 A job lease protects the job record; it does not stop two Claude Code sessions from editing the
 same checkout, which is how the intermittent failures in decision 45 happened. `orch
