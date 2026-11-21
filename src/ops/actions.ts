@@ -408,6 +408,8 @@ function reland(store: Store, before: Job, force: boolean | undefined): ActionRe
     const { job } = dispatchJob(store, {
       repo: before.repoPath,
       base: before.baseBranch,
+      // The re-land works on the same ticket; `before` is finished, so the ticket is free.
+      ticket: before.ticketId ?? undefined,
       title: `${before.title} (re-land)`,
       description: before.description ? `${before.description}\n\n${sentence}` : sentence,
       session: DASHBOARD_SESSION,

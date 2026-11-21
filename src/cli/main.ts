@@ -17,8 +17,10 @@ import { formatFactoryList, formatPlan, print, printError } from './output.ts';
 import type { HookOutcome } from '../ops/checkout.ts';
 import type { FactoryRow } from '../ops/dispatch.ts';
 import type { Plan } from '../ops/factory.ts';
+import type { TicketList } from '../ops/tickets.ts';
 import { mailWatermark, reportJobMail } from '../ops/mail.ts';
 import { RECOVER_HELP, runRecover } from './recover.ts';
+import { formatTicketList, runTicket, TICKET_HELP } from './ticket.ts';
 import { runUi, UI_HELP } from './ui.ts';
 import { runVerify, VERIFY_HELP } from './verify.ts';
 import { runWorktree, WORKTREE_HELP } from './worktree.ts';
@@ -35,6 +37,8 @@ Typical workflow:
 Commands:
   factory <subcommand>   The primary interface: start, plan, resume, dispatch, and list factory
                          jobs for the /factory skill (orch factory --help)
+  ticket <subcommand>    The global ticket queue: add, list, ready, show, edit, start, done,
+                         dependencies, import (orch ticket --help)
   doctor                 Check the local environment (Node, Git, Claude Code, paths)
   init                   Write a repository's factory.json verification policy, or --check its
                          readiness (orch init --help)
@@ -77,6 +81,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   ui: UI_HELP,
   recover: RECOVER_HELP,
   mail: MAIL_HELP,
+  ticket: TICKET_HELP,
 };
 
 const str = { type: 'string' } as const;
@@ -157,6 +162,20 @@ export async function main(argv: string[]): Promise<number> {
         provider: str,
         ref: str,
         cwd: str,
+        // ticket
+        ticket: str,
+        type: str,
+        area: str,
+        priority: str,
+        effort: str,
+        classified: str,
+        'depends-on': str,
+        related: str,
+        body: str,
+        offset: str,
+        of: str,
+        note: str,
+        dir: str,
         // ui
         port: str,
         open: bool,
@@ -214,6 +233,12 @@ export async function main(argv: string[]): Promise<number> {
                 : result,
           json,
         );
+        return 0;
+      }
+      case 'ticket': {
+        const result = await withStore(json, (store) => runTicket(store, rest, o));
+        const listed = ['list', 'order', 'ready', 'blocked'].includes(rest[0] ?? '');
+        print(json || !listed ? result : formatTicketList(result as TicketList), json);
         return 0;
       }
       case 'worktree':

@@ -30,17 +30,23 @@ export interface FactoryOptions {
   'no-ui'?: boolean;
   fingerprint?: string;
   adopt?: string;
+  ticket?: string;
 }
 
 export const FACTORY_HELP = `Usage: orch factory <command> [options]
 
   start   (--title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>])
-          [--repo <path>] [--base <branch>] [--max-rounds <n>] [--session <name>] [--ui|--no-ui]
+          [--ticket <id>] [--repo <path>] [--base <branch>] [--max-rounds <n>]
+          [--session <name>] [--ui|--no-ui]
                               Create, claim, and give a worktree to a new job; print the plan + token.
                               A job needs a non-blank description: --description, or one fetched
-                              from --issue (its URL and body) when --description is omitted
-  dispatch (--title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>])
-          [--repo <path>] [--base <branch>] [--max-rounds <n>] [--session <name>]
+                              from --issue (its URL and body) when --description is omitted.
+                              --ticket links the job to that ticket and marks it in progress in
+                              the same transaction (refused while the ticket is blocked or already
+                              has an unfinished job); its title and body are the defaults
+  dispatch (--title <t> --description <d> | --issue <ref> | --ticket <id>) [--title <t>]
+          [--description <d>] [--repo <path>] [--base <branch>] [--max-rounds <n>]
+          [--session <name>]
                               Create a job for another (or this) repository that an independent
                               session will run; print what that session needs (workspace, prompt).
                               Refused unless the repository's factory.json is ready. Nothing is
@@ -94,6 +100,7 @@ export function runFactory(
         title: o.title,
         description: o.description,
         issue: o.issue,
+        ticket: o.ticket,
         repo: o.repo,
         base: o.base,
         maxRounds: maxRounds(),
@@ -104,12 +111,15 @@ export function runFactory(
       return { session, ...started };
     }
     case 'dispatch': {
-      if (!o.title && !o.issue) throw new UsageError('dispatch needs --title <t> or --issue <ref>');
+      if (!o.title && !o.issue && !o.ticket) {
+        throw new UsageError('dispatch needs --title <t>, --issue <ref>, or --ticket <id>');
+      }
       const session = needSession();
       const dispatched = dispatchJob(store, {
         title: o.title,
         description: o.description,
         issue: o.issue,
+        ticket: o.ticket,
         repo: o.repo,
         base: o.base,
         maxRounds: maxRounds(),

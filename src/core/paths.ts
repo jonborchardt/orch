@@ -131,6 +131,11 @@ export function jobArtifactDir(jobId: string, paths: RuntimePaths = runtimePaths
   return join(paths.data, 'jobs', jobId, 'artifacts');
 }
 
+/** Screenshots and attachments of one ticket. Private runtime state, never in a repository. */
+export function ticketAssetDir(ticketId: number, paths: RuntimePaths = runtimePaths()): string {
+  return join(paths.data, 'tickets', String(ticketId).padStart(4, '0'), 'assets');
+}
+
 /** Filesystem-safe form of a repository identity, e.g. github.com/o/r -> github.com-o-r. */
 export function repoSlug(identity: string): string {
   return identity.replace(/[^a-z0-9._]+/gi, '-').replace(/^-+|-+$/g, '') || 'repo';

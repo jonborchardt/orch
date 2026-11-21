@@ -26,17 +26,19 @@ output (`web/dist`) ships prebuilt. See decision 10 under `docs/decisions/` for 
 src/
   cli/           main.ts (arg parsing, dispatch), args.ts (option helpers), output.ts, and one
                  file per command: doctor, init, install, job, worktree, gh, verify, factory,
-                 checkout, ui, recover
+                 checkout, ui, recover, ticket
   core/          workflow.ts, artifact-rules.ts, roles.ts, ownership.ts, verification.ts, ci.ts,
-                 sensitive.ts, session.ts, recovery.ts, errors.ts, paths.ts, exec.ts
+                 sensitive.ts, session.ts, recovery.ts, errors.ts, paths.ts, exec.ts,
+                 tickets.ts (ticket rules), todo-register.ts (the imported Markdown format)
   storage/       schema.ts, client.ts, jobs.ts, events.ts, artifacts.ts, verification.ts,
-                 checkouts.ts (only SQLite importer)
+                 checkouts.ts, tickets.ts, ticket-import.ts (only SQLite importer)
   git/           run.ts (git with arg arrays), repo.ts (queries), worktree.ts (worktree ops)
   integrations/  claude.ts (skill/agent linking), github.ts (gh CLI wrapper)
   ops/           factory.ts (the plan), dispatch.ts, gates.ts (Git-aware gates), verify.ts (runs
                  the policy), worktree.ts, github.ts, repo.ts (job <-> repository), checkout.ts,
                  init.ts, usage.ts, actions.ts (dashboard actions), tree.ts, recover.ts
-                 (recovery worker passes, loop, PID file), verify-lock.ts
+                 (recovery worker passes, loop, PID file), verify-lock.ts, tickets.ts (shared by
+                 the CLI and /api/tickets), ticket-import.ts
   server/        http.ts (loopback server, guards, static), api.ts (read models), status.ts
                  (derived liveness, blockers, CI view), types.ts (shared with web/)
 web/             Vite + React + MUI dashboard: index.html, src/*.tsx, vite.config.ts -> web/dist
@@ -208,6 +210,11 @@ orch factory cancel <id> --reason <r> [--session <name>] [--force]   # exit 4 if
 orch factory check-readonly <id> --fingerprint <f>
 orch factory config
 orch job session attach <id> --provider vscode-agents|claude-code --ref <link|uuid> [--cwd <dir>] [--token <t>]
+
+orch ticket add|list|order|ready|blocked|next|show|history|jobs|edit|note|start|done|drop|reopen|duplicate
+orch ticket dep|related add|remove <id> <other>
+orch ticket area list|add, asset add <id> <file>, import [--dir <d>] [--dry-run]   # docs/tickets.md
+orch factory start|dispatch --ticket <id>   # a job for a ticket, claimed in one transaction
 
 orch ui [--port <n>] [--open]          # long-running, optional; loopback only
 orch recover start|stop|status [--json] # opt-in recovery worker (detached, PID file in the data dir)

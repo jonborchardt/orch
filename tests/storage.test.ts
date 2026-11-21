@@ -76,6 +76,10 @@ describe('openStore', () => {
         'integrations',
         'jobs',
         'reviews',
+        'ticket_areas',
+        'ticket_events',
+        'ticket_links',
+        'tickets',
         'verification_checks',
         'verification_runs',
       ]);

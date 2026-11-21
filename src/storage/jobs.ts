@@ -44,6 +44,7 @@ import { findArtifact, listArtifacts, upsertArtifact, validateArtifact } from '.
 import type { Db, Store } from './client.ts';
 import { appendEvent, eventsOfTypes, latestEventsByJob, listEvents } from './events.ts';
 import { type Artifact, type Event, type Job, jobs, type Review, reviews } from './schema.ts';
+import { claimTicketForJob } from './tickets.ts';
 
 export interface CreateJobInput {
   title: string;
@@ -56,6 +57,8 @@ export interface CreateJobInput {
   maxRounds?: number | undefined;
   maxCiRepairs?: number | undefined;
   actor?: string | undefined;
+  /** Ticket the job works on: claimed (checked, marked in progress, linked) in the same transaction. */
+  ticketId?: number | undefined;
 }
 
 export interface Auth {
@@ -82,10 +85,14 @@ export function createJob(store: Store, input: CreateJobInput): Job {
   const id = `job-${randomBytes(4).toString('hex')}`;
   const job = store.db.transaction(
     (tx) => {
+      if (input.ticketId !== undefined) {
+        claimTicketForJob(tx, input.ticketId, { id, ...input }, input.actor ?? null, ts);
+      }
       const row = tx
         .insert(jobs)
         .values({
           id,
+          ticketId: input.ticketId ?? null,
           title: input.title,
           description: input.description ?? null,
           repo: input.repo,
@@ -115,6 +122,21 @@ export function createJob(store: Store, input: CreateJobInput): Job {
   );
   mkdirSync(jobArtifactDir(id, store.paths), { recursive: true });
   return job;
+}
+
+/**
+ * Associate an existing ticketless job with a ticket (the register import). Metadata: no revision
+ * bump, no lease. False when the job is missing or already has a ticket.
+ */
+export function linkJobToTicket(tx: Db, jobId: string, ticketId: number): boolean {
+  return (
+    tx
+      .update(jobs)
+      .set({ ticketId })
+      .where(and(eq(jobs.id, jobId), isNull(jobs.ticketId)))
+      .returning({ id: jobs.id })
+      .all().length === 1
+  );
 }
 
 export function getJob(db: Db, id: string): Job {

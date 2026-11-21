@@ -48,6 +48,7 @@ import type { Artifact, Event, Integration, Job, Review } from '../storage/schem
 import { latestRun, listIntegrations } from '../storage/verification.ts';
 import { issue as ghIssue } from './github.ts';
 import { jobRepository } from './repo.ts';
+import { ticketJobRequest } from './tickets.ts';
 import {
   currentFlakes,
   effectivePolicy,
@@ -735,6 +736,8 @@ export interface StartInput {
   session: string;
   cwd: string;
   ui?: boolean | undefined;
+  /** Ticket the job works on; its title and body are the defaults for title and description. */
+  ticket?: string | number | undefined;
 }
 
 export interface StartResult {
@@ -745,6 +748,11 @@ export interface StartResult {
 
 /** Create, claim, and give a worktree to a new job in one step; returns the first plan. */
 export function startJob(store: Store, input: StartInput): StartResult {
+  // The session works where it stands, so the ticket must belong to that repository.
+  const forTicket =
+    input.ticket === undefined
+      ? undefined
+      : ticketJobRequest(store, input.ticket, input.repo ?? input.cwd);
   const { repo, base } = jobRepository(input.repo ?? input.cwd, input.base);
   let title = input.title;
   let description = input.description;
@@ -753,12 +761,18 @@ export function startJob(store: Store, input: StartInput): StartResult {
     if (!title) ({ title } = found); // also replaces an empty --title, as before
     description ??= `${found.url}\n\n${found.body}`;
   }
-  if (!title)
-    throw new ValidationError('Provide --title (or --issue so the title can be fetched).');
+  if (title === undefined || title === '') title = forTicket?.title;
+  description ??= forTicket?.description;
+  if (!title) {
+    throw new ValidationError(
+      'Provide --title (or --issue or --ticket so the title can be fetched).',
+    );
+  }
   const config = loadConfig(store);
   const job = createJob(store, {
     title,
     description,
+    ticketId: forTicket?.ticket.id,
     issueRef: input.issue,
     repo: repo.identity,
     repoPath: repo.root,

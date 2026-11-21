@@ -8,7 +8,8 @@ import { dashboardAction } from '../src/ops/actions.ts';
 import { prStatus } from '../src/ops/github.ts';
 import { detail } from '../src/server/api.ts';
 import { listEvents } from '../src/storage/events.ts';
-import { getJob, listJobs } from '../src/storage/jobs.ts';
+import { addTicket, showTicket, ticketAction } from '../src/ops/tickets.ts';
+import { getJob, linkJobToTicket, listJobs } from '../src/storage/jobs.ts';
 import { type Ctx, head, start, toCi } from './drive.ts';
 import { checks, clone, job, reconcile, run, shim, store } from './ci-fixture.ts';
 
@@ -70,11 +71,21 @@ describe('fix-conflicts from GitHub CONFLICTING, and the completed re-land', () 
       dashboardAction(store, c.id, { action: 'refresh-pr', force: true });
     }
 
+    // The finished job worked on a ticket: its re-land works on the same one.
+    const ticket = addTicket(store, { title: 'CSV export', repo: clone });
+    ticketAction(store, ticket.id, { action: 'start' });
+    expect(linkJobToTicket(store.db, c.id, ticket.id)).toBe(true);
+
     const r = dashboardAction(store, c.id, { action: 'fix-conflicts', force: true });
     const jobs = listJobs(store.db);
     expect(jobs).toHaveLength(count + 1);
     const next = jobs.find((j) => j.id !== c.id && j.supersededBy === null);
     if (!next) throw new Error('no re-land job');
+    expect(next.ticketId).toBe(ticket.id);
+    expect(showTicket(store, ticket.id)).toMatchObject({
+      ticket: { status: 'in-progress', activeJob: next.id },
+      jobs: [{ id: c.id }, { id: next.id }],
+    });
     expect(next).toMatchObject({
       title: `${done.title} (re-land)`,
       stage: 'spec',

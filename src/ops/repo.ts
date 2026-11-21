@@ -163,12 +163,24 @@ export function findJobs(store: Store, filter: JobFilter): Job[] {
     stage: filter.stage,
   });
   if (path === undefined) return jobs;
+  return jobs.filter(inRepositoryAt(path));
+}
+
+/**
+ * Predicate for rows (jobs, tickets) of the repository at `path`: recorded in that local
+ * repository (by common directory, so a stale stored identity still matches) or, when it has a
+ * remote, in another clone of the same remote.
+ */
+export function inRepositoryAt(path: string): (row: { repo: string; repoPath: string }) => boolean {
   const info = describeRepo(path);
   const key = localRepoKey(path);
-  // ponytail: one git call per job of another identity; index a stored key if lists get long.
-  return jobs.filter(
-    (j) =>
-      (info.remote !== undefined && j.repo === info.remote) ||
-      (key !== undefined && localRepoKey(j.repoPath) === key),
-  );
+  // ponytail: one git call per distinct recorded checkout; index a stored key if lists get long.
+  const keys = new Map<string, string | undefined>();
+  const keyOf = (p: string) => {
+    if (!keys.has(p)) keys.set(p, localRepoKey(p));
+    return keys.get(p);
+  };
+  return (row) =>
+    (info.remote !== undefined && row.repo === info.remote) ||
+    (key !== undefined && keyOf(row.repoPath) === key);
 }
