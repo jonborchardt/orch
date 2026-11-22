@@ -926,4 +926,46 @@ describe('a PR that changes .github/workflows/ needs a human merge', () => {
       rmSync(graftFile, { force: true });
     }
   });
+
+  it('a shallow file that moves the merge base cannot hide a workflow change', () => {
+    // X reverts the base's workflow commit; the head merges X with the base's parent. Marking X
+    // shallow drops its parents, so merge-base falls back to that parent, which has no workflow.
+    const parent = gitIn(wf.clone, 'rev-parse', 'origin/main^');
+    const x = branch('wf-shallow', () => {
+      gitIn(wf.clone, 'rm', '-q', WORKFLOW);
+      commitFile(wf.clone, 'c.txt', 'c\n');
+    });
+    const head = gitIn(
+      wf.clone,
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'commit-tree',
+      `${x}^{tree}`,
+      '-p',
+      x,
+      '-p',
+      parent,
+      '-m',
+      'merge',
+    );
+    const shallowFile = gitIn(
+      wf.clone,
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-path',
+      'shallow',
+    );
+    expect(gitIn(wf.clone, 'merge-base', 'origin/main', head)).not.toBe(parent);
+    writeFileSync(shallowFile, `${x}\n`);
+    try {
+      expect(gitIn(wf.clone, 'merge-base', 'origin/main', head)).toBe(parent);
+      const job = jobAt(head);
+      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+      expect(merges()).toHaveLength(0);
+    } finally {
+      rmSync(shallowFile, { force: true });
+    }
+  });
 });

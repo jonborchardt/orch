@@ -212,9 +212,20 @@ function changesWorkflows(cwd: string, job: Job): boolean {
   // onto the head; --no-replace-objects does not turn it off, so its presence fails closed.
   const grafts = tryGit(cwd, 'rev-parse', '--git-path', 'info/grafts');
   if (!grafts || existsSync(resolve(cwd, grafts))) return true;
+  // A shallow file cuts parents the same way; anything but an exact "false" fails closed.
+  if (tryGit(cwd, 'rev-parse', '--is-shallow-repository') !== 'false') return true;
   // --no-replace-objects: a refs/replace/* entry cannot substitute a commit or tree that hides
-  // the change from the guard.
-  const mergeBase = tryGit(cwd, '--no-replace-objects', 'merge-base', base, job.ciHead);
+  // the change from the guard. core.commitGraph=false: merge-base reads parents from the commit
+  // objects, not from a commit-graph file Git does not check against them.
+  const mergeBase = tryGit(
+    cwd,
+    '--no-replace-objects',
+    '-c',
+    'core.commitGraph=false',
+    'merge-base',
+    base,
+    job.ciHead,
+  );
   if (!mergeBase) return true;
   // -z: unquoted names, so an odd character cannot hide the prefix.
   const names = tryGit(

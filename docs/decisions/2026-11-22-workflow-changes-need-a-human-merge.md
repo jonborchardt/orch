@@ -12,8 +12,12 @@ change), matched by the pure `touchesWorkflows` (prefix `.github/workflows/`, or
 appears; case-insensitive), so an addition, edit, deletion, or rename (both sides) counts. When Git
 cannot answer, the value is true: fail closed. A graft file (`git rev-parse --git-path
 info/grafts`, which honours `GIT_GRAFT_FILE`) also makes it true, since a graft rewrites parents,
-can make the head its own merge base, and is not turned off by `--no-replace-objects`. The rule
-applies to every repository, whatever its verification authority.
+can make the head its own merge base, and is not turned off by `--no-replace-objects`. A shallow
+repository does too (anything but `false` from `git rev-parse --is-shallow-repository`), since a
+shallow file cuts parents the same way and can move the merge base to an older commit that hides
+the change. The merge base is read with `-c core.commitGraph=false`, so a crafted commit-graph
+file cannot move it either. The rule applies to every repository, whatever its verification
+authority.
 
 **Exception to decision 042.** Decision 042 keeps sensitive paths (CI among them) labelled, not
 blocked, with reviewers as the control. This is the one place a path blocks, and only at merge
