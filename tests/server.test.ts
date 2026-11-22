@@ -134,6 +134,7 @@ describe('seeded board and detail', () => {
       state: 'draft',
       // Completed on GitHub's verdict while the PR stayed a draft.
       phase: 'ready-mark-failed',
+      refreshable: true,
     });
     expect(by(ids.completed).ci.status).toBe('failing');
     // A ci completion whose CI was later observed failing claims nothing beyond completed.
@@ -487,6 +488,48 @@ describe('elapsed time without completedAt', () => {
     const expected = Date.parse(event?.createdAt ?? '') - Date.parse(cancelled.createdAt);
     expect(elapsedOf(cancelled.id)).toBe(expected);
     expect(elapsedOf(bare.id)).toBeNull();
+  });
+});
+
+describe('board refresh flag (ticket 0053)', () => {
+  let own: TempStore;
+  beforeAll(() => {
+    own = tempStore();
+  });
+  afterAll(() => {
+    own.cleanup();
+  });
+
+  it('is true exactly where Refresh PR is allowed', () => {
+    const repoPath = tempDir('refresh-');
+    dirs.push(repoPath);
+    const pr = 'https://github.com/acme/alpha/pull/7';
+    const mk = (title: string, set: Partial<typeof jobs.$inferInsert>) => {
+      const { id } = createJob(own, {
+        title,
+        description: title,
+        repo: 'r',
+        repoPath,
+        baseBranch: 'main',
+      });
+      own.db.update(jobs).set(set).where(eq(jobs.id, id)).run();
+      return id;
+    };
+    const done = { stage: 'completed', status: 'completed' } as const;
+    const cases: [string, boolean][] = [
+      [mk('finished, open PR', { ...done, prUrl: pr, prState: 'ready' }), true],
+      [
+        mk('needs human', { stage: 'needs-human', status: 'blocked', prUrl: pr, prState: 'draft' }),
+        true,
+      ],
+      [mk('no PR', done), false],
+      [mk('merged', { ...done, prUrl: pr, prState: 'merged' }), false],
+      [mk('in ci', { stage: 'ci', status: 'running', prUrl: pr, prState: 'draft' }), false],
+    ];
+    const rows = board(own);
+    for (const [id, refreshable] of cases) {
+      expect(rows.find((r) => r.id === id)?.pr.refreshable).toBe(refreshable);
+    }
   });
 });
 

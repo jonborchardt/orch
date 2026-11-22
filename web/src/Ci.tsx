@@ -49,7 +49,16 @@ const PHASE: Record<PrPhase, { glyph: string; label: string; color: ChipColor; t
 };
 
 /** Where the PR stands in delivery, as orch last recorded it. */
-export function PrPhaseChip({ phase }: { phase: PrPhase }) {
+export function PrPhaseChip({
+  phase,
+  onClick,
+  disabled,
+}: {
+  phase: PrPhase;
+  /** Set only where Refresh PR is allowed: the chip becomes a button that runs it. */
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
   const p = PHASE[phase];
   return (
     <Chip
@@ -62,7 +71,9 @@ export function PrPhaseChip({ phase }: { phase: PrPhase }) {
       variant="outlined"
       size="small"
       data-phase={phase}
-      title={p.title}
+      title={onClick ? `${p.title} Click to refresh the PR state from GitHub.` : p.title}
+      onClick={onClick}
+      disabled={disabled}
     />
   );
 }

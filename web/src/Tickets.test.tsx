@@ -69,7 +69,7 @@ function job(n: number, over: Partial<BoardRow> = {}): BoardRow {
     liveness: 'running',
     outcome: null,
     updatedAt: '2026-11-20T09:00:00.000Z',
-    pr: { url: null, state: null, phase: 'no-pr' },
+    pr: { url: null, state: null, phase: 'no-pr', refreshable: false },
     ...over,
   } as BoardRow;
 }
@@ -281,7 +281,12 @@ beforeEach(() => {
         status: 'completed',
         liveness: 'completed',
         outcome: { kind: 'merged', label: 'completed: merged' },
-        pr: { url: 'https://github.com/acme/alpha/pull/6', state: 'merged', phase: 'merged' },
+        pr: {
+          url: 'https://github.com/acme/alpha/pull/6',
+          state: 'merged',
+          phase: 'merged',
+          refreshable: false,
+        },
       }),
       job(7, { stage: 'ci', status: 'pending', liveness: 'idle' }),
     ],
