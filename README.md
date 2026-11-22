@@ -171,6 +171,12 @@ plan reports `policy.authorization: required`, and a human accepts or rejects th
 dashboard. A repository with no policy cannot pass the gates until one is committed on the base
 branch. Details: [docs/workflow.md](docs/workflow.md#verification-evidence).
 
+A repository whose GitHub CI runs the full suite can add `"authority": "ci"` to `verification` and
+list only fast checks (typecheck, lint, format, build): the commit then goes to the draft PR and must
+pass CI before review and approval. The default, `local`, keeps today's order and suits a repository
+without CI. Details: [docs/workflow.md](docs/workflow.md#verification-authority). A PR that changes
+`.github/workflows/` is merged only by a human's click on the dashboard.
+
 The merge opt-in is off by default, per repository, and kept in your own `<config>/factory.json`,
 never in a repository. Model overrides, `maxRounds`, `maxCiRepairs`, and `runnerClaudeArgs` go in
 the same file (`orch factory config` prints it). The controller's Claude session gets

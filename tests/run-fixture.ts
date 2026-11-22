@@ -19,9 +19,10 @@ import { getJob } from '../src/storage/jobs.ts';
 import { type Event, type Job, jobs } from '../src/storage/schema.ts';
 import { ticketJobs } from '../src/storage/tickets.ts';
 import { makePolicyRepo } from './drive.ts';
-import { type GhShim, ghShim, type TempStore, tempStore } from './helpers.ts';
+import { type GhShim, ghShim, gitIn, type TempStore, tempStore } from './helpers.ts';
 
-export const SHA = 'a'.repeat(40);
+/** The verified head: a real commit (the clone's main), so the merge's workflow check reads it. */
+export let SHA = '';
 export const OTHER = 'b'.repeat(40);
 export const DEAD_PID = 2 ** 31 - 1;
 
@@ -36,6 +37,7 @@ beforeAll(() => {
   shim = ghShim('acme/alpha');
   Object.assign(process.env, shim.env);
   ({ clone, bare } = makePolicyRepo());
+  SHA = gitIn(clone, 'rev-parse', 'HEAD');
   beta = makePolicyRepo('git@github.com:acme/beta.git');
 });
 afterAll(() => {

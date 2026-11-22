@@ -123,6 +123,15 @@ spec → build → simplify → review → approve → pr → ci → completed
          any stage ── escalate ──→ needs-human ── resume --to <stage> ──→ back
 ```
 
+That is the order for `verification.authority` `local` (the default). Under `ci`
+([Verification authority](#verification-authority)) the same stages run in another order, with a
+pr/ci pass before review:
+
+```
+spec → build → simplify → pr → ci → review → approve → pr → ci → completed
+                          └ pre-review ┘                └ delivery ┘
+```
+
 **Stage** is where the job is; **status** is what is happening there:
 `pending`, `running`, `blocked`, `interrupted`, `completed`, `failed`, `cancelled`.
 
@@ -317,6 +326,14 @@ orchestrator's `factory.json`; stored per job); when spent, the next failure esc
 verdict for the current head is passing; `completed` therefore means "PR with passing required
 checks, which orch marked ready for review" (or reported why it could not), never "PR created".
 A human close-out (`resume --to completed`, the dashboard's Accept delivery) does not mark it ready.
+
+Under `verification.authority: "ci"` a passing verdict before an approval holds for HEAD is the
+pre-review pass: `orch gh ci` moves the job to `review` (event `stage.completed` with the head),
+leaves the PR a draft, calls no `gh pr ready`, and the session keeps its lease. Failing,
+infrastructure, `none`, outdated, and merged-by-a-human results act exactly as in the table, so
+nothing short of a passing verdict for HEAD reaches review; a human merge before review escalates,
+because the delivery gate still needs the approval. Only the pass after approval completes the job
+and marks the PR ready.
 
 ## Recovery worker
 
@@ -690,7 +707,10 @@ the first two, and only with `verified: true`: a merge recorded as unverified ex
 
 `blocked` codes: `no-pr`, `not-completed`, `wrong-completion`, `no-ci-evidence`, `superseded`,
 `wrong-repository`, `wrong-base`, `wrong-head-branch`, `pr-closed`, `pr-draft`, `head-changed`,
-`not-authorized`, `conflict` (only where re-landing was not asked for: the dashboard's Merge),
+`workflow-changed` (the job's diff from its merge base to `ciHead` adds, edits, deletes, or renames
+a file under `.github/workflows/`, matched case-insensitively, or Git could not tell; only the
+dashboard's Merge, a human's click, proceeds; decision
+2026-11-22-workflow-changes-need-a-human-merge), `not-authorized`, `conflict` (only where re-landing was not asked for: the dashboard's Merge),
 `second-conflict`, `reland-refused`, `github-refused`. The result also carries `jobId`, `ticketId`,
 `prUrl`, `base`, `prHead`, `verifiedHead`, `mergeCommit`, `verified`, `ticket`, and `relandJob`.
 
@@ -826,6 +846,56 @@ proposed file from the dashboard (**Accept verification policy**), which snapsho
 (`jobs.policy`) and makes every earlier run stale. A repository with no policy at the baseline
 gets `configuration-required`: the gate stays closed until a policy exists on the base branch or a
 proposed one is accepted. Nothing is invented.
+
+### Verification authority
+
+`verification.authority` says which run is the authoritative test gate. It is optional:
+
+```json
+{
+  "verification": {
+    "authority": "ci",
+    "commands": [
+      { "id": "typecheck", "command": "npm", "args": ["run", "typecheck"] },
+      { "id": "lint", "command": "npm", "args": ["run", "lint"] },
+      { "id": "format", "command": "npm", "args": ["run", "format:check"] },
+      { "id": "build", "command": "npm", "args": ["run", "build"] }
+    ]
+  }
+}
+```
+
+- `local` (the default, also when the key is absent): the policy's commands are the full checks,
+  tests included, and run locally; GitHub CI runs once more at the end, after approval. Use it for
+  a repository without GitHub CI, or whose CI does not run the full suite. Its fingerprint is the
+  same as before the key existed.
+- `ci`: GitHub CI is the one full test run. The policy's commands are only the fast checks (for
+  example typecheck, lint, format, build), and `orch verify` runs exactly those. The order becomes
+  spec → build → simplify → **pr → ci** → review → approve → pr → ci → completed: the verified
+  commit is pushed to the draft PR (no approval needed for this pre-review pass, the one exception
+  to decision 39), and review and approve complete only while `ciStatus` is `passing` with
+  `ciHead` equal to HEAD. The second pr/ci pass is today's delivery: it integrates the base if it
+  moved, pushes (a no-op when nothing changed), reuses the PR, re-reads GitHub for a fresh verdict,
+  and marks the PR ready. The pre-review pr pass and approve never integrate the base. Use it only
+  where required checks on the base branch run the full suite.
+
+Any commit moves HEAD, so a repair, a commit during review, or a commit after approval makes the
+verdict, the verdicts, and `decision.md` stale; under `ci` review and approval are refused until a
+new pr/ci pass passes for the new HEAD, and a commit after approval sends the job through review
+again instead of completing it. A token-bearing `orch gh pr status` records a rollup without a head,
+which clears `ciHead`: review then fails closed and a human runs `resume --to ci`. Changing the
+authority in the worktree is a policy change (`authority: local -> ci` in the refusal; local → ci
+counts as weakening) and needs **Accept verification policy**; the next transition follows the
+accepted authority (decision 2026-11-22-ci-authoritative-verification).
+
+**The CI repair budget under `ci`.** `maxCiRepairs` stays 2. Test failures that local verification
+used to catch now reach CI, so they spend repairs: each failure that survives the one automatic
+re-run sends the job to build with the saved logs and costs a whole CI cycle (push, wait, re-read)
+plus a new pr/ci pass before review. A re-run (`ci.rerun`) spends none, and neither do
+infrastructure failures, which escalate. A repository whose builds often fail tests in CI can raise
+the limit for new jobs with `maxCiRepairs` in the orchestrator's `factory.json`
+(`<config>/factory.json`, read when a job is created); a running job keeps the limit it was created
+with, and a human resuming a job blocked with `max CI repair cycles reached` decides its next step.
 
 **What a run records** (`verification_runs`, `verification_checks`): job, run id, commit and tree,
 dirty files (always none, since a dirty worktree is refused), the policy fingerprint and where it

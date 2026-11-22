@@ -349,8 +349,8 @@ Stop codes `src/ops/run.ts` can write:
 - `needs-human`, the outcome used as the code, when the job waits for a person;
 - any `blocked` code `mergeJob` returns (`MERGE_BLOCKS` in `src/core/workflow.ts`): `no-pr`,
   `not-completed`, `wrong-completion`, `no-ci-evidence`, `superseded`, `wrong-repository`,
-  `wrong-base`, `wrong-head-branch`, `pr-closed`, `pr-draft`, `head-changed`, `not-authorized`,
-  `conflict`, `second-conflict`, `reland-refused`, `github-refused`;
+  `wrong-base`, `wrong-head-branch`, `pr-closed`, `pr-draft`, `head-changed`, `workflow-changed`,
+  `not-authorized`, `conflict`, `second-conflict`, `reland-refused`, `github-refused`;
 - `merge-blocked`, the fallback when `mergeJob` blocks without a code.
 
 Nothing is written: for a cancelled job (its `job.cancelled` already says why); for a stop you
@@ -392,6 +392,9 @@ The controller reads CI with the same rules as `orch gh ci` ([workflow.md](workf
 <path>`) or click Merge on the dashboard, which needs no opt-in.
 - `blocked` / `head-changed`: the PR head is not the CI-verified head; a person looks at what
   moved the branch.
+- `blocked` / `workflow-changed`: the PR adds, edits, deletes, or renames a file under
+  `.github/workflows/` (or Git could not read the job's diff), so it changed what CI runs; a person
+  reviews the workflow change and clicks Merge on the dashboard. No setting lifts this.
 - `blocked` / `github-refused`: branch protection or a repository setting refused the merge; gh's
   message is recorded on `pr.merged` with `ok: false`.
 - `merged` or `already_merged` with `verified: false`, or a ticket that stays open: see

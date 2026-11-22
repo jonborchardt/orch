@@ -22,6 +22,7 @@ import { stripControl } from '../core/flake.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { DEFAULT_CONFIG } from '../core/roles.ts';
 import { SESSION_EVENT, type SessionRef } from '../core/session.ts';
+import type { Authority } from '../core/verification.ts';
 import {
   type Action,
   challengeSpecHash,
@@ -347,6 +348,10 @@ export interface TransitionOptions extends Auth {
   mergedByHuman?: boolean | undefined;
   /** See `TransitionContext.integration`; only `integrateBase` sets it. */
   integration?: boolean | undefined;
+  /** See `TransitionContext.authority`; computed by `ops/gates.ts` from the effective policy. */
+  authority?: Authority | undefined;
+  /** See `TransitionContext.approved`; only `completeCi` sets it. */
+  approved?: boolean | undefined;
 }
 
 export function transitionJob(
@@ -376,6 +381,8 @@ export function transitionJob(
       reason: opts.reason,
       mergedByHuman: opts.mergedByHuman,
       integration: opts.integration,
+      authority: opts.authority,
+      approved: opts.approved,
     });
   });
 }
