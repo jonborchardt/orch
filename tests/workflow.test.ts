@@ -36,6 +36,7 @@ function job(stage: Stage, status: Status, extra: Partial<JobState> = {}): JobSt
     ciRepairs: 0,
     maxCiRepairs: 2,
     scopeReworks: 0,
+    startedAt: null,
     ...extra,
   };
 }
@@ -98,6 +99,19 @@ const run = (j: JobState, action: Action, ctx = none) => transition(j, action, c
 const step = (j: JobState, action: Action, ctx = none): JobState => ({
   ...j,
   ...run(j, action, ctx).patch,
+});
+
+describe('transition: startedAt', () => {
+  it('stamps the first start once; a restart or the next stage keeps it', () => {
+    let j = step(job('spec', 'pending'), 'start');
+    const first = j.startedAt;
+    expect(first).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    j = step(j, 'fail');
+    expect(run(j, 'start').patch).not.toHaveProperty('startedAt');
+    j = step(step(j, 'start'), 'complete', { artifacts: passedSpec(), reviews: [] });
+    expect(run(j, 'start').patch).not.toHaveProperty('startedAt');
+    expect(step(j, 'start').startedAt).toBe(first);
+  });
 });
 
 describe('transition: happy path', () => {

@@ -247,6 +247,22 @@ const COLUMNS: Column[] = [
     cell: (r) => elapsedCell(r.elapsedMs),
   },
   {
+    id: 'started',
+    label: 'Started',
+    hint: 'When the job first started a stage (not when it was created). Restarts keep the first time.',
+    hideable: true,
+    hideBelow: COMPACT,
+    // ISO strings sort by time; unstarted jobs sort together, after every started one ascending.
+    sortValue: (r) => r.startedAt ?? '￿',
+    sx: { whiteSpace: 'nowrap' },
+    cell: (r) =>
+      r.startedAt ? (
+        <time dateTime={r.startedAt}>{new Date(r.startedAt).toLocaleString()}</time>
+      ) : (
+        '—'
+      ),
+  },
+  {
     id: 'updated',
     label: 'Updated',
     hideable: true,

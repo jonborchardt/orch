@@ -24,7 +24,10 @@ board rests while Tickets is. A further section is one entry in `SECTIONS` in `w
 and one branch where the page body is chosen.
 
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
-worktree, review round, reviews, elapsed time, last update, PR link and CI rollup. Elapsed is
+worktree, review round, reviews, elapsed time, start time, last update, PR link and CI rollup.
+Started is the local date and time of the job's first stage start (`jobs.startedAt`, stamped once
+by the first `start` transition, not at creation; `—` before then or for jobs older than the
+column), and unstarted jobs sort after started ones when ascending. Elapsed is
 wall-clock time from job creation until it completed or was cancelled (until now while active),
 blocked and waiting time included; a finished job's value stops at its terminal transition
 (`completedAt`, else its newest `job.completed` / `job.cancelled` event) and shows `Unknown` when
@@ -113,7 +116,7 @@ and Branch / worktree start hidden. The choice is a per-browser view preference 
 (`orch.board.hiddenColumns`), not job state. On a narrow display the board also hides columns by
 width, in CSS on top of that choice (a column the menu hides stays hidden; one it shows may still
 be hidden by width, and the menu does not say so): below 1024px it hides Repository, Session,
-Branch / worktree, Elapsed, Updated, Round, and Reviews, and below 900px also Stage. Job, Status,
+Branch / worktree, Elapsed, Started, Updated, Round, and Reviews, and below 900px also Stage. Job, Status,
 PR / CI, and Actions are never hidden by width; the Status cell wraps, and below 1024px the PR /
 CI cell wraps too and Job narrows, so they and every Archive, Copy resume, and PR control stay on screen at 800px.
 The table still scrolls sideways if real content is wider. The Actions column holds **Archive** on each finished,

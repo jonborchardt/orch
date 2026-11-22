@@ -259,6 +259,7 @@ type JobState = Pick<
   | 'ciRepairs'
   | 'maxCiRepairs'
   | 'scopeReworks'
+  | 'startedAt'
 >;
 
 /** Pure decision: throws WorkflowError when the action is illegal in the current state. */
@@ -279,7 +280,8 @@ export function transition(
       if (stage === 'needs-human') reject('resume with --to <stage> first');
       if (!['pending', 'failed', 'interrupted'].includes(status)) reject('stage is not startable');
       return {
-        patch: { status: 'running' },
+        // The job's first start is stamped once; restarts keep it.
+        patch: job.startedAt ? { status: 'running' } : { status: 'running', startedAt: now() },
         events: [{ type: 'stage.started', payload: { stage } }],
       };
     }

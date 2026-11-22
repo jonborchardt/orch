@@ -135,6 +135,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       blocking: blockingOf(artifacts, job.round),
       blocker: blockerOf(job, state, evidence),
       resume: resumeOf(job, state),
+      startedAt: job.startedAt,
       updatedAt: job.updatedAt,
       elapsedMs: span(job.createdAt, end),
       pr: {
