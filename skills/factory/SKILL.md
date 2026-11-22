@@ -294,7 +294,11 @@ interrupted attempt.
   commands in one script, so that a session killed while waiting leaves no scheduled write behind.
   When `plan.ci.release` is true, the plan's only command is `orch job release <id> --token <t>`:
   run it, tell the user CI is still running, give the resume command, and stop.
-- `complete`: the job is `completed`; `orch factory next` confirms `done`.
+- `complete`: usually the job is `completed`; `orch factory next` confirms `done`. In a repository
+  with `verification.authority: "ci"` the first pr/ci pass runs before review (simplify leads to
+  `pr`): there `complete` with `ready: null` moves the job to `review` and the PR stays a draft.
+  You still hold the job; follow `orch factory next` into review. Only the pass after approval
+  completes the job.
 - `rework`: the job is back in `build`. Give the builder the saved log paths and failing check
   names, and require a real fix, never weakening tests, checks, `factory.json`, or CI workflows.
 - `exhausted` or `escalate`: the job is in `needs-human`; handle it as above.

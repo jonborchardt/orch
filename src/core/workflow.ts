@@ -7,6 +7,7 @@
  */
 import { WorkflowError } from './errors.ts';
 import { ROLES } from './roles.ts';
+import type { Authority } from './verification.ts';
 import type { Artifact, Job, Review } from '../storage/schema.ts';
 
 export const STAGES = [
@@ -238,6 +239,16 @@ export interface TransitionContext {
    * it reworks like approve and pr, spending no CI repair.
    */
   integration?: boolean | undefined;
+  /**
+   * The effective policy's authority (default `local`). Under `ci` the order is simplify -> pr ->
+   * ci -> review -> approve -> pr -> ci -> completed: the first pr/ci pass runs before review.
+   */
+  authority?: Authority | undefined;
+  /**
+   * `ci` complete under `ci` only: the approval holds for HEAD (`requireApproved`). Without it the
+   * verdict is the pre-review pass and the job goes to review instead of completing.
+   */
+  approved?: boolean | undefined;
 }
 
 export interface TransitionResult {
@@ -302,6 +313,7 @@ export function transition(
       if (required && !artifact) reject(`missing required artifact ${required}`);
       const completed = { type: 'stage.completed', payload: { stage, round: job.round } };
       const blocking = blockingCount(ctx.artifacts, job.round);
+      const ciFirst = ctx.authority === 'ci';
       switch (stage) {
         case 'spec': {
           const refused = scopeGapSpecRefusal(ctx.artifacts) ?? specChallengeRefusal(ctx.artifacts);
@@ -315,7 +327,11 @@ export function transition(
             events: [completed],
           };
         case 'simplify':
-          return { patch: { stage: 'review', status: 'pending' }, events: [completed] };
+          // Under `ci` the verified commit goes through GitHub CI before anyone reviews it.
+          return {
+            patch: { stage: ciFirst ? 'pr' : 'review', status: 'pending' },
+            events: [completed],
+          };
         case 'review':
           return completeReview(job, ctx, blocking, completed);
         case 'approve': {
@@ -335,8 +351,12 @@ export function transition(
         }
         case 'pr': {
           if (!job.prUrl) reject('record the PR first (orch job pr)');
-          // Reaching pr by a human `--to pr` is allowed; finishing without an approval is not.
-          if (ctx.artifacts.find((a) => a.path === 'decision.md')?.marker !== 'approve') {
+          // Reaching pr by a human `--to pr` is allowed; finishing without an approval is not,
+          // except under `ci`, whose pre-review pass has none yet (the delivery gate decides).
+          if (
+            !ciFirst &&
+            ctx.artifacts.find((a) => a.path === 'decision.md')?.marker !== 'approve'
+          ) {
             reject('no DECISION: APPROVE is registered in decision.md');
           }
           return { patch: { stage: 'ci', status: 'pending' }, events: [completed] };
@@ -351,11 +371,20 @@ export function transition(
           }
           // A human merged the PR at the verified, approved HEAD before the checks finished.
           const merged = ctx.mergedByHuman === true;
+          const preReview = ciFirst && ctx.approved !== true;
+          if (merged && preReview) reject('a PR merged before review cannot complete the job');
           if (merged && job.prState !== 'merged') reject('the PR is not recorded as merged');
           if (!merged && job.ciStatus !== 'passing') {
             reject(
               `required checks are ${job.ciStatus ?? 'not observed'} for the PR head; run orch gh ci`,
             );
+          }
+          if (preReview) {
+            // The pre-review pass: CI passed for this exact commit, so reviewers may judge it.
+            return {
+              patch: { stage: 'review', status: 'pending' },
+              events: [{ ...completed, payload: { ...completed.payload, head: job.ciHead } }],
+            };
           }
           const payload = {
             prUrl: job.prUrl,
@@ -605,6 +634,7 @@ export const MERGE_BLOCKS = [
   'pr-closed',
   'pr-draft',
   'head-changed',
+  'workflow-changed',
   'not-authorized',
   'conflict',
   'second-conflict',
@@ -643,6 +673,26 @@ export interface MergeFacts {
   authorized: boolean;
   /** This job already replaced another one, so a conflict here is the second. */
   isReland: boolean;
+  /**
+   * The job's diff (merge base to `ciHead`) touches `.github/workflows/`, or that could not be
+   * determined. Such a PR changed what CI runs, so only a human's click merges it
+   * (decision 2026-11-22-workflow-changes-need-a-human-merge).
+   */
+  changesWorkflows: boolean;
+  /** The merge is a human's dashboard click. */
+  byHuman: boolean;
+}
+
+/** True when any of `paths` (repository-relative, `/` or `\`) is under `.github/workflows/`. */
+export function touchesWorkflows(paths: readonly string[]): boolean {
+  return paths.some((p) =>
+    p
+      .split('\\')
+      .join('/')
+      .replace(/^\.\/+/, '')
+      .toLowerCase()
+      .startsWith('.github/workflows/'),
+  );
 }
 
 /**
@@ -723,6 +773,13 @@ export function mergeDecision(
     return blocked(
       'head-changed',
       `the PR head is ${short(pr.headSha)}, not the verified ${short(evidence)}: commits nobody verified`,
+    );
+  }
+  if (facts.changesWorkflows && !facts.byHuman) {
+    return blocked(
+      'workflow-changed',
+      'the PR changes .github/workflows/ (or that could not be checked), which decides what CI runs; ' +
+        'only a human merges it (Merge on the dashboard)',
     );
   }
   if (!facts.authorized) {

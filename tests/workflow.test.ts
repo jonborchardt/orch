@@ -9,12 +9,16 @@ import {
   completionOf,
   describeNext,
   latestChallenge,
+  type LivePr,
+  MAX_CI_REPAIRS_REASON,
   MAX_ROUNDS_REASON,
+  mergeDecision,
   requiredArtifact,
   SCOPE_GAP_REASON,
   type Stage,
   STAGES,
   type Status,
+  touchesWorkflows,
   transition,
   type TransitionContext,
 } from '../src/core/workflow.ts';
@@ -850,5 +854,152 @@ describe('describeNext / requiredArtifact', () => {
     });
     const done = describeNext({ stage: 'completed', status: 'completed', round: 1 });
     expect(done.requiredArtifacts).toEqual([]);
+  });
+});
+
+describe('transition: authority ci runs CI before review', () => {
+  const ciCtx: TransitionContext = { ...none, authority: 'ci' };
+  const atCi = (extra: Partial<JobState> = {}) =>
+    job('ci', 'running', {
+      round: 1,
+      prUrl: 'https://x/pr/1',
+      prState: 'draft',
+      ciStatus: 'passing',
+      ciHead: 'abc',
+      ...extra,
+    });
+
+  it('walks simplify -> pr -> ci -> review -> approve -> pr -> ci -> completed', () => {
+    let j = job('simplify', 'running', { round: 1 });
+    j = step(j, 'complete', { ...ciCtx, artifacts: simplified(1) });
+    expect([j.stage, j.status, j.round]).toEqual(['pr', 'pending', 1]);
+    j = step({ ...j, prUrl: 'https://x/pr/1', prState: 'draft' }, 'start');
+    // The pre-review pr pass has no decision.md yet.
+    j = step(j, 'complete', { ...ciCtx, artifacts: [art('pr.md')] });
+    expect([j.stage, j.status]).toEqual(['ci', 'pending']);
+    j = step({ ...j, ciStatus: 'passing', ciHead: 'abc' }, 'start');
+    const pre = run(j, 'complete', { ...ciCtx, approved: false });
+    expect(pre.patch).toEqual({ stage: 'review', status: 'pending' });
+    expect(pre.events).toEqual([
+      { type: 'stage.completed', payload: { stage: 'ci', round: 1, head: 'abc' } },
+    ]);
+    j = step({ ...j, ...pre.patch }, 'start');
+    j = step(j, 'complete', {
+      ...ciCtx,
+      artifacts: [art('round-1/consolidated.md')],
+      reviews: trio(1),
+    });
+    expect(j.stage).toBe('approve');
+    j = step(step(j, 'start'), 'complete', { ...ciCtx, artifacts: [art('decision.md')] });
+    expect(j.stage).toBe('pr');
+    j = step(step(j, 'start'), 'complete', {
+      ...ciCtx,
+      artifacts: [art('pr.md'), art('decision.md')],
+    });
+    expect(j.stage).toBe('ci');
+    const done = run(step(j, 'start'), 'complete', { ...ciCtx, approved: true });
+    expect(done.patch).toMatchObject({ stage: 'completed', status: 'completed' });
+    expect(done.events[1]?.payload).toEqual({ prUrl: 'https://x/pr/1', head: 'abc' });
+    expect(completionOf('completed', done.events[1]?.payload)).toBe('ci');
+  });
+
+  it('a pre-review ci pass never completes: no approval defaults to review, a merge is refused', () => {
+    expect(run(atCi(), 'complete', ciCtx).patch).toEqual({ stage: 'review', status: 'pending' });
+    expect(() =>
+      run(atCi({ prState: 'merged' }), 'complete', { ...ciCtx, mergedByHuman: true }),
+    ).toThrow(/merged before review/);
+    for (const ciStatus of ['pending', 'failing', 'none'] as const) {
+      expect(() => run(atCi({ ciStatus }), 'complete', ciCtx)).toThrow(
+        new RegExp(`required checks are ${ciStatus}`),
+      );
+    }
+  });
+
+  it('failing CI in the pre-review pass reworks with a repair, and blocks after maxCiRepairs', () => {
+    const r = run(atCi({ ciStatus: 'failing' }), 'rework', { ...ciCtx, reason: 'test failed' });
+    expect(r.patch).toMatchObject({ stage: 'build', ciRepairs: 1 });
+    const exhausted = run(atCi({ ciStatus: 'failing', ciRepairs: 2 }), 'rework', ciCtx);
+    expect(exhausted.patch).toMatchObject({ stage: 'needs-human', status: 'blocked' });
+    expect(exhausted.events[0]?.payload['reason']).toBe(MAX_CI_REPAIRS_REASON);
+  });
+
+  it('local (or no authority) keeps every branch as it was', () => {
+    for (const ctx of [none, { ...none, authority: 'local' as const }]) {
+      expect(
+        run(job('simplify', 'running', { round: 1 }), 'complete', {
+          ...ctx,
+          artifacts: simplified(1),
+        }).patch.stage,
+      ).toBe('review');
+      expect(() =>
+        run(job('pr', 'running', { prUrl: 'https://x/pr/1' }), 'complete', {
+          ...ctx,
+          artifacts: [art('pr.md')],
+        }),
+      ).toThrow(/no DECISION: APPROVE/);
+      // `approved` means nothing without `ci`.
+      expect(run(atCi(), 'complete', { ...ctx, approved: false }).patch.stage).toBe('completed');
+    }
+  });
+});
+
+describe('mergeDecision: workflow changes need a human', () => {
+  const ok: LivePr = {
+    url: 'https://github.com/acme/alpha/pull/1',
+    state: 'OPEN',
+    isDraft: false,
+    repo: 'github.com/acme/alpha',
+    isCrossRepository: false,
+    baseRefName: 'main',
+    headRefName: 'factory/j',
+    headSha: 'abc',
+    mergeable: 'MERGEABLE',
+  };
+  const done = {
+    stage: 'completed' as const,
+    repo: 'github.com/acme/alpha',
+    baseBranch: 'main',
+    branch: 'factory/j',
+    ciStatus: 'passing' as const,
+    ciHead: 'abc',
+    supersededBy: null,
+  };
+  const facts = { completion: 'ci' as const, authorized: true, isReland: false };
+
+  it('blocks changesWorkflows without byHuman, after head-changed and before not-authorized', () => {
+    const wf = { ...facts, changesWorkflows: true, byHuman: false };
+    expect(mergeDecision(done, ok, wf)).toMatchObject({
+      step: 'blocked',
+      code: 'workflow-changed',
+    });
+    expect(mergeDecision(done, ok, { ...wf, authorized: false })).toMatchObject({
+      code: 'workflow-changed',
+    });
+    expect(mergeDecision(done, { ...ok, headSha: 'def' }, wf)).toMatchObject({
+      code: 'head-changed',
+    });
+    // A PR GitHub already merged is only recorded, as before.
+    expect(mergeDecision(done, { ...ok, state: 'MERGED' }, wf)).toMatchObject({ step: 'record' });
+  });
+
+  it('proceeds for a human, and for a diff that leaves workflows alone', () => {
+    expect(mergeDecision(done, ok, { ...facts, changesWorkflows: true, byHuman: true })).toEqual({
+      step: 'merge',
+      head: 'abc',
+    });
+    expect(mergeDecision(done, ok, { ...facts, changesWorkflows: false, byHuman: false })).toEqual({
+      step: 'merge',
+      head: 'abc',
+    });
+  });
+
+  it('touchesWorkflows matches the prefix case-insensitively and nothing else', () => {
+    expect(touchesWorkflows(['.github/workflows/ci.yml'])).toBe(true);
+    expect(touchesWorkflows(['src/a.ts', '.GitHub/Workflows/CI.yml'])).toBe(true);
+    expect(touchesWorkflows(['.github\\workflows\\ci.yml'])).toBe(true);
+    expect(
+      touchesWorkflows(['.github/CODEOWNERS', 'workflows/ci.yml', 'a/.github/workflows/x']),
+    ).toBe(false);
+    expect(touchesWorkflows([])).toBe(false);
   });
 });

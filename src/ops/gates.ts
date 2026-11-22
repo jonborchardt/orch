@@ -19,6 +19,7 @@ import {
   ticketKey,
   unaccountedItems,
 } from '../core/tickets.ts';
+import { type Authority, authorityOf } from '../core/verification.ts';
 import { type Action, requiredArtifact, simplifyArtifact } from '../core/workflow.ts';
 import { findArtifact, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
@@ -100,7 +101,10 @@ function requireAuthorizedPolicy(
     throw new ValidationError(
       `${what} is refused: the worktree's factory.json changes the verification policy ` +
         `(added: ${eff.diff.added.join(', ') || 'none'}; removed: ${eff.diff.removed.join(', ') || 'none'}; ` +
-        `modified: ${eff.diff.modified.join(', ') || 'none'}${eff.candidateError ? `; ${eff.candidateError}` : ''}). ` +
+        `modified: ${eff.diff.modified.join(', ') || 'none'}` +
+        (eff.diff.authority ? `; authority: ${eff.diff.authority}` : '') +
+        (eff.candidateError ? `; ${eff.candidateError}` : '') +
+        '). ' +
         'A human must accept it (dashboard: accept-policy) or the change must be reverted.',
     );
   }
@@ -209,20 +213,33 @@ function requireApproved(store: Store, job: Job, tree: Tree, what: string): void
   }
 }
 
+/** Whether `requireApproved` holds for HEAD. */
+function approvalHolds(store: Store, job: Job, tree: Tree): boolean {
+  try {
+    requireApproved(store, job, tree, 'delivery');
+    return true;
+  } catch (err) {
+    if (err instanceof ValidationError) return false;
+    throw err;
+  }
+}
+
 /**
  * Delivery (push, PR creation, completing pr or ci) needs a clean HEAD that is the approved
  * commit (plus clean base merges), verified under an authorized policy; `what` names the
  * operation in the refusal. Every delivery path calls this, so the approval binds what is
- * pushed and what counts as delivered alike.
+ * pushed and what counts as delivered alike. `preReview` (only from `deliveryGate`) drops the
+ * approval check for the pre-review pass under `ci`; everything else still holds.
  */
 export function requireDeliverable(
   store: Store,
   job: Job,
   tree: Tree,
   what = `completing ${job.stage}`,
+  preReview = false,
 ): void {
   requireClean(tree, `${what} must describe a committed state.`);
-  requireApproved(store, job, tree, what);
+  if (!preReview) requireApproved(store, job, tree, what);
   // GitHub's verdict counts only for the commit it was read for.
   if (job.stage === 'ci' && job.ciHead !== tree.head) {
     throw new ValidationError(
@@ -233,6 +250,48 @@ export function requireDeliverable(
   const eff = effectivePolicy(job, tree);
   requireVerified(store, job, tree, what, eff);
   requireAuthorizedPolicy(job, tree, what, eff);
+}
+
+export interface DeliveryPass {
+  authority: Authority;
+  /** The approval holds for HEAD; false only for the pre-review pass under `ci`. */
+  approved: boolean;
+}
+
+/**
+ * The gate of push, `pr create`, pr complete and ci complete. Under `ci`, while no approval holds
+ * for HEAD, this is the pre-review pass: `requireDeliverable` without the approval check (clean,
+ * verified at HEAD, authorized policy, and in ci a verdict for HEAD). Otherwise it is
+ * `requireDeliverable` itself (decision 2026-11-22-ci-authoritative-verification).
+ */
+export function deliveryGate(
+  store: Store,
+  job: Job,
+  tree: Tree,
+  what = `completing ${job.stage}`,
+): DeliveryPass {
+  const authority = authorityOf(effectivePolicy(job, tree).policy);
+  const preReview = authority === 'ci' && !approvalHolds(store, job, tree);
+  requireDeliverable(store, job, tree, what, preReview);
+  return { authority, approved: !preReview };
+}
+
+/** Whether this job is in the pre-review pass (`ci` authority, no approval for HEAD). */
+export function isPreReview(store: Store, job: Job, tree: Tree): boolean {
+  return (
+    authorityOf(effectivePolicy(job, tree).policy) === 'ci' && !approvalHolds(store, job, tree)
+  );
+}
+
+/** Under `ci`, review and approval judge only a commit GitHub CI passed. */
+function requireCiPassed(job: Job, tree: Tree, what: string): void {
+  if (job.ciStatus === 'passing' && job.ciHead === tree.head) return;
+  throw new ValidationError(
+    `${what} is refused: the repository makes GitHub CI the test gate (verification.authority "ci"), ` +
+      `and CI is ${job.ciStatus ?? 'not observed'} for ${job.ciHead?.slice(0, 7) ?? 'no commit'}, ` +
+      `not passing for HEAD ${tree.head.slice(0, 7)}. Run a pr/ci pass for HEAD first ` +
+      `(a human: orch factory resume ${job.id} --to pr).`,
+  );
 }
 
 /** `requireDeliverable`'s refusal as text, or null when delivery is allowed. */
@@ -254,8 +313,8 @@ export function deliverableRefusal(store: Store, job: Job, tree: Tree): string |
  */
 export function completeCi(store: Store, id: string, auth: TransitionOptions): Job {
   const job = authorize(store, id, auth);
-  requireDeliverable(store, job, requireWorktree(job, 'completing ci'));
-  return transitionJob(store, id, 'complete', auth);
+  const pass = deliveryGate(store, job, requireWorktree(job, 'completing ci'));
+  return transitionJob(store, id, 'complete', { ...auth, ...pass });
 }
 
 /**
@@ -336,7 +395,24 @@ export function transitionGuarded(
     }
     if (job.stage === 'approve') requireChecklistAccounted(store, job);
     if (job.stage === 'pr') {
-      requireDeliverable(store, job, requireWorktree(job, 'completing pr'));
+      const pass = deliveryGate(store, job, requireWorktree(job, 'completing pr'));
+      return transitionJob(store, id, action, { ...opts, authority: pass.authority });
+    }
+    if (job.stage === 'simplify' || job.stage === 'review' || job.stage === 'approve') {
+      // The authority decides where simplify leads, and whether review and approve need CI first.
+      // Without a worktree or a base the stage's own evidence checks refuse; local is assumed.
+      let info: Tree | null = null;
+      let authority: Authority | undefined;
+      try {
+        info = worktreeOf(job);
+        authority = info ? authorityOf(effectivePolicy(job, info).policy) : undefined;
+      } catch (err) {
+        if (!(err instanceof ValidationError)) throw err;
+      }
+      if (info && authority === 'ci' && job.stage !== 'simplify') {
+        requireCiPassed(job, info, `completing ${job.stage}`);
+      }
+      return transitionJob(store, id, action, { ...opts, authority });
     }
   }
   return transitionJob(store, id, action, opts);

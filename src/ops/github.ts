@@ -54,7 +54,7 @@ import {
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
-import { completeCi, deliverableRefusal, requireDeliverable } from './gates.ts';
+import { completeCi, deliverableRefusal, deliveryGate } from './gates.ts';
 import { type Tree, worktreeOf } from './tree.ts';
 import { cap } from './verify.ts';
 
@@ -101,13 +101,14 @@ export interface PushResult {
 /**
  * Only approved, verified code leaves the machine: pushing and PR creation happen in the pr stage,
  * and the delivery gate (approval, clean base merges only, verified HEAD, authorized policy)
- * holds for this exact HEAD.
+ * holds for this exact HEAD. Under `ci` before approval, the pre-review pass pushes verified
+ * code to the draft PR without the approval (`deliveryGate`).
  */
 function requireApprovedHead(store: Store, job: Job, tree: Tree): void {
   if (job.stage !== 'pr') {
     throw new ValidationError(`Pushing is allowed in the pr stage only (job is in ${job.stage}).`);
   }
-  requireDeliverable(store, job, tree, 'delivering');
+  deliveryGate(store, job, tree, 'delivering');
 }
 
 /** `git push --set-upstream origin <branch>`; never force, never the base branch. */
@@ -556,9 +557,13 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     // The read and the completion are one operation: no stored verdict is ever reused.
     // A draft still needs its ready write, so the lease is held for it; that write releases it.
     updated = completeCi(store, id, { ...tok, holdLease: prState === 'draft', mergedByHuman });
-    // Strictly after the verdict commits: a failed or interrupted ready never undoes it, and is
-    // not retried (a human runs gh pr ready; the board still shows the PR as draft).
-    if (prState === 'draft') {
+    // Under `ci` before approval the verdict only moved the job to review: the PR stays a draft
+    // and the session keeps its lease. The ready write follows only a completed job.
+    if (updated.stage !== 'completed') {
+      ready = null;
+    } else if (prState === 'draft') {
+      // Strictly after the verdict commits: a failed or interrupted ready never undoes it, and is
+      // not retried (a human runs gh pr ready; the board still shows the PR as draft).
       readyError = markPrReady(pr.url, tree.path);
       updated = recordPrReady(store, id, { ...tok, head, error: readyError });
       ready = readyError === null ? 'marked' : 'failed';

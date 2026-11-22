@@ -48,6 +48,7 @@ import { claimJob, createJob, getJob, jobDetail, releaseJob, resumeJob } from '.
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
 import { getTicket } from '../storage/tickets.ts';
 import { latestRun, listIntegrations } from '../storage/verification.ts';
+import { isPreReview } from './gates.ts';
 import { issue as ghIssue } from './github.ts';
 import { jobRepository } from './repo.ts';
 import { ticketJobRequest } from './tickets.ts';
@@ -380,16 +381,20 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   let verification: VerificationStatus | null = null;
   let sensitive: SensitiveReport | null = null;
   let planProblem = '';
+  // Under `ci` before an approval holds for HEAD: the pr/ci pass runs before review.
+  let preReview = false;
   if (worktree?.head && worktree.baseRef) {
     const tree = { ...worktree, head: worktree.head };
     try {
       const eff = effectivePolicy(job, tree);
       verification = verificationStatus(store, job, tree, eff);
       sensitive = sensitiveReport(tree, eff);
+      preReview = isPreReview(store, job, tree);
     } catch (err) {
       planProblem = (err as Error).message;
     }
   }
+  const ciFirst = verification?.policy.authority === 'ci';
   const integration = listIntegrations(store.db, id)[0] ?? null;
   const required = requiredArtifact(job.stage, job.round);
   const observations = detail.events.filter((e) => e.type === 'ci.observed');
@@ -639,7 +644,10 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         `Simplify round ${String(job.round)}: the simplifier reviews the job's diff for over-engineering and writes ` +
         `${findings} without touching code; the builder applies the findings that make sense (never widening ` +
         `scope), commits if anything changed, runs orch verify (which returns the build's run when nothing ` +
-        `changed), and writes ${record} listing what was applied and each declined finding with its reason.`;
+        `changed), and writes ${record} listing what was applied and each declined finding with its reason.` +
+        (ciFirst
+          ? ' Completing leads to pr: GitHub CI is the test gate here, so the verified commit goes to the draft PR and CI before review.'
+          : ' Completing leads to review.');
       plan.commands = [
         ...start,
         add(findings, has(findings)),
@@ -685,7 +693,11 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const key = job.ticketId === null ? '' : ticketKey(job.ticketId);
       plan.reason =
         'Independent final approval: spec, build.md, git diff, review artifacts, outstanding findings.' +
-        (behind > 0
+        // Under `ci` approval needs CI passing for HEAD, so base integration waits for the next pr pass.
+        (ciFirst
+          ? ' GitHub CI passed for this exact HEAD; approval binds to it. Base integration, if needed, happens in the pr pass after approval.'
+          : '') +
+        (behind > 0 && !ciFirst
           ? ` Base advanced by ${String(behind)} commit(s): if the approver escalates for that, run orch worktree integrate ${id} instead; a conflict sends the job back to build as rework.`
           : '') +
         (boxes.length > 0
@@ -710,10 +722,14 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       break;
     }
     case 'pr': {
-      const behind = worktree.behind ?? 0;
+      // The pre-review pass integrates nothing: review and approval judge the commit CI passed.
+      const behind = preReview ? 0 : (worktree.behind ?? 0);
       plan.reason =
-        'Deliver: integrate base if it advanced, verify the resulting commit, push, create or reuse the draft PR, write pr.md. ' +
-        'Completing hands the job to the ci stage; delivery is not done until required checks pass.' +
+        (preReview
+          ? 'Pre-review pass (GitHub CI is the test gate): push the verified commit, create or reuse the draft PR, write pr.md. ' +
+            'Completing hands the job to the ci stage; a passing verdict for this commit leads to review, and the PR stays a draft.'
+          : 'Deliver: integrate base if it advanced, verify the resulting commit, push, create or reuse the draft PR, write pr.md. ' +
+            'Completing hands the job to the ci stage; delivery is not done until required checks pass.') +
         (behind > 0 ? ` Base is ${String(behind)} commit(s) ahead.` : '') +
         (job.prUrl ? ` The existing PR ${job.prUrl} is updated, never duplicated.` : '');
       plan.commands = [
@@ -747,7 +763,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       } else {
         plan.reason =
           `Reconcile CI for the PR head through orch gh ci; it records GitHub's verdict for the exact commit and ` +
-          `acts on it (passing: completes the job; failing: re-run once, then rework to build with saved logs; ` +
+          `acts on it (passing: ${preReview ? 'moves the job to review, the PR stays a draft (pre-review pass)' : 'completes the job'}; ` +
+          `failing: re-run once, then rework to build with saved logs; ` +
           `cannot run or no checks: escalate). Pending checks are only an observation: sleep plan.ci.waitSeconds ` +
           `(${String(plan.ci.waitSeconds)} s now) and run it again; the CLI never polls by itself. ${budget}` +
           (job.ciHead && !ciCurrent
@@ -766,9 +783,13 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   }
   // A failure only in files the job did not change, with a moved base: integrate and verify again
   // before any rework (decision 2026-11-19-integrate-base-before-reworking-unchanged-failures).
+  // Under `ci`, approve and the pre-review pr pass never integrate (approval binds to CI's commit).
   const behind = worktree.behind ?? 0;
+  const integrates = ciFirst
+    ? job.stage === 'build' || job.stage === 'simplify' || (job.stage === 'pr' && !preReview)
+    : ['build', 'simplify', 'approve', 'pr'].includes(job.stage);
   if (
-    ['build', 'simplify', 'approve', 'pr'].includes(job.stage) &&
+    integrates &&
     integrateFirst(plan.flake, latestRun(store.db, id)?.run, worktree.head, behind)
   ) {
     plan.reason = `${integrateFirstAdvice(id, behind)} ${plan.reason}`;

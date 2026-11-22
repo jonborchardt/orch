@@ -28,8 +28,23 @@ export interface VerificationCheckSpec {
   timeoutMs: number;
 }
 
+/**
+ * Which run is the authoritative test gate: `local` (the default) runs the full policy locally
+ * and CI once more at the end; `ci` runs only the policy's fast checks locally and needs GitHub CI
+ * to pass on the exact commit before review (decision 2026-11-22-ci-authoritative-verification).
+ */
+export const AUTHORITIES = ['local', 'ci'] as const;
+export type Authority = (typeof AUTHORITIES)[number];
+
 export interface VerificationPolicy {
   commands: VerificationCheckSpec[];
+  /** Absent means `local`. */
+  authority?: Authority | undefined;
+}
+
+/** The policy's authority, `local` when it names none. */
+export function authorityOf(policy: VerificationPolicy): Authority {
+  return policy.authority ?? 'local';
 }
 
 export type PolicySource = 'baseline' | 'authorized';
@@ -55,7 +70,7 @@ export function parsePolicy(raw: unknown): VerificationPolicy {
   }
   const section = v as Record<string, unknown>;
   for (const key of Object.keys(section)) {
-    if (key !== 'commands') fail(`verification: unknown key "${key}"`);
+    if (key !== 'commands' && key !== 'authority') fail(`verification: unknown key "${key}"`);
   }
   const list = section['commands'];
   if (!Array.isArray(list)) fail('verification.commands must be an array');
@@ -65,7 +80,12 @@ export function parsePolicy(raw: unknown): VerificationPolicy {
     if (ids.has(c.id)) fail(`duplicate check id "${c.id}"`);
     ids.add(c.id);
   }
-  return { commands };
+  const authority = section['authority'] === undefined ? 'local' : section['authority'];
+  if (!AUTHORITIES.includes(authority as Authority)) {
+    fail(`verification.authority must be one of ${AUTHORITIES.map((a) => `"${a}"`).join(', ')}`);
+  }
+  // `local` is the default, so it is not stored: every existing policy keeps its exact shape.
+  return authority === 'ci' ? { commands, authority: 'ci' } : { commands };
 }
 
 /** Parse the text of a factory.json (`where` names the source in the error, e.g. a commit). */
@@ -89,7 +109,8 @@ export function formatPolicy(policy: VerificationPolicy): string {
     ...(c.required ? {} : { required: false }),
     ...(c.timeoutMs === DEFAULT_TIMEOUT_MS ? {} : { timeoutMs: c.timeoutMs }),
   }));
-  return JSON.stringify({ verification: { commands } }, null, 2) + '\n';
+  const ci = authorityOf(policy) === 'ci' ? { authority: 'ci' } : {};
+  return JSON.stringify({ verification: { ...ci, commands } }, null, 2) + '\n';
 }
 
 function parseCheck(item: unknown, i: number): VerificationCheckSpec {
@@ -142,17 +163,21 @@ function parseCheck(item: unknown, i: number): VerificationCheckSpec {
   };
 }
 
-/** Canonical form: the parsed checks in order with sorted keys, so formatting changes do not count. */
+/**
+ * Canonical form: the parsed checks in order with sorted keys, so formatting changes do not count.
+ * The authority joins only when it is `ci`, so every `local` policy keeps its fingerprint.
+ */
 export function canonicalPolicy(policy: VerificationPolicy): string {
+  const checks = policy.commands.map((c) => ({
+    args: c.args,
+    command: c.command,
+    cwd: c.cwd,
+    id: c.id,
+    required: c.required,
+    timeoutMs: c.timeoutMs,
+  }));
   return JSON.stringify(
-    policy.commands.map((c) => ({
-      args: c.args,
-      command: c.command,
-      cwd: c.cwd,
-      id: c.id,
-      required: c.required,
-      timeoutMs: c.timeoutMs,
-    })),
+    authorityOf(policy) === 'ci' ? { authority: 'ci', commands: checks } : checks,
   );
 }
 
@@ -165,8 +190,13 @@ export interface PolicyDiff {
   added: string[];
   removed: string[];
   modified: string[];
-  /** Required checks that were removed, made optional, or had their command changed. */
+  /**
+   * Required checks that were removed, made optional, or had their command changed; plus
+   * `authority` when the candidate moves the test gate from local to CI.
+   */
   weakened: string[];
+  /** The authority change, when the candidate names another one (e.g. "local -> ci"). */
+  authority?: string | undefined;
 }
 
 /** What a candidate policy does to the effective one. */
@@ -192,12 +222,16 @@ export function diffPolicy(
       return next.command !== c.command || next.args.join('\0') !== c.args.join('\0');
     })
     .map((c) => c.id);
+  const from = authorityOf(effective);
+  const to = authorityOf(candidate);
+  if (from === 'local' && to === 'ci') weakened.push('authority');
   return {
-    changed: added.length + removed.length + modified.length > 0,
+    changed: added.length + removed.length + modified.length > 0 || from !== to,
     added,
     removed,
     modified,
     weakened,
+    ...(from !== to ? { authority: `${from} -> ${to}` } : {}),
   };
 }
 

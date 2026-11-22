@@ -28,10 +28,21 @@ import { appendEvent, listEvents } from '../src/storage/events.ts';
 import { claimJob, createJob, getJob, listJobs } from '../src/storage/jobs.ts';
 import { type Job, jobs } from '../src/storage/schema.ts';
 import { makePolicyRepo } from './drive.ts';
-import { type GhShim, ghShim, json, makeRepo, orch, type TempStore, tempStore } from './helpers.ts';
+import {
+  commitFile,
+  type GhShim,
+  ghShim,
+  gitIn,
+  json,
+  makeRepo,
+  orch,
+  type TempStore,
+  tempStore,
+} from './helpers.ts';
 
 const REPO = 'github.com/acme/alpha';
-const SHA = 'a'.repeat(40);
+/** The verified head: a real commit (the clone's main), so the workflow check can read its diff. */
+let SHA = '';
 const OTHER = 'b'.repeat(40);
 const MERGE_COMMIT = 'c'.repeat(40);
 
@@ -45,6 +56,7 @@ beforeAll(() => {
   shim = ghShim('acme/alpha');
   Object.assign(process.env, shim.env);
   ({ clone, bare } = makePolicyRepo());
+  SHA = gitIn(clone, 'rev-parse', 'HEAD');
 });
 afterAll(() => {
   delete process.env['ORCH_GH_SHIM'];
@@ -791,5 +803,85 @@ describe('orch job merge', () => {
     const blocked = cli(['job', 'merge', job.id]);
     expect(blocked.code).toBe(1);
     expect(blocked.out).toMatch(/^BLOCKED \(pr-draft\): /);
+  });
+});
+
+describe('a PR that changes .github/workflows/ needs a human merge', () => {
+  let wf: { clone: string; bare: string };
+  const WORKFLOW = '.github/workflows/ci.yml';
+  beforeAll(() => {
+    wf = makePolicyRepo();
+    commitFile(wf.clone, WORKFLOW, 'on: push\n');
+    gitIn(wf.clone, 'push', '-q', 'origin', 'main');
+  });
+  afterAll(() => {
+    for (const d of [wf.clone, wf.bare]) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** A commit on its own branch off main, made by `change`; main is checked out again after. */
+  const branch = (name: string, change: () => void): string => {
+    gitIn(wf.clone, 'checkout', '-q', '-b', name, 'main');
+    change();
+    const sha = gitIn(wf.clone, 'rev-parse', 'HEAD');
+    gitIn(wf.clone, 'checkout', '-q', 'main');
+    return sha;
+  };
+  const commit = (message: string) =>
+    gitIn(wf.clone, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', message);
+  const jobAt = (sha: string): Job => {
+    const job = completed({ job: { ciHead: sha, repoPath: wf.clone } });
+    editPr(job, { headRefOid: sha });
+    return getJob(store.db, job.id);
+  };
+  const changes: [string, () => void][] = [
+    ['adds', () => commitFile(wf.clone, '.github/workflows/new.yml', 'on: push\n')],
+    ['edits', () => commitFile(wf.clone, WORKFLOW, 'on: pull_request\n')],
+    [
+      'deletes',
+      () => {
+        gitIn(wf.clone, 'rm', '-q', WORKFLOW);
+        commit('delete workflow');
+      },
+    ],
+    [
+      'renames',
+      () => {
+        gitIn(wf.clone, 'mv', WORKFLOW, '.github/workflows/renamed.yml');
+        commit('rename workflow');
+      },
+    ],
+    [
+      'moves out',
+      () => {
+        gitIn(wf.clone, 'mv', WORKFLOW, 'ci-moved.yml');
+        commit('move workflow out');
+      },
+    ],
+  ];
+
+  it.each(changes)('a session merge of a job that %s a workflow is blocked', (name, change) => {
+    const job = jobAt(branch(`wf-${name.replace(' ', '-')}`, change));
+    const before = events(job).length;
+    const r = merge(job);
+    expect(r).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+    expect(r.reason).toContain('.github/workflows/');
+    expect(merges()).toHaveLength(0);
+    expect(events(job)).toHaveLength(before);
+  });
+
+  it('the dashboard merges it; a job that leaves workflows alone merges from a session', () => {
+    const job = jobAt(branch('wf-dashboard', () => commitFile(wf.clone, WORKFLOW, 'on: [push]\n')));
+    expect(mergeJob(store, job.id, { session: 'dashboard', mode: 'dashboard' })).toMatchObject({
+      outcome: 'merged',
+      verified: true,
+    });
+    const plain = jobAt(branch('wf-none', () => commitFile(wf.clone, 'src/b.ts', 'export {};\n')));
+    expect(merge(plain).outcome).toBe('merged');
+  });
+
+  it('fails closed: a head Git cannot read is blocked as workflow-changed', () => {
+    const job = jobAt(OTHER);
+    expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+    expect(merges()).toHaveLength(0);
   });
 });

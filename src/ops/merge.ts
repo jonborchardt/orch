@@ -19,7 +19,10 @@ import {
   type MergeBlock,
   mergeDecision,
   type MergeStep,
+  touchesWorkflows,
 } from '../core/workflow.ts';
+import { baseRef } from '../git/repo.ts';
+import { tryGit } from '../git/run.ts';
 import { type GhPr, mergePr, prWorkflowState, viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob } from '../storage/events.ts';
@@ -185,13 +188,32 @@ function look(store: Store, job: Job, input: MergeInput): Seen {
   if (!job.prUrl) {
     return { pr: null, step: { step: 'blocked', code: 'no-pr', reason: 'the job has no PR' } };
   }
-  const pr = viewPr(job.prUrl, ghCwd(job));
+  const cwd = ghCwd(job);
+  const pr = viewPr(job.prUrl, cwd);
   const step = mergeDecision(job, pr, {
     completion: completionFor(store, job),
     authorized: input.mode === 'dashboard' || mergeAuthorized(store, job.repo),
     isReland: predecessorsOf(store.db, job.id).length > 0,
+    changesWorkflows: changesWorkflows(cwd, job),
+    byHuman: input.mode === 'dashboard',
   });
   return { pr, step };
+}
+
+/**
+ * Whether the job's diff, from its merge base with the base branch to `ciHead`, touches
+ * `.github/workflows/` (added, edited, deleted, or renamed; renames count both sides). Read from
+ * Git, never from the repository's configuration; true when Git cannot answer (fail closed).
+ */
+function changesWorkflows(cwd: string, job: Job): boolean {
+  const base = baseRef(cwd, job.baseBranch);
+  if (!base || !job.ciHead) return true;
+  const mergeBase = tryGit(cwd, 'merge-base', base, job.ciHead);
+  if (!mergeBase) return true;
+  // -z: unquoted names, so an odd character cannot hide the prefix.
+  const names = tryGit(cwd, 'diff', '--name-only', '--no-renames', '-z', mergeBase, job.ciHead);
+  if (names === undefined) return true;
+  return touchesWorkflows(names.split('\0').filter((l) => l !== ''));
 }
 
 function result(

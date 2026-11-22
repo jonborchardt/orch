@@ -3,6 +3,7 @@
  * src/ops/verify.ts), against a temporary repository that carries a real factory.json policy.
  * Shared by the Phase 5B test files.
  */
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { planJob, startJob } from '../src/ops/factory.ts';
@@ -23,6 +24,19 @@ export const CHECK_JS =
 export const POLICY = {
   verification: { commands: [{ id: 'check', command: 'node', args: ['check.js'] }] },
 };
+
+/** POLICY with GitHub CI as the authoritative test gate. */
+export const CI_POLICY = {
+  verification: { authority: 'ci', commands: POLICY.verification.commands },
+};
+
+/** Make CI_POLICY the baseline on main (before the job starts). */
+export function useCiAuthority(clone: string): void {
+  const text = JSON.stringify(CI_POLICY, null, 2) + '\n';
+  if (readFileSync(join(clone, 'factory.json'), 'utf8') === text) return;
+  commitFile(clone, 'factory.json', text, 'authority ci');
+  gitIn(clone, 'push', '-q', 'origin', 'main');
+}
 
 /** A clone with origin whose main branch carries check.js, marker.txt, and factory.json. */
 export function makePolicyRepo(

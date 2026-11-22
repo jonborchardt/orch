@@ -34,6 +34,8 @@ import {
   type SensitiveReport,
 } from '../core/sensitive.ts';
 import {
+  type Authority,
+  authorityOf,
   diffPolicy,
   OUTPUT_CAP,
   parsePolicyText,
@@ -144,6 +146,8 @@ export interface VerificationStatus {
     head: string | null;
     fingerprint: string;
     checks: string[];
+    /** Which run is the authoritative test gate (decision 2026-11-22-ci-authoritative-verification). */
+    authority: Authority;
     authorization: SensitiveReport['authorization'];
     candidateError: string | null;
   };
@@ -188,6 +192,7 @@ export function verificationStatus(
       head: eff.head,
       fingerprint: eff.fingerprint,
       checks: eff.policy.commands.map((c) => `${c.id}${c.required ? '' : ' (optional)'}`),
+      authority: authorityOf(eff.policy),
       authorization,
       candidateError: eff.candidateError,
     },
