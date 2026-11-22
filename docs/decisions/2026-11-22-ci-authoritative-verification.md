@@ -65,18 +65,19 @@ labelled **measured** (read from a clock or a log) or **computed** (arithmetic o
 
 | Figure                                        | Value                 | Kind     | Source                                                                                                                                                              |
 | --------------------------------------------- | --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full local `npm run check` (the `check` step) | FULL_CHECK            | measured | `orch verify` run FULL_RUN of job job-f3982f23, `verification/FULL_RUN/check.log` (`duration:` line)                                                                |
+| Full local `npm run check` (the `check` step) | 23 min 35 s           | measured | `orch verify` run 175 of job job-f3982f23 at 6846392, check `check` duration 1415038 ms (`verification/175/check.log`)                                              |
 | `npm run typecheck`                           | 30.5 s                | measured | timed separately in the job-f3982f23 worktree, 2026-11-22                                                                                                           |
 | `npm run lint`                                | 67.2 s                | measured | same                                                                                                                                                                |
 | `npm run format:check`                        | 14.5 s                | measured | same                                                                                                                                                                |
 | `npm run build`                               | 11.1 s                | measured | same                                                                                                                                                                |
 | Fast checks together                          | 123.3 s (about 2 min) | computed | sum of the four rows above                                                                                                                                          |
 | GitHub CI wall-clock for a PR                 | 11 min 56 s           | measured | `gh run view 45002908723` (PR #115, ticket 0109, attempt 1): created 08:27:35Z, last job done 08:39:31Z; the slowest job, `windows (rest)`, ran 08:27:39Z-08:39:30Z |
-| Verification per ticket before (`local`)      | BEFORE_TOTAL          | computed | full local check + CI wall-clock, one pass each                                                                                                                     |
-| Verification per ticket after (`ci`)          | AFTER_TOTAL           | computed | fast checks + CI wall-clock; pending: a real measurement of the first CI-authoritative ORCH ticket under ticket 0116                                                |
+| Verification per ticket before (`local`)      | 35 min 31 s           | computed | full local check + CI wall-clock, one pass each (23:35 + 11:56)                                                                                                     |
+| Verification per ticket after (`ci`)          | 13 min 59 s           | computed | fast checks + CI wall-clock (2:03 + 11:56), about 61% less; pending: a real measurement of the first CI-authoritative ORCH ticket under ticket 0116                 |
 
 A CI run that needed a re-run takes longer: `gh run view 45023401560` (PR #117, attempt 2) finished
 25 min 10 s after it was created. Under `ci` a typical ticket has two CI passes (pre-review and
 delivery), but the delivery pass usually re-reads the same commit's verdict, so it costs a CI run
 only when the base was integrated or a commit was added; that is why the "after" figure counts one
-CI run and is computed, not measured.
+CI run and is computed, not measured. The ticket's own earlier sample (PR #112, about 21 min local
+and 10.5 min CI) is cited from the ticket and was not re-measured here.
