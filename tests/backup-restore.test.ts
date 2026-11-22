@@ -248,7 +248,8 @@ describe('restore validation', () => {
   beforeEach(() => {
     jobId = seedJob(store).id;
     file = backup();
-    dest = tempDir();
+    // Nested, so its parent is private to this test: an escape would show up there.
+    dest = join(tempDir(), 'dest');
   });
   const refused = (pattern: RegExp) => {
     expect(() => restoreBackup(file, homePaths(dest))).toThrow(pattern);
