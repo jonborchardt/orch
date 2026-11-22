@@ -552,6 +552,58 @@ view in the dashboard. **Optional future work**, not needed to operate the facto
 over `runner.session` and `runner.stopped` events across jobs, and an Agents view of time per
 role. Neither exists, and neither is a prerequisite for anything above.
 
+## Backup and restore
+
+Everything orch knows lives in one data directory: `%LOCALAPPDATA%\orch` on Windows,
+`~/Library/Application Support/orch` on macOS, `$XDG_DATA_HOME/orch` (default
+`~/.local/share/orch`) on Linux, or `<dir>` when `ORCH_HOME=<dir>` is set. The database is
+`<data>/orch.sqlite`; job artifacts are under `<data>/jobs/<id>/artifacts/` and ticket assets under
+`<data>/tickets/<id>/assets/` ([Where things live](../README.md#where-things-live)).
+
+```sh
+orch backup create D:\backups\orch.tar.gz            # refuses an existing file; --force replaces it
+orch backup restore D:\backups\orch.tar.gz           # into the data directory (must be empty)
+orch backup restore D:\backups\orch.tar.gz --data-dir C:\tmp\orch-test   # a test restore
+ORCH_HOME=C:\tmp\orch-test orch ticket list          # inspect the test restore
+```
+
+**Create** works while the controller, the dashboard, or any other `orch` command runs. The
+database is copied by SQLite (`VACUUM INTO`, one read transaction, so writers keep going and
+changes still in the WAL are included), never as a file. The archive holds `manifest.json`
+first (format `orch-backup`, version 1, orch version, the schema's migration names, row counts per
+table, every file's size and SHA-256, what is included and excluded), then `orch.sqlite`, then every
+regular file under `jobs/<id>/artifacts/` and `tickets/<id>/assets/` at the same paths. Symbolic
+links and other non-regular entries there are skipped and reported. Every registered artifact must
+exist and match the hash in the snapshot's own row; if an artifact is being replaced at that
+moment the snapshot is retaken (three times at most), and a file still missing or changed fails
+the backup and names the job and path. The archive is written to a temporary file next to
+`<file>`, read back and checked (gzip, entry paths, manifest, hashes, `integrity_check`), and only
+then renamed into place. `<file>` is required, and it may not be inside the data directory, the
+orch installation, the Claude Code directory, or a Git working tree.
+
+Not in the archive: `worktrees/` and `checkouts/` (Git repositories and branches live in your
+repositories and on GitHub), runner state (`runner.json`, `runner-lock/`, `runner.stop-*`),
+`verify.lock` and `verify-queue/`, the recovery worker's files, `logs/`, `tmp/`, the `-wal` and
+`-shm` files (folded into the snapshot), any other file in the data directory, and user
+configuration (`<config>/factory.json`, `mail.env`).
+
+**Restore** needs an inactive, empty destination: it refuses (exit 1, nothing written) when the
+destination already has `orch.sqlite` (or its `-wal`/`-shm`), anything in `jobs/` or `tickets/`,
+or a live controller, recovery worker, or `orch verify` for it. There is no overwrite flag; to
+replace data, move the old data directory aside first. The archive is unpacked into a staging
+directory inside the destination and checked there before anything is installed: supported format
+version, a complete manifest, safe entry paths only (no absolute paths, drive letters, `..`,
+backslashes, links, or paths outside the allow-list), matching hashes, `PRAGMA integrity_check`,
+and every registered artifact present with its hash. A backup from an older orch is migrated
+forward with the installed migrations; one whose database has migrations this orch does not know
+is refused ("created by a newer orch"). The database is installed last and never over an existing
+file; a failure removes the staging directory and undoes the moves. Restore does not recreate
+worktrees, repositories, branches, running controllers or workers, queues, logs, or configuration;
+jobs whose worktree is gone need it again before they can continue.
+
+A backup on the same disk does not survive that disk failing: copy the archive to another drive
+or machine. Archives are built in memory, which suits the usual size of a data directory.
+
 ## Email reports
 
 Optional. Put SMTP settings in `<config>/mail.env` (see

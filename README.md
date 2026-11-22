@@ -205,6 +205,11 @@ orch factory status job-1a2b3c4d      # where it is, what blocks it, next step, 
 orch job events job-1a2b3c4d          # the audit log, runner.session and runner.stopped included
 orch job merge job-1a2b3c4d           # where opted in: merge the verified PR and close the ticket
 orch ui                               # dashboard at http://127.0.0.1:4777/
+
+# backup (safe while orch runs; restore only into an empty, inactive data directory)
+orch backup create D:\backups\orch-2026-11-22.tar.gz
+orch backup restore D:\backups\orch-2026-11-22.tar.gz --data-dir C:\tmp\orch-test   # test restore
+ORCH_HOME=C:\tmp\orch-test orch ticket list                                         # inspect it
 ```
 
 A job can also run without the controller. In a Claude Code session in the repository,
@@ -296,6 +301,11 @@ Optional email reports of every job change: [docs/operations.md](docs/operations
 
 `ORCH_HOME=<dir>` redirects all of it (tests and side-by-side campaigns use this).
 
+`orch backup create <file>` archives the database, artifacts, and ticket assets into one
+`.tar.gz`; `orch backup restore <file> [--data-dir <dir>]` puts them back into an empty data
+directory. Worktrees, repositories, runner state, logs, and configuration are not included.
+Details: [docs/operations.md](docs/operations.md#backup-and-restore).
+
 ## Documentation
 
 - `orch <command> --help` for every command and option.
@@ -306,7 +316,8 @@ Optional email reports of every job change: [docs/operations.md](docs/operations
   artifacts, events, worktrees, verification evidence, CI reconciliation, merging, the controller,
   ownership.
 - [docs/operations.md](docs/operations.md): operating the factory, stop and resume, diagnosing
-  blocked tickets, needs-human, recovery budgets, limitations, metrics, email reports.
+  blocked tickets, needs-human, recovery budgets, limitations, metrics, backup and restore, email
+  reports.
 - [docs/tickets.md](docs/tickets.md): the ticket queue, its CLI and HTTP API, and the import.
 - [docs/dashboard.md](docs/dashboard.md): the dashboard's views, actions, and security model.
 - [docs/development.md](docs/development.md): stack, layout, build, tests, migrations, install
