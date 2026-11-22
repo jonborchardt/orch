@@ -40,7 +40,7 @@ export const tickets = sqliteTable(
     type: text().$type<TicketType>().notNull(),
     area: text().notNull(),
     priority: text().$type<Priority>().notNull(),
-    /** Days, one of core/tickets.ts EFFORTS. */
+    /** Days of elapsed wall-clock time (24 hours each), one of core/tickets.ts EFFORTS. */
     effort: real().notNull(),
     /** Set exactly when status is `duplicate`. */
     duplicateOf: integer().references((): AnySQLiteColumn => tickets.id),

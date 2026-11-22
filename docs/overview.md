@@ -113,7 +113,7 @@ A **ticket** is the persistent description of what you want, and nothing about h
 going. Its fields (all in `src/core/tickets.ts`): a global id, a title, a Markdown body, the
 repository, a status (`open`, `in-progress`, `done`, `dropped`, `duplicate`; blocked is derived,
 never stored), a type (`bug`, `feature`, `chore`, `question`), an area, a priority (`P1`–`P4`), an
-effort in days (`0.25`, `0.5`, `1`, `2`, `3`, `5`), dependencies, related tickets, `duplicateOf`,
+effort in 24-hour days of elapsed time (`0.05` to `5`), dependencies, related tickets, `duplicateOf`,
 and an append-only history ([tickets.md](tickets.md#fields)).
 
 A **job** is one factory attempt at it in one repository: its stage and status, its artifacts, its
