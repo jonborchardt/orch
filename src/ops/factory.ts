@@ -13,7 +13,7 @@ import { type Flake, integrateFirst, integrateFirstAdvice } from '../core/flake.
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import type { SensitiveReport } from '../core/sensitive.ts';
-import { ticketKey } from '../core/tickets.ts';
+import { CHECKLIST_DELIMITER, ticketKey, uncheckedItems } from '../core/tickets.ts';
 import {
   detectUi,
   type FactoryConfig,
@@ -46,6 +46,7 @@ import type { Store } from '../storage/client.ts';
 import { eventsOfTypes } from '../storage/events.ts';
 import { claimJob, createJob, getJob, jobDetail, releaseJob, resumeJob } from '../storage/jobs.ts';
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
+import { getTicket } from '../storage/tickets.ts';
 import { latestRun, listIntegrations } from '../storage/verification.ts';
 import { issue as ghIssue } from './github.ts';
 import { jobRepository } from './repo.ts';
@@ -680,15 +681,32 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       if (r)
         plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'decision.md' }];
       const behind = worktree.behind ?? 0;
+      const ticket = job.ticketId === null ? null : getTicket(store.db, job.ticketId);
+      const boxes =
+        ticket && (ticket.status === 'open' || ticket.status === 'in-progress')
+          ? [...new Set(uncheckedItems(ticket.body))]
+          : [];
+      const key = job.ticketId === null ? '' : ticketKey(job.ticketId);
       plan.reason =
         'Independent final approval: spec, build.md, git diff, review artifacts, outstanding findings.' +
         (behind > 0
           ? ` Base advanced by ${String(behind)} commit(s): if the approver escalates for that, run orch worktree integrate ${id} instead; a conflict sends the job back to build as rework.`
+          : '') +
+        (boxes.length > 0
+          ? ` Ticket ${key} has unchecked checklist item(s): ${boxes.map((b) => `"${b}"`).join(', ')}. ` +
+            `decision.md's ## Ticket checklist accounts for each (- [x] <item>${CHECKLIST_DELIMITER}<evidence> or ` +
+            `- [ ] <item>${CHECKLIST_DELIMITER}<reason>, item text verbatim); tick the delivered boxes before completing.`
           : '');
       plan.commands = [
         ...start,
         ...verifyIfStale,
         add('decision.md', has('decision.md')),
+        ...(boxes.length > 0
+          ? [
+              `orch ticket edit ${key} --body-file -   # tick the boxes decision.md marks delivered`,
+              `orch ticket note ${key} "<item>: <reason>"   # each box decision.md marks not delivered`,
+            ]
+          : []),
         `${complete}   # only if DECISION: APPROVE`,
         `orch job transition ${id} rework --reason "<the scope gap>"${tok}   # DECISION: REWORK-BUILD (code less than spec) or REWORK-SPEC (spec less than request)`,
         `orch job transition ${id} escalate --reason "<why>"${tok}   # DECISION: ESCALATE`,

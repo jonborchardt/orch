@@ -138,6 +138,26 @@ export function uncheckedItems(body: string): string[] {
   );
 }
 
+/** The delimiter between an item and its reason in decision.md's Ticket checklist. */
+export const CHECKLIST_DELIMITER = ' — ';
+
+/**
+ * The ticket's unchecked items (each once) that decision.md does not record as not delivered: a
+ * `- [ ] <item> — <reason>` line under `## Ticket checklist` (up to the next `## ` heading), item
+ * text matching exactly and a non-empty reason. A `- [x]` line there accounts for nothing: the
+ * box itself must be ticked in the ticket.
+ */
+export function unaccountedItems(body: string, decision: string): string[] {
+  const section = /^## Ticket checklist[ \t]*\r?$([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(decision);
+  const accounted = new Set<string>();
+  for (const line of uncheckedItems(section?.[1] ?? '')) {
+    const at = line.indexOf(CHECKLIST_DELIMITER);
+    if (at < 0 || line.slice(at + CHECKLIST_DELIMITER.length).trim() === '') continue;
+    accounted.add(line.slice(0, at).trim());
+  }
+  return [...new Set(uncheckedItems(body))].filter((item) => !accounted.has(item));
+}
+
 /**
  * The path `from -> ... -> to` through existing dependencies, when there is one: adding
  * "`to` depends on `from`" would then close a cycle. `deps` maps a ticket to what it depends on.

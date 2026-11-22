@@ -119,9 +119,17 @@ number of jobs over time (a cancelled attempt, a re-land), and jobs without a ti
   head is the CI-verified one, the job was not superseded, no other job is working on the ticket,
   and the body has no unchecked task item (`- [ ]`). Otherwise the status is left alone and a
   `ticket.job-merged` event says why, once; a ticket already done, dropped, or duplicate is not
-  touched. Nothing ticks a box for you, and a ticket is never marked done and reopened: tick what
-  was delivered and run `orch job merge <job>` again, or `orch ticket done`
+  touched. A ticket is never marked done and reopened: tick what was delivered and run
+  `orch job merge <job>` again, or `orch ticket done`
   ([workflow.md](workflow.md#verified-integration-and-reconciliation)).
+- The factory's approve stage ticks the boxes: the approver's `decision.md` lists every unchecked
+  box under `## Ticket checklist`, item text verbatim, as `- [x] <item> — <evidence>` (delivered)
+  or `- [ ] <item> — <reason>` (not delivered), and the factory session ticks the delivered ones
+  with `orch ticket edit <id> --body-file -` and copies each reason with `orch ticket note` (best
+  effort). `orch job transition <job> complete` in `approve` is refused while an unchecked box is
+  neither ticked nor recorded by such a `- [ ]` line, which is the enforced record of the reason
+  (`unaccountedItems` in `src/core/tickets.ts`, decision
+  [2026-11-21-approval-accounts-for-the-ticket-checklist](decisions/2026-11-21-approval-accounts-for-the-ticket-checklist.md)).
 - `orch ticket start <id>` only marks a ticket in progress (work done by hand); it creates no job.
 
 `orch ticket jobs <id>` lists a ticket's jobs; `orch job show <job>` includes `job.ticketId`.

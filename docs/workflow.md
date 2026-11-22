@@ -708,9 +708,9 @@ passed on.
 merge is verified, the job is not superseded, no other job is working on the ticket, and its body
 has no unchecked Markdown task item (`- [ ]`). Otherwise its status stays as it is and the reason
 is recorded once on the ticket (`ticket.job-merged`, listing the remaining items); a ticket someone
-already closed, dropped, or marked duplicate is not touched. orch never ticks a box: tick what was
-delivered (`orch ticket edit`) and run `orch job merge` again, or close the ticket with
-`orch ticket done`.
+already closed, dropped, or marked duplicate is not touched. The merge never ticks a box: the
+approve stage did (see below); otherwise tick what was delivered (`orch ticket edit`) and run
+`orch job merge` again, or close the ticket with `orch ticket done`.
 
 **Conflicts.** A completed job cannot rework, so a `CONFLICTING` PR is re-landed: one new job with
 `(re-land)` in its title, the same ticket, and the old job marked superseded, all in the
@@ -770,9 +770,15 @@ in `src/storage/jobs.ts` inside the merge's transaction):
 - otherwise the ticket's status stays as it is and one `ticket.job-merged` event records why (the
   verified flag, the reason, the remaining items); the same job and reason are not recorded twice.
 
-orch never ticks a box. Tick what was delivered (`orch ticket edit <id> --body-file <file>`) and
-run `orch job merge <job>` again, which settles the ticket without merging anything, or close it
-with `orch ticket done <id>`.
+The boxes are ticked before the merge, in the approve stage: the approver's `decision.md` lists
+every unchecked box under `## Ticket checklist` (item text verbatim, then a space, an em dash, and a space, then the evidence
+for `- [x]` or the reason for `- [ ]`), the factory session ticks the delivered ones with
+`orch ticket edit <id> --body-file -` and notes each reason with `orch ticket note` (best effort),
+and `orch job transition <job> complete` in `approve` is refused while an unchecked box is neither
+ticked nor recorded by a `- [ ] <item> — <reason>` line there (`unaccountedItems`, decision
+2026-11-21-approval-accounts-for-the-ticket-checklist). A box deliberately not delivered keeps the
+ticket open after the merge. Otherwise tick what was delivered and run `orch job merge <job>`
+again, which settles the ticket without merging anything, or close it with `orch ticket done <id>`.
 
 ## Verification evidence
 
