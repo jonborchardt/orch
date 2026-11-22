@@ -66,7 +66,12 @@ interface Column {
    */
   hideBelow?: number;
   /** `repoLabel` is set only when the board spans several repositories. */
-  cell: (r: BoardRow, now: number, repoLabel: string | undefined) => ReactNode;
+  cell: (
+    r: BoardRow,
+    now: number,
+    repoLabel: string | undefined,
+    onChanged: () => void,
+  ) => ReactNode;
 }
 
 const COLUMNS: Column[] = [
@@ -257,7 +262,7 @@ const COLUMNS: Column[] = [
     sortValue: (r) => r.pr.phase,
     // Wraps only on a compact board; the chips stay on one line where there is room.
     sx: { whiteSpace: 'nowrap', [below(COMPACT)]: { whiteSpace: 'normal' } },
-    cell: (r) =>
+    cell: (r, _now, _repoLabel, onChanged) =>
       r.pr.url ? (
         <Stack
           direction="row"
@@ -270,7 +275,7 @@ const COLUMNS: Column[] = [
           </Link>
           {/* The CI chip already says "CI running/failing", with the head; don't repeat it. */}
           {r.pr.phase !== 'ci-running' && r.pr.phase !== 'ci-failing' && (
-            <PrPhaseChip phase={r.pr.phase} />
+            <PhaseCell row={r} onChanged={onChanged} />
           )}
           {/* A completed job's outcome is the headline; a merged PR's passing CI adds nothing,
               and neither do the checks a human merged it before (never "CI pending"). */}
@@ -290,6 +295,53 @@ const COLUMNS: Column[] = [
 /** CSS-only width hiding for a column's header and body cells (see `Column.hideBelow`). */
 function narrow(c: Column): object | undefined {
   return c.hideBelow === undefined ? undefined : { [below(c.hideBelow)]: { display: 'none' } };
+}
+
+/**
+ * The PR phase chip; where the server allows Refresh PR it is a button that runs it, as the detail
+ * page does (`force` on a finished job), with no confirm.
+ */
+function PhaseCell({ row, onChanged }: { row: BoardRow; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!row.pr.refreshable) return <PrPhaseChip phase={row.pr.phase} />;
+  const refresh = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await postAction(
+        row.id,
+        finished(row) ? { action: 'refresh-pr', force: true } : { action: 'refresh-pr' },
+      );
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiFailure ? `${err.type}: ${err.message}` : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <PrPhaseChip
+        phase={row.pr.phase}
+        disabled={busy}
+        onClick={() => {
+          void refresh();
+        }}
+      />
+      {error && (
+        <Typography
+          component="div"
+          variant="caption"
+          color="error"
+          role="alert"
+          sx={{ whiteSpace: 'normal' }}
+        >
+          {error}
+        </Typography>
+      )}
+    </>
+  );
 }
 
 /** One verdict rollup for the round, every reviewer in its tooltip, and any blocking count. */
@@ -502,7 +554,7 @@ export function JobBoard({
                 >
                   {columns.map((c) => (
                     <TableCell key={c.id} align={c.align} sx={{ ...c.sx, ...narrow(c) }}>
-                      {c.cell(r, now, labels.get(r.repo))}
+                      {c.cell(r, now, labels.get(r.repo), onChanged)}
                     </TableCell>
                   ))}
                   <TableCell>

@@ -9,7 +9,14 @@ import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { claudeHome, jobArtifactDir } from '../core/paths.ts';
 import { SESSION_EVENT, sessionLinks, UUID } from '../core/session.ts';
-import { now, prPhase, STAGES, type Stage, TERMINAL_STATUSES } from '../core/workflow.ts';
+import {
+  cannotRefreshPr,
+  now,
+  prPhase,
+  STAGES,
+  type Stage,
+  TERMINAL_STATUSES,
+} from '../core/workflow.ts';
 import {
   allowedActions,
   DASHBOARD_ACTIONS,
@@ -130,7 +137,12 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       resume: resumeOf(job, state),
       updatedAt: job.updatedAt,
       elapsedMs: span(job.createdAt, end),
-      pr: { url: job.prUrl, state: job.prState, phase: prPhase(job, ci.completion) },
+      pr: {
+        url: job.prUrl,
+        state: job.prState,
+        phase: prPhase(job, ci.completion),
+        refreshable: cannotRefreshPr(job) === null,
+      },
       supersededBy: job.supersededBy,
       ticketId: job.ticketId,
       archivedAt: job.archivedAt,
