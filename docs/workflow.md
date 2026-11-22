@@ -632,9 +632,9 @@ branch with the same base is reused instead of creating a duplicate. The PR is r
 (`prUrl`, `prState`) together with the CI rollup (`ciStatus`: `none`, `pending`, `passing`,
 `failing`) but no head (`ciHead` is written by `orch gh ci` alone). `orch` never force-pushes, and marks the
 PR ready only after `orch gh ci` completes the job; a recorded draft PR is not a passing CI run, which is what the `ci` stage then establishes.
-The factory session never merges. Merging a completed job is `mergeJob`, the separate operation
-described under [Merging](#merging): a dashboard Merge click, or, only in a repository opted in to
-`mergeRepos` (`orch factory config merge enable`), `orch job merge` and the controller. After completion, `prState` (`draft`, `ready`, `merged`, `closed`) changes
+Merging a completed job is `mergeJob` ([Merging](#merging)), not the factory session: a dashboard
+Merge click, or `orch job merge` and the controller where the repository is opted in to
+`mergeRepos`. After completion, `prState` (`draft`, `ready`, `merged`, `closed`) changes
 only from GitHub's answer: `orch gh pr status <id> --token` and the dashboard's Refresh PR record
 `prState` alone (event `pr.observed`) and keep the completed verdict's `ciHead` and `ciStatus`; a
 merge is never inferred.
