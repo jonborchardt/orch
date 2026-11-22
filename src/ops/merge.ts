@@ -10,7 +10,7 @@
  * and finishes the record. Nothing here changes a job's stage, status, or CI verdict.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import { ToolError, ValidationError, WorkflowError } from '../core/errors.ts';
 import {
@@ -208,6 +208,10 @@ function look(store: Store, job: Job, input: MergeInput): Seen {
 function changesWorkflows(cwd: string, job: Job): boolean {
   const base = baseRef(cwd, job.baseBranch);
   if (!base || !job.ciHead) return true;
+  // A graft file (info/grafts, or GIT_GRAFT_FILE) rewrites parents and can move the merge base
+  // onto the head; --no-replace-objects does not turn it off, so its presence fails closed.
+  const grafts = tryGit(cwd, 'rev-parse', '--git-path', 'info/grafts');
+  if (!grafts || existsSync(resolve(cwd, grafts))) return true;
   // --no-replace-objects: a refs/replace/* entry cannot substitute a commit or tree that hides
   // the change from the guard.
   const mergeBase = tryGit(cwd, '--no-replace-objects', 'merge-base', base, job.ciHead);

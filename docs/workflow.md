@@ -710,10 +710,12 @@ the first two, and only with `verified: true`: a merge recorded as unverified ex
 `workflow-changed` (the job's diff from its merge base to `ciHead` adds, edits, deletes, or renames
 a file under `.github/workflows/`, or an entry named exactly `.github/workflows` or `.github` (a
 symlink or gitlink in place of the directory), matched case-insensitively with replace refs
-ignored, or Git could not tell; only the dashboard's Merge, a human's click, proceeds; decision
-2026-11-22-workflow-changes-need-a-human-merge), `not-authorized`, `conflict` (only where
-re-landing was not asked for: the dashboard's Merge), `second-conflict`, `reland-refused`, `github-refused`. The result also carries `jobId`, `ticketId`,
-`prUrl`, `base`, `prHead`, `verifiedHead`, `mergeCommit`, `verified`, `ticket`, and `relandJob`.
+ignored, or Git could not tell, which includes a graft file being present; only the dashboard's
+Merge, a human's click, proceeds; decision 2026-11-22-workflow-changes-need-a-human-merge),
+`not-authorized`, `conflict` (only where re-landing was not asked for: the dashboard's Merge),
+`second-conflict`, `reland-refused`, `github-refused`. The result also carries `jobId`,
+`ticketId`, `prUrl`, `base`, `prHead`, `verifiedHead`, `mergeCommit`, `verified`, `ticket`, and
+`relandJob`.
 
 **Evidence and retries.** GitHub is the authority on whether a merge happened. After the merge
 command, whatever it exited with, the PR is read again, and only `MERGED` with a merge commit is

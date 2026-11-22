@@ -4,9 +4,9 @@
  * the bounded re-land, retries after interruption, and the per-repository opt-in. Jobs are put in
  * their completed state directly (tests/pr-merge.test.ts drives a real one through the dashboard).
  */
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -897,6 +897,33 @@ describe('a PR that changes .github/workflows/ needs a human merge', () => {
       expect(merges()).toHaveLength(0);
     } finally {
       gitIn(wf.clone, 'replace', '-d', head);
+    }
+  });
+
+  it('a graft that makes the head the merge base cannot hide a workflow change', () => {
+    // The head branches off the base's parent; the graft adds it as a second parent of the base.
+    const base = gitIn(wf.clone, 'rev-parse', 'origin/main');
+    const parent = gitIn(wf.clone, 'rev-parse', 'origin/main^');
+    gitIn(wf.clone, 'checkout', '-q', '-b', 'wf-grafted', parent);
+    commitFile(wf.clone, WORKFLOW, 'on: [workflow_call]\n');
+    const head = gitIn(wf.clone, 'rev-parse', 'HEAD');
+    gitIn(wf.clone, 'checkout', '-q', 'main');
+    const graftFile = gitIn(
+      wf.clone,
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-path',
+      'info/grafts',
+    );
+    mkdirSync(dirname(graftFile), { recursive: true });
+    writeFileSync(graftFile, `${base} ${parent} ${head}\n`);
+    try {
+      expect(gitIn(wf.clone, 'merge-base', 'origin/main', head)).toBe(head);
+      const job = jobAt(head);
+      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+      expect(merges()).toHaveLength(0);
+    } finally {
+      rmSync(graftFile, { force: true });
     }
   });
 });

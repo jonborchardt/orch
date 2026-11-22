@@ -10,7 +10,9 @@ unchanged. `ops/merge.ts` computes `changesWorkflows` from Git, never from the r
 change), matched by the pure `touchesWorkflows` (prefix `.github/workflows/`, or exactly
 `.github/workflows` or `.github`, which is how a symlink or gitlink replacing either directory
 appears; case-insensitive), so an addition, edit, deletion, or rename (both sides) counts. When Git
-cannot answer, the value is true: fail closed. The rule
+cannot answer, the value is true: fail closed. A graft file (`git rev-parse --git-path
+info/grafts`, which honours `GIT_GRAFT_FILE`) also makes it true, since a graft rewrites parents,
+can make the head its own merge base, and is not turned off by `--no-replace-objects`. The rule
 applies to every repository, whatever its verification authority.
 
 **Exception to decision 042.** Decision 042 keeps sensitive paths (CI among them) labelled, not
