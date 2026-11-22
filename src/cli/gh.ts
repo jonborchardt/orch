@@ -34,7 +34,7 @@ export const GH_HELP = `Usage: orch gh <command> [options]
                                       passing verdict completes the job and marks the draft PR ready
 
 gh must be installed and authenticated (gh auth login). Nothing here merges or force-pushes;
-humans merge.
+merge a completed job with orch job merge or the dashboard's Merge.
 `;
 
 export function runGh(store: Store, args: string[], o: GhOptions, env = process.env): unknown {
