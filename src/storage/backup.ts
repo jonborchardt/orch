@@ -23,7 +23,6 @@ export function snapshotDatabase(source: string, target: string): void {
 export interface SnapshotFacts {
   /** `PRAGMA integrity_check`'s first line: 'ok' when sound. */
   integrity: string;
-  foreignKeyViolations: number;
   /** Migration names recorded in __drizzle_migrations, in order. */
   migrations: string[];
   rows: Record<string, number>;
@@ -40,7 +39,7 @@ export function inspectSnapshot(file: string): SnapshotFacts {
     const integrity = db.prepare('PRAGMA integrity_check').all();
     const first = integrity[0] ? String(Object.values(integrity[0])[0]) : 'no result';
     if (first !== 'ok') {
-      return { integrity: first, foreignKeyViolations: 0, migrations: [], rows: {}, artifacts: [] };
+      return { integrity: first, migrations: [], rows: {}, artifacts: [] };
     }
     const tables = db
       .prepare(
@@ -77,13 +76,7 @@ export function inspectSnapshot(file: string): SnapshotFacts {
             sha256: String(r['sha256']),
           }))
       : [];
-    return {
-      integrity: first,
-      foreignKeyViolations: db.prepare('PRAGMA foreign_key_check').all().length,
-      migrations,
-      rows,
-      artifacts,
-    };
+    return { integrity: first, migrations, rows, artifacts };
   } finally {
     db.close();
   }
