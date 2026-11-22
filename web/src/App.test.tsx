@@ -75,7 +75,7 @@ function row(over: Partial<BoardRow>): BoardRow {
     resume: null,
     updatedAt: '2026-11-13T08:30:00.000Z',
     elapsedMs: 1_800_000,
-    pr: { url: null, state: null, phase: 'no-pr' },
+    pr: { url: null, state: null, phase: 'no-pr', refreshable: false },
     supersededBy: null,
     supersedes: [],
     ticketId: null,
@@ -141,7 +141,12 @@ const rows: BoardRow[] = [
       detail: 'AC2 needs deployment verification',
     },
     resume: { command: '/factory resume job-00000003', heldBy: null },
-    pr: { url: 'https://github.com/x/y/pull/1', state: 'draft', phase: 'ci-failing' },
+    pr: {
+      url: 'https://github.com/x/y/pull/1',
+      state: 'draft',
+      phase: 'ci-failing',
+      refreshable: false,
+    },
     ci: noCi({ status: 'failing', head: 'abcdef0123456789', outcome: 'failing', repairs: 1 }),
     progress: progress(6, 'stopped', 'CI, needs human'),
   }),
@@ -2417,7 +2422,7 @@ describe('PR phase, Merge, and Refresh PR', () => {
         ...failing,
         id: 'job-00000009',
         title: 'Ready row',
-        pr: { ...failing.pr, state: 'ready', phase: 'ready-to-merge' },
+        pr: { ...failing.pr, state: 'ready', phase: 'ready-to-merge', refreshable: false },
         ci: { ...failing.ci, status: 'passing', completion: 'ci' },
       },
     ];
@@ -2431,6 +2436,80 @@ describe('PR phase, Merge, and Refresh PR', () => {
     expect(chip).toHaveTextContent('ready to merge');
     // The glyph repeats the label, so it is hidden from assistive technology.
     expect(must(chip.querySelector('[aria-hidden="true"]'))).toHaveTextContent('✓');
+    // Refresh PR is not allowed for the row, so the chip stays a label.
+    expect(chip).not.toHaveAttribute('role', 'button');
+    expect(within(table).queryByRole('button', { name: /ready to merge/ })).toBeNull();
+  });
+
+  describe('board phase chip runs Refresh PR where the server allows it', () => {
+    const refreshRows = () => [
+      row({
+        id: 'job-00000021',
+        title: 'Finished ready',
+        stage: 'completed',
+        status: 'completed',
+        liveness: 'completed',
+        owner: null,
+        pr: { url: pr, state: 'ready', phase: 'ready-to-merge', refreshable: true },
+        ci: noCi({ status: 'passing', head, completion: 'ci' }),
+      }),
+      row({
+        id: 'job-00000022',
+        title: 'Waiting on a human',
+        stage: 'needs-human',
+        status: 'blocked',
+        liveness: 'blocked',
+        pr: { url: pr, state: 'draft', phase: 'draft', refreshable: true },
+      }),
+    ];
+    const chipOf = (id: string) =>
+      within(boardRowOf(id)).getByRole('button', { name: /ready to merge|draft/ });
+    const boardReads = (f: FetchMock) =>
+      (f.mock.calls as [string, RequestInit | undefined][]).filter(
+        ([u, i]) => i?.method !== 'POST' && /^\/api\/jobs(\?|$)/.test(u),
+      ).length;
+
+    it('is a focusable button that posts refresh-pr (force only when finished) and reloads', async () => {
+      const f = mockFetch();
+      data.rows = refreshRows();
+      data.actionBody = { job: detail().job, message: `GitHub reports ${pr} as ready.` };
+      mount(60_000);
+      await screen.findByText('Finished ready');
+      const done = chipOf('job-00000021');
+      expect(done).toHaveAttribute('tabindex', '0');
+      expect(done).toHaveAccessibleDescription(/refresh the PR state from GitHub/);
+      expect(done).toHaveAttribute('data-phase', 'ready-to-merge');
+      const reads = boardReads(f);
+      fireEvent.click(done);
+      await waitFor(() => {
+        expect(boardReads(f)).toBeGreaterThan(reads);
+      });
+      expect(window.location.hash).toBe('');
+      fireEvent.keyDown(chipOf('job-00000022'), { key: 'Enter' });
+      await waitFor(() => {
+        expect(posts(f)).toHaveLength(2);
+      });
+      expect(posts(f)).toEqual([{ action: 'refresh-pr', force: true }, { action: 'refresh-pr' }]);
+      expect(window.location.hash).toBe('');
+    });
+
+    it('shows a refused refresh on the board and leaves the chip usable', async () => {
+      const f = mockFetch();
+      data.rows = refreshRows();
+      data.actionStatus = 409;
+      data.actionBody = { error: { type: 'OwnershipError', message: 'held by another session' } };
+      mount(60_000);
+      await screen.findByText('Finished ready');
+      fireEvent.click(chipOf('job-00000021'));
+      expect(await within(boardRowOf('job-00000021')).findByRole('alert')).toHaveTextContent(
+        'OwnershipError: held by another session',
+      );
+      expect(chipOf('job-00000021')).not.toHaveAttribute('aria-disabled', 'true');
+      fireEvent.click(chipOf('job-00000021'));
+      await waitFor(() => {
+        expect(posts(f)).toHaveLength(2);
+      });
+    });
   });
 
   it('names how a completed job ended and keeps its CI chip secondary, hidden once merged and passing', async () => {
@@ -2443,43 +2522,43 @@ describe('PR phase, Merge, and Refresh PR', () => {
         status: 'completed',
         liveness: 'completed',
         owner: null,
-        pr: { url: pr, state: 'ready', phase: 'ready-to-merge' },
+        pr: { url: pr, state: 'ready', phase: 'ready-to-merge', refreshable: false },
         ci: noCi({ status: 'passing', head, completion: 'ci' }),
         ...over,
       });
     data.rows = [
       done('job-00000011', {
         outcome: { kind: 'merged', label: 'completed: merged' },
-        pr: { url: pr, state: 'merged', phase: 'merged' },
+        pr: { url: pr, state: 'merged', phase: 'merged', refreshable: false },
       }),
       done('job-00000012', {
         outcome: { kind: 'ready', label: 'completed: PR ready, checks passed' },
       }),
       done('job-00000013', {
         outcome: { kind: 'human', label: 'completed: human close-out' },
-        pr: { url: pr, state: 'draft', phase: 'ci-failing' },
+        pr: { url: pr, state: 'draft', phase: 'ci-failing', refreshable: false },
         ci: noCi({ status: 'failing', head, completion: 'human' }),
       }),
       done('job-00000014', {
         outcome: { kind: 'completed', label: 'completed' },
-        pr: { url: pr, state: 'ready', phase: 'ci-failing' },
+        pr: { url: pr, state: 'ready', phase: 'ci-failing', refreshable: false },
         ci: noCi({ status: 'failing', head, completion: 'ci' }),
       }),
       done('job-00000015', {
         outcome: { kind: 'merged', label: 'completed: merged' },
-        pr: { url: pr, state: 'merged', phase: 'merged' },
+        pr: { url: pr, state: 'merged', phase: 'merged', refreshable: false },
         ci: noCi({ status: 'failing', head, completion: 'ci' }),
       }),
       // Merged by a human before CI finished: the merge is the headline, never "CI pending".
       done('job-00000017', {
         outcome: { kind: 'merged', label: 'completed: merged' },
-        pr: { url: pr, state: 'merged', phase: 'merged' },
+        pr: { url: pr, state: 'merged', phase: 'merged', refreshable: false },
         ci: noCi({ status: 'pending', head, completion: 'merged' }),
       }),
       row({
         id: 'job-00000016',
         title: 'Still running',
-        pr: { url: pr, state: 'draft', phase: 'ci-failing' },
+        pr: { url: pr, state: 'draft', phase: 'ci-failing', refreshable: false },
         ci: noCi({ status: 'failing', head }),
       }),
     ];

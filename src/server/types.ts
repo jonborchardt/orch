@@ -167,8 +167,11 @@ export interface BoardRow {
    * and waiting time included. Null when a finished job's end time cannot be established.
    */
   elapsedMs: number | null;
-  /** `phase` is orch's recorded view (`prPhase`); GitHub is asked again only on Merge or Refresh PR. */
-  pr: { url: string | null; state: string | null; phase: PrPhase };
+  /**
+   * `phase` is orch's recorded view (`prPhase`); GitHub is asked again only on Merge or Refresh PR.
+   * `refreshable`: the server allows Refresh PR now (`cannotRefreshPr` is null).
+   */
+  pr: { url: string | null; state: string | null; phase: PrPhase; refreshable: boolean };
   /** Job that replaced this one, and jobs this one replaced (`orch job supersede`). */
   supersededBy: string | null;
   supersedes: string[];

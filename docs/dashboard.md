@@ -360,7 +360,9 @@ where the PR stands, from recorded fields only (`prPhase` in `src/core/workflow.
 `draft` (CI not passing yet), `CI running`, `CI failing`, `ready to merge` (completed on GitHub's
 verdict, marked ready, CI passing), `ready marking failed` (completed on the verdict but the PR is
 still a draft: run `gh pr ready`, then Refresh PR), `merged`, and `closed`. `ready to merge` is
-orch's record; GitHub's live mergeability is checked only when Merge is clicked.
+orch's record; GitHub's live mergeability is checked only when Merge is clicked. On the board,
+where Refresh PR is allowed (the row's `pr.refreshable`, from `cannotRefreshPr`), the chip is a
+button that runs Refresh PR for that job without opening it; a refusal shows under the chip.
 
 **Archive** hides a finished job from the board's default views and nothing else: stage, status,
 `completedAt`, the PR and CI columns, the worktree, the branch, and the artifacts stay as they are,
