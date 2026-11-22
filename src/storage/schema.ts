@@ -166,6 +166,8 @@ export const jobs = sqliteTable(
     /** Incremented on every mutation; optimistic concurrency check for callers. */
     revision: integer().notNull().default(1),
     createdAt: text().notNull(),
+    /** The first `start` transition (not creation); later starts keep it. Null until then. */
+    startedAt: text(),
     updatedAt: text().notNull(),
     completedAt: text(),
   },

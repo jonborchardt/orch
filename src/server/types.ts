@@ -161,6 +161,8 @@ export interface BoardRow {
   blocker: Blocker | null;
   /** Null for finished jobs; otherwise whether and how a session may resume it. */
   resume: Resume | null;
+  /** The job's first stage start (not its creation); null until then. */
+  startedAt: string | null;
   updatedAt: string;
   /**
    * Wall-clock time from creation to completion or cancellation (to now while active), blocked
