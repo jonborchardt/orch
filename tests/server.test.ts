@@ -491,6 +491,38 @@ describe('elapsed time without completedAt', () => {
   });
 });
 
+describe('board startedAt (ticket 0109)', () => {
+  let own: TempStore;
+  beforeAll(() => {
+    own = tempStore();
+  });
+  afterAll(() => {
+    own.cleanup();
+  });
+
+  it('is null until the first start, then the stored first-start time', () => {
+    const repoPath = tempDir('started-');
+    dirs.push(repoPath);
+    const { id } = createJob(own, {
+      title: 'Started',
+      description: 'Started',
+      repo: 'r',
+      repoPath,
+      baseBranch: 'main',
+    });
+    const startedOf = () => board(own).find((r) => r.id === id)?.startedAt;
+    expect(startedOf()).toBeNull();
+    const { token } = claimJob(own, id, { session: 'claude-started' });
+    transitionJob(own, id, 'start', { token });
+    const stored = own.db.select().from(jobs).where(eq(jobs.id, id)).get()?.startedAt;
+    expect(stored).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(startedOf()).toBe(stored);
+    transitionJob(own, id, 'fail', { token, reason: 'test' });
+    transitionJob(own, id, 'start', { token });
+    expect(startedOf()).toBe(stored);
+  });
+});
+
 describe('board refresh flag (ticket 0053)', () => {
   let own: TempStore;
   beforeAll(() => {

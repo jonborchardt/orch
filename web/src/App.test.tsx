@@ -73,6 +73,7 @@ function row(over: Partial<BoardRow>): BoardRow {
     blocking: null,
     blocker: null,
     resume: null,
+    startedAt: '2026-11-13T08:00:00.000Z',
     updatedAt: '2026-11-13T08:30:00.000Z',
     elapsedMs: 1_800_000,
     pr: { url: null, state: null, phase: 'no-pr', refreshable: false },
@@ -202,6 +203,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       scopeReworks: 0,
       revision: 9,
       createdAt: '2026-11-13T08:00:00.000Z',
+      startedAt: '2026-11-13T08:00:00.000Z',
       updatedAt: '2026-11-13T08:30:00.000Z',
       completedAt: null,
       policy: null,
@@ -569,6 +571,30 @@ describe('App board', () => {
     expect(
       [...document.querySelectorAll('[data-job-id]')].map((e) => e.getAttribute('data-job-id')),
     ).toEqual(['job-00000002', 'job-00000003', 'job-00000001']);
+  });
+
+  it('shows Started as a local date and time or —, and sorts unstarted jobs last', async () => {
+    const later = '2026-11-13T09:00:00.000Z';
+    const earlier = '2026-11-12T07:15:00.000Z';
+    data.rows = [
+      row({ id: 'job-00000001', startedAt: null }),
+      row({ id: 'job-00000002', startedAt: later }),
+      row({ id: 'job-00000003', startedAt: earlier }),
+    ];
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(within(boardRowOf('job-00000001')).getByText('—')).toBeInTheDocument();
+    const shown = within(boardRowOf('job-00000003')).getByText(new Date(earlier).toLocaleString());
+    expect(shown).toHaveAttribute('dateTime', earlier);
+    const sort = screen.getByRole('button', { name: 'Started' });
+    sort.focus();
+    const tip = await screen.findByRole('tooltip');
+    expect(tip).toHaveTextContent(/not when it was created/);
+    fireEvent.click(sort);
+    expect(
+      [...document.querySelectorAll('[data-job-id]')].map((e) => e.getAttribute('data-job-id')),
+    ).toEqual(['job-00000003', 'job-00000002', 'job-00000001']);
   });
 
   it('shows the review round as "-" before the first round and "N / M" after, with a tooltip', async () => {
@@ -1909,6 +1935,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
       'Round column',
       'Reviews column',
       'Elapsed column',
+      'Started column',
       'Updated column',
       'PR / CI column',
     ]);
@@ -1960,7 +1987,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stage' }));
     expect(ids()).toEqual(['job-00000003', 'job-00000002', 'job-00000001', 'job-00000004']);
     fireEvent.click(screen.getByRole('button', { name: 'Job' }));
-    for (const name of ['Stage', 'Status', 'Round', 'Elapsed', 'Updated']) {
+    for (const name of ['Stage', 'Status', 'Round', 'Elapsed', 'Started', 'Updated']) {
       fireEvent.click(screen.getByRole('button', { name }));
       expect(header(name)).toHaveAttribute('aria-sort', 'ascending');
     }
