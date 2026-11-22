@@ -6,7 +6,11 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { jobArtifactDir } from '../src/core/paths.ts';
-import { MAX_CI_REPAIRS_REASON, MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
+import {
+  MAX_CI_REPAIRS_REASON,
+  MAX_ROUNDS_REASON,
+  SCOPE_GAP_REASON,
+} from '../src/core/workflow.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { board, detail } from '../src/server/api.ts';
 import { liveness } from '../src/server/status.ts';
@@ -985,6 +989,33 @@ describe('blocker and resume derivation', () => {
         evidence({ events: fromApprove, artifacts: [artifact('decision.md', 'approve')] }),
       )?.kind,
     ).toBe('escalated');
+    expect(blockerOf(job(), 'blocked', evidence({ events: fromApprove }))?.summary).toBe(
+      'Escalated from approve',
+    );
+
+    // A second scope gap names the gap the approver recorded, still as an escalation.
+    const scopeGap = (detail?: string | null) =>
+      new Map([
+        [
+          'job.blocked',
+          event('job.blocked', {
+            from: 'approve',
+            reason: SCOPE_GAP_REASON,
+            ...(detail === undefined ? {} : { detail }),
+          }),
+        ],
+      ]);
+    const gap = blockerOf(job(), 'blocked', evidence({ events: scopeGap('AC3 still missing') }));
+    expect(gap).toMatchObject({ kind: 'escalated', detail: SCOPE_GAP_REASON });
+    expect(gap?.summary).toContain('AC3 still missing');
+    expect(gap?.summary).toMatch(/scope gap/i);
+    expect(gap?.summary).not.toContain('Escalated from approve');
+    for (const missing of [undefined, null]) {
+      const bare = blockerOf(job(), 'blocked', evidence({ events: scopeGap(missing) }));
+      expect(bare?.kind).toBe('escalated');
+      expect(bare?.summary).toMatch(/scope gap/i);
+      expect(bare?.summary).not.toContain('Escalated from approve');
+    }
 
     expect(blockerOf(job(), 'blocked', evidence({ latestRun: failedRun }))).toEqual({
       kind: 'verification',
