@@ -8,7 +8,13 @@
  */
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { OrchError, OwnershipError, ToolError, ValidationError } from '../core/errors.ts';
+import {
+  LostLockError,
+  OrchError,
+  OwnershipError,
+  ToolError,
+  ValidationError,
+} from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { ticketKey } from '../core/tickets.ts';
 import { now, TERMINAL_STATUSES } from '../core/workflow.ts';
@@ -37,6 +43,7 @@ import {
   controllerPid,
   readSession,
   requestStop,
+  type RunnerLock,
   type RunnerSession,
   type StopRequests,
   stopRequests,
@@ -92,6 +99,13 @@ interface Run {
   launch: (input: LaunchInput) => ClaudeChild;
   log: (line: string) => void;
   pollMs: number;
+  /** Whether this controller still holds the lock it took. */
+  owned(): boolean;
+  /**
+   * Throws `LostLockError` once another controller took the lock. Every write and every job step
+   * passes it first; nothing turns the error into a ticket result.
+   */
+  assertOwned(): void;
   save(): void;
   stopNow(): boolean;
   /** Wait `seconds`, returning early once a stop-now request is seen. */
@@ -142,6 +156,7 @@ function leave(store: Store, jobId: string, note?: (job: Job) => Note | null): s
 }
 
 function leaveJob(run: Run, jobId: string, note?: (job: Job) => Note | null): void {
+  run.assertOwned();
   const problem = leave(run.store, jobId, note);
   if (problem !== null) run.log(`  job ${jobId}: could not be recorded and released: ${problem}`);
 }
@@ -190,34 +205,51 @@ interface ChildRun {
 /** One Claude session on the job, from claim to exit. Throws when another session holds the job. */
 async function runChild(run: Run, job: Job): Promise<ChildRun> {
   const { store, session } = run;
+  run.assertOwned();
   // Claim under the controller's name and make sure the worktree exists: the child's own
   // `orch factory resume` then renews this claim instead of meeting a foreign lease.
   const resumed = resumeFactoryJob(store, job.id, { session: RUNNER_SESSION });
   const cwd = resumed.job.worktreePath ?? job.repoPath;
   const env: NodeJS.ProcessEnv = { ...process.env, ORCH_SESSION: RUNNER_SESSION };
   delete env['ORCH_TOKEN'];
-  const child = run.launch({
-    cwd,
-    prompt: promptFor(job),
-    args: loadConfig(store).runnerClaudeArgs,
-    name: `factory ${job.id}`,
-    env,
-  });
+  const args = loadConfig(store).runnerClaudeArgs;
+  run.assertOwned();
+  const child = run.launch({ cwd, prompt: promptFor(job), args, name: `factory ${job.id}`, env });
   session.child = { pid: child.pid, startedAt: child.startedAt };
-  run.save();
-  run.log(`  claude: started (pid ${String(child.pid)}) in ${cwd}`);
   let exit: ChildExit | undefined;
   let stopped = false;
+  let lost: LostLockError | null = null;
   void child.done.then((e) => (exit = e));
-  // Only the process ending ends the wait: a quiet session is a working one.
-  while (exit === undefined) {
-    if (!stopped && run.stopNow()) {
-      stopped = true;
-      run.log('  claude: stopping on request');
+  try {
+    run.save();
+  } catch (err) {
+    if (err instanceof LostLockError) {
       child.kill();
+      await child.done;
+    }
+    throw err;
+  }
+  run.log(`  claude: started (pid ${String(child.pid)}) in ${cwd}`);
+  // Only the process ending ends the wait: a quiet session is a working one. A lost lock ends
+  // the child the way a stop request does, and the error goes up once it has exited.
+  while (exit === undefined) {
+    if (!stopped && lost === null) {
+      try {
+        if (run.stopNow()) {
+          stopped = true;
+          run.log('  claude: stopping on request');
+          child.kill();
+        }
+      } catch (err) {
+        if (!(err instanceof LostLockError)) throw err;
+        lost = err;
+        run.log('  claude: stopping: another controller took the lock');
+        child.kill();
+      }
     }
     await Promise.race([child.done, run.pause(run.pollMs)]);
   }
+  if (lost !== null) throw lost;
   session.child = null;
   run.save();
   return { exit, stopped, pid: child.pid };
@@ -229,6 +261,7 @@ async function runChild(run: Run, job: Job): Promise<ChildRun> {
  */
 async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
   const { store } = run;
+  run.assertOwned();
   const { token } = resumeFactoryJob(store, jobId, { session: RUNNER_SESSION });
   const auth = { token };
   let failures = 0;
@@ -266,7 +299,10 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
     };
   } finally {
     // Completing released it already; anything else goes back for whoever continues the job.
-    if (getJob(store.db, jobId).ownerToken === token) releaseJob(store, jobId, auth);
+    // After a lost lock the lease is left for the controller that took over (same name).
+    if (run.owned() && getJob(store.db, jobId).ownerToken === token) {
+      releaseJob(store, jobId, auth);
+    }
   }
 }
 
@@ -349,6 +385,7 @@ type MergeRun =
 /** `mergeJob` until it gives an answer that is not "try again", within a small budget. */
 async function merge(run: Run, jobId: string): Promise<MergeRun> {
   for (let attempt = 1; ; attempt++) {
+    run.assertOwned();
     const m = mergeJob(run.store, jobId, { session: RUNNER_SESSION });
     run.log(`  merge: ${m.outcome}${m.code ? ` (${m.code})` : ''}: ${m.reason}`);
     switch (m.outcome) {
@@ -465,6 +502,7 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
   if (job === undefined) {
     const refused = mergeNotEnabled(store, ticket);
     if (refused !== null) return out('refused', refused, null);
+    run.assertOwned();
     try {
       job = dispatchJob(store, {
         ticket: ticketId,
@@ -518,7 +556,8 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       run.log(`  job ${jobId}: re-land`);
     }
   } catch (err) {
-    if (!(err instanceof OrchError)) throw err;
+    // A lost lock is never a ticket result: it goes up to the command, which exits.
+    if (err instanceof LostLockError || !(err instanceof OrchError)) throw err;
     // A job another session holds is left alone: `leave` writes nothing to it.
     const code = err instanceof OwnershipError ? 'ownership' : 'error';
     return out('blocked', err.message, jobId, retry, code);
@@ -586,23 +625,37 @@ function summarize(session: RunnerSession, reason: string, stopped: boolean): Ru
 /** Run the session to its end as the lock holder; `resuming` continues the ticket in flight. */
 async function drive(
   store: Store,
+  lock: RunnerLock,
   session: RunnerSession,
   resuming: boolean,
   opts: RunOptions,
 ): Promise<RunSummary> {
   const paths = store.paths;
   const pause = opts.sleep ?? ((ms: number) => delay(ms, undefined, { ref: true }));
+  const write = () => {
+    session.beatAt = now();
+    writeSession(paths, session);
+  };
+  // ponytail: a starter can take the next generation between a check and the write after it;
+  // the next check stops this controller. Closing that gap needs a real mutex (a lock redesign).
   const run: Run = {
     store,
     session,
     launch: opts.launch ?? launchClaude,
     log: opts.log ?? (() => undefined),
     pollMs: opts.pollMs ?? POLL_MS,
-    save: () => {
-      session.beatAt = now();
-      writeSession(paths, session);
+    owned: () => lock.owned(),
+    assertOwned: () => {
+      if (!lock.owned()) throw new LostLockError(controllerPid(paths));
     },
-    stopNow: () => opts.signal?.aborted === true || stopRequests(paths).now,
+    save: () => {
+      run.assertOwned();
+      write();
+    },
+    stopNow: () => {
+      run.assertOwned();
+      return opts.signal?.aborted === true || stopRequests(paths).now;
+    },
     pause,
     wait: async (seconds) => {
       for (let left = seconds * 1000; left > 0 && !run.stopNow(); left -= run.pollMs) {
@@ -615,8 +668,9 @@ async function drive(
   session.pid = process.pid;
   session.child = null;
   run.save();
+  // Never throws: after a lost lock it writes nothing, and the main flow stops at its next check.
   const beat = setInterval(() => {
-    run.save();
+    if (lock.owned()) write();
   }, BEAT_MS);
   beat.unref();
 
@@ -626,6 +680,7 @@ async function drive(
     run.save();
     const mark = mailWatermark(store);
     const result = await runTicket(run, ticketId);
+    run.assertOwned();
     await reportJobMail(store, mark);
     session.results = [...session.results.filter((r) => r.ticketId !== ticketId), result];
     // A stopped ticket stays the one in flight, for `orch resume`.
@@ -653,8 +708,8 @@ async function drive(
       stopped = reason === null;
     }
     if (stopped || reason === null) {
+      run.save(); // first: a lost lock leaves the stop request to the controller that has it
       clearStop(paths, 'now');
-      run.save();
       return summarize(session, 'stopped on request; orch resume continues the session', true);
     }
     session.finished = { at: now(), reason };
@@ -709,7 +764,7 @@ export async function startSession(
       skipped: [],
       finished: null,
     };
-    return await drive(store, session, false, opts);
+    return await drive(store, release, session, false, opts);
   } finally {
     release();
   }
@@ -747,7 +802,7 @@ export async function resumeSession(
           'resume again. If that PID is now another program, orch resume --force says so.',
       );
     }
-    return await drive(store, session, true, opts);
+    return await drive(store, release, session, true, opts);
   } finally {
     release();
   }
@@ -809,6 +864,7 @@ export function stopSession(store: Store, which: keyof StopRequests, waitMs = 30
   const release = acquireRunnerLock(paths);
   let kept: string | null = null;
   try {
+    if (!release.owned()) throw new LostLockError(controllerPid(paths));
     if (session.jobId !== null) kept = leave(store, session.jobId);
     writeSession(paths, {
       ...session,

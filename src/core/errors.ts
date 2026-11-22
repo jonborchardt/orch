@@ -63,6 +63,22 @@ export class NotFoundError extends OrchError {
   }
 }
 
+/**
+ * The factory controller found a lock generation higher than its own: another controller took
+ * over (after this one looked stale, as when the machine slept). It stops without writing.
+ */
+export class LostLockError extends OrchError {
+  constructor(pid: number | null) {
+    super(
+      'Another factory controller took the lock' +
+        (pid === null ? '' : ` (PID ${String(pid)})`) +
+        '; this controller stopped without writing anything more. See orch status; ' +
+        'orch resume continues the session when no controller runs.',
+      1,
+    );
+  }
+}
+
 /** Job owned by another session, bad token, or stale revision. */
 export class OwnershipError extends OrchError {
   constructor(message: string) {

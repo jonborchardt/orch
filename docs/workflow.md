@@ -437,6 +437,15 @@ finishes the same merge, and then goes on as the session was configured. It refu
 recorded child PID is alive (`--force` when that PID is another program); `orch start` and
 `orch do` refuse while an interrupted session exists.
 
+A live controller can look dead: after the machine sleeps past the stale threshold its heartbeat
+is old until the next beat, and a starter in that window takes the next generation. So the holder
+checks its own lock before every write and every job step (runner state, claim, release, event,
+transition, CI read, merge, dispatch, launch). A controller that finds a higher generation than
+its own stops at once: it kills the Claude process it started, waits for it to exit, writes
+nothing more, and exits 1 with "Another factory controller took the lock". The job keeps its
+`orch-runner` lease for the controller that has the lock, and `orch resume` continues the session
+(decision 2026-11-21-controller-checks-its-lock).
+
 Tickets passed over for a missing merge opt-in are part of the saved session: `orch resume`
 continues that session and keeps skipping them, also after
 `orch factory config merge enable` for their repository. A new session reconsiders them: let the
