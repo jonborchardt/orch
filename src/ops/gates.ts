@@ -270,10 +270,12 @@ export function deliveryGate(
   tree: Tree,
   what = `completing ${job.stage}`,
 ): DeliveryPass {
-  const authority = authorityOf(effectivePolicy(job, tree).policy);
-  const preReview = authority === 'ci' && !approvalHolds(store, job, tree);
+  const preReview = isPreReview(store, job, tree);
   requireDeliverable(store, job, tree, what, preReview);
-  return { authority, approved: !preReview };
+  return {
+    authority: preReview ? 'ci' : authorityOf(effectivePolicy(job, tree).policy),
+    approved: !preReview,
+  };
 }
 
 /** Whether this job is in the pre-review pass (`ci` authority, no approval for HEAD). */
