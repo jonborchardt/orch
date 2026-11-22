@@ -37,7 +37,8 @@ Rules that are never relaxed:
 - Escalate rather than approve around a blocking finding.
 - Never run `git push --force`, `gh pr merge`, `gh pr ready`, or `gh run rerun`; never push outside
   `orch gh push`; never delete branches or worktrees. `orch gh ci` requests the one bounded re-run
-  and marks a passing PR ready; humans merge.
+  and marks a passing PR ready. Merging is orch's `mergeJob` alone: a dashboard Merge click, or
+  `orch job merge` / the controller where the repository is opted in to `mergeRepos`.
 
 ## 0. Preflight
 

@@ -39,7 +39,7 @@ describe('ci stage: orch marks a passing PR ready', () => {
     expect(readyEvents(c).map((e) => e.payload)).toEqual([{ head: sha, ok: true, error: null }]);
     expect(readyEvents(c)[0]?.actor).toBe(SESSION);
     expect(planJob(store, c.id).reason).toContain('orch marked the PR ready for review');
-    expect(planJob(store, c.id).reason).toContain('Humans merge');
+    expect(planJob(store, c.id).reason).toContain('merging is mergeJob alone');
     expect(planJob(store, c.id).reason).toContain('PR phase ready-to-merge');
     expect(planJob(store, c.id).reason).toContain('Merge on the dashboard');
     // Nothing merged.

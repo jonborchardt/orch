@@ -11,7 +11,8 @@ invocation, in this session.
 
 This skill does not merge by itself and holds no merge rules: `orch job merge` does both, and only
 where the user opted the repository in (decision 2026-11-20-orch-job-merge). The `factory` skill's
-rules stay as written while the job runs (it never merges, never resolves a conflict by hand);
+rules stay as written while the job runs (the `factory` session never merges and never resolves a
+conflict by hand; `orch job merge` merges afterwards, where the repository is opted in);
 `dotodo` acts only after the job is `completed`.
 
 Tickets live in orch's database, not in the repository: read and change them only with

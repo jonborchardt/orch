@@ -465,8 +465,9 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     const phase = prPhase(job, completionOf(job.stage, done?.payload));
     const merge =
       phase === 'ready-to-merge'
-        ? 'PR phase ready-to-merge: Humans merge (Merge on the dashboard, or on GitHub).'
-        : `PR phase ${phase}. Humans merge.`;
+        ? 'PR phase ready-to-merge: merging is mergeJob alone (Merge on the dashboard, or ' +
+          'orch job merge / the controller where the repository is opted in to mergeRepos).'
+        : `PR phase ${phase}. Merging is mergeJob alone (the dashboard, or orch job merge where opted in).`;
     plan.reason =
       done?.payload['mergedByHuman'] === true
         ? `PR merged by a human before CI finished (${job.prUrl ?? 'no URL'}): required checks were ` +
