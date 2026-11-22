@@ -56,7 +56,12 @@ describe('ustar and entry paths (pure)', () => {
   });
 
   it('accepts only safe allow-listed paths', () => {
-    for (const ok of ['orch.sqlite', 'jobs/job-1/artifacts/spec.md', 'tickets/0007/assets/a.png']) {
+    for (const ok of [
+      'orch.sqlite',
+      'jobs/job-1/artifacts/spec.md',
+      'tickets/0007/assets/a.png',
+      'jobs/job-1/artifacts/console.md',
+    ]) {
       expect(entryPathProblem(ok)).toBeNull();
     }
     for (const bad of [
@@ -70,6 +75,13 @@ describe('ustar and entry paths (pure)', () => {
       'runner.json',
       'worktrees/r/job/x',
       'tickets/abc/assets/x',
+      'jobs/D:/artifacts/x',
+      'jobs/a/artifacts/x.txt:stream',
+      'jobs/a/artifacts/CON',
+      'jobs/a/artifacts/nul.txt',
+      'tickets/0001/assets/com1',
+      'jobs/a/artifacts/x.',
+      'jobs/a/artifacts/x ',
     ]) {
       expect(entryPathProblem(bad), bad).not.toBeNull();
     }
@@ -167,6 +179,16 @@ describe('createBackup', () => {
     ).toThrow();
     expect(readFileSync(file, 'utf8')).toBe('prior');
     expect(readdirSync(out)).toEqual(['b.tar.gz']);
+  });
+
+  it('leaves a temp file it did not create in place', () => {
+    seedJob(store);
+    const file = join(out, 'b.tar.gz');
+    const foreign = `${file}.tmp-${String(process.pid)}`;
+    writeFileSync(foreign, 'not ours');
+    expect(() => createBackup(store.paths, file)).toThrow();
+    expect(readFileSync(foreign, 'utf8')).toBe('not ours');
+    expect(existsSync(file)).toBe(false);
   });
 
   it('fails on a missing or changed registered artifact, naming job and path (AC8)', () => {

@@ -58,6 +58,13 @@ import { sleep, verifyLockHolder } from './verify-lock.ts';
 /** Snapshots retaken when an artifact file and its row disagree (a concurrent replace). */
 const ATTEMPTS = 3;
 
+/**
+ * Largest uncompressed archive read back, so a gzip bomb cannot exhaust memory. Create validates
+ * by reading back, so it never publishes an archive restore would refuse.
+ * ponytail: in-memory cap; raise it together with streaming if asset sets grow past it.
+ */
+const MAX_ARCHIVE_BYTES = 2 * 1024 ** 3;
+
 /** Seams for tests to change files at the moments a race or a corruption would. */
 export interface BackupHooks {
   afterSnapshot?: (attempt: number) => void;
@@ -205,7 +212,7 @@ function describeMismatches(bad: ReturnType<typeof artifactMismatches>): string 
 export function readArchive(file: string): CheckedArchive {
   let raw: Buffer;
   try {
-    raw = gunzipSync(readFileSync(file));
+    raw = gunzipSync(readFileSync(file), { maxOutputLength: MAX_ARCHIVE_BYTES });
   } catch (err) {
     throw new ValidationError(`Not a readable backup (gzip): ${file}: ${(err as Error).message}`);
   }
@@ -246,6 +253,7 @@ export function createBackup(
   const work = mkdtempSync(join(tmpdir(), 'orch-backup-'));
   mkdirSync(dirname(out), { recursive: true });
   const tmp = `${out}.tmp-${String(process.pid)}`;
+  let created = false; // never remove a temp file this run did not write
   try {
     const snap = join(work, DATABASE_PATH);
     let facts: SnapshotFacts;
@@ -290,6 +298,7 @@ export function createBackup(
     );
     // ponytail: built in memory; stream through zlib if asset sets grow beyond memory.
     writeFileSync(tmp, gzipSync(tar), { flag: 'wx' });
+    created = true;
     opts.hooks?.beforePublish?.(tmp);
     checkDatabase(readArchive(tmp), join(work, 'check.sqlite'));
     if (!opts.force && existsSync(out))
@@ -308,7 +317,7 @@ export function createBackup(
       skipped: found.skipped,
     };
   } finally {
-    rmSync(tmp, { force: true });
+    if (created) rmSync(tmp, { force: true });
     rmSync(work, { recursive: true, force: true });
   }
 }
@@ -370,7 +379,7 @@ export function restoreBackup(
 
   mkdirSync(dest, { recursive: true });
   const staging = mkdtempSync(join(dest, '.orch-restore-'));
-  const moved: string[] = [];
+  const moved: { d: string; hadEmpty: boolean }[] = [];
   try {
     const stagedDb = join(staging, DATABASE_PATH);
     const before = checkDatabase(archive, stagedDb);
@@ -380,7 +389,14 @@ export function restoreBackup(
       if (!inside(canonicalTarget(abs), staging))
         throw new ValidationError(`Unsafe archive entry ${rel}.`);
       mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, data, { flag: 'wx' });
+      try {
+        writeFileSync(abs, data, { flag: 'wx' });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        throw new ValidationError(
+          `Archive entry ${rel} collides with another entry on this filesystem (case-insensitive?).`,
+        );
+      }
     }
     const stagingPaths: RuntimePaths = {
       config: staging,
@@ -400,14 +416,22 @@ export function restoreBackup(
     refuseActive(paths);
     for (const d of ['jobs', 'tickets']) {
       if (!existsSync(join(staging, d))) continue;
-      if (existsSync(join(dest, d))) rmdirSync(join(dest, d)); // empty (checked); fails if filled meanwhile
+      const hadEmpty = existsSync(join(dest, d));
+      if (hadEmpty) rmdirSync(join(dest, d)); // empty (checked); fails if filled meanwhile
       renameSync(join(staging, d), join(dest, d));
-      moved.push(d);
+      moved.push({ d, hadEmpty });
     }
     hooks.beforeInstallDatabase?.();
     // Installed last and never over a file: link fails if orch.sqlite appeared meanwhile.
     // ponytail: hard link needs a filesystem that has them (not FAT); the data directory always has.
-    linkSync(stagedDb, databasePath(paths));
+    try {
+      linkSync(stagedDb, databasePath(paths));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      throw new ValidationError(
+        `Refusing to restore: ${databasePath(paths)} appeared during the restore; nothing was installed.`,
+      );
+    }
     moved.length = 0;
     return {
       destination: dest,
@@ -418,17 +442,13 @@ export function restoreBackup(
       notRecreated: NOT_RECREATED,
     };
   } catch (err) {
-    for (const d of moved.reverse()) {
+    for (const { d, hadEmpty } of moved.reverse()) {
       try {
         renameSync(join(dest, d), join(staging, d));
+        if (hadEmpty) mkdirSync(join(dest, d));
       } catch {
         /* leave it rather than delete restored files */
       }
-    }
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new ValidationError(
-        `Refusing to restore: ${databasePath(paths)} appeared during the restore; nothing was installed.`,
-      );
     }
     throw err;
   } finally {

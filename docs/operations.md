@@ -574,7 +574,8 @@ first (format `orch-backup`, version 1, orch version, the schema's migration nam
 table, every file's size and SHA-256, what is included and excluded), then `orch.sqlite`, then every
 regular file under `jobs/<id>/artifacts/` and `tickets/<id>/assets/` at the same paths. Symbolic
 links and other non-regular entries there are skipped and reported. Every registered artifact must
-exist and match the hash in the snapshot's own row; if an artifact is being replaced at that
+exist and match the hash in the snapshot's own row (a row registered before hashes were recorded
+is only checked for presence); if an artifact is being replaced at that
 moment the snapshot is retaken (three times at most), and a file still missing or changed fails
 the backup and names the job and path. The archive is written to a temporary file next to
 `<file>`, read back and checked (gzip, entry paths, manifest, hashes, `integrity_check`), and only
@@ -592,8 +593,10 @@ destination already has `orch.sqlite` (or its `-wal`/`-shm`), anything in `jobs/
 or a live controller, recovery worker, or `orch verify` for it. There is no overwrite flag; to
 replace data, move the old data directory aside first. The archive is unpacked into a staging
 directory inside the destination and checked there before anything is installed: supported format
-version, a complete manifest, safe entry paths only (no absolute paths, drive letters, `..`,
-backslashes, links, or paths outside the allow-list), matching hashes, `PRAGMA integrity_check`,
+version, a complete manifest, safe entry paths only (no absolute paths, `..`, backslashes, a
+colon anywhere, Windows reserved names such as `CON` or `nul.txt`, names ending in `.` or a space,
+links, or paths outside the allow-list; an artifact or asset with such a name is skipped and
+reported at backup time), matching hashes, `PRAGMA integrity_check`,
 and every registered artifact present with its hash. A backup from an older orch is migrated
 forward with the installed migrations; one whose database has migrations this orch does not know
 is refused ("created by a newer orch"). The database is installed last and never over an existing

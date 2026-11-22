@@ -1,5 +1,13 @@
 /** `orch backup restore`: round trip, refusals, archive validation, migrations, rollback. */
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { gzipSync } from 'node:zlib';
@@ -10,6 +18,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { databasePath, migrationsDir, ticketAssetDir, verifyLockPath } from '../src/core/paths.ts';
 import { encodeTar } from '../src/core/tar.ts';
 import { createBackup, restoreBackup } from '../src/ops/backup.ts';
+import { holdPidFile } from '../src/ops/recover.ts';
+import { acquireRunnerLock } from '../src/ops/runner-state.ts';
 import { addTicket, addTicketAsset, showTicket } from '../src/ops/tickets.ts';
 import { listArtifacts } from '../src/storage/artifacts.ts';
 import { openStore } from '../src/storage/client.ts';
@@ -131,6 +141,26 @@ describe('restore round trip', () => {
     }
   });
 
+  it('backs up and restores an artifact row without a hash, still requiring its file', () => {
+    const c = seedJob(store);
+    const raw = new DatabaseSync(databasePath(store.paths));
+    try {
+      raw.prepare("UPDATE artifacts SET sha256 = NULL WHERE path = 'spec.md'").run();
+    } finally {
+      raw.close();
+    }
+    const spec = join(c.dir, 'spec.md');
+    writeFileSync(spec, readFileSync(spec, 'utf8') + '\nedited; no hash to compare\n');
+    const file = backup();
+    const dest = tempDir();
+    expect(restoreBackup(file, homePaths(dest)).files).toBe(1);
+    expect(readFileSync(join(dest, 'jobs', c.id, 'artifacts', 'spec.md'), 'utf8')).toBe(
+      readFileSync(spec, 'utf8'),
+    );
+    rmSync(spec);
+    expect(() => backup('missing.tar.gz')).toThrow(new RegExp(`job ${c.id}: spec\\.md is missing`));
+  });
+
   it('migrates a backup of an older schema forward (AC16)', () => {
     const old = join(tempDir(), 'old-migrations');
     const shipped = readdirSync(migrationsDir(), { withFileTypes: true })
@@ -202,6 +232,29 @@ describe('restore refusals', () => {
     ).toBe(2);
   });
 
+  it('refuses a destination with a live factory controller or recovery worker (AC11)', () => {
+    seedJob(store);
+    const file = backup();
+    const dest = tempDir();
+    const release = acquireRunnerLock(homePaths(dest));
+    try {
+      const before = listing(dest);
+      expect(() => restoreBackup(file, homePaths(dest))).toThrow(/a factory controller runs/);
+      expect(listing(dest)).toEqual(before);
+    } finally {
+      release();
+    }
+    const dest2 = tempDir();
+    const worker = holdPidFile(homePaths(dest2));
+    try {
+      const before = listing(dest2);
+      expect(() => restoreBackup(file, homePaths(dest2))).toThrow(/a recovery worker runs/);
+      expect(listing(dest2)).toEqual(before);
+    } finally {
+      worker.release();
+    }
+  });
+
   it('refuses a newer schema or an unsupported format (AC16)', () => {
     seedJob(store);
     const raw = new DatabaseSync(databasePath(store.paths));
@@ -228,6 +281,7 @@ describe('restore refusals', () => {
     const c = seedJob(store);
     const file = backup();
     const dest = tempDir();
+    mkdirSync(join(dest, 'jobs')); // an empty jobs/ is allowed, and is put back on rollback
     expect(() =>
       restoreBackup(file, homePaths(dest), {
         beforeInstallDatabase: () => {
@@ -236,7 +290,8 @@ describe('restore refusals', () => {
         },
       }),
     ).toThrow(/appeared during the restore/);
-    expect(listing(dest)).toEqual(['orch.sqlite']);
+    expect(listing(dest)).toEqual(['jobs', 'orch.sqlite']);
+    expect(listing(join(dest, 'jobs'))).toEqual([]);
     expect(readFileSync(join(dest, 'orch.sqlite'), 'utf8')).toBe('someone else');
   });
 });
@@ -309,6 +364,8 @@ describe('restore validation', () => {
       'C:/abs.txt',
       'logs/x.log',
       'jobs/a/artifacts/..\\x',
+      'jobs/C:/artifacts/x',
+      `jobs/${jobId}/artifacts/spec.md:stream`,
     ]) {
       rewrite(file, (m, list) => withFile(m, list, bad, 'escape'));
       refused(/Unsafe archive entry/);

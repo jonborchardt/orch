@@ -73,7 +73,7 @@ export function inspectSnapshot(file: string): SnapshotFacts {
           .map((r) => ({
             jobId: String(r['jobId']),
             path: String(r['path']),
-            sha256: String(r['sha256']),
+            sha256: r['sha256'] === null ? null : String(r['sha256']),
           }))
       : [];
     return { integrity: first, migrations, rows, artifacts };

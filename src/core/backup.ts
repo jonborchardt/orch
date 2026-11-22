@@ -54,6 +54,8 @@ export interface Manifest {
 export const sha256 = (data: Buffer | string): string =>
   createHash('sha256').update(data).digest('hex');
 
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
+
 /** Why `p` may not be an archive entry, or null when it is safe and on the allow-list. */
 export function entryPathProblem(p: string): string | null {
   if (p === '') return 'empty path';
@@ -63,6 +65,11 @@ export function entryPathProblem(p: string): string | null {
   const segs = p.split('/');
   if (segs.some((s) => s === '..')) return '".." segment';
   if (segs.some((s) => s === '' || s === '.')) return 'empty or "." segment';
+  // A colon anywhere is a drive letter or an NTFS alternate data stream.
+  if (segs.some((s) => s.includes(':'))) return 'colon in path';
+  if (segs.some((s) => /[. ]$/.test(s) || WINDOWS_RESERVED.test(s))) {
+    return 'Windows reserved name or trailing "." or space';
+  }
   if (p === MANIFEST_PATH || p === DATABASE_PATH) return null;
   if (segs.length >= 4 && segs[0] === 'jobs' && segs[2] === 'artifacts') return null;
   if (segs.length >= 4 && segs[0] === 'tickets' && /^\d+$/.test(segs[1] ?? '')) {
@@ -188,12 +195,14 @@ export function checkArchive(entries: readonly TarEntry[]): CheckedArchive {
 export interface ArtifactRow {
   jobId: string;
   path: string;
-  sha256: string;
+  /** Null on rows registered before hashes were recorded (no backfill). */
+  sha256: string | null;
 }
 
 /**
  * Registered artifacts whose file is missing or differs from the row. Rows hash the file as
- * UTF-8 text (storage/artifacts.ts validateArtifact), so the comparison does the same.
+ * UTF-8 text (storage/artifacts.ts validateArtifact), so the comparison does the same. A row
+ * without a hash is only checked for presence.
  */
 export function artifactMismatches(
   rows: readonly ArtifactRow[],
@@ -203,7 +212,7 @@ export function artifactMismatches(
   for (const r of rows) {
     const data = files.get(`jobs/${r.jobId}/artifacts/${r.path}`);
     if (data === undefined) out.push({ jobId: r.jobId, path: r.path, problem: 'missing' });
-    else if (sha256(data.toString('utf8')) !== r.sha256) {
+    else if (r.sha256 !== null && sha256(data.toString('utf8')) !== r.sha256) {
       out.push({ jobId: r.jobId, path: r.path, problem: 'changed' });
     }
   }
