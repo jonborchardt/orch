@@ -67,7 +67,10 @@ describe('scope-gap rework at approval', () => {
     expect(go(c, 'complete').stage).toBe('build');
 
     plan = next(c.id);
-    expect(plan.reason).toContain('Scope gap at approval: two requested cases were cut');
+    expect(plan.reason.startsWith('Scope gap at approval: two requested cases were cut')).toBe(
+      true,
+    );
+    expect(plan.reason).not.toContain('consolidated.md');
     expect(plan.reason).not.toContain('Base integration');
   });
 
@@ -83,7 +86,10 @@ describe('scope-gap rework at approval', () => {
       4,
     ]);
     const plan = next(c.id);
-    expect(plan.reason).toContain('Scope gap at approval: AC3 is not implemented');
+    expect(plan.reason.startsWith('Scope gap at approval: AC3 is not implemented')).toBe(true);
+    expect(plan.reason).toContain('decision.md');
+    expect(plan.reason).not.toContain('consolidated.md');
+    expect(plan.reason).not.toContain('Rework round');
     expect(plan.reason).not.toContain('Base integration');
 
     toApprove(c, 'src/ac3.ts');
