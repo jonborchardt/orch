@@ -12,6 +12,7 @@ import {
   now,
   prPhase,
   type PrPhase,
+  SCOPE_GAP_REASON,
 } from '../core/workflow.ts';
 import type { Artifact, Event, Job, VerificationRun } from '../storage/schema.ts';
 import type {
@@ -167,6 +168,17 @@ export function blockerOf(
         return {
           kind: 'decision',
           summary: 'Approver escalated: a human must decide',
+          detail: reason,
+        };
+      }
+      // Before verificationFailed on purpose: the gap is why the job stopped, not a stale run.
+      if (from === 'approve' && reason === SCOPE_GAP_REASON) {
+        const gap = text(e, 'detail');
+        return {
+          kind: 'escalated',
+          summary: gap
+            ? `Repeated scope gap at approval: ${gap}`
+            : 'Repeated scope gap at approval',
           detail: reason,
         };
       }

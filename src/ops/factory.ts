@@ -614,21 +614,22 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       );
       const pending = reworked && (!builtSince || reworked.id > builtSince.id) ? reworked : null;
       const why = typeof pending?.payload['reason'] === 'string' ? pending.payload['reason'] : null;
+      // A scope gap leads: that round's consolidated review passed, so there is nothing to address there.
+      const scopeGap = typeof pending?.payload['scopeGap'] === 'string';
       const reworkNote = !pending
         ? ''
-        : typeof pending.payload['scopeGap'] === 'string'
-          ? ` Scope gap at approval: ${why ?? 'the build covers less than requested'}. ` +
-            'Implement everything spec.md puts in scope that decision.md names as missing; this is the one automatic scope rework.'
-          : pending.payload['from'] === 'ci' && pending.payload['integration'] !== true
-            ? ` CI repair ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}: ${why ?? 'required checks failed'}. ` +
-              'The builder reads the saved logs, fixes the defect without weakening checks or the policy, commits, and runs orch verify.'
-            : ` Base integration needs the builder: ${why ?? 'the merge did not apply cleanly'}. ` +
-              `Merge ${job.baseBranch}, resolve, commit the merge; the result is reviewed as new code.`;
-      plan.reason =
-        (rework
-          ? `Rework round ${String(job.round + 1)}: address round-${String(job.round)}/consolidated.md, then rebuild build.md.`
-          : 'Implement spec.md in the worktree, commit, run orch verify, and write build.md citing the run id.') +
-        reworkNote;
+        : pending.payload['from'] === 'ci' && pending.payload['integration'] !== true
+          ? ` CI repair ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}: ${why ?? 'required checks failed'}. ` +
+            'The builder reads the saved logs, fixes the defect without weakening checks or the policy, commits, and runs orch verify.'
+          : ` Base integration needs the builder: ${why ?? 'the merge did not apply cleanly'}. ` +
+            `Merge ${job.baseBranch}, resolve, commit the merge; the result is reviewed as new code.`;
+      plan.reason = scopeGap
+        ? `Scope gap at approval: ${why ?? 'the build covers less than requested'}. ` +
+          'Implement everything spec.md puts in scope that decision.md names as missing, then rebuild build.md; this is the one automatic scope rework.'
+        : (rework
+            ? `Rework round ${String(job.round + 1)}: address round-${String(job.round)}/consolidated.md, then rebuild build.md.`
+            : 'Implement spec.md in the worktree, commit, run orch verify, and write build.md citing the run id.') +
+          reworkNote;
       plan.commands = [...start, verify, add('build.md', rework), complete];
       break;
     }
