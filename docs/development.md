@@ -221,6 +221,8 @@ orch stop [next] | status [--json]                   # ask it to stop; what it i
 orch ui [--port <n>] [--open]          # long-running, optional; loopback only
 orch recover start|stop|status [--json] # opt-in recovery worker (detached, PID file in the data dir)
 orch recover run [--once]              # the worker in the foreground, or one pass
+orch backup create <file> [--force]    # one .tar.gz: SQLite snapshot, artifacts, ticket assets, manifest
+orch backup restore <file> [--data-dir <dir>]   # into an empty, inactive data dir; no overwrite flag
 ```
 
 `job create` detects the repository from the current directory (or `--repo`), records its identity
