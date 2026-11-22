@@ -208,10 +208,21 @@ function look(store: Store, job: Job, input: MergeInput): Seen {
 function changesWorkflows(cwd: string, job: Job): boolean {
   const base = baseRef(cwd, job.baseBranch);
   if (!base || !job.ciHead) return true;
-  const mergeBase = tryGit(cwd, 'merge-base', base, job.ciHead);
+  // --no-replace-objects: a refs/replace/* entry cannot substitute a commit or tree that hides
+  // the change from the guard.
+  const mergeBase = tryGit(cwd, '--no-replace-objects', 'merge-base', base, job.ciHead);
   if (!mergeBase) return true;
   // -z: unquoted names, so an odd character cannot hide the prefix.
-  const names = tryGit(cwd, 'diff', '--name-only', '--no-renames', '-z', mergeBase, job.ciHead);
+  const names = tryGit(
+    cwd,
+    '--no-replace-objects',
+    'diff',
+    '--name-only',
+    '--no-renames',
+    '-z',
+    mergeBase,
+    job.ciHead,
+  );
   if (names === undefined) return true;
   return touchesWorkflows(names.split('\0').filter((l) => l !== ''));
 }

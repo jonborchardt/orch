@@ -1002,4 +1002,20 @@ describe('mergeDecision: workflow changes need a human', () => {
     ).toBe(false);
     expect(touchesWorkflows([])).toBe(false);
   });
+
+  it('touchesWorkflows matches a link named exactly .github/workflows or .github', () => {
+    for (const p of [
+      '.github/workflows',
+      '.github',
+      '.GitHub',
+      './.github/workflows',
+      '.github\\workflows',
+    ]) {
+      expect(touchesWorkflows([p]), p).toBe(true);
+    }
+    for (const p of ['.github/CODEOWNERS', '.githubx', 'a/.github']) {
+      expect(touchesWorkflows([p]), p).toBe(false);
+    }
+    expect(touchesWorkflows([])).toBe(false);
+  });
 });

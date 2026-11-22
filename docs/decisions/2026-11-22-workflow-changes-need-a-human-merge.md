@@ -5,9 +5,12 @@ diff touches `.github/workflows/` and the merge is not a human's dashboard click
 (`MergeFacts.changesWorkflows && !byHuman`). It is checked after `head-changed` and before
 `not-authorized`, so `mergeRepos` does not lift it, and recording a PR GitHub already merged is
 unchanged. `ops/merge.ts` computes `changesWorkflows` from Git, never from the repository's files:
-`git diff --name-only --no-renames -z <merge-base(base, ciHead)> <ciHead>`, matched by the pure
-`touchesWorkflows` (prefix `.github/workflows/`, case-insensitive), so an addition, edit, deletion,
-or rename (both sides) counts. When Git cannot answer, the value is true: fail closed. The rule
+`git --no-replace-objects diff --name-only --no-renames -z <merge-base(base, ciHead)> <ciHead>`
+(the merge base also read with `--no-replace-objects`, so a `refs/replace/*` entry cannot hide a
+change), matched by the pure `touchesWorkflows` (prefix `.github/workflows/`, or exactly
+`.github/workflows` or `.github`, which is how a symlink or gitlink replacing either directory
+appears; case-insensitive), so an addition, edit, deletion, or rename (both sides) counts. When Git
+cannot answer, the value is true: fail closed. The rule
 applies to every repository, whatever its verification authority.
 
 **Exception to decision 042.** Decision 042 keeps sensitive paths (CI among them) labelled, not

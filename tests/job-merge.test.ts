@@ -884,4 +884,19 @@ describe('a PR that changes .github/workflows/ needs a human merge', () => {
     expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
     expect(merges()).toHaveLength(0);
   });
+
+  it('a refs/replace/ entry cannot hide a workflow change', () => {
+    const head = branch('wf-replaced', () =>
+      commitFile(wf.clone, WORKFLOW, 'on: [pull_request]\n'),
+    );
+    const decoy = branch('wf-decoy', () => commitFile(wf.clone, 'src/c.ts', 'export {};\n'));
+    gitIn(wf.clone, 'replace', head, decoy);
+    try {
+      const job = jobAt(head);
+      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+      expect(merges()).toHaveLength(0);
+    } finally {
+      gitIn(wf.clone, 'replace', '-d', head);
+    }
+  });
 });
