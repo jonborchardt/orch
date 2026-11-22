@@ -218,19 +218,23 @@ async function runChild(run: Run, job: Job): Promise<ChildRun> {
   session.child = { pid: child.pid, startedAt: child.startedAt };
   let exit: ChildExit | undefined;
   let stopped = false;
-  let saved = false;
   let lost: LostLockError | null = null;
   void child.done.then((e) => (exit = e));
+  try {
+    run.save();
+  } catch (err) {
+    if (err instanceof LostLockError) {
+      child.kill();
+      await child.done;
+    }
+    throw err;
+  }
+  run.log(`  claude: started (pid ${String(child.pid)}) in ${cwd}`);
   // Only the process ending ends the wait: a quiet session is a working one. A lost lock ends
   // the child the way a stop request does, and the error goes up once it has exited.
   while (exit === undefined) {
     if (!stopped && lost === null) {
       try {
-        if (!saved) {
-          run.save();
-          saved = true;
-          run.log(`  claude: started (pid ${String(child.pid)}) in ${cwd}`);
-        }
         if (run.stopNow()) {
           stopped = true;
           run.log('  claude: stopping on request');
@@ -266,13 +270,9 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
       if (run.stopNow()) return { kind: 'stopped' };
       const job = getJob(store.db, jobId);
       if (job.stage !== 'ci') return null;
-      if (job.status !== 'running') {
-        run.assertOwned();
-        transitionGuarded(store, jobId, 'start', auth);
-      }
+      if (job.status !== 'running') transitionGuarded(store, jobId, 'start', auth);
       let waitSeconds = RETRY_SECONDS;
       try {
-        run.assertOwned();
         const r = reconcileCi(store, jobId, auth);
         failures = 0;
         run.log(`  ci: ${r.action}: ${r.reason}`);
@@ -862,14 +862,10 @@ export function stopSession(store: Store, which: keyof StopRequests, waitMs = 30
     );
   }
   const release = acquireRunnerLock(paths);
-  const guard = () => {
-    if (!release.owned()) throw new LostLockError(controllerPid(paths));
-  };
   let kept: string | null = null;
   try {
-    guard();
+    if (!release.owned()) throw new LostLockError(controllerPid(paths));
     if (session.jobId !== null) kept = leave(store, session.jobId);
-    guard();
     writeSession(paths, {
       ...session,
       child: null,
