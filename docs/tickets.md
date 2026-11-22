@@ -47,7 +47,7 @@ unchanged and reported as blocked by its repository.
 | `type`        | `bug`, `feature`, `chore`, `question` (a decision to make, never executable)              |
 | `area`        | one of the thirteen built-in areas (`orch ticket area list`) or one added with `area add` |
 | `priority`    | `P1` fix now, `P2` next, `P3` someday, `P4` parked                                        |
-| `effort`      | days: `0.25, 0.5, 1, 2, 3, 5`                                                             |
+| `effort`      | 24-hour days: `0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2, 3, 5` (see [Effort](#effort))     |
 | `classified`  | `auto` or `user`: whether a person gave the area, priority, or effort                     |
 | `body`        | the whole Markdown description, stored as text: What, Why, checklists, Screenshot         |
 | `duplicateOf` | set exactly while `status` is `duplicate`                                                 |
@@ -59,6 +59,19 @@ repository.
 Status changes: `start` (open to in-progress), `done`, `drop`, `duplicate --of <id>` (from open or
 in-progress), `reopen` (from anything but open; clears `duplicateOf`). `done`, `drop`, and
 `duplicate` are refused while an unfinished job is working on the ticket.
+
+## Effort
+
+`effort` is the expected elapsed wall-clock time from starting the ticket to its merge, in days of
+24 hours: `0.05` is 1.2 hours, `0.1` is 2.4 hours, `0.25` is 6 hours. It includes everything the
+factory does (worktree, verification runs, CI, reviews, rework), not only the implementation. The
+`log-todo` skill holds the estimation rubric; `orch` only checks that the value is on the scale.
+
+An estimate aims at 70% confidence: about 7 of 10 tickets should finish within theirs. To check,
+divide a completed ticket's elapsed hours (its jobs' `startedAt` to `completedAt`, summed) by
+`effort × 24`; 1 or less is within the estimate. Count only tickets estimated on or after
+2026-11-22: earlier values were nominal working days and are not comparable. Estimates are never
+rewritten after the work; a re-estimate is a `ticket.reclassified` event that keeps the old value.
 
 ## Dependencies and related tickets
 

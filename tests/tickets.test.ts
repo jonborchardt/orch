@@ -172,6 +172,7 @@ describe('create, read, edit', () => {
     for (const bad of [
       { priority: 'P5' },
       { effort: 4 },
+      { effort: 0.025 },
       { type: 'epic' },
       { area: 'nope' },
       { classified: 'maybe' },
@@ -213,7 +214,7 @@ describe('create, read, edit', () => {
       title: 'T2',
       priority: 'P1',
       area: 'core',
-      effort: 2,
+      effort: 0.075,
       classified: 'user',
       actor: 'me',
     });
@@ -221,7 +222,7 @@ describe('create, read, edit', () => {
       title: 'T2',
       priority: 'P1',
       area: 'core',
-      effort: 2,
+      effort: 0.075,
       revision: 2,
     });
     const events = ticketHistory(store, t.id);
@@ -232,7 +233,11 @@ describe('create, read, edit', () => {
       'ticket.priority-changed',
     ]);
     expect(events[3]).toMatchObject({ payload: { from: 'P3', to: 'P1' }, actor: 'me' });
-    expect(events[2]?.payload).toMatchObject({ area: { from: 'web', to: 'core' } });
+    expect(events[2]?.payload).toMatchObject({
+      area: { from: 'web', to: 'core' },
+      // A re-estimate keeps the original value in the history.
+      effort: { from: 1, to: 0.075 },
+    });
     expect(() => ticketAction(store, t.id, { action: 'edit', title: 'T2' })).toThrow(
       /Nothing to change/,
     );

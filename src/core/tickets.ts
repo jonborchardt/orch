@@ -13,8 +13,8 @@ export type TicketType = (typeof TICKET_TYPES)[number];
 /** P1 fix now, P2 next, P3 someday, P4 parked. */
 export const PRIORITIES = ['P1', 'P2', 'P3', 'P4'] as const;
 export type Priority = (typeof PRIORITIES)[number];
-/** Days. */
-export const EFFORTS: readonly number[] = [0.25, 0.5, 1, 2, 3, 5];
+/** Days of elapsed wall-clock time, start to merge; one day is 24 hours (docs/tickets.md). */
+export const EFFORTS: readonly number[] = [0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2, 3, 5];
 export const CLASSIFIED = ['auto', 'user'] as const;
 export type Classified = (typeof CLASSIFIED)[number];
 export const LINK_KINDS = ['depends_on', 'related'] as const;

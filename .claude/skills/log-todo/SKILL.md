@@ -45,11 +45,12 @@ area, a dependency cycle, a closed ticket); exit 3 is no such id.
    dropped ticket: a new ticket with `--related <that id>`, no question.
 4. Classify each todo: `type` (`bug|feature|chore|question`; a question is a decision to make, not code), `area` (an
    existing area whenever one fits; if none does, `orch ticket area add <name> --description "<d>"` first and say so),
-   `priority` (P1 fix now, P2 next, P3 someday, P4 parked: only when the user says so), `effort` in days from
-   `0.25, 0.5, 1, 2, 3, 5` (an educated guess), `--depends-on` and `--related` by id. Values the text gives (`p1`,
-   `area: api`, `2 days`, `depends on 7`, `blocks 9`) are taken as given; "blocks 9" is `orch ticket dep add 9 <new id>`
-   after filing. `--classified user` when the text gave any of area, priority or effort, else `auto`. Two items
-   combined into one take the higher priority and the summed effort (rounded up to the scale).
+   `priority` (P1 fix now, P2 next, P3 someday, P4 parked: only when the user says so), `effort` (see **Effort**
+   below), `--depends-on` and `--related` by id. Values the text gives (`p1`, `area: api`, `0.25 days`, `3 hours`,
+   `depends on 7`, `blocks 9`) are taken as given (hours: divide by 24, round up to the scale); "blocks 9" is
+   `orch ticket dep add 9 <new id>` after filing. `--classified user` when the text gave any of area, priority or
+   effort, else `auto`. Two items combined into one take the higher priority and one fresh estimate of the combined
+   work (never the sum: the fixed overhead is paid once).
 5. Screenshots. A pasted image: transcribe it into `## Screenshot` (the page or command, the exact error text, the UI
    state); its pixels cannot be saved. A path: after filing, `orch ticket asset add <id> <path>` (it is copied into
    orch's private data directory, never the repository), name the file in `## Screenshot`, read it once and transcribe
@@ -65,9 +66,35 @@ area, a dependency cycle, a closed ticket); exit 3 is no such id.
    ```
 
    Then `orch ticket note <id> "<which of area, priority, effort were given and which guessed>"`.
-   Reply one line per ticket: `NNNN  title  area  P?  effort d` plus the guess you are least sure of.
+   Reply one line per ticket: `NNNN  title  area  P?  effort d (~N h)` plus the guess you are least sure of.
 
 No other question is ever asked.
+
+## Effort
+
+`effort` is how long the factory will take on the ticket, start to merge, in elapsed wall-clock time: not human
+engineering effort. It is stored in days where **one day is 24 hours**. Estimate in hours, then convert:
+
+1. Start from the fixed cost every ticket pays, about 0.8 h: worktree, spec, two 15-minute check runs, CI, reviews,
+   approval, PR.
+2. Add the work itself: how much there is to write, how many files and subsystems it crosses, the new tests it
+   needs, rendered UI (four more reviewers), and the risk of a failed verification or a review rework round (each
+   costs about another 0.5 h).
+3. Pick the **smallest scale value that 7 of 10 such tickets would finish within**: not the best case, not the worst.
+
+| effort | hours | typical ticket |
+| --- | --- | --- |
+| `0.05` | 1.2 | prose, docs, a label, a one-line fix: almost nothing beyond the fixed cost |
+| `0.075` | 1.8 | a small change in one place with a test |
+| `0.1` | 2.4 | an ordinary bug or feature in one subsystem; the default when unsure |
+| `0.15` | 3.6 | crosses subsystems (CLI + server + UI), a schema change, or rework is likely |
+| `0.25` | 6 | large or risky: new workflow rules, concurrency, a new subsystem |
+| `0.5` | 12 | several of those at once; consider splitting |
+| `1, 2, 3, 5` | 24+ | only when the user says so |
+
+Measured on 41 completed tickets: half finished within 1.5 h, 73% within 2.4 h, 83% within 3.6 h, and the slowest
+four took 6 to 11 h. Nothing finishes in under half an hour. One glance at the request is the whole estimate: no
+arithmetic in the reply, no reading code.
 
 ## The body
 
