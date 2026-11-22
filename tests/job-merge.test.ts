@@ -4,7 +4,7 @@
  * the bounded re-land, retries after interruption, and the per-repository opt-in. Jobs are put in
  * their completed state directly (tests/pr-merge.test.ts drives a real one through the dashboard).
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -966,6 +966,49 @@ describe('a PR that changes .github/workflows/ needs a human merge', () => {
       expect(merges()).toHaveLength(0);
     } finally {
       rmSync(shallowFile, { force: true });
+    }
+  });
+
+  it('a commit-graph that swaps the head tree cannot hide a workflow change', () => {
+    const head = branch('wf-graph', () => commitFile(wf.clone, WORKFLOW, 'on: [merge_group]\n'));
+    const baseTree = gitIn(wf.clone, 'rev-parse', 'origin/main^{tree}');
+    gitIn(wf.clone, 'commit-graph', 'write', '--reachable');
+    const graphFile = gitIn(
+      wf.clone,
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-path',
+      'objects/info/commit-graph',
+    );
+    try {
+      // Commit-graph format: 8-byte header (byte 6 = chunk count), then a table of 12-byte entries
+      // (4-byte id, 8-byte offset); CDAT rows are (tree oid, 16 bytes) in OIDL order.
+      const g = readFileSync(graphFile);
+      const hashLen = head.length / 2;
+      const chunk = (id: string): number => {
+        for (let i = 0; i < g.readUInt8(6); i++) {
+          const at = 8 + i * 12;
+          if (g.toString('latin1', at, at + 4) === id) return Number(g.readBigUInt64BE(at + 4));
+        }
+        throw new Error(`no ${id} chunk`);
+      };
+      const oidl = chunk('OIDL');
+      const count = g.readUInt32BE(chunk('OIDF') + 255 * 4);
+      let index = -1;
+      for (let i = 0; i < count; i++) {
+        const at = oidl + i * hashLen;
+        if (g.toString('hex', at, at + hashLen) === head) index = i;
+      }
+      expect(index).toBeGreaterThanOrEqual(0);
+      Buffer.from(baseTree, 'hex').copy(g, chunk('CDAT') + index * (hashLen + 16));
+      chmodSync(graphFile, 0o644); // Git writes the graph read-only
+      writeFileSync(graphFile, g);
+      expect(gitIn(wf.clone, 'diff', '--name-only', 'origin/main', head)).toBe('');
+      const job = jobAt(head);
+      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+      expect(merges()).toHaveLength(0);
+    } finally {
+      rmSync(graphFile, { force: true });
     }
   });
 });
