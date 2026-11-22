@@ -60,13 +60,18 @@ Anything else:
 | the spec stage finds the work is already on `main`                      | `orch factory cancel` with that reason; `orch ticket done <id> --note "<the commit or PR that fixed it>"`    |
 | cancelled for any other reason                                          | ticket stays `in-progress` with an `orch ticket note`; report and stop                                       |
 
-## 4. Tick what the PR covered
+## 4. Check what the PR covered
 
-A merge closes the ticket only when no checklist item in its body is unchecked, and orch never ticks
-one. So before merging: take `ticket.body` from `orch ticket show <id> --json`, tick every box in
-What that this PR delivers, and write it back with `orch ticket edit <id> --body-file -`. Leave a
-box unticked when it is not code in this PR (a rerun, a setting on GitHub): the ticket then stays
-`in-progress` after the merge, which is correct.
+A merge closes the ticket only when no checklist item in its body is unchecked. The factory's
+approve stage already ticked the boxes this PR delivers: the approver's `decision.md` lists every
+box under `## Ticket checklist` as `- [x] <item> — <evidence>` or `- [ ] <item> — <reason>`, the
+factory session ticks the delivered ones with `orch ticket edit`, and `orch` refuses to complete
+approval until every unchecked box is ticked or recorded there (that line is the enforced record;
+the `orch ticket note` copy is best effort). So before merging, only check `ticket.body` from
+`orch ticket show <id> --json`; never tick a box the PR did not deliver. A box left unticked (a
+rerun, a setting on GitHub) keeps the ticket `in-progress` after the merge, which is correct. A job
+approved before this rule existed may need its delivered boxes ticked here with
+`orch ticket edit <id> --body-file -`.
 
 ## 5. Merge
 

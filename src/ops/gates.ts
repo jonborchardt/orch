@@ -13,6 +13,12 @@ import { baseRef } from '../git/repo.ts';
 import { tryGit } from '../git/run.ts';
 import { containsRef, editedMerges } from '../git/worktree.ts';
 import { sensitiveSummary } from '../core/sensitive.ts';
+import {
+  CHECKLIST_DELIMITER,
+  openChecklist,
+  ticketKey,
+  unaccountedItems,
+} from '../core/tickets.ts';
 import { type Action, requiredArtifact, simplifyArtifact } from '../core/workflow.ts';
 import { findArtifact, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
@@ -27,6 +33,7 @@ import {
   type TransitionOptions,
 } from '../storage/jobs.ts';
 import type { Artifact, Job, Review } from '../storage/schema.ts';
+import { getTicket } from '../storage/tickets.ts';
 
 import { effectivePolicy, sensitiveReport, verificationStatus } from './verify.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
@@ -251,6 +258,31 @@ export function completeCi(store: Store, id: string, auth: TransitionOptions): J
   return transitionJob(store, id, 'complete', auth);
 }
 
+/**
+ * Approval accounts for the linked ticket's checklist: every unchecked box is ticked in the ticket
+ * (`orch ticket edit`) or decision.md records it as not delivered, with the reason, under
+ * `## Ticket checklist` (decision 2026-11-21-approval-accounts-for-the-ticket-checklist).
+ */
+function requireChecklistAccounted(store: Store, job: Job): void {
+  if (job.ticketId === null) return;
+  const ticket = getTicket(store.db, job.ticketId);
+  if (openChecklist(ticket).length === 0) return;
+  const decision = findArtifact(store.db, job.id, 'decision.md');
+  // Without an APPROVE decision transitionJob refuses the completion on its own.
+  if (decision?.marker !== 'approve') return;
+  const text = readFileSync(join(jobArtifactDir(job.id, store.paths), 'decision.md'), 'utf8');
+  const missing = unaccountedItems(ticket.body, text);
+  if (missing.length === 0) return;
+  const key = ticketKey(job.ticketId);
+  throw new ValidationError(
+    `Ticket ${key} has unchecked checklist item(s) that decision.md does not account for: ` +
+      `${missing.map((m) => `"${m}"`).join(', ')}. For each one, either tick it with ` +
+      `orch ticket edit ${key} --body-file - (delivered), or add under ## Ticket checklist in ` +
+      `decision.md the line to copy: ${missing.map((m) => `- [ ] ${m}${CHECKLIST_DELIMITER}<reason>`).join(' | ')} ` +
+      '(not delivered), register it with --replace, and complete again.',
+  );
+}
+
 /** `orch job transition`: `complete` is refused when the worktree moved past its evidence. */
 export function transitionGuarded(
   store: Store,
@@ -302,6 +334,7 @@ export function transitionGuarded(
       }
       if (job.stage === 'approve') requireAuthorizedPolicy(job, info, 'completing approve');
     }
+    if (job.stage === 'approve') requireChecklistAccounted(store, job);
     if (job.stage === 'pr') {
       requireDeliverable(store, job, requireWorktree(job, 'completing pr'));
     }

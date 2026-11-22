@@ -264,7 +264,15 @@ Follow `plan.commands`; the coordinator adds:
 
 ### Approval and delivery
 
-`decision.md` has one of four outcomes. `APPROVE`: follow the `pr` stage commands.
+`decision.md` has one of four outcomes. `APPROVE`: for a job linked to a ticket whose body has
+unchecked boxes (`plan.reason` lists them), first tick, in `ticket.body` from
+`orch ticket show <key> --json`, every box `decision.md`'s `## Ticket checklist` marks
+`- [x] <item> — <evidence>`, and write it back with `orch ticket edit <key> --body-file -` (on exit
+4, re-read and retry). Never tick a box it marks `- [ ] <item> — <reason>`; copy each reason onto
+the ticket with `orch ticket note <key> "<item>: <reason>"`. That note is best effort for the human
+reading the ticket; the `decision.md` line is what `orch` checks: `complete` is refused while an
+unchecked box is neither ticked nor recorded there. Then complete and follow the `pr` stage
+commands.
 `REWORK-BUILD` (the code is less than the spec) or `REWORK-SPEC` (the spec is less than the
 request) is a scope gap, which is rework, not a human decision: run
 `orch job transition <id> rework --reason "<the gap>" --token <t>` and keep going with

@@ -48,8 +48,17 @@ For either `REWORK-*`, name each missing case under `Scope changes` so the next 
 builder can act on it. `orch` allows one automatic scope rework per job: a second `REWORK-*` goes
 to a human anyway, so still choose it when the gap is real.
 
+When the job is linked to a ticket, the request carries its checklist (`orch ticket show <key>
+--json` has the current `ticket.body`). Under `## Ticket checklist` write one line per unchecked
+box, the item text copied verbatim, then a space, an em dash (—, U+2014), and a space: `- [x] <item> — <the
+acceptance evidence>` when this PR delivers it, `- [ ] <item> — <reason>` when it deliberately does
+not (a rerun, a setting on GitHub, a later ticket). The coordinator ticks the `- [x]` boxes in the
+ticket; `orch` refuses to complete approval while an unchecked box has neither a tick nor a
+`- [ ]` line here, and that line is the enforced record of the reason. Write `none` when there is
+no ticket or no box.
+
 Write `decision.md` with headings `Examined`, `Acceptance criteria`, `Outstanding findings`,
-`Scope changes`, `Rationale`, and exactly one final line `DECISION: APPROVE`,
+`Scope changes`, `Ticket checklist`, `Rationale`, and exactly one final line `DECISION: APPROVE`,
 `DECISION: REWORK-BUILD`, `DECISION: REWORK-SPEC`, or `DECISION: ESCALATE`. The `Rationale`
 heading and the `DECISION:` line are mandatory; `orch` refuses the file without them, advances
 only on `APPROVE`, and sends the job back (`rework`) only on a `REWORK-*` decision.

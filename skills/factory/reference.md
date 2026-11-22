@@ -242,6 +242,11 @@ dropped, whichever reviewer raised it.
 
 <none, or what drifted from spec.md>
 
+## Ticket checklist
+
+- [x] <item, copied verbatim from the ticket> — <acceptance evidence>
+- [ ] <item, copied verbatim from the ticket> — <reason it is not delivered by this PR>
+
 ## Rationale
 
 Why this is (not) ready for a human to review as a draft PR.
@@ -256,6 +261,13 @@ under `Scope changes`; the coordinator runs `orch job transition <id> rework`, w
 back to `build` or `spec` once per job and to `needs-human` the second time.
 `DECISION: ESCALATE` with the rationale naming the blocking reason otherwise: a blocking finding is
 open, scope drifted materially beyond the spec, evidence is missing, or a human must decide.
+
+`## Ticket checklist` is for a job linked to a ticket (`orch ticket show <key> --json`, the
+checklist is also in the request): one line per unchecked box in the ticket body, the item text
+copied verbatim, then a space, an em dash (—, U+2014), a space, and the evidence or the reason. Write
+`none` for a job without a ticket or a ticket without boxes. `orch job transition <id> complete`
+in `approve` is refused while an unchecked ticket box is neither ticked in the ticket nor recorded
+here as `- [ ] <item> — <reason>`; that line is the enforced record of why it was not delivered.
 
 ## pr.md (also used as the PR body)
 
