@@ -247,6 +247,8 @@ beforeEach(() => {
         repo: BETA,
         repoPath: '/r/beta',
         priority: 'P2',
+        effort: 0.5,
+        createdAt: '2026-11-21T17:45:30.000Z',
         dependsOn: [3],
         ready: false,
         blockedBy: [
@@ -397,8 +399,10 @@ describe('ticket list', () => {
       'Title',
       'Repository',
       'Priority',
+      'Effort',
       'State',
       'Area / Type',
+      'Created',
       'Job',
       'Blocked by',
     ]);
@@ -422,9 +426,21 @@ describe('ticket list', () => {
       '#/tickets/1',
     );
     expect(cells(2)[3]).toHaveTextContent('beta');
-    expect(cells(1)[6]).toHaveTextContent('core / bug');
+    expect(cells(1)[5]).toHaveTextContent(/^1 d$/);
+    expect(cells(2)[5]).toHaveTextContent(/^0\.5 d$/);
+    expect(cells(1)[7]).toHaveTextContent('core / bug');
+    // Created is the local date-time, with the exact ISO string kept on the <time> element.
+    for (const [n, iso] of [
+      [1, '2026-11-20T08:00:00.000Z'],
+      [2, '2026-11-21T17:45:30.000Z'],
+    ] as const) {
+      const time = cells(n)[8]?.querySelector('time');
+      expect(time).toHaveAttribute('dateTime', iso);
+      expect(time).toHaveAttribute('title', iso);
+      expect(time).toHaveTextContent(new Date(iso).toLocaleString());
+    }
     // The blocker is the server's sentence, with the ticket it names as a link.
-    expect(cells(2)[8]).toHaveTextContent('depends on 0003, which is in-progress');
+    expect(cells(2)[10]).toHaveTextContent('depends on 0003, which is in-progress');
     expect(within(rowOf(2)).getByRole('link', { name: '0003' })).toHaveAttribute(
       'href',
       '#/tickets/3',
@@ -434,7 +450,7 @@ describe('ticket list', () => {
       '#/jobs/job-00000003',
     );
     // A merge is shown as what the job did, apart from the ticket's own state.
-    expect(cells(6)[7]).toHaveTextContent('job-00000006 completed: merged');
+    expect(cells(6)[9]).toHaveTextContent('job-00000006 completed: merged');
     // The whole view costs a fixed number of requests: none is per ticket.
     await waitFor(() => {
       expect(db.gets.filter((u) => u === '/api/runner').length).toBeGreaterThan(1);
