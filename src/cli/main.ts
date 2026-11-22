@@ -5,6 +5,7 @@ import { UsageError } from '../core/errors.ts';
 import { runtimePaths } from '../core/paths.ts';
 import { packageInfo } from '../core/paths.ts';
 import { openStore, type Store } from '../storage/client.ts';
+import { BACKUP_HELP, runBackup } from './backup.ts';
 import { CHECKOUT_HELP, runCheckout } from './checkout.ts';
 import { formatChecks, runDoctor } from './doctor.ts';
 import { FACTORY_HELP, runFactory } from './factory.ts';
@@ -60,6 +61,9 @@ Commands:
   recover start|stop|status|run [--once]
                          Opt-in worker that continues ci-stage jobs after a network outage
                          (orch recover --help)
+  backup create <file> | restore <file> [--data-dir <dir>]
+                         Archive the database, artifacts, and ticket assets, or restore one
+                         into an empty data directory (orch backup --help)
 
 Low-level commands (used internally and by generated plans):
   job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
@@ -95,6 +99,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   recover: RECOVER_HELP,
   mail: MAIL_HELP,
   ticket: TICKET_HELP,
+  backup: BACKUP_HELP,
   ...Object.fromEntries(RUN_COMMANDS.map((c) => [c, RUN_HELP])),
 };
 
@@ -191,6 +196,8 @@ export async function main(argv: string[]): Promise<number> {
         of: str,
         note: str,
         dir: str,
+        // backup
+        'data-dir': str,
         // ui
         port: str,
         open: bool,
@@ -305,6 +312,13 @@ export async function main(argv: string[]): Promise<number> {
       case 'recover':
         print(await runRecover(rest, o, process.argv[1] ?? ''), json);
         return 0;
+      case 'backup': {
+        // No withStore: create reads the database through its own snapshot connection, and
+        // restore must not create a database in the destination before it checks it is empty.
+        const { data, text } = runBackup(rest, o);
+        print(json ? data : text, json);
+        return 0;
+      }
       case 'mail': {
         // No database: a generic sender that knows nothing about jobs.
         const receipt = await runMail(rest, o);

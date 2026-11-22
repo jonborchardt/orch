@@ -174,6 +174,12 @@ function liveEntries(queueDir: string): { pid: number; jobId: string; since: str
   return out;
 }
 
+/** The live process holding the lock at `file`, or undefined. Read-only. */
+export function verifyLockHolder(file: string): LockHolder | undefined {
+  const holder = read(file)?.holder;
+  return holder && alive(holder.pid) ? holder : undefined;
+}
+
 /** Whether `jobId` holds the live lock (running) or has a live queue entry (queued). Read-only. */
 export function verifyQueueState(
   file: string,
