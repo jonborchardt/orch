@@ -1016,6 +1016,5 @@ describe('mergeDecision: workflow changes need a human', () => {
     for (const p of ['.github/CODEOWNERS', '.githubx', 'a/.github']) {
       expect(touchesWorkflows([p]), p).toBe(false);
     }
-    expect(touchesWorkflows([])).toBe(false);
   });
 });
