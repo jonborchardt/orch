@@ -13,7 +13,12 @@ import { baseRef } from '../git/repo.ts';
 import { tryGit } from '../git/run.ts';
 import { containsRef, editedMerges } from '../git/worktree.ts';
 import { sensitiveSummary } from '../core/sensitive.ts';
-import { CHECKLIST_DELIMITER, ticketKey, unaccountedItems } from '../core/tickets.ts';
+import {
+  CHECKLIST_DELIMITER,
+  openChecklist,
+  ticketKey,
+  unaccountedItems,
+} from '../core/tickets.ts';
 import { type Action, requiredArtifact, simplifyArtifact } from '../core/workflow.ts';
 import { findArtifact, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
@@ -261,7 +266,7 @@ export function completeCi(store: Store, id: string, auth: TransitionOptions): J
 function requireChecklistAccounted(store: Store, job: Job): void {
   if (job.ticketId === null) return;
   const ticket = getTicket(store.db, job.ticketId);
-  if (ticket.status !== 'open' && ticket.status !== 'in-progress') return;
+  if (openChecklist(ticket).length === 0) return;
   const decision = findArtifact(store.db, job.id, 'decision.md');
   // Without an APPROVE decision transitionJob refuses the completion on its own.
   if (decision?.marker !== 'approve') return;

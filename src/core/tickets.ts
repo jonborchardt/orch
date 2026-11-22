@@ -138,6 +138,13 @@ export function uncheckedItems(body: string): string[] {
   );
 }
 
+/** The unchecked items (each once) approval must account for: none once the ticket is finished. */
+export function openChecklist(ticket: { status: string; body: string }): string[] {
+  return ticket.status === 'open' || ticket.status === 'in-progress'
+    ? [...new Set(uncheckedItems(ticket.body))]
+    : [];
+}
+
 /** The delimiter between an item and its reason in decision.md's Ticket checklist. */
 export const CHECKLIST_DELIMITER = ' — ';
 

@@ -13,7 +13,7 @@ import { type Flake, integrateFirst, integrateFirstAdvice } from '../core/flake.
 import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import type { SensitiveReport } from '../core/sensitive.ts';
-import { CHECKLIST_DELIMITER, ticketKey, uncheckedItems } from '../core/tickets.ts';
+import { CHECKLIST_DELIMITER, openChecklist, ticketKey } from '../core/tickets.ts';
 import {
   detectUi,
   type FactoryConfig,
@@ -681,11 +681,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       if (r)
         plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'decision.md' }];
       const behind = worktree.behind ?? 0;
-      const ticket = job.ticketId === null ? null : getTicket(store.db, job.ticketId);
-      const boxes =
-        ticket && (ticket.status === 'open' || ticket.status === 'in-progress')
-          ? [...new Set(uncheckedItems(ticket.body))]
-          : [];
+      const boxes = job.ticketId === null ? [] : openChecklist(getTicket(store.db, job.ticketId));
       const key = job.ticketId === null ? '' : ticketKey(job.ticketId);
       plan.reason =
         'Independent final approval: spec, build.md, git diff, review artifacts, outstanding findings.' +
