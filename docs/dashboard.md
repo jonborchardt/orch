@@ -397,8 +397,8 @@ server validates.
   resumed from the CLI only. The strip does not list Claude sessions: each child's outcome is a
   `runner.session` event, and a stop's reason a `runner.stopped` event, on the job's Events tab
   ([operations.md](operations.md#runner-events-on-the-job)).
-- **The list** has Queue, ID, Title, Repository, Priority, State, Area / Type, Job, and Blocked
-  by. Queue is the ticket's position in `GET /api/tickets?view=order`, the server's proposed
+- **The list** has Queue, ID, Title, Repository, Priority, Effort (days), State, Area / Type,
+  Created (local date and time), Job, and Blocked by. Queue is the ticket's position in `GET /api/tickets?view=order`, the server's proposed
   order of the open tickets. **Show** picks `current` (the default: tickets in progress, then the
   open ones in queue order), `ready`, `blocked`, `in-progress`, `done`, `dropped`, `duplicate`,
   or `all`; Repository, Priority, Area, and Type narrow it, and Search matches the key (`0085`),

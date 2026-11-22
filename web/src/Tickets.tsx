@@ -529,8 +529,10 @@ export function TicketsPage({
                 <TableCell>Title</TableCell>
                 <TableCell>Repository</TableCell>
                 <TableCell>Priority</TableCell>
+                <TableCell>Effort</TableCell>
                 <TableCell>State</TableCell>
                 <TableCell>Area / Type</TableCell>
+                <TableCell>Created</TableCell>
                 <TableCell>Job</TableCell>
                 <TableCell>Blocked by</TableCell>
               </TableRow>
@@ -579,6 +581,7 @@ export function TicketsPage({
                         ))}
                       </Box>
                     </TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{String(t.effort)} d</TableCell>
                     <TableCell>
                       <Chip
                         label={state.label}
@@ -590,6 +593,11 @@ export function TicketsPage({
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
                       {t.area} / {t.type}
+                    </TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                      <time dateTime={t.createdAt} title={t.createdAt}>
+                        {new Date(t.createdAt).toLocaleString()}
+                      </time>
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
                       {job && (
