@@ -28,6 +28,17 @@ with no new state. A `both` mode was not added, because `local` already runs CI 
 pre-review pass). The PR stays a draft, nothing merges, and the ready write and completion still
 need the approval of HEAD.
 
+**Secrets before review.** The job branch lives in the repository itself, not a fork, so under `ci`
+the pre-review pass runs the unreviewed branch's workflows and tests with the repository's Actions
+secrets and its `GITHUB_TOKEN`; a changed workflow or test can read them before anyone has looked.
+This is accepted because the branch is written by the user's own factory session, which already
+runs on the user's machine with the user's Git and `gh` credentials, and because what it limits is
+a merge: the PR stays a draft, and `workflow-changed` (decision
+2026-11-22-workflow-changes-need-a-human-merge) keeps a workflow change from merging without a
+human. It does not stop the changed workflow from running once. A repository whose `pull_request`
+workflows carry secrets the session should not reach (deploy, publish, or cloud credentials) should
+keep `local`, where CI runs only after review and approval.
+
 **Left out.** ORCH's own opt-in (below), a third mode, changes to `maxCiRepairs`, the controller,
 the dashboard, `orch init`, and `cannotAcceptDelivery`.
 

@@ -683,16 +683,20 @@ export interface MergeFacts {
   byHuman: boolean;
 }
 
-/** True when any of `paths` (repository-relative, `/` or `\`) is under `.github/workflows/`. */
+/**
+ * True when any of `paths` (repository-relative, `/` or `\`) is under `.github/workflows/`, or is
+ * exactly `.github/workflows` or `.github`: how a symlink or gitlink that replaces either
+ * directory appears in `git diff --name-only`.
+ */
 export function touchesWorkflows(paths: readonly string[]): boolean {
-  return paths.some((p) =>
-    p
+  return paths.some((p) => {
+    const n = p
       .split('\\')
       .join('/')
       .replace(/^\.\/+/, '')
-      .toLowerCase()
-      .startsWith('.github/workflows/'),
-  );
+      .toLowerCase();
+    return n.startsWith('.github/workflows/') || n === '.github/workflows' || n === '.github';
+  });
 }
 
 /**

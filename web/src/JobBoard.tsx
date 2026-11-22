@@ -254,7 +254,8 @@ const COLUMNS: Column[] = [
     hideBelow: COMPACT,
     // ISO strings sort by time; unstarted jobs sort together, after every started one ascending.
     sortValue: (r) => r.startedAt ?? '￿',
-    sx: { whiteSpace: 'nowrap' },
+    // May wrap: its width follows the clock (10:00 is wider than 9:59), so on one line it can
+    // push Actions off a 1440px board.
     cell: (r) =>
       r.startedAt ? (
         <time dateTime={r.startedAt}>{new Date(r.startedAt).toLocaleString()}</time>

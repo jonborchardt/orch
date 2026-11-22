@@ -4,9 +4,9 @@
  * the bounded re-land, retries after interruption, and the per-repository opt-in. Jobs are put in
  * their completed state directly (tests/pr-merge.test.ts drives a real one through the dashboard).
  */
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -883,5 +883,132 @@ describe('a PR that changes .github/workflows/ needs a human merge', () => {
     const job = jobAt(OTHER);
     expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
     expect(merges()).toHaveLength(0);
+  });
+
+  it('a refs/replace/ entry cannot hide a workflow change', () => {
+    const head = branch('wf-replaced', () =>
+      commitFile(wf.clone, WORKFLOW, 'on: [pull_request]\n'),
+    );
+    const decoy = branch('wf-decoy', () => commitFile(wf.clone, 'src/c.ts', 'export {};\n'));
+    gitIn(wf.clone, 'replace', head, decoy);
+    try {
+      const job = jobAt(head);
+      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+      expect(merges()).toHaveLength(0);
+    } finally {
+      gitIn(wf.clone, 'replace', '-d', head);
+    }
+  });
+
+  it('a graft that makes the head the merge base cannot hide a workflow change', () => {
+    // The head branches off the base's parent; the graft adds it as a second parent of the base.
+    const base = gitIn(wf.clone, 'rev-parse', 'origin/main');
+    const parent = gitIn(wf.clone, 'rev-parse', 'origin/main^');
+    gitIn(wf.clone, 'checkout', '-q', '-b', 'wf-grafted', parent);
+    commitFile(wf.clone, WORKFLOW, 'on: [workflow_call]\n');
+    const head = gitIn(wf.clone, 'rev-parse', 'HEAD');
+    gitIn(wf.clone, 'checkout', '-q', 'main');
+    const graftFile = gitIn(
+      wf.clone,
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-path',
+      'info/grafts',
+    );
+    mkdirSync(dirname(graftFile), { recursive: true });
+    writeFileSync(graftFile, `${base} ${parent} ${head}\n`);
+    try {
+      expect(gitIn(wf.clone, 'merge-base', 'origin/main', head)).toBe(head);
+      const job = jobAt(head);
+      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+      expect(merges()).toHaveLength(0);
+    } finally {
+      rmSync(graftFile, { force: true });
+    }
+  });
+
+  it('a shallow file that moves the merge base cannot hide a workflow change', () => {
+    // X reverts the base's workflow commit; the head merges X with the base's parent. Marking X
+    // shallow drops its parents, so merge-base falls back to that parent, which has no workflow.
+    const parent = gitIn(wf.clone, 'rev-parse', 'origin/main^');
+    const x = branch('wf-shallow', () => {
+      gitIn(wf.clone, 'rm', '-q', WORKFLOW);
+      commitFile(wf.clone, 'c.txt', 'c\n');
+    });
+    const head = gitIn(
+      wf.clone,
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'commit-tree',
+      `${x}^{tree}`,
+      '-p',
+      x,
+      '-p',
+      parent,
+      '-m',
+      'merge',
+    );
+    const shallowFile = gitIn(
+      wf.clone,
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-path',
+      'shallow',
+    );
+    expect(gitIn(wf.clone, 'merge-base', 'origin/main', head)).not.toBe(parent);
+    writeFileSync(shallowFile, `${x}\n`);
+    try {
+      expect(gitIn(wf.clone, 'merge-base', 'origin/main', head)).toBe(parent);
+      const job = jobAt(head);
+      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+      expect(merges()).toHaveLength(0);
+    } finally {
+      rmSync(shallowFile, { force: true });
+    }
+  });
+
+  it('a commit-graph that swaps the head tree cannot hide a workflow change', () => {
+    const head = branch('wf-graph', () => commitFile(wf.clone, WORKFLOW, 'on: [merge_group]\n'));
+    const baseTree = gitIn(wf.clone, 'rev-parse', 'origin/main^{tree}');
+    gitIn(wf.clone, 'commit-graph', 'write', '--reachable');
+    const graphFile = gitIn(
+      wf.clone,
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-path',
+      'objects/info/commit-graph',
+    );
+    try {
+      // Commit-graph format: 8-byte header (byte 6 = chunk count), then a table of 12-byte entries
+      // (4-byte id, 8-byte offset); CDAT rows are (tree oid, 16 bytes) in OIDL order.
+      const g = readFileSync(graphFile);
+      const hashLen = head.length / 2;
+      const chunk = (id: string): number => {
+        for (let i = 0; i < g.readUInt8(6); i++) {
+          const at = 8 + i * 12;
+          if (g.toString('latin1', at, at + 4) === id) return Number(g.readBigUInt64BE(at + 4));
+        }
+        throw new Error(`no ${id} chunk`);
+      };
+      const oidl = chunk('OIDL');
+      const count = g.readUInt32BE(chunk('OIDF') + 255 * 4);
+      let index = -1;
+      for (let i = 0; i < count; i++) {
+        const at = oidl + i * hashLen;
+        if (g.toString('hex', at, at + hashLen) === head) index = i;
+      }
+      expect(index).toBeGreaterThanOrEqual(0);
+      Buffer.from(baseTree, 'hex').copy(g, chunk('CDAT') + index * (hashLen + 16));
+      chmodSync(graphFile, 0o644); // Git writes the graph read-only
+      writeFileSync(graphFile, g);
+      expect(gitIn(wf.clone, 'diff', '--name-only', 'origin/main', head)).toBe('');
+      const job = jobAt(head);
+      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
+      expect(merges()).toHaveLength(0);
+    } finally {
+      rmSync(graphFile, { force: true });
+    }
   });
 });

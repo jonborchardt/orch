@@ -10,7 +10,7 @@
  * and finishes the record. Nothing here changes a job's stage, status, or CI verdict.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import { ToolError, ValidationError, WorkflowError } from '../core/errors.ts';
 import {
@@ -208,10 +208,40 @@ function look(store: Store, job: Job, input: MergeInput): Seen {
 function changesWorkflows(cwd: string, job: Job): boolean {
   const base = baseRef(cwd, job.baseBranch);
   if (!base || !job.ciHead) return true;
-  const mergeBase = tryGit(cwd, 'merge-base', base, job.ciHead);
+  // A graft file (info/grafts, or GIT_GRAFT_FILE) rewrites parents and can move the merge base
+  // onto the head; --no-replace-objects does not turn it off, so its presence fails closed.
+  const grafts = tryGit(cwd, 'rev-parse', '--git-path', 'info/grafts');
+  if (!grafts || existsSync(resolve(cwd, grafts))) return true;
+  // A shallow file cuts parents the same way; anything but an exact "false" fails closed.
+  if (tryGit(cwd, 'rev-parse', '--is-shallow-repository') !== 'false') return true;
+  // --no-replace-objects: a refs/replace/* entry cannot substitute a commit or tree that hides
+  // the change from the guard. core.commitGraph=false: both calls read parents and trees from the
+  // commit objects, not from a commit-graph file Git does not check against them.
+  const mergeBase = tryGit(
+    cwd,
+    '--no-replace-objects',
+    '-c',
+    'core.commitGraph=false',
+    'merge-base',
+    base,
+    job.ciHead,
+  );
   if (!mergeBase) return true;
-  // -z: unquoted names, so an odd character cannot hide the prefix.
-  const names = tryGit(cwd, 'diff', '--name-only', '--no-renames', '-z', mergeBase, job.ciHead);
+  // -z: unquoted names, so an odd character cannot hide the prefix. --ignore-submodules=none: a
+  // diff.ignoreSubmodules setting in the repository config cannot hide a gitlink.
+  const names = tryGit(
+    cwd,
+    '--no-replace-objects',
+    '-c',
+    'core.commitGraph=false',
+    'diff',
+    '--ignore-submodules=none',
+    '--name-only',
+    '--no-renames',
+    '-z',
+    mergeBase,
+    job.ciHead,
+  );
   if (names === undefined) return true;
   return touchesWorkflows(names.split('\0').filter((l) => l !== ''));
 }
