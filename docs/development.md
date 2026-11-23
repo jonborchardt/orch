@@ -207,7 +207,7 @@ orch factory dispatch --title <t> --description <d> | --issue <ref> [--title <t>
                     [--max-rounds <n>] [--session <name>]   # job for another repo; an independent session runs it
 orch factory list   [--repo <path|identity>]              # one row per job: stage, status, action, PR, title
 orch factory next|status <id> [--ui|--no-ui]          # where, what blocks, next step, numbered commands; --json for the full plan
-orch factory resume <id> [--session <name>] [--to <stage>] [--force] [--adopt <worktree>]
+orch factory resume <id> [--session <name>] [--to <stage> [--release]] [--force] [--ui|--no-ui] [--adopt <worktree>]   # --to gives the job up again (token: null); --release is redundant
 orch factory cancel <id> --reason <r> [--session <name>] [--force]   # exit 4 if another session holds a live lease
 orch factory check-readonly <id> --fingerprint <f>
 orch factory config

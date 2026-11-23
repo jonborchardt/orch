@@ -494,7 +494,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       'A human must decide. Report the blocking reason and stop. To continue' +
       (job.returnStage === 'spec'
         ? `: ${specResumeSteps(id, detail.artifactDir, job.ticketId)}.`
-        : ` after the decision: orch factory resume ${id} --session <name> [--to ${job.returnStage ?? '<stage>'}]`);
+        : ` after the decision: orch factory resume ${id} --to ${job.returnStage ?? '<stage>'}, then run ` +
+          (job.ticketId === null ? `/factory ${id}` : `orch do ${ticketKey(job.ticketId)}`));
     plan.commands = [`orch job show ${id}`];
     return plan;
   }
