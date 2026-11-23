@@ -16,6 +16,7 @@ import {
 import { prWorkflowState, viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
 import { policyFingerprint } from '../core/verification.ts';
+import { ticketKey } from '../core/tickets.ts';
 import {
   getJob,
   postNotice as storeNotice,
@@ -486,6 +487,16 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
         throw new ValidationError('factory.json at HEAD defines no verification commands.');
       }
       authorizePolicy(store, id, { token }, policy, tree.head, policyFingerprint(policy));
+      // Accepting the policy is the human decision a needs-human job waits on: send it back to
+      // the stage it was escalated from, as approve would. Spec escalations keep their own steps.
+      const back = current.returnStage;
+      if (
+        current.stage === 'needs-human' &&
+        back !== null &&
+        !['spec', 'needs-human', 'completed'].includes(back)
+      ) {
+        transitionJob(store, id, 'resume', { token, to: back, reason });
+      }
     } else {
       const to = target(input.action, current, input.to);
       if (current.stage !== 'needs-human') {
@@ -507,12 +518,17 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
     };
   }
   if (input.action === 'accept-policy') {
+    const accepted =
+      `Verification policy from factory.json at ${job.policyHead?.slice(0, 7) ?? '?'} accepted (${reason}). ` +
+      'Earlier verification runs are stale; the next orch verify uses the accepted checks.';
+    const returned = before.stage === 'needs-human' && job.stage !== 'needs-human';
+    const next = !returned || job.ticketId === null ? resume : `orch do ${ticketKey(job.ticketId)}`;
     return {
       job: safe,
-      message:
-        `Verification policy from factory.json at ${job.policyHead?.slice(0, 7) ?? '?'} accepted (${reason}). ` +
-        'Earlier verification runs are stale; the next orch verify uses the accepted checks.',
-      resumeCommand: resume,
+      message: returned
+        ? `${accepted} The job returned to ${job.stage} (pending); continue it with: ${next}`
+        : accepted,
+      resumeCommand: next,
     };
   }
   return {

@@ -124,8 +124,9 @@ describe('orch verify: runs and records', () => {
     const accepted = dashboardAction(store, c.id, { action: 'accept-policy' });
     expect(accepted.message).toContain('accepted');
     expect(getJob(store.db, c.id).policyHead).toBe(head(c.wt));
-    const back = dashboardAction(store, c.id, { action: 'approve', to: 'build' });
-    expect(back.job.stage).toBe('build');
+    // Accepting the policy returns the escalated job to build; no approve click follows.
+    expect(accepted.job.stage).toBe('build');
+    expect(accepted.job.status).toBe('pending');
     const token = claimJob(store, c.id, { session: SESSION }).token;
     const c2 = { ...c, token };
     go(store, c2, 'start');
