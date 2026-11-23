@@ -86,16 +86,24 @@ export function descendantsOf(rows: readonly ProcRow[], root: number, since: num
 }
 
 const PS_TABLE =
-  'Get-CimInstance Win32_Process | ForEach-Object { if ($_.CreationDate) { ' +
+  'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate | ' +
+  'ForEach-Object { if ($_.CreationDate) { ' +
   "'{0},{1},{2}' -f $_.ProcessId, $_.ParentProcessId, " +
   '([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } }';
+
+/**
+ * A cold powershell.exe plus the WMI query takes about 1.5 s idle, but 13-59 s measured with 24
+ * busy processes on 12 cores (a full parallel test run, or a verification run beside one): the
+ * old 20 s limit timed out there. With one retry (`sweepDescendants`) a pass waits at most 2 min.
+ */
+const TABLE_TIMEOUT_MS = 60_000;
 
 /** The live process table (pid, parent pid, creation time) through PowerShell. */
 function processTable(): ProcRow[] {
   const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PS_TABLE], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 20_000,
+    timeout: TABLE_TIMEOUT_MS,
     windowsHide: true,
   });
   if (r.error || r.status !== 0) {
@@ -114,8 +122,10 @@ function processTable(): ProcRow[] {
  * Terminate what a killed command left running. `spawnSync` kills only the direct child; on
  * Windows a shell between us and the real work (the npm shim is `cmd.exe`) dies alone and the
  * tree under it survives, still holding files and CPU. Each pass reads the table and kills every
- * descendant created since `since`; it stops when a pass finds nothing or after three passes,
- * which bounds the cleanup to a few seconds. Safe to call for a root that already exited.
+ * descendant created since `since`; it stops when a pass finds nothing or after three passes.
+ * A read that fails is tried once more before the sweep gives up and reports `error`, so the
+ * cleanup is bounded by six reads (a few seconds normally, see TABLE_TIMEOUT_MS for the worst
+ * case). Safe to call for a root that already exited.
  */
 export function sweepDescendants(
   root: number,
@@ -123,11 +133,18 @@ export function sweepDescendants(
   table: () => ProcRow[] = processTable,
 ): Cleanup {
   const out: Cleanup = { killed: [], failed: [] };
+  const read = () => {
+    try {
+      return table();
+    } catch {
+      return table(); // a cold PowerShell under load can miss its limit once; its error stands
+    }
+  };
   // ponytail: three passes catch processes spawned during a pass; a Job Object would need native code.
   for (let pass = 0; pass < 3; pass++) {
     let pids: number[];
     try {
-      pids = descendantsOf(table(), root, since).filter(
+      pids = descendantsOf(read(), root, since).filter(
         (p) => !out.killed.includes(p) && !out.failed.includes(p),
       );
     } catch (err) {

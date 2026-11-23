@@ -1,77 +1,54 @@
 /**
- * The controller lock under real contention: several processes start at the same instant, all
- * finding the lock of a controller that is dead. Exactly one may proceed, every time. Each round
- * leaves the lock of a process that has really exited, which the next round then competes for.
+ * The controller lock's exclusive takeover, with the race forced rather than hoped for: this
+ * starter judges a dead controller's lock stale, and before it claims the next generation a
+ * competitor claims it. The competitor is a real `acquireRunnerLock`, run from inside this
+ * starter's liveness check (the one moment between its look and its claim).
  */
-import { spawn } from 'node:child_process';
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { installRoot, runnerPaths } from '../src/core/paths.ts';
-import { controllerPid } from '../src/ops/runner-state.ts';
+import { runnerPaths, type RuntimePaths } from '../src/core/paths.ts';
+import { acquireRunnerLock, type RunnerLock } from '../src/ops/runner-state.ts';
 import { homePaths, tempDir } from './helpers.ts';
 
-/** Waits for the shared instant, tries once, and holds the lock until it exits. */
-const STARTER = String.raw`
-import { pathToFileURL } from 'node:url';
-const [module, home, at, holdMs] = process.argv.slice(2);
-const { acquireRunnerLock } = await import(pathToFileURL(module).href);
-const paths = { config: home, data: home, logs: home + '/logs', tmp: home + '/tmp' };
-while (Date.now() < Number(at)) { /* spin: every starter leaves the barrier together */ }
-try {
-  acquireRunnerLock(paths);
-  console.log('acquired');
-  setTimeout(() => process.exit(0), Number(holdMs));
-} catch (err) {
-  console.log('refused: ' + err.message);
-}
-`;
+const DEAD = 2 ** 31 - 1;
+const race: { paths: RuntimePaths | null; competitor: RunnerLock | null; claimed: Buffer | null } =
+  { paths: null, competitor: null, claimed: null };
 
-const STARTERS = 6;
-const ROUNDS = 5;
+vi.mock('../src/ops/verify-lock.ts', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/ops/verify-lock.ts')>();
+  return {
+    ...real,
+    alive: (pid: number) => {
+      if (pid === DEAD && race.paths) {
+        const paths = race.paths;
+        race.paths = null; // the competitor's own look finds the dead pid dead, and claims
+        race.competitor = acquireRunnerLock(paths);
+        race.claimed = readFileSync(join(runnerPaths(paths).lock, '2'));
+      }
+      return real.alive(pid);
+    },
+  };
+});
 
-function starter(script: string, home: string, at: number): Promise<string> {
-  return new Promise((resolve) => {
-    const module = join(installRoot(), 'src', 'ops', 'runner-state.ts');
-    const child = spawn(process.execPath, [script, module, home, String(at), '1500']);
-    let out = '';
-    child.stdout.on('data', (d: Buffer) => (out += d.toString()));
-    child.stderr.on('data', (d: Buffer) => (out += d.toString()));
-    child.on('close', () => {
-      resolve(out.trim());
-    });
-  });
-}
-
-describe('controller lock: competing starters and a stale lock', () => {
-  it('lets exactly one process through in every round', async () => {
-    const home = tempDir('orch-runner-lock-');
-    const script = join(home, 'starter.mjs');
-    writeFileSync(script, STARTER);
-    // A controller that died without releasing.
-    const dir = runnerPaths(homePaths(home)).lock;
-    mkdirSync(dir);
+describe('controller lock: a competitor claims between the look and the claim', () => {
+  it('refuses the late starter and leaves the competitor holding its generation', () => {
+    const paths = homePaths(tempDir('orch-runner-lock-'));
+    const dir = runnerPaths(paths).lock;
+    mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, '1'),
-      JSON.stringify({ pid: 2 ** 31 - 1, startedAt: new Date().toISOString() }),
+      JSON.stringify({ pid: DEAD, startedAt: new Date().toISOString() }),
     );
 
-    for (let round = 1; round <= ROUNDS; round++) {
-      expect(controllerPid(homePaths(home))).toBeNull();
-      // Far enough ahead that every process has loaded the module before the barrier.
-      const at = Date.now() + 4000;
-      const results = await Promise.all(
-        Array.from({ length: STARTERS }, () => starter(script, home, at)),
-      );
-      const won = results.filter((r) => r === 'acquired');
-      const lost = results.filter((r) => r.startsWith('refused: '));
-      expect(won, `round ${String(round)}: ${results.join(' | ')}`).toHaveLength(1);
-      expect(lost).toHaveLength(STARTERS - 1);
-    }
-    // One generation per winner on top of the dead one, and no leftovers of the losers.
-    expect(readdirSync(dir).sort()).toEqual(
-      Array.from({ length: ROUNDS + 1 }, (_, i) => String(i + 1)),
-    );
+    race.paths = paths;
+    expect(() => acquireRunnerLock(paths)).toThrow(/already running/);
+    // The competitor took generation 2 while the late starter was judging generation 1.
+    expect(race.competitor?.owned()).toBe(true);
+    expect(JSON.parse(String(race.claimed))).toMatchObject({ pid: process.pid });
+    // The refused starter overwrote nothing, added no generation, and left no tmp file.
+    expect(readFileSync(join(dir, '2')).equals(race.claimed ?? Buffer.alloc(0))).toBe(true);
+    expect(readdirSync(dir).sort()).toEqual(['1', '2']);
   });
 });
