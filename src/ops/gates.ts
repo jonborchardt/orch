@@ -359,10 +359,9 @@ function requireDeferralsApplied(store: Store, ticket: Ticket, decision: string)
   let notes: string[] | undefined;
   for (const { item, to } of deferredItems(decision)) {
     const next = ticketKey(to);
-    const fixLine = `or fix the line in decision.md's ## Ticket checklist, register it with --replace, and complete again.`;
     if (to === ticket.id) {
       throw new ValidationError(
-        `"${item}" is deferred to ${next}, which is this ticket; ${fixLine}`,
+        `"${item}" is deferred to ${next}, which is this ticket; fix the line in decision.md.`,
       );
     }
     let follow: Ticket | undefined;
@@ -374,7 +373,8 @@ function requireDeferralsApplied(store: Store, ticket: Ticket, decision: string)
     if (!follow || (follow.status !== 'open' && follow.status !== 'in-progress')) {
       throw new ValidationError(
         `"${item}" is deferred to ${next}, which ${follow ? `is ${follow.status}` : 'does not exist'}; ` +
-          `file the follow-up with orch ticket add, ${fixLine}`,
+          `file the follow-up with orch ticket add, or fix the line in decision.md's ## Ticket ` +
+          `checklist, register it with --replace, and complete again.`,
       );
     }
     if (unchecked.has(item)) {
