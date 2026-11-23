@@ -115,12 +115,10 @@ figures were read:
 | Waiting for a human (escalation to acceptance) | 1 h 37 min 4 s         | measured |
 | Wall-clock without the human wait              | 38 min 44 s (2324.0 s) | computed |
 | Verification share of that (874.7 s)           | 37.6%                  | computed |
-| Local verify share (128.7 s)                   | 5.5%                   | computed |
-| Without CI and the human wait                  | 26 min 18 s (1578.0 s) | computed |
-| Stage and agent overhead (that minus verify)   | 24 min 9 s (1449.3 s)  | computed |
+| Stage and agent overhead (that minus 874.7 s)  | 24 min 9 s (1449.3 s)  | computed |
 
 The human wait runs from `runner.stopped` (needs-human, accept-policy) at 00:37:56.829Z to
-`policy.authorized` at 02:15:00.331Z. Verification is 10.7% of the full wall-clock.
+`policy.authorized` at 02:15:00.331Z.
 
 What ci authority already addresses: 0113's "run relevant targeted checks rather than the entire
 validation suite" for verification. The local run is now the fast checks only (2 min 9 s, within
