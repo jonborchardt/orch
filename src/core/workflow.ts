@@ -692,8 +692,9 @@ export type MergeBlock = (typeof MERGE_BLOCKS)[number];
 
 /**
  * The merge refusals only a person can lift on this one ticket, each with the step that person
- * takes. The factory controller reports such a ticket as needs-human and goes on to the next one;
- * every other refusal ends its run (decision 2026-11-23-queue-passes-over-person-merge-blocks).
+ * takes. The factory controller reports such a ticket as needs-human instead of blocked
+ * (decision 2026-11-23-queue-passes-over-person-merge-blocks); whether its run goes on is
+ * `endsRun`'s answer.
  */
 const PERSON_MERGE_STEPS = {
   'workflow-changed': (job: string) =>
@@ -715,6 +716,26 @@ export function personMergeStep(code: string, jobId: string, ticketKey: string):
   return Object.hasOwn(PERSON_MERGE_STEPS, code)
     ? PERSON_MERGE_STEPS[code as keyof typeof PERSON_MERGE_STEPS](jobId, ticketKey)
     : null;
+}
+
+/**
+ * The stop codes of a ticket result that would hit every ticket, so the factory controller's
+ * queue ends on them: claude cannot start, GitHub cannot be read, answers nothing, or refuses
+ * the merge call. Any other code, including one added later, concerns only its ticket: it is
+ * reported and passed over, and the queue goes on (decision
+ * 2026-11-23-queue-ends-only-on-run-wide-outcomes). A stop request and a lost lock end the run
+ * on their own and are not ticket codes.
+ */
+export const RUN_ENDING_CODES: readonly string[] = [
+  'claude-failed',
+  'github-unreadable',
+  'merge-no-answer',
+  'github-refused',
+];
+
+/** Whether a ticket that ended with `code` ends the controller's run; no code never does. */
+export function endsRun(code: string | undefined): boolean {
+  return code !== undefined && RUN_ENDING_CODES.includes(code);
 }
 
 /** What GitHub says about the PR right now (a `GhPr`; restated here so this module stays pure). */

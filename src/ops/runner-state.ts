@@ -40,6 +40,8 @@ export const TICKET_OUTCOMES = [
  * person can unblock (`personMergeStep` in core/workflow.ts). `blocked`: started, and cannot go
  * on without one (cancelled, unverified merge, a budget spent). `refused`: nothing was started.
  * `claimed`: another process created the ticket's job first. `stopped`: `orch stop` interrupted it.
+ * In a queue run every outcome but `done` and `stopped` passes the ticket over for the session,
+ * unless its `code` is one of `RUN_ENDING_CODES` (core/workflow.ts), which ends the run.
  */
 export type TicketOutcome = (typeof TICKET_OUTCOMES)[number];
 
@@ -50,6 +52,8 @@ export interface TicketResult {
   /** The job that was run or merged last; null when none was created. */
   jobId: string | null;
   outcome: TicketOutcome;
+  /** Which budget or refusal stopped it (the `runner.stopped` code); absent in older records. */
+  code?: string | undefined;
   reason: string;
   /** Re-land jobs run for it in this session. */
   relands: number;

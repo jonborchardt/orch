@@ -18,7 +18,7 @@ import {
 } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { ticketKey } from '../core/tickets.ts';
-import { now, personMergeStep, TERMINAL_STATUSES } from '../core/workflow.ts';
+import { endsRun, now, personMergeStep, TERMINAL_STATUSES } from '../core/workflow.ts';
 import {
   type ChildExit,
   type ClaudeChild,
@@ -498,6 +498,7 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       repo: ticket.repo,
       jobId,
       outcome,
+      code,
       reason,
       relands,
       next,
@@ -582,12 +583,16 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       if (m.kind === 'done') return out('done', `merged and verified (job ${jobId})`, jobId);
       if (m.kind === 'stopped') return out('stopped', 'stopped on request', jobId, 'orch resume');
       if (m.kind === 'blocked') {
-        // A refusal only a person can lift waits for that person, like an escalation; any other
-        // one ends the run (decision 2026-11-23-queue-passes-over-person-merge-blocks).
+        // A refusal only a person can lift waits for that person, like an escalation (decision
+        // 2026-11-23-queue-passes-over-person-merge-blocks).
         const person = personMergeStep(m.code, jobId, key);
-        return person === null
-          ? out('blocked', m.reason, jobId, `orch do ${key} tries again`, m.code)
-          : out('needs-human', m.reason, jobId, person, m.code);
+        if (person !== null) return out('needs-human', m.reason, jobId, person, m.code);
+        // Merged and verified: nothing is left to retry, only the boxes the merge left open.
+        const step =
+          m.code === 'ticket-open'
+            ? `tick the remaining boxes (orch ticket edit ${key} --body-file -) or move them to a follow-up ticket, then orch ticket done ${key}`
+            : `orch do ${key} tries again`;
+        return out('blocked', m.reason, jobId, step, m.code);
       }
       relands += 1;
       jobId = m.jobId;
@@ -603,21 +608,29 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
 }
 
 /**
+ * Whether the queue passes this ticket over for the rest of the session and goes on: every
+ * outcome but done and stopped, unless its code would hit every ticket (`endsRun`, decision
+ * 2026-11-23-queue-ends-only-on-run-wide-outcomes).
+ */
+const passesOver = (r: TicketResult): boolean =>
+  r.outcome !== 'done' && r.outcome !== 'stopped' && !endsRun(r.code);
+
+/**
  * Ready tickets, best first, one at a time, until none is left, a stop was requested, or one
- * could not be finished. A ticket whose job waits for a person is passed over for the rest of
- * the session (decision 2026-11-22-queue-passes-over-needs-human); its dependents are not ready
- * until it is done. Returns why it ended, or null when `orch stop` interrupted it.
+ * ended with a run-wide outcome. Any other ticket that could not be finished is passed over for
+ * the rest of the session (`passesOver`); its dependents are not ready until it is done.
+ * Returns why it ended, or null when `orch stop` interrupted it.
  */
 async function runQueue(
   run: Run,
   attempt: (ticketId: number) => Promise<TicketResult>,
 ): Promise<string | null> {
   const { store, session } = run;
-  // Tickets left for a person stay passed over for the session, across `orch resume` too.
+  // Passed-over tickets stay passed over for the session, across `orch resume` too.
   const isHuman = (r: TicketResult): boolean => r.outcome === 'needs-human';
   const passed = new Set([
     ...session.skipped.map((s) => s.ticketId),
-    ...session.results.filter(isHuman).map((r) => r.ticketId),
+    ...session.results.filter(passesOver).map((r) => r.ticketId),
   ]);
   for (;;) {
     if (run.stopNow()) return null;
@@ -647,16 +660,12 @@ async function runQueue(
     }
     const r = await attempt(next.id);
     if (r.outcome === 'stopped') return null;
-    if (r.outcome === 'claimed') {
-      passed.add(next.id);
-      continue;
-    }
-    if (r.outcome === 'needs-human') {
-      run.log(`ticket ${next.key} passed over: it waits for a person`);
-      passed.add(next.id);
-      continue;
-    }
-    if (r.outcome !== 'done') return `ticket ${next.key} is ${r.outcome}: ${r.reason}`;
+    if (r.outcome === 'done') continue;
+    if (!passesOver(r)) return `ticket ${next.key} is ${r.outcome}: ${r.reason}`;
+    run.log(
+      `ticket ${next.key} passed over: ${isHuman(r) ? 'it waits for a person' : `${r.outcome} (${r.code ?? r.outcome})`}`,
+    );
+    passed.add(next.id);
   }
 }
 
@@ -753,10 +762,7 @@ async function drive(
     if (first !== null) {
       const r = await attempt(first);
       if (r.outcome === 'stopped') stopped = true;
-      else if (
-        session.mode === 'ticket' ||
-        (r.outcome !== 'done' && r.outcome !== 'claimed' && r.outcome !== 'needs-human')
-      ) {
+      else if (session.mode === 'ticket' || (r.outcome !== 'done' && !passesOver(r))) {
         reason = `ticket ${ticketKey(first)} is ${r.outcome}: ${r.reason}`;
       }
     }

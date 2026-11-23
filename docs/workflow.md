@@ -55,7 +55,8 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
 17. **Settlement.** In the transaction that records the merge, the ticket becomes `done` only if
     the merged head is the verified one and nothing is left on the ticket
     ([Verified integration and reconciliation](#verified-integration-and-reconciliation)).
-18. **Next ticket.** The controller takes the next ready ticket, or ends the run
+18. **Next ticket.** The controller takes the next ready ticket, passing over one it could not
+    finish, or ends the run on an outcome that would hit every ticket
     ([Factory controller](#factory-controller)).
 
 Any stage can escalate to `needs-human`, which waits for a person's decision
@@ -443,12 +444,16 @@ cancelled ends the ticket. A completed job goes to `mergeJob`:
 | `blocked` (second conflict, head changed, refused) | blocked, with the code and reason                 |
 
 Budgets: two sessions in a row that exit without changing the job's stage, round, CI repairs, or
-artifacts; 60 CI reads; five unreadable answers from GitHub. A spent budget or a blocked ticket
-ends the whole session with the ticket, the job, the reason, and the command that continues it;
-the queue never moves on past it. A job waiting for a person ends only `orch do`: in queue mode
-the controller releases it, passes its ticket over for the rest of the session (decision
-2026-11-22-queue-passes-over-needs-human), takes the next ready ticket, and lists it with its
-next step in the end-of-session summary. Exit status is 1 in either case.
+artifacts; 60 CI reads; five unreadable answers from GitHub. A ticket that ends blocked, refused,
+or waiting for a person ends only `orch do`: in queue mode the controller releases its job,
+passes the ticket over for the rest of the session (`orch resume` included), takes the next ready
+ticket, and lists it with the reason and its next step in the end-of-session summary. Only an
+outcome that would hit every ticket ends the whole session there: `claude-failed`,
+`github-unreadable`, `merge-no-answer`, or `github-refused` (`RUN_ENDING_CODES` in
+`src/core/workflow.ts`; any other code continues, decision
+2026-11-23-queue-ends-only-on-run-wide-outcomes). For `ticket-open` (merged and verified, a box
+left unchecked) the next step is to tick or move the remaining boxes, then
+`orch ticket done <id>`. Exit status is 1 in every such case.
 The budgets are counted in the running controller only: `orch do` or `orch resume` starts them
 again, which takes a person each time. Nothing waits between two sessions, and nothing ends a
 session for running long. Every budget, durable or controller-local, is in one table in

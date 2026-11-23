@@ -1,7 +1,8 @@
 /**
  * A completed job whose merge only a person can unblock (decision
  * 2026-11-23-queue-passes-over-person-merge-blocks): the controller reports it as needs-human with
- * a step that works and goes on; any other merge refusal still ends the run. Uses
+ * a step that works and goes on; `github-refused` is run-ending and still ends the run (decision
+ * 2026-11-23-queue-ends-only-on-run-wide-outcomes). Uses
  * tests/run-fixture.ts; the workflow change is in the PR's file list on the gh shim.
  */
 import { describe, expect, it } from 'vitest';
