@@ -447,8 +447,7 @@ replaces: `orch ticket reopen <id>` queues it for a new job, or `orch ticket dro
 ## Recovery budgets
 
 Every automatic recovery is bounded. A spent budget is not a success: it stops the ticket with
-its reason. A `blocked` ticket ends the run there; one that waits in `needs-human` is passed over
-and the queue goes on.
+its reason, and a `blocked` ticket ends the run there.
 
 ```mermaid
 flowchart TD
@@ -513,8 +512,8 @@ failures understandable:
   to the CI-verified head with `--match-head-commit` and never uses `--admin`.
 - **No silent continuation after a terminal ticket failure.** A blocked or refused ticket ends
   the run: later tickets may depend on it, and a failure hidden behind more work is harder to
-  diagnose. A `needs-human` ticket is passed over, not hidden: its dependents stay unready until
-  it is done, the summary lists it, and the run exits 1.
+  diagnose. A `needs-human` ticket is passed over instead (decision
+  2026-11-22-queue-passes-over-needs-human).
 - **No wall-clock termination of Claude children.** A builder or a test run can be quiet for a
   long time; silence is not evidence of failure. Only the process ending ends the wait.
 - **No automatic adoption of surviving child processes.** A PID read from a file cannot prove it

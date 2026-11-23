@@ -575,11 +575,12 @@ async function runQueue(
   attempt: (ticketId: number) => Promise<TicketResult>,
 ): Promise<string | null> {
   const { store, session } = run;
-  // A ticket left for a person is skipped for the rest of the session, across `orch resume` too.
-  const human = new Set(
-    session.results.filter((r) => r.outcome === 'needs-human').map((r) => r.ticketId),
-  );
-  const passed = new Set([...session.skipped.map((s) => s.ticketId), ...human]);
+  // Tickets left for a person stay passed over for the session, across `orch resume` too.
+  const isHuman = (r: TicketResult): boolean => r.outcome === 'needs-human';
+  const passed = new Set([
+    ...session.skipped.map((s) => s.ticketId),
+    ...session.results.filter(isHuman).map((r) => r.ticketId),
+  ]);
   for (;;) {
     if (run.stopNow()) return null;
     if (stopRequests(store.paths).next) return 'stopped after the current ticket (orch stop next)';
@@ -589,14 +590,13 @@ async function runQueue(
     }).tickets;
     const next = ready.find((t) => !passed.has(t.id));
     if (next === undefined) {
-      const over = passed.size - human.size;
-      const notes = [
-        ...(human.size > 0 ? [`${String(human.size)} waits for a person`] : []),
-        ...(over > 0 ? [`${String(over)} passed over`] : []),
-      ];
-      return over > 0
-        ? `no ready ticket is left that can be started (${notes.join(', ')})`
-        : `no ready ticket is left${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`;
+      const human = session.results.filter(isHuman).length;
+      const over = passed.size - human;
+      const end =
+        over > 0
+          ? `no ready ticket is left that can be started (${String(over)} passed over)`
+          : 'no ready ticket is left';
+      return human > 0 ? `${end} (${String(human)} waits for a person)` : end;
     }
     // Reported and passed over, never started: an opt-in is per repository.
     const refused = mergeNotEnabled(store, next);
@@ -615,7 +615,6 @@ async function runQueue(
     }
     if (r.outcome === 'needs-human') {
       run.log(`ticket ${next.key} passed over: it waits for a person`);
-      human.add(next.id);
       passed.add(next.id);
       continue;
     }
