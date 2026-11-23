@@ -444,8 +444,8 @@ const STEPS: { id: StepId; label: string }[] = [
 const FAST_STEPS: readonly StepId[] = ['build', 'pr', 'ci', 'done'];
 
 /** Step index of a delivery stage; -1 for anything else (needs-human, completed, null). */
-function stepIndex(stage: unknown): number {
-  return stage === 'done' ? -1 : STEPS.findIndex((s) => s.id === stage);
+function stepIndex(stage: unknown, list: readonly { id: StepId }[] = STEPS): number {
+  return stage === 'done' ? -1 : list.findIndex((s) => s.id === stage);
 }
 
 const STOPPED: Partial<Record<Job['status'], string>> = {
@@ -465,7 +465,7 @@ export function progressOf(
 ): Progress {
   // A fast job never visits spec, simplify, review, or approve, so they are not its steps.
   const list = job.mode === 'fast' ? STEPS.filter((s) => FAST_STEPS.includes(s.id)) : STEPS;
-  const index = (stage: unknown) => (stage === 'done' ? -1 : list.findIndex((s) => s.id === stage));
+  const index = (stage: unknown) => stepIndex(stage, list);
   const steps = (position: number, at: StepState): Progress['steps'] =>
     list.map((s, i) => ({
       ...s,

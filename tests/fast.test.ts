@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 
 import { ValidationError } from '../src/core/errors.ts';
 import { planJob, resumeFactoryJob } from '../src/ops/factory.ts';
+import { completeCi } from '../src/ops/gates.ts';
+import { pushBranch } from '../src/ops/github.ts';
 import { addTicket, showTicket } from '../src/ops/tickets.ts';
 import { jobUsage } from '../src/ops/usage.ts';
 import { listArtifacts } from '../src/storage/artifacts.ts';
@@ -79,21 +81,31 @@ describe('a fast job', () => {
 
   it('a build that changes what the checks run or see is refused with escalate; a full build is not', () => {
     commitFile(clone, 'tests/a.test.ts', "it('a', () => {});\nit('b', () => {});\n");
+    commitFile(clone, 'vitest.config.ts', 'export default { test: {} };\n');
     gitIn(clone, 'push', '-q', 'origin', 'main');
     const c = startFast(store, clone);
     go(store, c, 'start');
-    const risky: [string, string, RegExp][] = [
-      ['package.json', '{ "name": "x" }\n', /package\.json \(deps/],
-      ['.github/workflows/ci.yml', 'on: push\n', /ci\.yml \(ci/],
-      ['vitest.config.ts', 'export default {};\n', /vitest\.config\.ts \(test-config/],
-      ['check.js', `${CHECK_JS}// edited\n`, /check\.js \(policy/],
-      ['tests/a.test.ts', "it.skip('a', () => {});\nit('b', () => {});\n", /disabled test/],
-      ['tests/a.test.ts', "it('a', () => {});\n", /test\(s\) removed/],
-      ['factory.json', `${JSON.stringify(POLICY)}\n`, /factory\.json \(policy/],
+    const write = (file: string, body: string) => () =>
+      commitFile(c.wt, file, body, `risky ${file}`);
+    // A rename out of the classification is seen at its old path.
+    const mv = (from: string, to: string) => () => {
+      gitIn(c.wt, 'mv', from, to);
+      gitIn(c.wt, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', `mv ${from}`);
+    };
+    const risky: [() => unknown, RegExp][] = [
+      [write('package.json', '{ "name": "x" }\n'), /package\.json \(deps/],
+      [write('.github/workflows/ci.yml', 'on: push\n'), /ci\.yml \(ci/],
+      [write('vitest.config.ts', 'export default {};\n'), /vitest\.config\.ts \(test-config/],
+      [write('check.js', `${CHECK_JS}// edited\n`), /check\.js \(policy/],
+      [write('tests/a.test.ts', "it.skip('a', () => {});\nit('b', () => {});\n"), /disabled test/],
+      [write('tests/a.test.ts', "it('a', () => {});\n"), /test\(s\) removed/],
+      [write('factory.json', `${JSON.stringify(POLICY)}\n`), /factory\.json \(policy/],
+      [mv('tests/a.test.ts', 'a.ts'), /tests\/a\.test\.ts \(tests, deleted/],
+      [mv('vitest.config.ts', 'vitest.config.bak'), /vitest\.config\.ts \(test-config, deleted/],
     ];
     let replace = false;
-    for (const [file, body, why] of risky) {
-      commitFile(c.wt, file, body, `risky ${file}`);
+    for (const [act, why] of risky) {
+      act();
       expect(verify(store, c).status).toBe('passed');
       add(store, c, 'build.md', fixture('build.md'), replace);
       replace = true;
@@ -112,6 +124,31 @@ describe('a fast job', () => {
     verify(store, full);
     add(store, full, 'build.md');
     expect(go(store, full, 'complete').stage).toBe('simplify');
+  });
+
+  it('a refused build resumed past the build gate is still refused at delivery', () => {
+    const c = startFast(store, clone);
+    go(store, c, 'start');
+    commitFile(c.wt, 'package.json', '{ "name": "y" }\n');
+    expect(verify(store, c).status).toBe('passed');
+    add(store, c, 'build.md');
+    expect(() => go(store, c, 'complete')).toThrow(/package\.json \(deps/);
+    go(store, c, 'escalate', 'refused');
+    for (const to of ['pr', 'ci'] as const) {
+      const r = resumeFactoryJob(store, c.id, { session: 'human', to, force: true });
+      expect(r.job.stage).toBe(to);
+      const token = r.token;
+      if (to === 'pr') {
+        expect(() => pushBranch(store, c.id, { token })).toThrow(
+          /delivering \(fast job\) is refused: .*package\.json \(deps/,
+        );
+        expect(() => go(store, { ...c, token }, 'complete')).toThrow(/package\.json \(deps/);
+      } else {
+        expect(() => completeCi(store, c.id, { token })).toThrow(/package\.json \(deps/);
+      }
+      go(store, { ...c, token }, 'escalate', 'still refused');
+    }
+    expect(gitIn(clone, 'ls-remote', 'origin', job(c).branch ?? '')).toBe('');
   });
 
   it('escalating keeps the worktree, branch, and commits; resume is limited to fast stages', () => {

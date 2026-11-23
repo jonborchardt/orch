@@ -161,7 +161,9 @@ any stage ── escalate ──→ needs-human ── resume --to build | pr | 
 - **The build gate refuses risk.** Completing a fast build is refused (exit 1, "Escalate") when
   `sensitiveReport` for HEAD shows a change of kind `policy` (factory.json or a file its commands
   run), `ci`, `test-config`, or `deps`, a deleted test file, a disabled or removed test, or policy
-  drift. The same diff in a full job goes to the reviewers instead.
+  drift. Renames count as a delete plus an add, so a file renamed out of its kind is still seen.
+  Every delivery (push, `pr create`, pr and ci complete) repeats the check, so resuming past a
+  refused build does not skip it. The same diff in a full job goes to the reviewers instead.
 - **Resume limits.** `resume --to spec|simplify|review|approve` on a fast job is refused; to run
   the full workflow, cancel the job and `orch ticket reopen` the ticket (a new full job and
   branch; the fast branch is kept).
