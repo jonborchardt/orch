@@ -701,8 +701,8 @@ export interface MergeFacts {
   /** This job already replaced another one, so a conflict here is the second. */
   isReland: boolean;
   /**
-   * The job's diff (merge base to `ciHead`) touches `.github/workflows/`, or that could not be
-   * determined. Such a PR changed what CI runs, so only a human's click merges it
+   * GitHub's file list for the PR touches `.github/workflows/`, or that list could not be read in
+   * full. Such a PR changed what CI runs, so only a human's click merges it
    * (decision 2026-11-22-workflow-changes-need-a-human-merge).
    */
   changesWorkflows: boolean;
@@ -713,7 +713,7 @@ export interface MergeFacts {
 /**
  * True when any of `paths` (repository-relative, `/` or `\`) is under `.github/workflows/`, or is
  * exactly `.github/workflows` or `.github`: how a symlink or gitlink that replaces either
- * directory appears in `git diff --name-only`.
+ * directory appears in a PR's file list.
  */
 export function touchesWorkflows(paths: readonly string[]): boolean {
   return paths.some((p) => {
