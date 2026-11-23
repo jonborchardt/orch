@@ -68,7 +68,7 @@ function effect(a: DashboardAction, d: JobDetailView, to: string): string {
     case 'request-review':
       return `The reviewers run again on the current build as ${nextRound(job)}. The job waits in review as pending and no session starts.`;
     case 'accept-policy':
-      return "Adopts factory.json at the worktree's HEAD as this job's verification policy. Earlier verification runs become stale; the next orch verify uses the accepted checks.";
+      return "Adopts factory.json at the worktree's HEAD as this job's verification policy. Earlier verification runs become stale; the next orch verify uses the accepted checks. A job waiting in needs-human goes back to the stage it was escalated from (except spec) as pending; no session starts.";
     case 'accept-delivery':
       return 'Completes the job without a CI verdict, with your reason recorded as the human close-out; nothing is merged or marked ready.';
     case 'cancel':

@@ -434,7 +434,8 @@ Whenever the controller leaves a job it releases it, a job waiting in `needs-hum
 when the session that escalated exited without releasing. It records and releases only a job it
 holds or nobody holds: a job another session holds is left exactly as it is, with nothing written
 to it. A person then decides a `needs-human` job on the dashboard (Approve to a stage, Request
-rework, Request review, Accept policy, Accept delivery, Cancel) and runs `orch do <ticket>`, which
+rework, Request review, Accept policy, which also returns the job to the stage it was escalated
+from unless that is spec, Accept delivery, Cancel) and runs `orch do <ticket>`, which
 continues the same job; `orch start` afterwards goes on with the queue. Deciding with
 `orch factory resume <job> --to <stage>` instead leaves that session's lease on the job, so pass
 `--release` there (it gives the job up again at once, `token: null`) or `orch do` reports the job
