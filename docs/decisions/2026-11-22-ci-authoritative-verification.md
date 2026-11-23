@@ -46,10 +46,12 @@ the dashboard, `orch init`, and `cannotAcceptDelivery`.
 
 Not delivered by ticket 0115: the installed `orch` that gates a job is main's build, and its
 `parsePolicy` rejects the unknown `verification.authority` key, so committing the opt-in on the
-job branch would block approval and accept-policy. Follow-up ticket 0116 tracks it:
+job branch would block approval and accept-policy. Follow-up ticket 0116 (job-7143c97f) carries it
+out. Status: steps 1 to 5 are done (job-7143c97f); nothing here is pending any more.
 
-1. After the 0115 PR merges: `npm run build` on main, then `orch install`.
-2. A change sets ORCH's `factory.json` to:
+1. Done: after the 0115 PR merged, `npm run build` on main, then `orch install`; the installed
+   `parsePolicy` accepts `verification.authority`.
+2. Done: committed by job-7143c97f (d378e0c) and accepted: ORCH's `factory.json` set to:
 
 ```json
 {
@@ -65,30 +67,65 @@ job branch would block approval and accept-policy. Follow-up ticket 0116 tracks 
 }
 ```
 
-3. A human accepts it with the dashboard's accept-policy.
-4. The first CI-authoritative ORCH ticket records its measured whole-ticket verification time
-   below, replacing the computed "after" figure; then 0113 is reevaluated.
+3. Done: a human accepted it for job-7143c97f with the dashboard's accept-policy.
+4. Done: job-7143c97f, the first CI-authoritative ORCH ticket, recorded its measured whole-ticket
+   verification time below, replacing the computed "after" figure.
+5. Done: 0113 is reevaluated against it under "0113 reevaluation" below.
 
 ## Measurements
 
 Recorded 2026-11-22 on the Windows development machine that runs the factory. Each figure is
 labelled **measured** (read from a clock or a log) or **computed** (arithmetic on measured figures).
 
-| Figure                                        | Value                 | Kind     | Source                                                                                                                                                              |
-| --------------------------------------------- | --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full local `npm run check` (the `check` step) | 23 min 35 s           | measured | `orch verify` run 175 of job job-f3982f23 at 6846392, check `check` duration 1415038 ms (`verification/175/check.log`)                                              |
-| `npm run typecheck`                           | 30.5 s                | measured | timed separately in the job-f3982f23 worktree, 2026-11-22                                                                                                           |
-| `npm run lint`                                | 67.2 s                | measured | same                                                                                                                                                                |
-| `npm run format:check`                        | 14.5 s                | measured | same                                                                                                                                                                |
-| `npm run build`                               | 11.1 s                | measured | same                                                                                                                                                                |
-| Fast checks together                          | 123.3 s (about 2 min) | computed | sum of the four rows above                                                                                                                                          |
-| GitHub CI wall-clock for a PR                 | 11 min 56 s           | measured | `gh run view 45002908723` (PR #115, ticket 0109, attempt 1): created 08:27:35Z, last job done 08:39:31Z; the slowest job, `windows (rest)`, ran 08:27:39Z-08:39:30Z |
-| Verification per ticket before (`local`)      | 35 min 31 s           | computed | full local check + CI wall-clock, one pass each (23:35 + 11:56)                                                                                                     |
-| Verification per ticket after (`ci`)          | 13 min 59 s           | computed | fast checks + CI wall-clock (2:03 + 11:56), about 61% less; pending: a real measurement of the first CI-authoritative ORCH ticket under ticket 0116                 |
+| Figure                                         | Value                 | Kind     | Source                                                                                                                                                                                                                                                                     |
+| ---------------------------------------------- | --------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full local `npm run check` (the `check` step)  | 23 min 35 s           | measured | `orch verify` run 175 of job job-f3982f23 at 6846392, check `check` duration 1415038 ms (`verification/175/check.log`)                                                                                                                                                     |
+| `npm run typecheck`                            | 30.5 s                | measured | timed separately in the job-f3982f23 worktree, 2026-11-22                                                                                                                                                                                                                  |
+| `npm run lint`                                 | 67.2 s                | measured | same                                                                                                                                                                                                                                                                       |
+| `npm run format:check`                         | 14.5 s                | measured | same                                                                                                                                                                                                                                                                       |
+| `npm run build`                                | 11.1 s                | measured | same                                                                                                                                                                                                                                                                       |
+| Fast checks together                           | 123.3 s (about 2 min) | computed | sum of the four rows above                                                                                                                                                                                                                                                 |
+| GitHub CI wall-clock for a PR                  | 11 min 56 s           | measured | `gh run view 45002908723` (PR #115, ticket 0109, attempt 1): created 08:27:35Z, last job done 08:39:31Z; the slowest job, `windows (rest)`, ran 08:27:39Z-08:39:30Z                                                                                                        |
+| Verification per ticket before (`local`)       | 35 min 31 s           | computed | full local check + CI wall-clock, one pass each (23:35 + 11:56)                                                                                                                                                                                                            |
+| `orch verify` run 190 under `ci` (ticket 0116) | 2 min 9 s (128.7 s)   | measured | `orch verify show job-7143c97f --json`: run 190 at ebee472, policy source `authorized`, authority `ci`, passed; started 2026-11-23T02:19:53.593Z, completed 02:22:02.304Z; checks typecheck 31268 ms, lint 69875 ms, format 15500 ms, build 12006 ms (`verification/190/`) |
+| GitHub CI run under `ci` (ticket 0116)         | 12 min 26 s           | measured | `gh run view 45100041089` (workflow CI, PR #121, ebee472, attempt 1, success): created 2026-11-23T02:24:41Z, last job done 02:37:07Z; the slowest job, `windows (rest)`, ran 02:24:44Z-02:37:07Z                                                                           |
+| Verification per ticket after (`ci`)           | 14 min 35 s (874.7 s) | measured | job-7143c97f (ticket 0116): verify run 190 + CI run 45100041089 attempt 1 (2:09 + 12:26); 2 passes: one local verify run and one CI run attempt, no re-run attempts and no CI repairs                                                                                      |
+| After compared with before                     | 59% less              | computed | 1 - 874.7 s / 2131 s (14:35 against 35:31); the earlier computed estimate was 13 min 59 s, about 61% less                                                                                                                                                                  |
 
-A CI run that needed a re-run takes longer: `gh run view 45023401560` (PR #117, attempt 2) finished
-25 min 10 s after it was created. Under `ci` a typical ticket has two CI passes (pre-review and
-delivery), but the delivery pass usually re-reads the same commit's verdict, so it costs a CI run
-only when the base was integrated or a commit was added; that is why the "after" figure counts one
-CI run and is computed, not measured. The ticket's own earlier sample (PR #112, about 21 min local
-and 10.5 min CI) is cited from the ticket and was not re-measured here.
+The "after" row covers job-7143c97f up to the commit that records it. Excluded, and named as
+excluded: runs under the baseline (`local`) policy before acceptance (there were none: round 1
+stopped before `orch verify`, and `orch job events job-7143c97f` shows no `verification.started`
+before `policy.authorized` at 2026-11-23T02:15:00Z; `gh run list` for the branch shows no CI run
+for d378e0c); and this recording commit's own verify and CI passes and the delivery pass, which a
+commit cannot contain and which go into the 0116 ticket note. One sample is noisy: a CI re-run
+takes longer, for example `gh run view 45023401560` (PR #117, attempt 2) finished 25 min 10 s after
+it was created. The ticket's own earlier sample (PR #112, about 21 min local and 10.5 min CI) is
+cited from the ticket and was not re-measured here.
+
+### 0113 reevaluation
+
+Ticket 0113 targets "a completed PR in under 10 minutes, excluding external CI delays" for a
+trivial change. Measured on job-7143c97f (`orch job show` / `orch job events`), from `job.created`
+at 2026-11-23T00:25:10.830Z to the round-2 `stage.started` (build) at 02:40:58.373Z, where these
+figures were read:
+
+| Figure                                         | Value                  | Kind     |
+| ---------------------------------------------- | ---------------------- | -------- |
+| Job wall-clock to recording                    | 2 h 15 min 48 s        | measured |
+| Waiting for a human (escalation to acceptance) | 1 h 37 min 4 s         | measured |
+| Wall-clock without the human wait              | 38 min 44 s (2324.0 s) | computed |
+| Verification share of that (874.7 s)           | 37.6%                  | computed |
+| Stage and agent overhead (that minus 874.7 s)  | 24 min 9 s (1449.3 s)  | computed |
+
+The human wait runs from `runner.stopped` (needs-human, accept-policy) at 00:37:56.829Z to
+`policy.authorized` at 02:15:00.331Z.
+
+What ci authority already addresses: 0113's "run relevant targeted checks rather than the entire
+validation suite" for verification. The local run is now the fast checks only (2 min 9 s, within
+the 10-minute budget), and the full suite runs once, in CI, which 0113 excludes as an external
+delay. What remains is stage and agent overhead: about 24 minutes outside verification, CI and the
+human wait, from separate spec, build, simplify, review, and approve sessions. That is 0113's
+single-agent, minimal-pipeline part, and ci authority does nothing for it.
+
+Recommendation: narrow 0113 to the single-agent fast pipeline (skip spec, simplify, and parallel
+review); its verification goal is already met by `verification.authority: "ci"`.
