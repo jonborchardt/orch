@@ -104,7 +104,9 @@ flowchart TD
     M -->|"conflict: one re-land job"| F
     M --> O{"Ticket outcome"}
     O -->|"done, or claimed by another process"| N
-    O -->|"blocked, needs-human, refused"| X["End the run with the reason; runner.stopped on the job"]
+    O -->|"needs-human"| H["Release the job, runner.stopped on it; pass over, report at the end"]
+    H --> N
+    O -->|"blocked, refused"| X["End the run with the reason; runner.stopped on the job"]
     O -->|"stopped by orch stop"| Z["Exit; orch resume continues"]
 ```
 
@@ -120,9 +122,11 @@ What the code guarantees (`drive` and `runQueue` in `src/ops/run.ts`):
 - `orch do <ticket>` refuses to start a new job without the opt-in, but continues an existing job,
   whose merge is then blocked with `not-authorized`;
 - a ticket outcome of `done` continues to the next ready ticket, and so does `claimed` (another
-  process created its job meanwhile; that ticket is passed over); `blocked`, `needs-human`, or
-  `refused` ends the run with that reason; `stopped` ends it as a resumable stop; `orch stop next`
-  ends it before the next ticket, and so does an empty ready queue;
+  process created its job meanwhile; that ticket is passed over); in queue mode `needs-human`
+  releases the job, passes the ticket over for the rest of the session, and continues (tickets that
+  depend on it stay unready; the end-of-session summary lists it with its next step and the exit
+  status is 1); `blocked` or `refused` ends the run with that reason; `stopped` ends it as a
+  resumable stop; `orch stop next` ends it before the next ticket, and so does an empty ready queue;
 - `orch do <ticket>` runs that one ticket and exits, whatever its outcome;
 - it is not a daemon: nothing keeps running after the command exits.
 

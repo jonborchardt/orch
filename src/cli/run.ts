@@ -25,10 +25,11 @@ each one's job with the /factory skill in a headless Claude Code session (claude
 merges through orch job merge's operation, and goes on to the next ticket. It runs only while this
 command runs; nothing is left behind when it exits.
 
-  start           Work the whole queue, best ready ticket first, one at a time. Ends when no ready
-                  ticket is left, a stop was requested, or a ticket could not be finished (blocked,
-                  needs a person, a retry budget spent): it reports that ticket and stops rather
-                  than start unrelated work
+  start           Work the whole queue, best ready ticket first, one at a time. A ticket whose job
+                  needs a person is released, passed over for the session, and reported at the
+                  end. Ends when no ready ticket is left, a stop was requested, or a ticket could
+                  not be finished (blocked, a retry budget spent): it reports that ticket and
+                  stops rather than start unrelated work
   start repo      The same, only for the repository containing the current directory
   do <ticket-id>  One ticket, to its outcome: start its job, or continue the unfinished one, or
                   merge the completed one. A cancelled job is never replaced
