@@ -10,6 +10,7 @@ import { join } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { formatSummary, summaryExitCode } from '../src/cli/run.ts';
 import { runnerPaths } from '../src/core/paths.ts';
 import { cancelJob } from '../src/ops/actions.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
@@ -33,6 +34,7 @@ import {
 } from '../src/ops/runner-state.ts';
 import { addTicket, ticketAction } from '../src/ops/tickets.ts';
 import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
+import type { Job } from '../src/storage/schema.ts';
 import {
   beta,
   clone,
@@ -71,6 +73,13 @@ vi.mock('../src/ops/dispatch.ts', async (original) => {
 beforeEach(() => {
   race.before = undefined;
 });
+
+/** What a Claude session leaves when the job needs a decision from a person. */
+const escalate = (job: Job): void => {
+  const { token } = claimJob(store, job.id, { session: RUNNER_SESSION });
+  transitionJob(store, job.id, 'start', { token });
+  transitionJob(store, job.id, 'escalate', { token, reason: 'two designs are possible' });
+};
 
 describe('orch start: the queue', () => {
   it('runs ready tickets best first, merges each verified PR, and ends when none is left', async () => {
@@ -114,24 +123,40 @@ describe('orch start: the queue', () => {
     expect(status(alpha)).toBe('open');
   });
 
-  it('stops at a ticket that needs a person instead of starting unrelated work', async () => {
+  it('passes over a ticket that needs a person and goes on to the next ready ticket', async () => {
     const first = ticket('First', { priority: 'P1' });
     const second = ticket('Second', { priority: 'P2' });
+    let next = '';
     const l = launcher((job) => {
-      const { token } = claimJob(store, job.id, { session: RUNNER_SESSION });
-      transitionJob(store, job.id, 'start', { token });
-      transitionJob(store, job.id, 'escalate', { token, reason: 'two designs are possible' });
-    });
+      escalate(job);
+      next = runnerStatus(store).next;
+    }, done);
 
     const s = await queue(l);
 
-    expect(s.tickets).toHaveLength(1);
-    expect(s.tickets[0]).toMatchObject({ ticketId: first, outcome: 'needs-human' });
-    expect(s.tickets[0]?.reason).toContain('two designs are possible');
-    expect(s.tickets[0]?.next).toContain(`orch do ${String(first).padStart(4, '0')}`);
-    expect(s.blocked).toBe(1);
-    expect(jobsOf(second)).toHaveLength(0);
-    expect(merges()).toHaveLength(0);
+    expect(next).toBe('Report that the job waits for a person, then take the next ready ticket.');
+    expect(s.tickets).toHaveLength(2);
+    const [human, merged] = s.tickets;
+    const jobId = jobsOf(first)[0]?.id;
+    expect(human).toMatchObject({ ticketId: first, outcome: 'needs-human', jobId });
+    expect(human?.reason).toContain('two designs are possible');
+    expect(human?.next).toContain(`orch do ${String(first).padStart(4, '0')}`);
+    expect(merged).toMatchObject({ ticketId: second, outcome: 'done' });
+    expect(s).toMatchObject({ blocked: 1, completed: 1 });
+    expect(getJob(store.db, jobId ?? '')).toMatchObject({
+      stage: 'needs-human',
+      ownerSession: null,
+    });
+    expect(l.calls.filter((c) => c.jobId === jobId)).toHaveLength(1);
+    expect(status(second)).toBe('done');
+    expect(merges()).toHaveLength(1);
+    expect(s.reason).toBe('no ready ticket is left (1 waits for a person)');
+    expect(summaryExitCode(s)).toBe(1);
+    const text = formatSummary(s);
+    expect(text).toContain(
+      `${String(first).padStart(4, '0')} needs-human: job ${jobId ?? ''} waits for a person`,
+    );
+    expect(text).toContain(`     next: ${human?.next ?? ''}`);
   });
 
   it('passes over a repository where merging is not enabled, and says how to enable it', async () => {
@@ -179,6 +204,23 @@ describe('orch do: one ticket, from wherever it is', () => {
     expect(jobsOf(id)).toHaveLength(0);
     expect(l.calls).toHaveLength(0);
     expect(s.blocked).toBe(1);
+  });
+
+  it('ends at a job that needs a person and starts no other ticket', async () => {
+    const id = ticket('Escalates', { priority: 'P1' });
+    const other = ticket('Other', { priority: 'P2' });
+    let next = '';
+    const l = launcher((job) => {
+      escalate(job);
+      next = runnerStatus(store).next;
+    }, done);
+
+    const s = await one(l, id);
+
+    expect(next).toBe('Report that the job waits for a person, then exit.');
+    expect(s.tickets.map((t) => t.outcome)).toEqual(['needs-human']);
+    expect(l.calls).toHaveLength(1);
+    expect(jobsOf(other)).toHaveLength(0);
   });
 
   it('refuses to start without the merge opt-in', async () => {
@@ -494,6 +536,23 @@ describe('stop and resume', () => {
     const r = await resumeSession(store, {}, { launch: l.launch, ...quick });
     expect(r.completed).toBe(1);
     expect(jobsOf(id)).toHaveLength(1);
+  });
+
+  it('a resumed ticket that then needs a person is passed over for the next ready one', async () => {
+    const first = ticket('In flight', { priority: 'P1' });
+    const second = ticket('Next', { priority: 'P2' });
+    const job = dispatchJob(store, { ticket: first, session: RUNNER_SESSION, cwd: clone }).job;
+    writeSession(store.paths, interrupted({ ticketId: first, jobId: job.id }));
+    const l = launcher(escalate, done);
+
+    const r = await resumeSession(store, {}, { launch: l.launch, ...quick });
+
+    expect(r.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([
+      [first, 'needs-human'],
+      [second, 'done'],
+    ]);
+    expect(l.calls.map((c) => c.jobId)).toEqual([job.id, jobsOf(second)[0]?.id]);
+    expect(r.reason).toBe('no ready ticket is left (1 waits for a person)');
   });
 
   it('orch stop discards an interrupted session and hands its job back', async () => {
