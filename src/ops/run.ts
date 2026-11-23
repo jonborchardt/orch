@@ -662,9 +662,7 @@ async function runQueue(
     if (r.outcome === 'stopped') return null;
     if (r.outcome === 'done') continue;
     if (!passesOver(r)) return `ticket ${next.key} is ${r.outcome}: ${r.reason}`;
-    run.log(
-      `ticket ${next.key} passed over: ${isHuman(r) ? 'it waits for a person' : `${r.outcome} (${r.code ?? r.outcome})`}`,
-    );
+    run.log(`ticket ${next.key} passed over: ${r.code ?? r.outcome}`);
     passed.add(next.id);
   }
 }
