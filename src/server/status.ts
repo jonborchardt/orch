@@ -465,7 +465,7 @@ export function progressOf(
 ): Progress {
   // A fast job never visits spec, simplify, review, or approve, so they are not its steps.
   const list = job.mode === 'fast' ? STEPS.filter((s) => FAST_STEPS.includes(s.id)) : STEPS;
-  const index = (stage: unknown) => list.findIndex((s) => s.id === STEPS[stepIndex(stage)]?.id);
+  const index = (stage: unknown) => (stage === 'done' ? -1 : list.findIndex((s) => s.id === stage));
   const steps = (position: number, at: StepState): Progress['steps'] =>
     list.map((s, i) => ({
       ...s,

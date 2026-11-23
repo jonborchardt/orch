@@ -397,11 +397,7 @@ export function transition(
           // Reaching pr by a human `--to pr` is allowed; finishing without an approval is not,
           // except under `ci`, whose pre-review pass has none yet (the delivery gate decides).
           if (!ciFirst && !approvalEvidence(mode, ctx.artifacts)) {
-            reject(
-              mode === 'fast'
-                ? 'no build.md is registered'
-                : 'no DECISION: APPROVE is registered in decision.md',
-            );
+            reject(`no ${approvalName(mode)} is registered`);
           }
           return { patch: { stage: 'ci', status: 'pending' }, events: [completed] };
         }
