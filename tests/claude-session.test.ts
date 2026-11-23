@@ -8,11 +8,19 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_RUNNER_CLAUDE_ARGS } from '../src/core/roles.ts';
-import { CLAUDE_SHIM_ENV, launchClaude } from '../src/integrations/claude-session.ts';
+import {
+  CLAUDE_SHIM_ENV,
+  launchClaude,
+  STDERR_TAIL_CHARS,
+} from '../src/integrations/claude-session.ts';
 import { makePolicyRepo } from './drive.ts';
 import { type GhShim, ghShim, json, orch, tempDir } from './helpers.ts';
 
-/** Records how it was started, then does what CLAUDE_SHIM_DO says: exit <n>, sleep <ms>, hang. */
+/**
+ * Records how it was started, then does what CLAUDE_SHIM_DO says: exit <n>, sleep <ms>, hang,
+ * stream <n> (stream-json lines as claude -p writes them, then exit n), stderr <chars> (that
+ * many characters then a marker on stderr, exit 4).
+ */
 const SHIM = String.raw`
 const fs = require('node:fs');
 const record = { args: process.argv.slice(2), cwd: process.cwd(), session: process.env.ORCH_SESSION ?? null, token: process.env.ORCH_TOKEN ?? null };
@@ -21,6 +29,23 @@ const [what, value] = (process.env.CLAUDE_SHIM_DO || 'exit 0').split(' ');
 if (what === 'exit') process.exit(Number(value));
 if (what === 'sleep') setTimeout(() => process.exit(0), Number(value));
 if (what === 'hang') setInterval(() => undefined, 1000);
+if (what === 'stream') {
+  const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+  out({ type: 'system', subtype: 'init', session_id: 'abc', model: 'opus' });
+  out({ type: 'assistant', parent_tool_use_id: null, message: { content: [
+    { type: 'text', text: 'Reading the plan ' + 'x'.repeat(400) },
+    { type: 'tool_use', name: 'Bash', input: { command: 'orch factory plan job-1' } },
+  ] } });
+  out({ type: 'rate_limit_event' });
+  process.stdout.write('not json at all\n');
+  process.stderr.write('a warning on stderr\n');
+  out({ type: 'result', subtype: 'success', is_error: false, result: 'All done. ' + 'y'.repeat(3000), num_turns: 7 });
+  process.exitCode = Number(value);
+}
+if (what === 'stderr') {
+  process.stderr.write('z'.repeat(Number(value)) + 'THE END\n');
+  process.exitCode = 4;
+}
 `;
 
 let dir: string;
@@ -49,19 +74,28 @@ const calls = (): Call[] =>
         .map((l) => JSON.parse(l) as Call)
     : [];
 
-const start = (what: string) =>
+const UUID = '0b6f3c1e-2d4a-4f5b-9c8d-7e6f5a4b3c2d';
+const start = (what: string, onLine?: (line: string) => void) =>
   launchClaude({
     cwd: dir,
     prompt: '/factory job-1a2b3c4d\n\nSecond line with "quotes" & symbols.',
     args: DEFAULT_RUNNER_CLAUDE_ARGS,
     name: 'factory job-1a2b3c4d',
+    sessionId: UUID,
     env: { ...env, CLAUDE_SHIM_DO: what },
+    onLine,
   });
 
 describe('launchClaude', () => {
   it('starts claude -p in the given directory with the permission arguments and the whole prompt', async () => {
     const child = start('exit 0');
-    expect(await child.done).toEqual({ code: 0, signal: null, error: null });
+    expect(await child.done).toEqual({
+      code: 0,
+      signal: null,
+      error: null,
+      stderrTail: '',
+      result: null,
+    });
     const [call] = calls();
     expect(call?.cwd.toLowerCase()).toBe(dir.toLowerCase());
     expect(call?.args[0]).toBe('-p');
@@ -73,7 +107,40 @@ describe('launchClaude', () => {
     expect(call?.args.join(' ')).not.toContain('bypassPermissions');
     // The prompt arrives as one argument, unparsed by any shell.
     expect(call?.args.at(-1)).toBe('/factory job-1a2b3c4d\n\nSecond line with "quotes" & symbols.');
-    expect(call?.args.at(-3)).toBe('--name');
+    // --name ends --allowedTools; orch's own output and session flags follow it, prompt last.
+    expect(call?.args.slice(-8, -1)).toEqual([
+      '--name',
+      'factory job-1a2b3c4d',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--session-id',
+      UUID,
+    ]);
+    expect(call?.args).not.toContain('--include-partial-messages');
+  });
+
+  it('turns stream-json into one short line per step and keeps the result', async () => {
+    const lines: string[] = [];
+    const exit = await start('stream 0', (l) => lines.push(l)).done;
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toBe('session abc (opus)');
+    expect(lines[1]).toMatch(/^Reading the plan x+…$/);
+    expect(lines[1]?.length).toBeLessThanOrEqual(160);
+    expect(lines[2]).toBe('Bash: orch factory plan job-1');
+    expect(lines[3]).toBe('not json at all');
+    expect(lines[4]).toMatch(/^result success, 7 turns: All done\. y+…$/);
+    expect(exit).toMatchObject({ code: 0, stderrTail: 'a warning on stderr\n' });
+    expect(exit.result).toMatchObject({ subtype: 'success', isError: false, numTurns: 7 });
+    expect(exit.result?.result?.length).toBe(1000);
+  });
+
+  it('keeps the last part of what a failing child wrote to stderr', async () => {
+    const exit = await start(`stderr ${String(STDERR_TAIL_CHARS + 50)}`).done;
+    expect(exit.code).toBe(4);
+    expect(exit.stderrTail).toHaveLength(STDERR_TAIL_CHARS);
+    expect(exit.stderrTail?.endsWith('zzzTHE END\n')).toBe(true);
+    expect(exit.result).toBeNull();
   });
 
   it('reports a non-zero exit as it is', async () => {
@@ -101,7 +168,14 @@ describe('launchClaude', () => {
 
   it('says how to install claude when it is not on PATH', () => {
     expect(() =>
-      launchClaude({ cwd: dir, prompt: 'x', args: [], name: 'n', env: { PATH: dir } }),
+      launchClaude({
+        cwd: dir,
+        prompt: 'x',
+        args: [],
+        name: 'n',
+        sessionId: UUID,
+        env: { PATH: dir },
+      }),
     ).toThrow(/claude was not found on PATH/);
   });
 });
@@ -177,5 +251,38 @@ describe('controller commands through the CLI', () => {
     expect(job.status).not.toBe('cancelled');
     expect(job.ownerSession).toBeNull();
     expect(json(orch(home, outside, ['status', '--json']))).toMatchObject({ state: 'idle' });
+  });
+
+  it('orch do shows the child live on stderr and records what it left on the job', () => {
+    const e = { ...shim.env, [CLAUDE_SHIM_ENV]: env[CLAUDE_SHIM_ENV], CLAUDE_SHIM_LOG: log };
+    expect(orch(home, repo.clone, ['ticket', 'add', 'Export CSV'], e).code).toBe(0);
+    expect(
+      orch(home, outside, ['factory', 'config', 'merge', 'enable', '--repo', repo.clone], e).code,
+    ).toBe(0);
+
+    const r = orch(home, outside, ['do', '1', '--json'], { ...e, CLAUDE_SHIM_DO: 'stream 3' });
+
+    // The summary on stdout stays JSON; the child's steps and its stderr go to stderr.
+    const summary = json<{ tickets: { jobId: string }[] }>(r);
+    expect(r.err).toContain('  claude: Bash: orch factory plan job-1');
+    expect(r.err).toContain('  claude: not json at all');
+    expect(r.err).toContain('a warning on stderr');
+    expect(r.err).toContain('claude: exited (code 3)');
+    const jobId = summary.tickets[0]?.jobId ?? '';
+    const events = json<{ type: string; payload: Record<string, unknown> }[]>(
+      orch(home, outside, ['job', 'events', jobId, '--json']),
+    );
+    const ran = events.filter((x) => x.type === 'runner.session');
+    expect(ran.length).toBeGreaterThan(0);
+    for (const x of ran) {
+      expect(x.payload).toMatchObject({
+        exitCode: 3,
+        stderrTail: 'a warning on stderr\n',
+        result: { subtype: 'success', isError: false, numTurns: 7 },
+      });
+    }
+    // Each launch ran under the uuid attached to the job.
+    const ids = calls().map((c) => c.args[c.args.indexOf('--session-id') + 1]);
+    expect(ran.map((x) => x.payload['sessionId']).sort()).toEqual([...ids].sort());
   });
 });
