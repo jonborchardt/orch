@@ -19,6 +19,8 @@ import {
 } from '../core/workflow.ts';
 import {
   allowedActions,
+  CHOICE_ACTIONS,
+  currentChoices,
   DASHBOARD_ACTIONS,
   type DashboardAction,
   dashboardAction,
@@ -336,6 +338,14 @@ export function detail(store: Store, id: string): JobDetailView {
   // Without a readable worktree HEAD there is nothing to compare the verdict against.
   const ci = ciView(job, evidence.events, plan?.worktree?.head ?? undefined);
   const conflicts = baseConflicts(store, job, plan?.worktree ?? null);
+  const choices = currentChoices(store, job);
+  const actions = allowedActions(
+    job,
+    plan?.verification?.policy.authorization === 'required',
+    ci.completion,
+    conflicts,
+    choices !== null,
+  );
   return {
     job: safeJob(job),
     liveness: state,
@@ -352,12 +362,12 @@ export function detail(store: Store, id: string): JobDetailView {
     timeline: timelineOf(events),
     flake: plan ? plan.flake : (currentFlakes(store).get(id) ?? null),
     prPhase: prPhase(job, ci.completion),
-    actions: allowedActions(
-      job,
-      plan?.verification?.policy.authorization === 'required',
-      ci.completion,
-      conflicts,
-    ),
+    actions,
+    choices:
+      choices?.map((c) => {
+        const action = CHOICE_ACTIONS[c.kind];
+        return { ...c, action, available: actions.includes(action) };
+      }) ?? null,
     conflicts,
     links: {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,
@@ -415,7 +425,7 @@ export function parseAction(body: unknown): ActionRequest & { to?: Stage } {
     throw new ValidationError('Body must be a JSON object.');
   }
   const b = body as Record<string, unknown>;
-  const allowed = new Set(['action', 'reason', 'force', 'to']);
+  const allowed = new Set(['action', 'reason', 'force', 'to', 'choice']);
   for (const k of Object.keys(b)) {
     if (!allowed.has(k)) throw new ValidationError(`Unknown field: ${k}`);
   }
@@ -440,6 +450,16 @@ export function parseAction(body: unknown): ActionRequest & { to?: Stage } {
     }
     out.to = b['to'] as Stage;
   }
+  const choice = b['choice'];
+  if ((choice !== undefined) !== (action === 'answer')) {
+    throw new ValidationError('choice is required with action answer, and only with it');
+  }
+  if (choice !== undefined) {
+    if (typeof choice !== 'number' || !Number.isInteger(choice) || choice < 0) {
+      throw new ValidationError('choice must be a non-negative integer');
+    }
+    out.choice = choice;
+  }
   return out;
 }
 
@@ -450,6 +470,7 @@ export function act(store: Store, id: string, body: unknown): ActionResponse {
     reason: req.reason,
     force: req.force,
     to: req.to,
+    choice: req.choice,
   });
   return r.resumeCommand
     ? { job: r.job, message: r.message, resumeCommand: r.resumeCommand }

@@ -6,7 +6,10 @@ import { ticketKey } from '../core/tickets.ts';
 import {
   type Action,
   ACTIONS,
+  CHOICE_KINDS,
   describeNext,
+  MAX_CHOICES,
+  parseChoices,
   type Stage,
   STAGES,
   type Status,
@@ -63,6 +66,7 @@ export interface JobOptions {
   cwd?: string;
   message?: string;
   through?: string;
+  choice?: string[];
 }
 
 export const JOB_HELP = `Usage: orch job <command> [options]
@@ -79,7 +83,11 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   release <id> --token <t>
   resume <id> --session <name> [--to <stage>] [--force]
   transition <id> <${ACTIONS.join('|')}> --token <t> [--to <stage>] [--reason <r>]
-            [--revision <n>]
+            [--revision <n>] [--choice "<kind>[:<stage>]=<label>" ...]
+            --choice (escalate only, 1 to ${String(MAX_CHOICES)}): an answer the human can pick in
+            the dashboard's Choices block; <kind> is ${CHOICE_KINDS.join(', ')} (resume
+            names its stage, e.g. resume:approve=Approve as is). A fast job refuses a
+            resume to a stage it never visits
   artifact add <id> <relative-path> --token <t> [--replace]
   review record <id> --reviewer <name> [--verdict pass|changes] [--summary <s>] --token <t>
             the verdict is read from round-<n>/review-<name>.md, which must agree
@@ -207,10 +215,14 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
     }
     case 'transition': {
       const action = need(oneOf<Action>(rest[1], ACTIONS, '<action>'), '<action>');
+      if (o.choice !== undefined && action !== 'escalate') {
+        throw new UsageError('--choice is only for the escalate action.');
+      }
       const job = transitionGuarded(store, id(), action, {
         ...auth,
         to: oneOf<Stage>(o.to, STAGES, '--to'),
         reason: o.reason,
+        choices: parseChoices(o.choice),
       });
       return summary(job, store);
     }
