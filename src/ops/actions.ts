@@ -521,13 +521,13 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
     const accepted =
       `Verification policy from factory.json at ${job.policyHead?.slice(0, 7) ?? '?'} accepted (${reason}). ` +
       'Earlier verification runs are stale; the next orch verify uses the accepted checks.';
-    if (before.stage !== 'needs-human' || job.stage === 'needs-human') {
-      return { job: safe, message: accepted, resumeCommand: resume };
-    }
-    const next = job.ticketId === null ? resume : `orch do ${ticketKey(job.ticketId)}`;
+    const returned = before.stage === 'needs-human' && job.stage !== 'needs-human';
+    const next = !returned || job.ticketId === null ? resume : `orch do ${ticketKey(job.ticketId)}`;
     return {
       job: safe,
-      message: `${accepted} The job returned to ${job.stage} (pending); continue it with: ${next}`,
+      message: returned
+        ? `${accepted} The job returned to ${job.stage} (pending); continue it with: ${next}`
+        : accepted,
       resumeCommand: next,
     };
   }

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { jobArtifactDir } from '../src/core/paths.ts';
+import { ticketKey } from '../src/core/tickets.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { RUNNER_SESSION } from '../src/ops/run.ts';
 import { claimJob, getJob, releaseJob } from '../src/storage/jobs.ts';
@@ -30,9 +31,6 @@ const STRONGER = JSON.stringify({
     ],
   },
 });
-const key = (id: number) => String(id).padStart(4, '0');
-const order = (jobId: string) =>
-  ['policy.authorized', 'job.resumed'].map((t) => eventsOf(jobId, t)[0]?.id ?? -1);
 
 /** A session that reaches build, proposes a stronger policy, escalates, and exits holding the job. */
 const proposePolicy: Act = (job) => {
@@ -70,13 +68,13 @@ describe('accept-policy on a job waiting in needs-human', () => {
       ownerToken: null,
       policyHead: head(job.worktreePath ?? ''),
     });
-    const [authorized, resumed] = order(jobId);
+    const authorized = eventsOf(jobId, 'policy.authorized')[0]?.id ?? -1;
     expect(authorized).toBeGreaterThan(0);
-    expect(resumed).toBeGreaterThan(authorized ?? 0);
+    expect(eventsOf(jobId, 'job.resumed')[0]?.id).toBeGreaterThan(authorized);
     expect(eventsOf(jobId, 'job.resumed')[0]?.payload).toMatchObject({ to: 'build' });
     expect(r.message).toContain('returned to build (pending)');
-    expect(r.message).toContain(`orch do ${key(id)}`);
-    expect(r.resumeCommand).toBe(`orch do ${key(id)}`);
+    expect(r.message).toContain(`orch do ${ticketKey(id)}`);
+    expect(r.resumeCommand).toBe(`orch do ${ticketKey(id)}`);
 
     const again = await one(l, id);
 
