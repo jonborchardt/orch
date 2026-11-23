@@ -86,7 +86,10 @@ while it is alive), writes its intent to `<data>/runner.json`, and loops:
 
 A ticket whose job waits for a person is released and passed over for the rest of the session;
 the queue takes the next ready ticket, and the end-of-session summary lists the passed-over ticket
-with its next step. It ends when no ready ticket is left, when `orch stop next` was requested, or
+with its next step. So is a completed job whose merge only a person can unblock (`personMergeStep`
+in `src/core/workflow.ts`): `workflow-changed` (next step: Merge on the dashboard),
+`not-authorized`, `head-changed`, `pr-closed`, `pr-draft`, and `second-conflict` (decision
+2026-11-23-queue-passes-over-person-merge-blocks). Every other merge refusal ends the run. It ends when no ready ticket is left, when `orch stop next` was requested, or
 at the first ticket it could not finish (blocked or refused). It exits 0 unless a ticket ended
 blocked, refused, or waiting for a person.
 
@@ -297,7 +300,7 @@ Each ticket the controller attempts ends with one outcome (`TICKET_OUTCOMES` in
 | `done`        | the ticket's lifecycle says done: a verified merge closed it, now or earlier   | continue with the next ticket      |
 | `claimed`     | another process created the ticket's job meanwhile                             | pass that ticket over and continue |
 | `blocked`     | started, and cannot go on without a person (a budget, a refusal, a cancel)     | end the run with the reason        |
-| `needs-human` | its job waits in `needs-human`                                                 | pass that ticket over and continue |
+| `needs-human` | its job waits in `needs-human`, or its merge only a person can unblock         | pass that ticket over and continue |
 | `refused`     | nothing was started (not open, not authorized for `orch do`, dispatch refused) | end the run with the reason        |
 | `stopped`     | `orch stop` interrupted it                                                     | end the run, resumable             |
 
@@ -352,7 +355,10 @@ Stop codes `src/ops/run.ts` can write:
 - any `blocked` code `mergeJob` returns (`MERGE_BLOCKS` in `src/core/workflow.ts`): `no-pr`,
   `not-completed`, `wrong-completion`, `no-ci-evidence`, `superseded`, `wrong-repository`,
   `wrong-base`, `wrong-head-branch`, `pr-closed`, `pr-draft`, `head-changed`, `workflow-changed`,
-  `not-authorized`, `conflict`, `second-conflict`, `reland-refused`, `github-refused`;
+  `not-authorized`, `conflict`, `second-conflict`, `reland-refused`, `github-refused`. Those only
+  a person can lift (`workflow-changed`, `not-authorized`, `head-changed`, `pr-closed`,
+  `pr-draft`, `second-conflict`) come with outcome `needs-human` and that person's step as `next`;
+  the rest with `blocked`;
 - `merge-blocked`, the fallback when `mergeJob` blocks without a code.
 
 Nothing is written: for a cancelled job (its `job.cancelled` already says why); for a stop you
@@ -512,8 +518,8 @@ failures understandable:
   to the CI-verified head with `--match-head-commit` and never uses `--admin`.
 - **No silent continuation after a terminal ticket failure.** A blocked or refused ticket ends
   the run: later tickets may depend on it, and a failure hidden behind more work is harder to
-  diagnose. A `needs-human` ticket is passed over instead (decision
-  2026-11-22-queue-passes-over-needs-human).
+  diagnose. A `needs-human` ticket is passed over instead (decisions
+  2026-11-22-queue-passes-over-needs-human and 2026-11-23-queue-passes-over-person-merge-blocks).
 - **No wall-clock termination of Claude children.** A builder or a test run can be quiet for a
   long time; silence is not evidence of failure. Only the process ending ends the wait.
 - **No automatic adoption of surviving child processes.** A PID read from a file cannot prove it

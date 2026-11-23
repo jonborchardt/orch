@@ -123,7 +123,9 @@ What the code guarantees (`drive` and `runQueue` in `src/ops/run.ts`):
   whose merge is then blocked with `not-authorized`;
 - a ticket outcome of `done` continues to the next ready ticket, and so does `claimed` (another
   process created its job meanwhile; that ticket is passed over); in queue mode `needs-human`
-  releases the job, passes the ticket over for the rest of the session, and continues (tickets that
+  (the job waits in `needs-human`, or its merge was refused for a reason only a person can lift:
+  `workflow-changed`, `not-authorized`, `head-changed`, `pr-closed`, `pr-draft`,
+  `second-conflict`; `personMergeStep` in `src/core/workflow.ts`) releases the job, passes the ticket over for the rest of the session, and continues (tickets that
   depend on it stay unready; the end-of-session summary lists it with its next step and the exit
   status is 1); `blocked` or `refused` ends the run with that reason; `stopped` ends it as a
   resumable stop; `orch stop next` ends it before the next ticket, and so does an empty ready queue;

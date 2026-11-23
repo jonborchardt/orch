@@ -362,8 +362,10 @@ describe('re-land', () => {
     const s = await one(l, id);
 
     expect(jobsOf(id)).toHaveLength(2);
-    expect(s.tickets[0]?.outcome).toBe('blocked');
+    // Only a person resolves it: reported as waiting for one, with that step.
+    expect(s.tickets[0]?.outcome).toBe('needs-human');
     expect(s.tickets[0]?.reason).toContain('second-conflict');
+    expect(s.tickets[0]?.next).toContain('by hand');
     expect(merges()).toHaveLength(0);
     expect(status(id)).toBe('in-progress');
   });

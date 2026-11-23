@@ -643,6 +643,33 @@ export const MERGE_BLOCKS = [
 ] as const;
 export type MergeBlock = (typeof MERGE_BLOCKS)[number];
 
+/**
+ * The merge refusals only a person can lift on this one ticket, each with the step that person
+ * takes. The factory controller reports such a ticket as needs-human and goes on to the next one;
+ * every other refusal ends its run (decision 2026-11-23-queue-passes-over-person-merge-blocks).
+ */
+const PERSON_MERGE_STEPS = {
+  'workflow-changed': (job: string) =>
+    `merge job ${job}'s PR with Merge on the dashboard (orch ui): it changes .github/workflows/, so only a human click merges it`,
+  'not-authorized': (job: string, key: string) =>
+    `merge job ${job}'s PR with Merge on the dashboard (orch ui), or enable merging with orch factory config merge enable --repo <path>, then orch do ${key}`,
+  'head-changed': (job: string, key: string) =>
+    `remove the commits nobody verified from job ${job}'s PR branch, then orch do ${key}`,
+  'pr-closed': (job: string, key: string) =>
+    `reopen job ${job}'s PR on GitHub, then orch do ${key}`,
+  'pr-draft': (job: string, key: string) =>
+    `mark job ${job}'s PR ready for review on GitHub, then orch do ${key}`,
+  'second-conflict': (job: string, key: string) =>
+    `resolve job ${job}'s conflict with its base by hand (no third job is started), merge it, then orch ticket done ${key}`,
+} satisfies Partial<Record<MergeBlock, (job: string, key: string) => string>>;
+
+/** The step a person takes for a merge refused with `code`, or null when no person can lift it. */
+export function personMergeStep(code: string, jobId: string, ticketKey: string): string | null {
+  return Object.hasOwn(PERSON_MERGE_STEPS, code)
+    ? PERSON_MERGE_STEPS[code as keyof typeof PERSON_MERGE_STEPS](jobId, ticketKey)
+    : null;
+}
+
 /** What GitHub says about the PR right now (a `GhPr`; restated here so this module stays pure). */
 export interface LivePr {
   url: string;
