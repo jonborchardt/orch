@@ -61,8 +61,9 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
   resume <id> [--session <name>] [--to <stage> [--release]] [--force] [--ui|--no-ui] [--adopt <worktree>]
                               Adopt an interrupted or orphaned job from persisted state; --adopt
                               records an existing worktree of the repository (the one this session
-                              runs in) when the job has none yet; --release (needs --to) gives the
-                              job up again at once, so orch do can continue it (token: null)
+                              runs in) when the job has none yet; --to gives the job up again at
+                              once, so orch do can continue it (token: null); --release (needs --to)
+                              is redundant but accepted; to keep a token, resume without --to
   cancel <id> --reason <r> [--session <name>] [--force]
                               Cancel the job in one short episode as this session; exit 4 when
                               another session holds a live lease, unless --force takes it over
@@ -153,7 +154,8 @@ export function runFactory(
         force: o.force,
         ui,
         adopt: o.adopt,
-        release: o.release,
+        // A terminal decision gives the job up, so orch do can continue it (ticket 0089).
+        release: o.to !== undefined,
       });
       return { session, ...resumed };
     }

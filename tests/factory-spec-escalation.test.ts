@@ -135,7 +135,7 @@ describe('spec escalation resumed by a human edit', () => {
     go(d, 'escalate', 'unclear request');
     expect(next(d.id).reason).toBe(
       'A human must decide. Report the blocking reason and stop. To continue after the decision: ' +
-        `orch factory resume ${d.id} --session <name> [--to build]`,
+        `orch factory resume ${d.id} --to build, then run /factory ${d.id}`,
     );
   });
 });
@@ -199,5 +199,37 @@ describe('orch factory resume --release', () => {
     const out = json<{ released: boolean; token: string | null }>(r);
     expect([out.released, out.token]).toEqual([true, null]);
     expect(getJob(store.db, c.id).ownerSession).toBeNull();
+  });
+
+  it('CLI: --to releases by default; a live lease of another session still exits 4', () => {
+    const c = start();
+    go(c, 'start');
+    const resume = () =>
+      orch(store.home, tmpdir(), [
+        '--json',
+        'factory',
+        'resume',
+        c.id,
+        '--to',
+        'spec',
+        '--session',
+        HUMAN,
+      ]);
+    const held = getJob(store.db, c.id);
+    expect(resume().code).toBe(4);
+    const after = getJob(store.db, c.id);
+    expect([after.ownerSession, after.ownerToken, after.leaseExpiresAt]).toEqual([
+      held.ownerSession,
+      held.ownerToken,
+      held.leaseExpiresAt,
+    ]);
+
+    escalateFree(c, 'decide');
+    const r = resume();
+    expect(r.code).toBe(0);
+    const out = json<{ released: boolean; token: string | null }>(r);
+    expect([out.released, out.token]).toEqual([true, null]);
+    expect(getJob(store.db, c.id).ownerSession).toBeNull();
+    expect(claimJob(store, c.id, { session: RUNNER_SESSION }).token).toBeTruthy();
   });
 });
