@@ -7,7 +7,7 @@ import { rmSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from 'vitest';
 
 import { ValidationError } from '../src/core/errors.ts';
-import { unaccountedItems } from '../src/core/tickets.ts';
+import { deferredItems, ticketKey, unaccountedItems } from '../src/core/tickets.ts';
 import { planJob, startJob } from '../src/ops/factory.ts';
 import { addTicket, ticketAction } from '../src/ops/tickets.ts';
 import { getJob } from '../src/storage/jobs.ts';
@@ -49,6 +49,39 @@ describe('unaccountedItems', () => {
     expect(unaccountedItems('- [ ] a', before)).toEqual(['a']);
     expect(unaccountedItems('- [ ] a', after)).toEqual(['a']);
     expect(unaccountedItems('- [ ] a', sub)).toEqual([]);
+  });
+});
+
+describe('deferredItems', () => {
+  it('reads the follow-up id in any form a ticket id takes, with or without a why', () => {
+    expect(
+      deferredItems(
+        section(
+          '- [ ] a — deferred to 0116\n- [ ] b — deferred to #116\n- [ ] c — deferred to 116: needs a rebuild',
+        ),
+      ),
+    ).toEqual([
+      { item: 'a', to: 116 },
+      { item: 'b', to: 116 },
+      { item: 'c', to: 116 },
+    ]);
+    // A deferral is still a not-delivered line.
+    expect(unaccountedItems('- [ ] a', section('- [ ] a — deferred to 0116'))).toEqual([]);
+  });
+
+  it('ignores lines outside the section, ticked lines, and other reasons', () => {
+    expect(deferredItems('# Decision\n\n- [ ] a — deferred to 0116\n')).toEqual([]);
+    expect(deferredItems(section('- [x] a — deferred to 0116'))).toEqual([]);
+    for (const reason of [
+      'needs a rebuild, deferred to 0116',
+      'moved to 0116',
+      'deferred to later',
+      'deferred to 0116x',
+      'deferred to 0',
+      'Deferred to 0116',
+    ]) {
+      expect(deferredItems(section(`- [ ] a — ${reason}`))).toEqual([]);
+    }
   });
 });
 
@@ -133,10 +166,67 @@ describe('completing approve for a ticket job', () => {
     expect(go(store, plain, 'complete').stage).toBe('pr');
   });
 
+  /** The ValidationError (exit 1) completing approve throws; the job stays in approve. */
+  const refusal = (c: Ctx): string => {
+    let err: unknown;
+    try {
+      go(store, c, 'complete');
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ValidationError);
+    expect((err as ValidationError).exitCode).toBe(1);
+    expect(getJob(store.db, c.id).stage).toBe('approve');
+    return (err as Error).message;
+  };
+  const note = (ticket: number, text: string) =>
+    ticketAction(store, ticket, { action: 'note', text });
+
+  it('a deferred box must leave the body and be noted before approve completes', () => {
+    const c = toApprove(BODY, section('- [x] a — A\n- [ ] b — deferred to 0002: needs a rebuild'));
+    addTicket(store, { title: 'Follow-up', repo: clone, body: '- [ ] b\n' });
+    tick(c.ticket, '## What\n\n- [x] a\n- [ ] b\n');
+    const still = refusal(c);
+    expect(still).toContain('"b" is deferred to 0002 but is still an unchecked box');
+    expect(still).toContain('orch ticket edit 0001 --body-file -');
+
+    tick(c.ticket, '## What\n\n- [x] a\n\nb (deferred to 0002)\n');
+    note(c.ticket, 'unrelated');
+    expect(refusal(c)).toContain('orch ticket note 0001 "b: deferred to 0002"');
+
+    note(c.ticket, 'b: deferred to 0002');
+    expect(go(store, c, 'complete').stage).toBe('pr');
+  });
+
+  it('a deferral to a missing, own, or finished ticket is refused with no box left', () => {
+    const c = toApprove('- [x] a\n', section('- [ ] a — deferred to 0099'));
+    note(c.ticket, 'a: deferred to 0099, 0001, 0002, 0003, 0004');
+    expect(refusal(c)).toContain('0099, which does not exist');
+    const defer = (to: string) =>
+      add(store, c, 'decision.md', section(`- [ ] a — deferred to ${to}`), true);
+    defer('#1');
+    expect(refusal(c)).toContain('0001, which is this ticket');
+    for (const [action, status] of [
+      ['done', 'done'],
+      ['drop', 'dropped'],
+      ['duplicate', 'duplicate'],
+    ] as const) {
+      const t = addTicket(store, { title: `Follow-up ${status}`, repo: clone }).id;
+      ticketAction(store, t, { action, ...(action === 'duplicate' ? { of: c.ticket } : {}) });
+      defer(String(t));
+      expect(refusal(c)).toContain(`which is ${status}`);
+    }
+    const open = addTicket(store, { title: 'Open follow-up', repo: clone }).id;
+    note(c.ticket, `a: deferred to ${ticketKey(open)}`);
+    defer(String(open));
+    expect(go(store, c, 'complete').stage).toBe('pr');
+  });
+
   it('the approve plan lists the boxes and ticks or notes them before complete', () => {
     const c = toApprove(BODY, section('- [x] a — A\n- [x] b — B'));
     const plan = planJob(store, c.id);
     expect(plan.reason).toContain('Ticket 0001 has unchecked checklist item(s): "a", "b"');
+    expect(plan.reason).toContain('deferred to <key>');
     const at = (s: string) => plan.commands.findIndex((x) => x.includes(s));
     expect(at('orch ticket edit 0001 --body-file -')).toBeGreaterThan(at('decision.md'));
     expect(at('orch ticket note 0001')).toBeGreaterThan(at('orch ticket edit'));

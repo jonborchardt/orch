@@ -246,6 +246,7 @@ dropped, whichever reviewer raised it.
 
 - [x] <item, copied verbatim from the ticket> — <acceptance evidence>
 - [ ] <item, copied verbatim from the ticket> — <reason it is not delivered by this PR>
+- [ ] <item, copied verbatim from the ticket> — deferred to <follow-up key>: <why>
 
 ## Rationale
 
@@ -268,6 +269,12 @@ copied verbatim, then a space, an em dash (—, U+2014), a space, and the eviden
 `none` for a job without a ticket or a ticket without boxes. `orch job transition <id> complete`
 in `approve` is refused while an unchecked ticket box is neither ticked in the ticket nor recorded
 here as `- [ ] <item> — <reason>`; that line is the enforced record of why it was not delivered.
+A box handed to a follow-up ticket is `- [ ] <item> — deferred to <key>[: <why>]` (the reason
+starts with exactly `deferred to` and a ticket id such as `0116` or `#116`). The coordinator then
+removes the box from the ticket body (or rewrites it as plain text) and notes
+`<item>: deferred to <key>` on the ticket; `complete` is refused until both are done and the
+follow-up is another open or in-progress ticket, so the original closes on its merge. A reason
+worded any other way keeps the box, and the ticket stays open after the merge.
 
 ## pr.md (also used as the PR body)
 

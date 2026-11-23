@@ -704,7 +704,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         (boxes.length > 0
           ? ` Ticket ${key} has unchecked checklist item(s): ${boxes.map((b) => `"${b}"`).join(', ')}. ` +
             `decision.md's ## Ticket checklist accounts for each (- [x] <item>${CHECKLIST_DELIMITER}<evidence> or ` +
-            `- [ ] <item>${CHECKLIST_DELIMITER}<reason>, item text verbatim); tick the delivered boxes before completing.`
+            `- [ ] <item>${CHECKLIST_DELIMITER}<reason>, item text verbatim); tick the delivered boxes before completing. ` +
+            `For a box handed to a follow-up, write ${CHECKLIST_DELIMITER}deferred to <key>, remove it from the body, and note the key.`
           : '');
       plan.commands = [
         ...start,

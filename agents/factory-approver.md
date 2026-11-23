@@ -54,8 +54,11 @@ box, the item text copied verbatim, then a space, an em dash (—, U+2014), and 
 acceptance evidence>` when this PR delivers it, `- [ ] <item> — <reason>` when it deliberately does
 not (a rerun, a setting on GitHub, a later ticket). The coordinator ticks the `- [x]` boxes in the
 ticket; `orch` refuses to complete approval while an unchecked box has neither a tick nor a
-`- [ ]` line here, and that line is the enforced record of the reason. Write `none` when there is
-no ticket or no box.
+`- [ ]` line here, and that line is the enforced record of the reason. When a box is handed to a
+follow-up ticket that already exists, write `- [ ] <item> — deferred to <key>: <why>` (exactly
+`deferred to`, then the follow-up's id such as `0116`); the coordinator removes the box from the
+ticket and notes the hand-off, so the ticket closes on its merge. Any other wording keeps the box
+and the ticket stays open. Write `none` when there is no ticket or no box.
 
 Write `decision.md` with headings `Examined`, `Acceptance criteria`, `Outstanding findings`,
 `Scope changes`, `Ticket checklist`, `Rationale`, and exactly one final line `DECISION: APPROVE`,
