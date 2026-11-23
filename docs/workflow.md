@@ -715,11 +715,11 @@ the first two, and only with `verified: true`: a merge recorded as unverified ex
 
 `blocked` codes: `no-pr`, `not-completed`, `wrong-completion`, `no-ci-evidence`, `superseded`,
 `wrong-repository`, `wrong-base`, `wrong-head-branch`, `pr-closed`, `pr-draft`, `head-changed`,
-`workflow-changed` (the job's diff from its merge base to `ciHead` adds, edits, deletes, or renames
-a file under `.github/workflows/`, or an entry named exactly `.github/workflows` or `.github` (a
-symlink or gitlink in place of the directory), matched case-insensitively with replace refs
-ignored, or Git could not tell, which includes a graft file being present or a shallow
-repository; only the dashboard's Merge, a human's click, proceeds; decision
+`workflow-changed` (GitHub's file list for the PR, `pulls/<n>/files`, adds, edits, deletes, or
+renames (either side) a file under `.github/workflows/`, or names exactly `.github/workflows` or
+`.github` (a symlink or gitlink in place of the directory), matched case-insensitively; or GitHub
+could not answer, or the list is shorter than the PR's `changedFiles`; local Git is not consulted;
+only the dashboard's Merge, a human's click, proceeds; decision
 2026-11-22-workflow-changes-need-a-human-merge),
 `not-authorized`, `conflict` (only where re-landing was not asked for: the dashboard's Merge),
 `second-conflict`, `reland-refused`, `github-refused`. The result also carries `jobId`,

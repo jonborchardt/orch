@@ -243,7 +243,9 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * With `bare` set to the local origin repository, PR heads are read from it like GitHub would;
  * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default; paginated in
  * pages of 100 under `--paginate --slurp`), `protection`, `rules`, `logs` (keyed by job id), or
- * `api` (keyed by path), `rate_limit` (the recovery worker's probe), else HTTP 404. `gh run rerun` succeeds and is only logged; `gh pr ready`
+ * `api` (keyed by path), `rate_limit` (the recovery worker's probe), else HTTP 404. A PR's
+ * `pulls/<n>/files` come from its `files` entries (paginated the same way; a string is printed
+ * as is), and its `changedFiles`, unless set, is their count (0 without any). `gh run rerun` succeeds and is only logged; `gh pr ready`
  * takes the PR out of draft; `gh pr merge` sets it MERGED with `mergeOid` as its merge commit.
  * `failAfter` fails a command after it took effect (a timeout that followed a merge).
  */
@@ -260,6 +262,7 @@ let code = 0;
 const out = (o) => process.stdout.write(typeof o === 'string' ? o : JSON.stringify(o));
 const notFound = () => { process.stderr.write('gh: Not Found (HTTP 404)'); code = 1; };
 const withHead = (p) => {
+  p = { changedFiles: Array.isArray(p.files) ? p.files.length : 0, ...p };
   if (!state.bare) return p;
   try {
     const sha = execFileSync('git', ['rev-parse', 'refs/heads/' + p.headRefName], { cwd: state.bare, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -291,7 +294,11 @@ else if (a === 'pr' && b === 'view') {
     out(slurp ? pages : pages[0]);
   };
   let m;
-  if ((m = /\/commits\/([0-9a-f]+)\/check-runs$/.exec(path))) {
+  if ((m = /^repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/files$/.exec(path))) {
+    const pr = state.prs.find((p) => String(p.number) === m[1]);
+    const files = (pr && pr.files) || [];
+    if (typeof files === 'string') out(files); else paged(files, (page) => page);
+  } else if ((m = /\/commits\/([0-9a-f]+)\/check-runs$/.exec(path))) {
     const runs = (state.checkRuns || {})[m[1]] || (state.checkRuns || {})['*'] || [];
     paged(runs, (page) => ({ total_count: runs.length, check_runs: page }));
   } else if ((m = /\/commits\/([0-9a-f]+)\/status$/.exec(path))) {

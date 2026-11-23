@@ -121,10 +121,12 @@ export interface GhPr {
   /** Repository the PR belongs to, from its URL, in the form of a job's repo identity. */
   repo: string;
   checks: GhCheck[];
+  /** How many files GitHub says the PR changes; null when it did not say. */
+  changedFiles: number | null;
 }
 
 const PR_FIELDS =
-  'number,url,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,title,statusCheckRollup,mergeCommit,isCrossRepository';
+  'number,url,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,title,statusCheckRollup,mergeCommit,isCrossRepository,changedFiles';
 
 interface RawPr {
   number: number;
@@ -139,6 +141,7 @@ interface RawPr {
   statusCheckRollup?: RawCheck[] | null;
   mergeCommit?: { oid?: string | null } | null;
   isCrossRepository?: boolean | null;
+  changedFiles?: number | null;
 }
 
 interface RawCheck {
@@ -169,6 +172,7 @@ function toPr(raw: RawPr): GhPr {
     repo: normalizeRemote(raw.url.replace(/\/pull\/\d+.*$/, '')),
     title: raw.title,
     checks,
+    changedFiles: typeof raw.changedFiles === 'number' ? raw.changedFiles : null,
   };
   return pr;
 }
@@ -184,6 +188,33 @@ export function listPrsForBranch(branch: string, cwd: string): GhPr[] {
 
 export function viewPr(urlOrNumber: string, cwd: string): GhPr {
   return toPr(ghJson<RawPr>(['pr', 'view', urlOrNumber, '--json', PR_FIELDS], cwd));
+}
+
+/** Every path a PR's file list names: each `filename`, and `previous_filename` for a rename. */
+export interface GhPrFile {
+  filename: string;
+  previousFilename: string | null;
+}
+
+/**
+ * The files of the PR at `prUrl`, across every page (`gh api --paginate --slurp`, so a failed page
+ * fails the whole call). An entry without a string `filename` is left out, so a malformed answer
+ * is shorter than the PR's `changedFiles` rather than wrong.
+ */
+export function listPrFiles(prUrl: string, cwd: string): GhPrFile[] {
+  const m = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)$/.exec(prUrl);
+  if (!m) throw new ToolError(`Not a pull request URL: ${prUrl}`);
+  const path = `repos/${m[1] ?? ''}/${m[2] ?? ''}/pulls/${m[3] ?? ''}/files?per_page=100`;
+  const pages = ghJson<unknown>(['api', path, '--paginate', '--slurp'], cwd);
+  if (!Array.isArray(pages)) throw new ToolError(`gh api ${path} did not return pages`);
+  return pages
+    .flatMap((page: unknown) => (Array.isArray(page) ? (page as unknown[]) : []))
+    .flatMap((f) => {
+      const e = f as { filename?: unknown; previous_filename?: unknown } | null;
+      if (typeof e?.filename !== 'string') return [];
+      const previous = typeof e.previous_filename === 'string' ? e.previous_filename : null;
+      return [{ filename: e.filename, previousFilename: previous }];
+    });
 }
 
 export interface CreatePrInput {
