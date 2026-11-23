@@ -2,7 +2,7 @@
  * A completed job whose merge only a person can unblock (decision
  * 2026-11-23-queue-passes-over-person-merge-blocks): the controller reports it as needs-human with
  * a step that works and goes on; any other merge refusal still ends the run. Uses
- * tests/run-fixture.ts; the workflow change is a real commit in the fixture clone.
+ * tests/run-fixture.ts; the workflow change is in the PR's file list on the gh shim.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -10,7 +10,6 @@ import { formatSummary, summaryExitCode } from '../src/cli/run.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { getJob } from '../src/storage/jobs.ts';
 import type { Job } from '../src/storage/schema.ts';
-import { commitFile, gitIn } from './helpers.ts';
 import {
   clone,
   done,
@@ -29,19 +28,12 @@ import {
 
 const key = (id: number) => String(id).padStart(4, '0');
 
-/** A commit on its own branch off main that edits a workflow; main is checked out again after. */
-function workflowHead(): string {
-  const name = `wf-${String(Date.now())}-${String(Math.random()).slice(2, 8)}`;
-  gitIn(clone, 'checkout', '-q', '-b', name, 'main');
-  commitFile(clone, '.github/workflows/ci.yml', `on: push # ${name}\n`);
-  const sha = gitIn(clone, 'rev-parse', 'HEAD');
-  gitIn(clone, 'checkout', '-q', 'main');
-  return sha;
-}
+/** GitHub's file list for a PR that edits a workflow. */
+const WORKFLOW_FILES = { files: [{ filename: '.github/workflows/ci.yml' }] };
 
-/** A session that completes the job at a head that changes .github/workflows/. */
+/** A session that completes the job with a PR that changes .github/workflows/. */
 const doneWithWorkflow = (job: Job): void => {
-  finish(job, {}, workflowHead());
+  finish(job, WORKFLOW_FILES);
 };
 
 describe('a merge only a person can unblock', () => {
@@ -86,7 +78,7 @@ describe('a merge only a person can unblock', () => {
     const id = ticket('Touches CI', { priority: 'P1' });
     const other = ticket('Other', { priority: 'P2' });
     const job = dispatchJob(store, { ticket: id, session: 'earlier', cwd: clone }).job;
-    finish(job, {}, workflowHead());
+    finish(job, WORKFLOW_FILES);
     const l = launcher(done);
 
     const s = await one(l, id);

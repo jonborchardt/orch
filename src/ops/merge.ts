@@ -10,7 +10,7 @@
  * and finishes the record. Nothing here changes a job's stage, status, or CI verdict.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname } from 'node:path';
 
 import { ToolError, ValidationError, WorkflowError } from '../core/errors.ts';
 import {
@@ -21,9 +21,14 @@ import {
   type MergeStep,
   touchesWorkflows,
 } from '../core/workflow.ts';
-import { baseRef } from '../git/repo.ts';
-import { tryGit } from '../git/run.ts';
-import { type GhPr, mergePr, prWorkflowState, viewPr } from '../integrations/github.ts';
+import {
+  type GhPr,
+  type GhPrFile,
+  listPrFiles,
+  mergePr,
+  prWorkflowState,
+  viewPr,
+} from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob } from '../storage/events.ts';
 import {
@@ -189,61 +194,45 @@ function look(store: Store, job: Job, input: MergeInput): Seen {
     return { pr: null, step: { step: 'blocked', code: 'no-pr', reason: 'the job has no PR' } };
   }
   const cwd = ghCwd(job);
+  // Load-bearing order: the file list is read before the PR that `mergeDecision` judges, so it is
+  // no newer than the head that must equal `ciHead` (else `head-changed`), and `mergePr`'s
+  // --match-head-commit refuses a head that moves after that.
+  const files = prFiles(job.prUrl, cwd);
   const pr = viewPr(job.prUrl, cwd);
   const step = mergeDecision(job, pr, {
     completion: completionFor(store, job),
     authorized: input.mode === 'dashboard' || mergeAuthorized(store, job.repo),
     isReland: predecessorsOf(store.db, job.id).length > 0,
-    changesWorkflows: changesWorkflows(cwd, job),
+    changesWorkflows: changesWorkflows(files, pr),
     byHuman: input.mode === 'dashboard',
   });
   return { pr, step };
 }
 
+/** GitHub's file list for the PR, or null when GitHub could not give one. */
+function prFiles(url: string, cwd: string): GhPrFile[] | null {
+  try {
+    return listPrFiles(url, cwd);
+  } catch (err) {
+    if (err instanceof ToolError) return null;
+    throw err;
+  }
+}
+
 /**
- * Whether the job's diff, from its merge base with the base branch to `ciHead`, touches
- * `.github/workflows/` (added, edited, deleted, or renamed; renames count both sides). Read from
- * Git, never from the repository's configuration; true when Git cannot answer (fail closed).
+ * Whether the PR touches `.github/workflows/` (added, edited, deleted, or renamed; renames count
+ * both sides), from GitHub's file list for it, never from the local clone, which anything that can
+ * write `.git` can make lie (decision 2026-11-22-workflow-changes-need-a-human-merge). True (fail
+ * closed) when GitHub gave no list, or the list is not provably complete: its length must equal
+ * the PR's `changedFiles` (GitHub caps the list at 3000 files).
  */
-function changesWorkflows(cwd: string, job: Job): boolean {
-  const base = baseRef(cwd, job.baseBranch);
-  if (!base || !job.ciHead) return true;
-  // A graft file (info/grafts, or GIT_GRAFT_FILE) rewrites parents and can move the merge base
-  // onto the head; --no-replace-objects does not turn it off, so its presence fails closed.
-  const grafts = tryGit(cwd, 'rev-parse', '--git-path', 'info/grafts');
-  if (!grafts || existsSync(resolve(cwd, grafts))) return true;
-  // A shallow file cuts parents the same way; anything but an exact "false" fails closed.
-  if (tryGit(cwd, 'rev-parse', '--is-shallow-repository') !== 'false') return true;
-  // --no-replace-objects: a refs/replace/* entry cannot substitute a commit or tree that hides
-  // the change from the guard. core.commitGraph=false: both calls read parents and trees from the
-  // commit objects, not from a commit-graph file Git does not check against them.
-  const mergeBase = tryGit(
-    cwd,
-    '--no-replace-objects',
-    '-c',
-    'core.commitGraph=false',
-    'merge-base',
-    base,
-    job.ciHead,
+function changesWorkflows(files: GhPrFile[] | null, pr: GhPr): boolean {
+  if (files === null || pr.changedFiles === null || files.length !== pr.changedFiles) return true;
+  return touchesWorkflows(
+    files.flatMap((f) =>
+      f.previousFilename === null ? [f.filename] : [f.filename, f.previousFilename],
+    ),
   );
-  if (!mergeBase) return true;
-  // -z: unquoted names, so an odd character cannot hide the prefix. --ignore-submodules=none: a
-  // diff.ignoreSubmodules setting in the repository config cannot hide a gitlink.
-  const names = tryGit(
-    cwd,
-    '--no-replace-objects',
-    '-c',
-    'core.commitGraph=false',
-    'diff',
-    '--ignore-submodules=none',
-    '--name-only',
-    '--no-renames',
-    '-z',
-    mergeBase,
-    job.ciHead,
-  );
-  if (names === undefined) return true;
-  return touchesWorkflows(names.split('\0').filter((l) => l !== ''));
 }
 
 function result(

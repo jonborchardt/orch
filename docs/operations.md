@@ -407,7 +407,8 @@ The controller reads CI with the same rules as `orch gh ci` ([workflow.md](workf
 - `blocked` / `head-changed`: the PR head is not the CI-verified head; a person looks at what
   moved the branch.
 - `blocked` / `workflow-changed`: the PR adds, edits, deletes, or renames a file under
-  `.github/workflows/` (or Git could not read the job's diff), so it changed what CI runs; a person
+  `.github/workflows/` by GitHub's file list for the PR (or GitHub could not give the complete
+  list), so it changed what CI runs; a person
   reviews the workflow change and clicks Merge on the dashboard. No setting lifts this.
 - `blocked` / `github-refused`: branch protection or a repository setting refused the merge; gh's
   message is recorded on `pr.merged` with `ok: false`.

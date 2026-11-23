@@ -4,9 +4,9 @@
  * the bounded re-land, retries after interruption, and the per-repository opt-in. Jobs are put in
  * their completed state directly (tests/pr-merge.test.ts drives a real one through the dashboard).
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -41,7 +41,7 @@ import {
 } from './helpers.ts';
 
 const REPO = 'github.com/acme/alpha';
-/** The verified head: a real commit (the clone's main), so the workflow check can read its diff. */
+/** The verified head: a real commit (the clone's main), so local Git sees no change at all. */
 let SHA = '';
 const OTHER = 'b'.repeat(40);
 const MERGE_COMMIT = 'c'.repeat(40);
@@ -827,208 +827,106 @@ describe('orch job merge', () => {
 });
 
 describe('a PR that changes .github/workflows/ needs a human merge', () => {
-  let wf: { clone: string; bare: string };
   const WORKFLOW = '.github/workflows/ci.yml';
-  beforeAll(() => {
-    wf = makePolicyRepo();
-    commitFile(wf.clone, WORKFLOW, 'on: push\n');
-    gitIn(wf.clone, 'push', '-q', 'origin', 'main');
-  });
-  afterAll(() => {
-    for (const d of [wf.clone, wf.bare]) rmSync(d, { recursive: true, force: true });
-  });
-
-  /** A commit on its own branch off main, made by `change`; main is checked out again after. */
-  const branch = (name: string, change: () => void): string => {
-    gitIn(wf.clone, 'checkout', '-q', '-b', name, 'main');
-    change();
-    const sha = gitIn(wf.clone, 'rev-parse', 'HEAD');
-    gitIn(wf.clone, 'checkout', '-q', 'main');
-    return sha;
+  interface File {
+    filename: string;
+    previous_filename?: string;
+  }
+  const plain = (count: number): File[] =>
+    Array.from({ length: count }, (_, i) => ({ filename: `src/f${String(i)}.ts` }));
+  /** A completed job whose PR's file list on GitHub is `files` (a string is sent as is). */
+  const jobWith = (files: File[] | string, over: Record<string, unknown> = {}): Job => {
+    const job = completed();
+    editPr(job, { files, ...over });
+    return job;
   };
-  const commit = (message: string) =>
-    gitIn(wf.clone, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', message);
-  const jobAt = (sha: string): Job => {
-    const job = completed({ job: { ciHead: sha, repoPath: wf.clone } });
-    editPr(job, { headRefOid: sha });
-    return getJob(store.db, job.id);
-  };
-  const changes: [string, () => void][] = [
-    ['adds', () => commitFile(wf.clone, '.github/workflows/new.yml', 'on: push\n')],
-    ['edits', () => commitFile(wf.clone, WORKFLOW, 'on: pull_request\n')],
-    [
-      'deletes',
-      () => {
-        gitIn(wf.clone, 'rm', '-q', WORKFLOW);
-        commit('delete workflow');
-      },
-    ],
-    [
-      'renames',
-      () => {
-        gitIn(wf.clone, 'mv', WORKFLOW, '.github/workflows/renamed.yml');
-        commit('rename workflow');
-      },
-    ],
-    [
-      'moves out',
-      () => {
-        gitIn(wf.clone, 'mv', WORKFLOW, 'ci-moved.yml');
-        commit('move workflow out');
-      },
-    ],
-  ];
-
-  it.each(changes)('a session merge of a job that %s a workflow is blocked', (name, change) => {
-    const job = jobAt(branch(`wf-${name.replace(' ', '-')}`, change));
+  const blockedAsWorkflow = (job: Job) => {
     const before = events(job).length;
+    const merged = merges().length;
     const r = merge(job);
     expect(r).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
     expect(r.reason).toContain('.github/workflows/');
-    expect(merges()).toHaveLength(0);
+    expect(merges()).toHaveLength(merged);
     expect(events(job)).toHaveLength(before);
+  };
+
+  const touching: [string, File[]][] = [
+    ['adds', [{ filename: '.github/workflows/new.yml' }]],
+    ['edits', [{ filename: 'src/a.ts' }, { filename: WORKFLOW }]],
+    ['deletes', [{ filename: WORKFLOW }]],
+    ['replaces .github', [{ filename: '.github' }]],
+    ['replaces .github/workflows', [{ filename: '.github/workflows' }]],
+    ['moves out', [{ filename: 'ci-moved.yml', previous_filename: WORKFLOW }]],
+    ['moves in', [{ filename: WORKFLOW, previous_filename: 'ci-moved.yml' }]],
+  ];
+  it.each(touching)('a session merge of a PR that %s a workflow is blocked', (_name, files) => {
+    blockedAsWorkflow(jobWith(files));
   });
 
-  it('the dashboard merges it; a job that leaves workflows alone merges from a session', () => {
-    const job = jobAt(branch('wf-dashboard', () => commitFile(wf.clone, WORKFLOW, 'on: [push]\n')));
+  it('fails closed when GitHub cannot list the files, or lists them as nonsense', () => {
+    const failing = jobWith(plain(1));
+    shim.write({ fail: 'api repos/' });
+    blockedAsWorkflow(failing);
+    shim.write({ fail: undefined });
+    blockedAsWorkflow(jobWith('not json'));
+    blockedAsWorkflow(jobWith('{"filename":"src/a.ts"}'));
+    blockedAsWorkflow(jobWith([{ name: 'src/a.ts' } as unknown as File]));
+  });
+
+  it('fails closed when the list is shorter than the PR, or the PR gives no count', () => {
+    blockedAsWorkflow(jobWith(plain(3000), { changedFiles: 3001 }));
+    blockedAsWorkflow(jobWith(plain(100), { changedFiles: 150 }));
+    blockedAsWorkflow(jobWith(plain(1), { changedFiles: null }));
+  });
+
+  it('reads every page: 150 plain files merge, one workflow on page two blocks', () => {
+    expect(merge(jobWith(plain(150))).outcome).toBe('merged');
+    const files = plain(150);
+    files[120] = { filename: WORKFLOW };
+    blockedAsWorkflow(jobWith(files));
+  });
+
+  it('local Git has no say: only GitHub list counts', () => {
+    // The clone's main is the job head: locally the job changes nothing, GitHub lists a workflow.
+    blockedAsWorkflow(jobWith([{ filename: WORKFLOW }]));
+    // A local branch that edits a workflow, while GitHub's list does not show one.
+    gitIn(clone, 'checkout', '-q', '-b', 'wf-local', 'main');
+    commitFile(clone, WORKFLOW, 'on: push\n');
+    const head = gitIn(clone, 'rev-parse', 'HEAD');
+    gitIn(clone, 'checkout', '-q', 'main');
+    const job = completed({ job: { ciHead: head } });
+    editPr(job, { headRefOid: head, files: plain(1) });
+    expect(merge(job).outcome).toBe('merged');
+    const source = readFileSync(join(import.meta.dirname, '..', 'src', 'ops', 'merge.ts'), 'utf8');
+    expect(source).not.toMatch(
+      /'merge-base'|'diff'|info\/grafts|is-shallow-repository|commitGraph/,
+    );
+  });
+
+  it('reads the files before the PR it judges, and a moved head is still head-changed', () => {
+    const job = jobWith(plain(1));
+    shim.write({ calls: [] });
+    expect(merge(job).outcome).toBe('merged');
+    const kinds = shim
+      .read()
+      .calls.map((c) =>
+        c[0] === 'api' && c[1]?.includes('/files') ? 'files' : `${c[0] ?? ''} ${c[1] ?? ''}`,
+      );
+    expect(kinds).toEqual(['files', 'pr view', 'files', 'pr view', 'pr merge', 'pr view']);
+    const moved = jobWith([{ filename: WORKFLOW }], { headRefOid: OTHER });
+    expect(merge(moved)).toMatchObject({ outcome: 'blocked', code: 'head-changed' });
+  });
+
+  it('the dashboard merges it; a list that leaves workflows alone merges from a session', () => {
+    const job = jobWith([{ filename: WORKFLOW }]);
     expect(mergeJob(store, job.id, { session: 'dashboard', mode: 'dashboard' })).toMatchObject({
       outcome: 'merged',
       verified: true,
     });
-    const plain = jobAt(branch('wf-none', () => commitFile(wf.clone, 'src/b.ts', 'export {};\n')));
-    expect(merge(plain).outcome).toBe('merged');
-  });
-
-  it('fails closed: a head Git cannot read is blocked as workflow-changed', () => {
-    const job = jobAt(OTHER);
-    expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
-    expect(merges()).toHaveLength(0);
-  });
-
-  it('a refs/replace/ entry cannot hide a workflow change', () => {
-    const head = branch('wf-replaced', () =>
-      commitFile(wf.clone, WORKFLOW, 'on: [pull_request]\n'),
-    );
-    const decoy = branch('wf-decoy', () => commitFile(wf.clone, 'src/c.ts', 'export {};\n'));
-    gitIn(wf.clone, 'replace', head, decoy);
-    try {
-      const job = jobAt(head);
-      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
-      expect(merges()).toHaveLength(0);
-    } finally {
-      gitIn(wf.clone, 'replace', '-d', head);
-    }
-  });
-
-  it('a graft that makes the head the merge base cannot hide a workflow change', () => {
-    // The head branches off the base's parent; the graft adds it as a second parent of the base.
-    const base = gitIn(wf.clone, 'rev-parse', 'origin/main');
-    const parent = gitIn(wf.clone, 'rev-parse', 'origin/main^');
-    gitIn(wf.clone, 'checkout', '-q', '-b', 'wf-grafted', parent);
-    commitFile(wf.clone, WORKFLOW, 'on: [workflow_call]\n');
-    const head = gitIn(wf.clone, 'rev-parse', 'HEAD');
-    gitIn(wf.clone, 'checkout', '-q', 'main');
-    const graftFile = gitIn(
-      wf.clone,
-      'rev-parse',
-      '--path-format=absolute',
-      '--git-path',
-      'info/grafts',
-    );
-    mkdirSync(dirname(graftFile), { recursive: true });
-    writeFileSync(graftFile, `${base} ${parent} ${head}\n`);
-    try {
-      expect(gitIn(wf.clone, 'merge-base', 'origin/main', head)).toBe(head);
-      const job = jobAt(head);
-      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
-      expect(merges()).toHaveLength(0);
-    } finally {
-      rmSync(graftFile, { force: true });
-    }
-  });
-
-  it('a shallow file that moves the merge base cannot hide a workflow change', () => {
-    // X reverts the base's workflow commit; the head merges X with the base's parent. Marking X
-    // shallow drops its parents, so merge-base falls back to that parent, which has no workflow.
-    const parent = gitIn(wf.clone, 'rev-parse', 'origin/main^');
-    const x = branch('wf-shallow', () => {
-      gitIn(wf.clone, 'rm', '-q', WORKFLOW);
-      commitFile(wf.clone, 'c.txt', 'c\n');
-    });
-    const head = gitIn(
-      wf.clone,
-      '-c',
-      'user.email=t@t',
-      '-c',
-      'user.name=t',
-      'commit-tree',
-      `${x}^{tree}`,
-      '-p',
-      x,
-      '-p',
-      parent,
-      '-m',
-      'merge',
-    );
-    const shallowFile = gitIn(
-      wf.clone,
-      'rev-parse',
-      '--path-format=absolute',
-      '--git-path',
-      'shallow',
-    );
-    expect(gitIn(wf.clone, 'merge-base', 'origin/main', head)).not.toBe(parent);
-    writeFileSync(shallowFile, `${x}\n`);
-    try {
-      expect(gitIn(wf.clone, 'merge-base', 'origin/main', head)).toBe(parent);
-      const job = jobAt(head);
-      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
-      expect(merges()).toHaveLength(0);
-    } finally {
-      rmSync(shallowFile, { force: true });
-    }
-  });
-
-  it('a commit-graph that swaps the head tree cannot hide a workflow change', () => {
-    const head = branch('wf-graph', () => commitFile(wf.clone, WORKFLOW, 'on: [merge_group]\n'));
-    const baseTree = gitIn(wf.clone, 'rev-parse', 'origin/main^{tree}');
-    gitIn(wf.clone, 'commit-graph', 'write', '--reachable');
-    const graphFile = gitIn(
-      wf.clone,
-      'rev-parse',
-      '--path-format=absolute',
-      '--git-path',
-      'objects/info/commit-graph',
-    );
-    try {
-      // Commit-graph format: 8-byte header (byte 6 = chunk count), then a table of 12-byte entries
-      // (4-byte id, 8-byte offset); CDAT rows are (tree oid, 16 bytes) in OIDL order.
-      const g = readFileSync(graphFile);
-      const hashLen = head.length / 2;
-      const chunk = (id: string): number => {
-        for (let i = 0; i < g.readUInt8(6); i++) {
-          const at = 8 + i * 12;
-          if (g.toString('latin1', at, at + 4) === id) return Number(g.readBigUInt64BE(at + 4));
-        }
-        throw new Error(`no ${id} chunk`);
-      };
-      const oidl = chunk('OIDL');
-      const count = g.readUInt32BE(chunk('OIDF') + 255 * 4);
-      let index = -1;
-      for (let i = 0; i < count; i++) {
-        const at = oidl + i * hashLen;
-        if (g.toString('hex', at, at + hashLen) === head) index = i;
-      }
-      expect(index).toBeGreaterThanOrEqual(0);
-      Buffer.from(baseTree, 'hex').copy(g, chunk('CDAT') + index * (hashLen + 16));
-      chmodSync(graphFile, 0o644); // Git writes the graph read-only
-      writeFileSync(graphFile, g);
-      expect(gitIn(wf.clone, 'diff', '--name-only', 'origin/main', head)).toBe('');
-      const job = jobAt(head);
-      expect(merge(job)).toMatchObject({ outcome: 'blocked', code: 'workflow-changed' });
-      expect(merges()).toHaveLength(0);
-    } finally {
-      rmSync(graphFile, { force: true });
-    }
+    expect(merge(jobWith([{ filename: 'src/b.ts' }])).outcome).toBe('merged');
+    // A PR GitHub already merged is recorded whatever it changed.
+    const done = jobWith([{ filename: WORKFLOW }]);
+    githubMerged(done);
+    expect(merge(done)).toMatchObject({ outcome: 'already_merged', verified: true });
   });
 });
