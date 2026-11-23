@@ -663,8 +663,6 @@ const PERSON_MERGE_STEPS = {
     `resolve job ${job}'s conflict with its base by hand (no third job is started), merge it, then orch ticket done ${key}`,
 } satisfies Partial<Record<MergeBlock, (job: string, key: string) => string>>;
 
-export const PERSON_MERGE_BLOCKS = Object.keys(PERSON_MERGE_STEPS) as MergeBlock[];
-
 /** The step a person takes for a merge refused with `code`, or null when no person can lift it. */
 export function personMergeStep(code: string, jobId: string, ticketKey: string): string | null {
   return Object.hasOwn(PERSON_MERGE_STEPS, code)

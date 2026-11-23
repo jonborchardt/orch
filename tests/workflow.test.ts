@@ -14,7 +14,6 @@ import {
   MAX_ROUNDS_REASON,
   MERGE_BLOCKS,
   mergeDecision,
-  PERSON_MERGE_BLOCKS,
   personMergeStep,
   requiredArtifact,
   SCOPE_GAP_REASON,
@@ -1024,7 +1023,8 @@ describe('mergeDecision: workflow changes need a human', () => {
 
 describe('personMergeStep: merge refusals only a person can lift', () => {
   it('maps exactly the person-liftable codes to a step, each a merge block', () => {
-    expect([...PERSON_MERGE_BLOCKS].sort()).toEqual(
+    const person = MERGE_BLOCKS.filter((code) => personMergeStep(code, 'job-1', '0001') !== null);
+    expect([...person].sort()).toEqual(
       [
         'head-changed',
         'not-authorized',
@@ -1034,8 +1034,7 @@ describe('personMergeStep: merge refusals only a person can lift', () => {
         'workflow-changed',
       ].sort(),
     );
-    for (const code of PERSON_MERGE_BLOCKS) {
-      expect(MERGE_BLOCKS).toContain(code);
+    for (const code of person) {
       const step = personMergeStep(code, 'job-1', '0001');
       expect(step, code).toContain('job-1');
       expect(step, code).not.toContain('tries again');
