@@ -97,7 +97,10 @@ export interface CiView {
   guidance: string;
 }
 
-/** The eight presentation steps, in workflow order; `needs-human` and `completed` are never steps. */
+/**
+ * The eight presentation steps, in workflow order; `needs-human` and `completed` are never steps.
+ * A fast job's progress has only build, pr, ci, and done.
+ */
 export type StepId = 'spec' | 'build' | 'simplify' | 'review' | 'approve' | 'pr' | 'ci' | 'done';
 export type StepState = 'done' | 'current' | 'stopped' | 'not-started';
 
@@ -108,7 +111,7 @@ export type StepState = 'done' | 'current' | 'stopped' | 'not-started';
  */
 export interface Progress {
   steps: { id: StepId; label: string; state: StepState }[];
-  /** Index of the current or stopped step; -1 when none is known; 8 when the job completed. */
+  /** Index of the current or stopped step; -1 when none is known; `steps.length` when completed. */
   position: number;
   /** Short text for the position, e.g. "Build", "CI, needs human", "Done", "Needs human". */
   label: string;
@@ -147,6 +150,8 @@ export interface BoardRow {
   repoPath: string;
   stage: Job['stage'];
   status: Job['status'];
+  /** `fast`: build, pr, ci only (the board shows a chip); `full` otherwise. */
+  mode: Job['mode'];
   liveness: Liveness;
   /** Null unless the job completed. */
   outcome: Outcome | null;

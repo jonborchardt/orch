@@ -67,6 +67,11 @@ export interface RunnerSession {
   repo: string | null;
   /** The ticket `orch do` was given. */
   ticket: number | null;
+  /**
+   * `orch do --fast`: a job the controller creates for that ticket is a fast job. Absent in
+   * records written before fast mode; kept across `orch resume`.
+   */
+  fast?: boolean | undefined;
   /** The ticket and job in flight. */
   ticketId: number | null;
   jobId: string | null;

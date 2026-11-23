@@ -206,6 +206,7 @@ orch ticket show 85
 orch start                # every repository's ready tickets, best first, one at a time
 orch start repo           # only the repository containing the current directory
 orch do 85                # one ticket: start its job, continue it, or merge it
+orch do 85 --fast         # the same, but a new job is a fast job (see below)
 orch status               # controller, ticket, job, what it waits on, what happens next
 orch stop next            # finish the current ticket, start no other, exit
 orch stop                 # end the current session now; the job is kept, never cancelled
@@ -231,6 +232,14 @@ skill runs one ticket and merges it. How each works, and what happens at every s
 controller run, is in [docs/operations.md](docs/operations.md). A job that stops records why on
 itself (`runner.stopped`, next to a `runner.session` event per Claude session); decide a job that
 needs a person on the dashboard, then `orch do <ticket>` continues the same job.
+
+For a small, low-risk ticket you choose, `orch do <ticket> --fast` creates a fast job: one agent
+builds, verifies, and writes `build.md`, then PR, CI, and merge as usual, with no spec, simplify,
+review, or approval. The gates still hold (verification, `build.md`'s HEAD binds delivery, CI,
+merge rules), and a fast build that touches `factory.json`, CI, test configuration, dependencies,
+or disables a test is refused and escalates. Nothing classifies tickets for you, and a fast job
+never turns into a full one: cancel it and `orch ticket reopen` the ticket instead
+([docs/workflow.md](docs/workflow.md#fast-jobs)).
 
 Optional email reports of every job change: [docs/operations.md](docs/operations.md#email-reports).
 

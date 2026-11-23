@@ -102,7 +102,9 @@ export interface PushResult {
  * Only approved, verified code leaves the machine: pushing and PR creation happen in the pr stage,
  * and the delivery gate (approval, clean base merges only, verified HEAD, authorized policy)
  * holds for this exact HEAD. Under `ci` before approval, the pre-review pass pushes verified
- * code to the draft PR without the approval (`deliveryGate`).
+ * code to the draft PR without the approval (`deliveryGate`). The approval is whatever
+ * `approvalEvidence` names: decision.md APPROVE, or build.md for a fast job, which has no
+ * pre-review pass.
  */
 function requireApprovedHead(store: Store, job: Job, tree: Tree): void {
   if (job.stage !== 'pr') {

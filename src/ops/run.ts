@@ -523,6 +523,8 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       `orch ticket reopen ${key} queues the ticket for a new job`,
     );
   }
+  // `orch do --fast` decides the mode of a job created for its own ticket, and nothing else.
+  const fast = session.fast === true && session.ticket === ticketId;
   if (job === undefined) {
     const refused = mergeNotEnabled(store, ticket);
     if (refused !== null) return out('refused', refused, null);
@@ -532,6 +534,7 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
         ticket: ticketId,
         session: RUNNER_SESSION,
         cwd: ticket.repoPath,
+        mode: fast ? 'fast' : 'full',
       }).job;
     } catch (err) {
       if (!(err instanceof OrchError)) throw err;
@@ -540,9 +543,14 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       if (other !== null) return out('claimed', `job ${other} was created for it meanwhile`, other);
       return out('refused', err.message, null);
     }
-    run.log(`  job ${job.id}: dispatched`);
+    run.log(`  job ${job.id}: dispatched${job.mode === 'fast' ? ' (fast)' : ''}`);
   } else {
     run.log(`  job ${job.id}: found in ${job.stage}/${job.status}`);
+    if (fast) {
+      run.log(
+        `  job ${job.id}: --fast applies only to a new job; this one continues in its recorded mode, ${job.mode}`,
+      );
+    }
   }
 
   let jobId = job.id;
@@ -778,6 +786,8 @@ export interface StartInput {
   repo?: string | null | undefined;
   /** The ticket of `orch do`. */
   ticket?: number | undefined;
+  /** `orch do --fast`: a job created for that ticket is a fast job (never for `orch start`). */
+  fast?: boolean | undefined;
 }
 
 /** `orch start` and `orch do`: a new session. Refused while one is running or left interrupted. */
@@ -806,6 +816,7 @@ export async function startSession(
       mode: input.mode,
       repo: input.repo ?? null,
       ticket: input.ticket ?? null,
+      ...(input.fast === true && input.mode === 'ticket' ? { fast: true } : {}),
       ticketId: null,
       jobId: null,
       child: null,

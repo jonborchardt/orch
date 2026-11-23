@@ -602,9 +602,11 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       break;
     }
     case 'build': {
-      const r = role('build');
+      const fast = job.mode === 'fast';
+      const r = role(fast ? 'fast-build' : 'build');
       if (r) plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'build.md' }];
-      const rework = job.round > 0;
+      // A fast job's round stays 0; any earlier build.md is replaced on rework.
+      const rework = fast ? has('build.md') : job.round > 0;
       // A rework (CI failure, base-integration conflict or merge edits) is addressed by the next
       // build visit only; once that build completed, later visits are ordinary review rounds.
       const newest = [...detail.events].reverse();
@@ -623,13 +625,21 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
             'The builder reads the saved logs, fixes the defect without weakening checks or the policy, commits, and runs orch verify.'
           : ` Base integration needs the builder: ${why ?? 'the merge did not apply cleanly'}. ` +
             `Merge ${job.baseBranch}, resolve, commit the merge; the result is reviewed as new code.`;
-      plan.reason = scopeGap
-        ? `Scope gap at approval: ${why ?? 'the build covers less than requested'}. ` +
-          'Implement everything spec.md puts in scope that decision.md names as missing, then rebuild build.md; this is the one automatic scope rework.'
-        : (rework
-            ? `Rework round ${String(job.round + 1)}: address round-${String(job.round)}/consolidated.md, then rebuild build.md.`
-            : 'Implement spec.md in the worktree, commit, run orch verify, and write build.md citing the run id.') +
-          reworkNote;
+      plan.reason = fast
+        ? 'Fast job: no spec, review, or approval follows. The fast builder implements the ticket, commits, ' +
+          'runs targeted checks and orch verify, ticks the delivered ticket boxes, and writes build.md citing ' +
+          'the run id; build.md at that HEAD is what delivery binds to. A change to factory.json, CI, test ' +
+          'configuration, dependency manifests, or a disabled or removed test is refused. When it is, or the ' +
+          `builder answers ESCALATE, run orch job transition ${id} escalate --reason "<why>"${tok} instead ` +
+          'of completing; never widen the scope. Completing leads to pr.' +
+          reworkNote
+        : scopeGap
+          ? `Scope gap at approval: ${why ?? 'the build covers less than requested'}. ` +
+            'Implement everything spec.md puts in scope that decision.md names as missing, then rebuild build.md; this is the one automatic scope rework.'
+          : (rework
+              ? `Rework round ${String(job.round + 1)}: address round-${String(job.round)}/consolidated.md, then rebuild build.md.`
+              : 'Implement spec.md in the worktree, commit, run orch verify, and write build.md citing the run id.') +
+            reworkNote;
       plan.commands = [...start, verify, add('build.md', rework), complete];
       break;
     }
@@ -732,6 +742,9 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
             'Completing hands the job to the ci stage; a passing verdict for this commit leads to review, and the PR stays a draft.'
           : 'Deliver: integrate base if it advanced, verify the resulting commit, push, create or reuse the draft PR, write pr.md. ' +
             'Completing hands the job to the ci stage; delivery is not done until required checks pass.') +
+        (job.mode === 'fast'
+          ? ' Fast job: pr.md is concise (Summary, Changed files, Validation, Known limitations; the fast template in reference.md).'
+          : '') +
         (behind > 0 ? ` Base is ${String(behind)} commit(s) ahead.` : '') +
         (job.prUrl ? ` The existing PR ${job.prUrl} is updated, never duplicated.` : '');
       plan.commands = [

@@ -136,6 +136,7 @@ describe('openStore', () => {
       const job = getJob(v2.db, 'job-old');
       expect(job.title).toBe('legacy');
       expect(job.leaseMinutes).toBe(30);
+      expect(job.mode).toBe('full');
     } finally {
       v2.close();
     }

@@ -11,7 +11,7 @@ import { NotFoundError, ValidationError } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { baseRef } from '../git/repo.ts';
 import { tryGit } from '../git/run.ts';
-import { containsRef, editedMerges } from '../git/worktree.ts';
+import { containsRef, editedMerges, parseNameStatus } from '../git/worktree.ts';
 import { sensitiveSummary } from '../core/sensitive.ts';
 import {
   CHECKLIST_DELIMITER,
@@ -22,7 +22,13 @@ import {
   uncheckedItems,
 } from '../core/tickets.ts';
 import { type Authority, authorityOf } from '../core/verification.ts';
-import { type Action, requiredArtifact, simplifyArtifact } from '../core/workflow.ts';
+import {
+  type Action,
+  approvalEvidence,
+  approvalName,
+  requiredArtifact,
+  simplifyArtifact,
+} from '../core/workflow.ts';
 import { findArtifact, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import {
@@ -112,6 +118,42 @@ function requireAuthorizedPolicy(
   }
 }
 
+/** Sensitive kinds no fast job may change: they decide what the checks run and see. */
+const FAST_REFUSED_KINDS: readonly string[] = ['policy', 'ci', 'test-config', 'deps'];
+
+/**
+ * A fast build delivers without review, so its diff may not touch what the evidence rests on: the
+ * policy (or a file it runs), CI, test configuration, dependency manifests, or tests it disables
+ * or removes, and the policy may not drift. Such a change needs the full workflow: escalate.
+ * Renames are split into delete + add, so a file renamed out of its classification is still seen
+ * at its old path. Checked when the build completes and again at every delivery.
+ */
+function requireFastScope(job: Job, info: Tree, what: string): void {
+  const changes = info.baseRef
+    ? parseNameStatus(
+        tryGit(info.path, 'diff', '--name-status', '--no-renames', `${info.baseRef}...HEAD`) ?? '',
+      )
+    : info.changes;
+  const report = sensitiveReport({ ...info, changes }, effectivePolicy(job, info));
+  const found = [
+    ...report.changes
+      .filter(
+        (c) =>
+          FAST_REFUSED_KINDS.includes(c.kind) || (c.kind === 'tests' && c.status === 'deleted'),
+      )
+      .map((c) => `${c.path} (${c.kind}, ${c.status})`),
+    ...report.scan.disabled.map((d) => `${d.path}: disabled test: ${d.line}`),
+    ...report.scan.removedTests.map((r) => `${r.path}: ${String(r.removed)} test(s) removed`),
+    ...(report.policy?.changed ? ['the verification policy changed'] : []),
+  ];
+  if (found.length === 0) return;
+  throw new ValidationError(
+    `${what} (fast job) is refused: the change is riskier than fast mode allows (${found.join('; ')}). ` +
+      `Escalate (orch job transition ${job.id} escalate --reason "..."); cancel and orch ticket reopen ` +
+      'the ticket to run the full workflow.',
+  );
+}
+
 /** `orch job artifact add`: register with the worktree HEAD; code evidence needs a clean tree. */
 export function addArtifact(
   store: Store,
@@ -171,24 +213,29 @@ function evidenceHead(
 }
 
 /**
- * HEAD is the approved commit or builds on it: decision.md is APPROVE recorded against a commit,
- * HEAD contains that commit, and every commit since then that is not already on the base is a
- * merge whose result matches one of its parents (a clean base integration, no edits inside the
- * merge). A rewind or a divergence has nothing in approved..HEAD, so containment is checked first.
+ * HEAD is the approved commit or builds on it: the approval (`approvalEvidence`: decision.md
+ * APPROVE, or build.md for a fast job) is recorded against a commit, HEAD contains that commit,
+ * and every commit since then that is not already on the base is a merge whose result matches one
+ * of its parents (a clean base integration, no edits inside the merge). A rewind or a divergence
+ * has nothing in approved..HEAD, so containment is checked first.
  */
 function requireApproved(store: Store, job: Job, tree: Tree, what: string): void {
   const { path, head } = tree;
-  const decision = findArtifact(store.db, job.id, 'decision.md');
-  if (decision?.marker !== 'approve' || !decision.head) {
+  const back =
+    job.mode === 'fast'
+      ? 'Rework the build and complete build again, or escalate.'
+      : 'Return the job to review.';
+  const decision = approvalEvidence(job.mode, listArtifacts(store.db, job.id));
+  if (!decision?.head) {
     throw new ValidationError(
-      `No DECISION: APPROVE recorded against a commit; ${what} is refused.`,
+      `No ${approvalName(job.mode)} recorded against a commit; ${what} is refused.`,
     );
   }
   if (decision.head === head) return;
   if (!containsRef(path, decision.head, head)) {
     throw new ValidationError(
       `HEAD ${head.slice(0, 7)} does not contain the approved commit ${decision.head.slice(0, 7)}; ` +
-        `${what} is refused. Return the job to review.`,
+        `${what} is refused. ${back}`,
     );
   }
   const base = baseRef(path, job.baseBranch);
@@ -202,7 +249,7 @@ function requireApproved(store: Store, job: Job, tree: Tree, what: string): void
   if (unreviewed === undefined || unreviewed !== '') {
     throw new ValidationError(
       `HEAD ${head.slice(0, 7)} has commits that were not approved (approved: ${decision.head.slice(0, 7)}); ` +
-        `only base integration merges may follow an approval, so ${what} is refused. Return the job to review.`,
+        `only base integration merges may follow an approval, so ${what} is refused. ${back}`,
     );
   }
   const edited = editedMerges(path, decision.head, head, base);
@@ -210,7 +257,8 @@ function requireApproved(store: Store, job: Job, tree: Tree, what: string): void
     const list = edited.map((m) => `${m.sha.slice(0, 7)}: ${m.files.join(', ')}`).join('; ');
     throw new ValidationError(
       `Merge commit(s) since the approval contain edits that match neither parent (${list}); ` +
-        'conflict resolutions are new code. Rework, re-review, and re-approve first.',
+        'conflict resolutions are new code. ' +
+        (job.mode === 'fast' ? back : 'Rework, re-review, and re-approve first.'),
     );
   }
 }
@@ -242,6 +290,8 @@ export function requireDeliverable(
 ): void {
   requireClean(tree, `${what} must describe a committed state.`);
   if (!preReview) requireApproved(store, job, tree, what);
+  // A fast job has no reviewer behind the build gate; a resume past it must not skip its check.
+  if (job.mode === 'fast') requireFastScope(job, tree, what);
   // GitHub's verdict counts only for the commit it was read for.
   if (job.stage === 'ci' && job.ciHead !== tree.head) {
     throw new ValidationError(
@@ -280,10 +330,15 @@ export function deliveryGate(
   };
 }
 
-/** Whether this job is in the pre-review pass (`ci` authority, no approval for HEAD). */
+/**
+ * Whether this job is in the pre-review pass (`ci` authority, no approval for HEAD). A fast job
+ * has no review, so it never is: its delivery always needs build.md's HEAD to hold.
+ */
 export function isPreReview(store: Store, job: Job, tree: Tree): boolean {
   return (
-    authorityOf(effectivePolicy(job, tree).policy) === 'ci' && !approvalHolds(store, job, tree)
+    job.mode === 'full' &&
+    authorityOf(effectivePolicy(job, tree).policy) === 'ci' &&
+    !approvalHolds(store, job, tree)
   );
 }
 
@@ -444,6 +499,9 @@ export function transitionGuarded(
       }
       if (job.stage === 'build' || job.stage === 'simplify' || job.stage === 'approve') {
         requireVerified(store, job, info, `completing ${job.stage}`);
+      }
+      if (job.stage === 'build' && job.mode === 'fast') {
+        requireFastScope(job, info, 'completing build');
       }
       if (job.stage === 'approve') requireAuthorizedPolicy(job, info, 'completing approve');
     }

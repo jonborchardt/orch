@@ -67,6 +67,19 @@ describe('progressOf and timelineOf', () => {
     expect(g.label).toBe('Done');
   });
 
+  it('a fast job has only Build, PR, CI, and Done steps', () => {
+    const fast = { ...row('pr', 'running'), mode: 'fast' as const };
+    expect(states(progressOf(fast, new Map()))).toBe(
+      'Build:done PR:current CI:not-started Done:not-started',
+    );
+    const blocked = { ...row('needs-human', 'blocked', 'build'), mode: 'fast' as const };
+    const p = progressOf(blocked, newest(ev('job.blocked', { from: 'ci' })));
+    expect(p).toMatchObject({ position: 2, label: 'CI, needs human' });
+    const done = progressOf({ ...row('completed', 'completed'), mode: 'fast' as const }, new Map());
+    expect(done).toMatchObject({ position: 4, label: 'Done' });
+    expect(done.steps.map((s) => s.id)).toEqual(['build', 'pr', 'ci', 'done']);
+  });
+
   it('(h) a rework from ci shows the current pass, and the timeline the loop in order', () => {
     const p = progressOf(row('build', 'pending'), new Map());
     expect(states(p)).toBe(

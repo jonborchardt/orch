@@ -5,7 +5,7 @@
  * measured anywhere `orch` can read them, and the report says so instead of estimating.
  */
 import { resolveRoles } from '../core/roles.ts';
-import type { Stage } from '../core/workflow.ts';
+import type { JobMode, Stage } from '../core/workflow.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
 import { getJob, listReviews } from '../storage/jobs.ts';
@@ -38,6 +38,8 @@ export interface ReviewerRun {
 
 export interface UsageReport {
   jobId: string;
+  /** `fast` jobs visit only build, pr, and ci (core/workflow.ts JOB_MODES). */
+  mode: JobMode;
   /** From job creation to completion, or to now while unfinished. */
   wallMs: number;
   stages: StageVisit[];
@@ -116,6 +118,7 @@ export function jobUsage(store: Store, id: string): UsageReport {
   }
   return {
     jobId: id,
+    mode: job.mode,
     wallMs: ms(job.createdAt, job.completedAt ?? new Date().toISOString()),
     stages,
     stageMs,

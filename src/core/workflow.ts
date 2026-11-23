@@ -34,6 +34,41 @@ export const STATUSES = [
 ] as const;
 export type Status = (typeof STATUSES)[number];
 
+/**
+ * How a job travels through STAGES. `full`: every stage. `fast` (opt-in, `orch do --fast`): created
+ * in build, then pr, ci, completed; no spec, simplify, review, or approve (decision
+ * 2026-11-23-fast-mode). The same transition, gates, and delivery rules serve both.
+ */
+export const JOB_MODES = ['full', 'fast'] as const;
+export type JobMode = (typeof JOB_MODES)[number];
+
+/** Where a fast job may be resumed to from needs-human; anything else is a full-workflow job. */
+const FAST_RESUME_TARGETS: readonly Stage[] = ['build', 'pr', 'ci', 'completed'];
+
+/**
+ * The artifact that is a job's approval, or undefined when none is registered: decision.md saying
+ * APPROVE for a full job, build.md for a fast job (it has no approver). Its `head` is the approved
+ * head; delivery (`requireApproved` in ops/gates.ts) refuses one recorded without a head. Every
+ * reader of the approved head asks this; none branches on the mode itself.
+ */
+export function approvalEvidence(
+  mode: JobMode,
+  artifacts: readonly Artifact[],
+): Artifact | undefined {
+  const a = artifacts.find((x) => x.path === approvalPath(mode));
+  return mode === 'fast' || a?.marker === 'approve' ? a : undefined;
+}
+
+/** The artifact `approvalEvidence` reads. */
+export function approvalPath(mode: JobMode): 'build.md' | 'decision.md' {
+  return mode === 'fast' ? 'build.md' : 'decision.md';
+}
+
+/** What `approvalEvidence` looks for, for refusals. */
+export function approvalName(mode: JobMode): string {
+  return mode === 'fast' ? 'build.md' : 'DECISION: APPROVE';
+}
+
 export const VERDICTS = ['pass', 'changes'] as const;
 export type Verdict = (typeof VERDICTS)[number];
 
@@ -271,7 +306,9 @@ type JobState = Pick<
   | 'maxCiRepairs'
   | 'scopeReworks'
   | 'startedAt'
->;
+> &
+  // Absent means `full`, the mode of every job created before modes existed.
+  Partial<Pick<Job, 'mode'>>;
 
 /** Pure decision: throws WorkflowError when the action is illegal in the current state. */
 export function transition(
@@ -313,7 +350,9 @@ export function transition(
       if (required && !artifact) reject(`missing required artifact ${required}`);
       const completed = { type: 'stage.completed', payload: { stage, round: job.round } };
       const blocking = blockingCount(ctx.artifacts, job.round);
-      const ciFirst = ctx.authority === 'ci';
+      const mode = job.mode ?? 'full';
+      // A fast job has no pre-review pass: its approval (build.md) exists before pr.
+      const ciFirst = ctx.authority === 'ci' && mode === 'full';
       switch (stage) {
         case 'spec': {
           const refused = scopeGapSpecRefusal(ctx.artifacts) ?? specChallengeRefusal(ctx.artifacts);
@@ -321,6 +360,10 @@ export function transition(
           return { patch: { stage: 'build', status: 'pending' }, events: [completed] };
         }
         case 'build':
+          // A fast job delivers its build: build.md is its approval.
+          if (mode === 'fast') {
+            return { patch: { stage: 'pr', status: 'pending' }, events: [completed] };
+          }
           // Every build opens the next review round; its simplify pass belongs to that round.
           return {
             patch: { stage: 'simplify', status: 'pending', round: job.round + 1 },
@@ -353,11 +396,8 @@ export function transition(
           if (!job.prUrl) reject('record the PR first (orch job pr)');
           // Reaching pr by a human `--to pr` is allowed; finishing without an approval is not,
           // except under `ci`, whose pre-review pass has none yet (the delivery gate decides).
-          if (
-            !ciFirst &&
-            ctx.artifacts.find((a) => a.path === 'decision.md')?.marker !== 'approve'
-          ) {
-            reject('no DECISION: APPROVE is registered in decision.md');
+          if (!ciFirst && !approvalEvidence(mode, ctx.artifacts)) {
+            reject(`no ${approvalName(mode)} is registered`);
           }
           return { patch: { stage: 'ci', status: 'pending' }, events: [completed] };
         }
@@ -424,6 +464,13 @@ export function transition(
     case 'resume': {
       if (stage === 'needs-human') {
         const to = ctx.to ?? job.returnStage;
+        // A fast job never visits spec, simplify, review, or approve; converting it is not resuming.
+        if (job.mode === 'fast' && to && !FAST_RESUME_TARGETS.includes(to)) {
+          reject(
+            `a fast job resumes only to ${FAST_RESUME_TARGETS.join(', ')}; ` +
+              'cancel the job and `orch ticket reopen` it to run the full workflow',
+          );
+        }
         if (to === 'completed') return acceptDelivery(job, ctx);
         if (!to || to === 'needs-human') reject('specify --to <stage>');
         // Leaving a spec escalation for a later stage skips nothing: an unanswered REWORK-SPEC

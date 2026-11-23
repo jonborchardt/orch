@@ -25,9 +25,11 @@ import { SESSION_EVENT, type SessionRef } from '../core/session.ts';
 import type { Authority } from '../core/verification.ts';
 import {
   type Action,
+  approvalPath,
   challengeSpecHash,
   type CiStatus,
   isSpecChallenge,
+  type JobMode,
   looksLikeSpecChallenge,
   now,
   type PrState,
@@ -60,6 +62,8 @@ export interface CreateJobInput {
   actor?: string | undefined;
   /** Ticket the job works on: claimed (checked, marked in progress, linked) in the same transaction. */
   ticketId?: number | undefined;
+  /** `fast` starts in build (core/workflow.ts JOB_MODES); default `full`, starting in spec. */
+  mode?: JobMode | undefined;
   /**
    * The finished job this one re-lands (same repository, not superseded yet): marked superseded by
    * the new job in the same transaction, as its owner, so neither exists without the other.
@@ -89,6 +93,7 @@ export function createJob(store: Store, input: CreateJobInput): Job {
   }
   const ts = now();
   const id = `job-${randomBytes(4).toString('hex')}`;
+  const mode = input.mode ?? 'full';
   const job = store.db.transaction(
     (tx) => {
       if (input.ticketId !== undefined) {
@@ -105,8 +110,9 @@ export function createJob(store: Store, input: CreateJobInput): Job {
           repoPath: input.repoPath,
           issueRef: input.issueRef ?? null,
           baseBranch: input.baseBranch,
-          stage: 'spec',
+          stage: mode === 'fast' ? 'build' : 'spec',
           status: 'pending',
+          mode,
           maxRounds: input.maxRounds ?? DEFAULT_CONFIG.maxRounds,
           maxCiRepairs: input.maxCiRepairs ?? DEFAULT_CONFIG.maxCiRepairs,
           createdAt: ts,
@@ -118,7 +124,7 @@ export function createJob(store: Store, input: CreateJobInput): Job {
         tx,
         id,
         'job.created',
-        { title: input.title, repo: input.repo },
+        { title: input.title, repo: input.repo, mode },
         input.actor ?? null,
         ts,
       );
@@ -363,7 +369,7 @@ export function transitionJob(
   return mutate(store, id, opts, (job, tx) => {
     const artifacts = listArtifacts(tx, id);
     const dir = jobArtifactDir(id, store.paths);
-    if (action === 'complete') verifyOnDisk(dir, job.stage, job.round, artifacts);
+    if (action === 'complete') verifyOnDisk(dir, job, job.stage, artifacts);
     // Leaving a spec escalation for a later stage relies on the challenge as much as completion.
     const target = opts.to ?? job.returnStage;
     if (
@@ -372,7 +378,7 @@ export function transitionJob(
       job.returnStage === 'spec' &&
       target !== 'spec'
     ) {
-      verifyOnDisk(dir, 'spec', job.round, artifacts);
+      verifyOnDisk(dir, job, 'spec', artifacts);
     }
     return transition(job, action, {
       artifacts,
@@ -390,17 +396,22 @@ export function transitionJob(
 /**
  * A registered row is only evidence while the file still matches it: the stage's required
  * artifact and, in review, the round's files (in spec, the challenges) are re-read before
- * completion counts them.
+ * completion counts them; in pr, so is the approval artifact (`approvalPath`).
  */
-function verifyOnDisk(dir: string, stage: Stage, round: number, artifacts: Artifact[]): void {
-  const required = requiredArtifact(stage, round);
-  const prefix = `round-${String(round)}/`;
+function verifyOnDisk(
+  dir: string,
+  job: Pick<Job, 'round' | 'mode'>,
+  stage: Stage,
+  artifacts: Artifact[],
+): void {
+  const required = requiredArtifact(stage, job.round);
+  const prefix = `round-${String(job.round)}/`;
   for (const a of artifacts) {
     const relevant =
       a.path === required ||
       ((stage === 'review' || stage === 'simplify') && a.path.startsWith(prefix)) ||
       (stage === 'spec' && isSpecChallenge(a.path)) ||
-      (stage === 'pr' && a.path === 'decision.md');
+      (stage === 'pr' && a.path === approvalPath(job.mode));
     if (!relevant) continue;
     let checked;
     try {

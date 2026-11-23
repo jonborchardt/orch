@@ -28,7 +28,14 @@ import type { BoardRow } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
 import { CiChip, PrPhaseChip } from './Ci.tsx';
 import { ProgressStrip, RoundIndicator } from './Progress.tsx';
-import { BlockerText, CopyResume, FlakeText, StatusChip, Supersession } from './Status.tsx';
+import {
+  BlockerText,
+  CopyResume,
+  FastChip,
+  FlakeText,
+  StatusChip,
+  Supersession,
+} from './Status.tsx';
 import { ago, byAttention, elapsedCell, repoLabels, reviewRollup } from './format.ts';
 
 function openJob(id: string): void {
@@ -141,6 +148,7 @@ const COLUMNS: Column[] = [
           sx={{ alignItems: 'center', flexWrap: 'wrap' }}
         >
           <StatusChip state={r.liveness} outcome={r.outcome} />
+          {r.mode === 'fast' && <FastChip size="small" />}
           {r.archivedAt !== null && <Chip label="archived" size="small" />}
           {r.resume?.command && (
             <CopyResume id={r.id} command={r.resume.command} checkout={r.repoPath} compact />

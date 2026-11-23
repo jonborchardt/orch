@@ -39,6 +39,19 @@ export function StatusChip({
   );
 }
 
+/** A fast job (`orch do --fast`): one agent, then PR and CI, no spec, review, or approval. */
+export function FastChip({ size }: { size?: 'small' }) {
+  return (
+    <Chip
+      label="fast"
+      size={size}
+      variant="outlined"
+      data-mode="fast"
+      title="Fast job: one agent built it; no spec, simplify, review, or approval (orch do --fast)"
+    />
+  );
+}
+
 /** One compact line explaining why the job is not progressing. */
 export function BlockerText({
   blocker,

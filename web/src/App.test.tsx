@@ -62,6 +62,7 @@ function row(over: Partial<BoardRow>): BoardRow {
     repoPath: '/r',
     stage: 'build',
     status: 'running',
+    mode: 'full',
     liveness: 'running',
     outcome: null,
     round: 0,
@@ -187,6 +188,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       worktreePath: '/wt/g',
       stage: 'needs-human',
       status: 'blocked',
+      mode: 'full',
       round: 1,
       maxRounds: 3,
       returnStage: 'approve',
@@ -4376,5 +4378,32 @@ describe('job to ticket', () => {
     expect(
       within(await screen.findByTestId('job-header')).queryByRole('link', { name: /ticket/ }),
     ).toBeNull();
+  });
+});
+
+describe('Fast jobs', () => {
+  it('the board shows a fast chip on fast rows only', async () => {
+    data.rows = [row({ id: 'job-0000000a', title: 'Quick fix', mode: 'fast' }), ...rows];
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(within(boardRowOf('job-0000000a')).getByText('fast')).toBeInTheDocument();
+    expect(within(boardRowOf('job-00000001')).queryByText('fast')).toBeNull();
+  });
+
+  it('the detail header shows a fast chip for a fast job and none for a full job', async () => {
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByText('fast')).toBeNull();
+    cleanup();
+    data.detail = detail({ job: { ...detail().job, mode: 'fast' } });
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByText('fast').closest('[data-mode="fast"]')).toHaveAttribute(
+      'title',
+      expect.stringContaining('Fast job'),
+    );
   });
 });

@@ -221,6 +221,22 @@ Request: <job description>
 plus the stage-specific inputs listed in [reference.md](reference.md). Wait for every agent to
 finish before registering anything.
 
+### Fast jobs
+
+A job with `mode: "fast"` (only `orch do <ticket> --fast` creates one) starts in `build` and goes
+build -> pr -> ci -> completed; it never visits spec, simplify, review, or approve. `orch` enforces
+the route; the plans already follow it. In `build`, `plan.agents` names only
+`factory-fast-builder`: give it the ticket key and the inputs in reference.md. It implements,
+commits, runs `orch verify`, ticks the ticket boxes it delivered, and writes `build.md`; register
+it and `complete`. Completing is refused when the diff changes `factory.json` or a file it runs,
+CI, test configuration, a dependency manifest, or disables or removes a test, and when the agent
+answers `ESCALATE: <reason>`: run `orch job transition <id> escalate --reason "<reason>" --token
+<t>`, never widen the scope. `build.md`'s recorded HEAD is the approved head: push, PR creation,
+and completing pr or ci are refused for anything else (only clean base merges may follow). In
+`pr`, write the concise fast `pr.md` from reference.md. A CI failure reworks to `build` within the
+repair budget, as for any job. A fast job resumes only to build, pr, ci, or completed; to run the
+full workflow, a human cancels it and reopens the ticket (`orch ticket reopen`).
+
 ### Spec stage
 
 The plan walks the spec stage one step at a time: write `spec.md`, challenge it, revise once,

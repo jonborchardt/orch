@@ -203,6 +203,8 @@ export async function main(argv: string[]): Promise<number> {
         open: bool,
         // recover
         once: bool,
+        // do
+        fast: bool,
         // init
         command: { type: 'string', multiple: true },
         'from-package-json': bool,
@@ -305,7 +307,11 @@ export async function main(argv: string[]): Promise<number> {
       case 'stop':
       case 'status':
       case 'resume': {
-        const { text, data, exitCode } = await runRunner(command, rest, { json, force: o.force });
+        const { text, data, exitCode } = await runRunner(command, rest, {
+          json,
+          force: o.force,
+          fast: o.fast,
+        });
         print(json ? data : text, json);
         return exitCode;
       }

@@ -11,7 +11,7 @@
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import type { SessionRef } from '../core/session.ts';
-import { now, type Stage, type Status, TERMINAL_STATUSES } from '../core/workflow.ts';
+import { type JobMode, now, type Stage, type Status, TERMINAL_STATUSES } from '../core/workflow.ts';
 import { findProjectRoot } from '../core/paths.ts';
 import { baseRef } from '../git/repo.ts';
 import type { Store } from '../storage/client.ts';
@@ -34,6 +34,8 @@ export interface DispatchInput {
   maxRounds?: number | undefined;
   /** Ticket the job works on; its repository, title, and body are the defaults. */
   ticket?: string | number | undefined;
+  /** `fast` only from the controller's `orch do --fast`; default `full`. */
+  mode?: JobMode | undefined;
   /** A re-land: the finished job this one replaces, superseded in the creating transaction. */
   supersedes?: { id: string; token: string | undefined } | undefined;
   /** The initiating session's name; recorded as the actor. */
@@ -139,6 +141,7 @@ export function dispatchJob(store: Store, input: DispatchInput): DispatchResult 
     title,
     description,
     ticketId: forTicket?.ticket.id,
+    mode: input.mode,
     issueRef: issue,
     repo: repo.identity,
     repoPath: repo.root,

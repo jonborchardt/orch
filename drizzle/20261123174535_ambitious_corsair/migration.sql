@@ -1,0 +1,1 @@
+ALTER TABLE `jobs` ADD `mode` text DEFAULT 'full' NOT NULL;

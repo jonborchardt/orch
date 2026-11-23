@@ -123,6 +123,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       repoPath: job.repoPath,
       stage: job.stage,
       status: job.status,
+      mode: job.mode,
       liveness: state,
       outcome: outcomeOf(state, job, ci.completion),
       round: job.round,
