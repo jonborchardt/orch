@@ -356,7 +356,7 @@ describe('sensitive changes in a real job', () => {
     dashboardAction(store, c.id, { action: 'accept-policy' });
     const job = getJob(store.db, c.id);
     expect(job.policy?.commands.map((x) => x.id)).toEqual(['check', 'types']);
-    dashboardAction(store, c.id, { action: 'approve', to: 'approve' });
+    expect(job.stage).toBe('approve');
     const token = claimJob(store, c.id, { session: SESSION }).token;
     const c2 = { ...c, token };
     go(store, c2, 'start');

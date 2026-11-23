@@ -121,7 +121,7 @@ describe('changing authority needs a human', () => {
     go(store, c, 'escalate', 'verification policy needs human acceptance');
     dashboardAction(store, c.id, { action: 'accept-policy' });
     expect(getJob(store.db, c.id).policy?.authority).toBe('ci');
-    dashboardAction(store, c.id, { action: 'approve', to: 'approve' });
+    expect(getJob(store.db, c.id).stage).toBe('approve');
     const c2 = { ...c, token: claimJob(store, c.id, { session: SESSION }).token };
     go(store, c2, 'start');
     verify(store, c2);
@@ -140,7 +140,7 @@ describe('changing authority needs a human', () => {
     expect(() => pushBranch(store, c.id, { token: c.token })).toThrow(/authority: ci -> local/);
     go(store, c, 'escalate', 'verification policy needs human acceptance');
     dashboardAction(store, c.id, { action: 'accept-policy' });
-    dashboardAction(store, c.id, { action: 'approve', to: 'pr' });
+    expect(getJob(store.db, c.id).stage).toBe('pr');
     const c2 = { ...c, token: claimJob(store, c.id, { session: SESSION }).token };
     go(store, c2, 'start');
     verify(store, c2);
