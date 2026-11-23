@@ -12,7 +12,9 @@ import {
   type LivePr,
   MAX_CI_REPAIRS_REASON,
   MAX_ROUNDS_REASON,
+  MERGE_BLOCKS,
   mergeDecision,
+  personMergeStep,
   requiredArtifact,
   SCOPE_GAP_REASON,
   type Stage,
@@ -1015,6 +1017,45 @@ describe('mergeDecision: workflow changes need a human', () => {
     }
     for (const p of ['.github/CODEOWNERS', '.githubx', 'a/.github']) {
       expect(touchesWorkflows([p]), p).toBe(false);
+    }
+  });
+});
+
+describe('personMergeStep: merge refusals only a person can lift', () => {
+  it('maps exactly the person-liftable codes to a step, each a merge block', () => {
+    const person = MERGE_BLOCKS.filter((code) => personMergeStep(code, 'job-1', '0001') !== null);
+    expect([...person].sort()).toEqual(
+      [
+        'head-changed',
+        'not-authorized',
+        'pr-closed',
+        'pr-draft',
+        'second-conflict',
+        'workflow-changed',
+      ].sort(),
+    );
+    for (const code of person) {
+      const step = personMergeStep(code, 'job-1', '0001');
+      expect(step, code).toContain('job-1');
+      expect(step, code).not.toContain('tries again');
+    }
+  });
+
+  it('names Merge on the dashboard for workflow-changed', () => {
+    expect(personMergeStep('workflow-changed', 'job-1', '0001')).toContain(
+      'Merge on the dashboard (orch ui)',
+    );
+  });
+
+  it('leaves every other code to end the run', () => {
+    for (const code of [
+      'github-refused',
+      'merge-no-answer',
+      'conflict',
+      'toString',
+      'needs-human',
+    ]) {
+      expect(personMergeStep(code, 'job-1', '0001'), code).toBeNull();
     }
   });
 });

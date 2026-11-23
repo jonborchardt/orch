@@ -146,26 +146,27 @@ describe('runner.stopped: the controller gave the ticket up', () => {
     expect(REPORTED_EVENTS).toContain('runner.stopped');
   });
 
-  const cases: [string, string, Record<string, unknown>][] = [
+  const cases: [string, string, string, Record<string, unknown>][] = [
     [
       'a merge at a head nobody verified',
       'unverified-merge',
+      'blocked',
       { state: 'MERGED', headRefOid: OTHER, mergeCommit: { oid: 'c'.repeat(40) } },
     ],
-    ['a PR head that changed after CI', 'head-changed', { headRefOid: OTHER }],
-    ['a PR still in draft', 'pr-draft', { isDraft: true }],
-    ['mergeability GitHub never decided', 'merge-no-answer', { mergeable: 'UNKNOWN' }],
+    ['a PR head that changed after CI', 'head-changed', 'needs-human', { headRefOid: OTHER }],
+    ['a PR still in draft', 'pr-draft', 'needs-human', { isDraft: true }],
+    ['mergeability GitHub never decided', 'merge-no-answer', 'blocked', { mergeable: 'UNKNOWN' }],
   ];
-  it.each(cases)('%s is recorded on the completed job as %s', async (_name, code, pr) => {
+  it.each(cases)('%s is recorded on the completed job as %s', async (_name, code, outcome, pr) => {
     const id = ticket('Cannot merge');
     const job = dispatchJob(store, { ticket: id, session: 'earlier', cwd: clone }).job;
     editPr(finish(job), pr);
 
     const s = await one(launcher(idle), id);
 
-    expect(s.tickets[0]?.outcome).toBe('blocked');
+    expect(s.tickets[0]?.outcome).toBe(outcome);
     expect(stops(job.id).map((e) => e.payload)).toMatchObject([
-      { outcome: 'blocked', code, reason: s.tickets[0]?.reason, stage: 'completed' },
+      { outcome, code, reason: s.tickets[0]?.reason, stage: 'completed' },
     ]);
     // A controller-level stop: the job is what it was, and nobody holds it.
     expect(getJob(store.db, job.id)).toMatchObject({
@@ -378,9 +379,9 @@ describe('resume in the middle of a re-land', () => {
 
     expect(l.calls.map((c) => c.jobId)).toEqual([second]);
     expect(jobsOf(id).map((j) => j.id)).toEqual([first, second]);
-    expect(r.tickets[0]).toMatchObject({ outcome: 'blocked', jobId: second });
+    expect(r.tickets[0]).toMatchObject({ outcome: 'needs-human', jobId: second });
     expect(stops(second).map((e) => e.payload)).toMatchObject([
-      { outcome: 'blocked', code: 'second-conflict', stage: 'completed' },
+      { outcome: 'needs-human', code: 'second-conflict', stage: 'completed' },
     ]);
     expect(stops(first)).toHaveLength(0);
     expect(merges()).toHaveLength(0);
