@@ -17,7 +17,7 @@ import {
 } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { ticketKey } from '../core/tickets.ts';
-import { now, TERMINAL_STATUSES } from '../core/workflow.ts';
+import { now, personMergeStep, TERMINAL_STATUSES } from '../core/workflow.ts';
 import {
   type ChildExit,
   type ClaudeChild,
@@ -549,8 +549,14 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       const m = await merge(run, jobId);
       if (m.kind === 'done') return out('done', `merged and verified (job ${jobId})`, jobId);
       if (m.kind === 'stopped') return out('stopped', 'stopped on request', jobId, 'orch resume');
-      if (m.kind === 'blocked')
-        return out('blocked', m.reason, jobId, `orch do ${key} tries again`, m.code);
+      if (m.kind === 'blocked') {
+        // A refusal only a person can lift waits for that person, like an escalation; any other
+        // one ends the run (decision 2026-11-23-queue-passes-over-person-merge-blocks).
+        const person = personMergeStep(m.code, jobId, key);
+        return person === null
+          ? out('blocked', m.reason, jobId, `orch do ${key} tries again`, m.code)
+          : out('needs-human', m.reason, jobId, person, m.code);
+      }
       relands += 1;
       jobId = m.jobId;
       run.log(`  job ${jobId}: re-land`);

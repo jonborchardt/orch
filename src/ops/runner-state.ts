@@ -36,8 +36,9 @@ export const TICKET_OUTCOMES = [
 ] as const;
 /**
  * `done`: the ticket's lifecycle says done (a verified merge closed it, now or earlier).
- * `needs-human`: its job waits for a person. `blocked`: started, and cannot go on without one
- * (cancelled, unverified merge, second conflict, a budget spent). `refused`: nothing was started.
+ * `needs-human`: its job waits for a person, in needs-human or completed with a merge only a
+ * person can unblock (`personMergeStep` in core/workflow.ts). `blocked`: started, and cannot go
+ * on without one (cancelled, unverified merge, a budget spent). `refused`: nothing was started.
  * `claimed`: another process created the ticket's job first. `stopped`: `orch stop` interrupted it.
  */
 export type TicketOutcome = (typeof TICKET_OUTCOMES)[number];

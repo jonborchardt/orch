@@ -71,7 +71,7 @@ export const eventsOf = (jobId: string, type: string): Event[] =>
   listEvents(store.db, jobId, 1000).filter((e) => e.type === type);
 
 /** What a session that ran the job to the end leaves: completed on a passing verdict, PR open. */
-export function finish(job: Job, pr: Record<string, unknown> = {}): Job {
+export function finish(job: Job, pr: Record<string, unknown> = {}, head = SHA): Job {
   n += 1;
   const url = `https://github.com/acme/alpha/pull/${String(n)}`;
   const branch = job.branch ?? `factory/${job.id}`;
@@ -85,7 +85,7 @@ export function finish(job: Job, pr: Record<string, unknown> = {}): Job {
       prUrl: url,
       prState: 'ready',
       ciStatus: 'passing',
-      ciHead: SHA,
+      ciHead: head,
       completedAt: ts,
       ownerSession: null,
       ownerToken: null,
@@ -93,7 +93,7 @@ export function finish(job: Job, pr: Record<string, unknown> = {}): Job {
     })
     .where(eq(jobs.id, job.id))
     .run();
-  appendEvent(store.db, job.id, 'job.completed', { prUrl: url, head: SHA }, null, ts);
+  appendEvent(store.db, job.id, 'job.completed', { prUrl: url, head }, null, ts);
   shim.write({
     prs: [
       ...shim.read().prs,
@@ -104,7 +104,7 @@ export function finish(job: Job, pr: Record<string, unknown> = {}): Job {
         isDraft: false,
         baseRefName: 'main',
         headRefName: branch,
-        headRefOid: SHA,
+        headRefOid: head,
         mergeable: 'MERGEABLE',
         title: job.title,
         statusCheckRollup: [],

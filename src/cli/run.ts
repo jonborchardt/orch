@@ -26,8 +26,10 @@ merges through orch job merge's operation, and goes on to the next ticket. It ru
 command runs; nothing is left behind when it exits.
 
   start           Work the whole queue, best ready ticket first, one at a time. A ticket whose job
-                  needs a person is released, passed over for the session, and reported at the
-                  end. Ends when no ready ticket is left, a stop was requested, or a ticket could
+                  needs a person, or whose merge only a person can unblock (workflow-changed:
+                  Merge on the dashboard; not-authorized, head-changed, pr-closed, pr-draft,
+                  second-conflict), is released, passed over for the session, and reported at the
+                  end with its next step. Ends when no ready ticket is left, a stop was requested, or a ticket could
                   not be finished (blocked, a retry budget spent): it reports that ticket and
                   stops rather than start unrelated work
   start repo      The same, only for the repository containing the current directory
