@@ -21,8 +21,9 @@ signal and still leave the same window for any long pause (a debugger, a frozen 
 checking the lock it holds closes the overlap with one cheap directory read, and recovery and
 contention between starters stay exactly as they were.
 
-**What remains.** A starter can take the next generation in the milliseconds between a check and
-the write that follows it; the controller stops at its next check, so at most one step overlaps.
+**What remains.** A starter can take the next generation between a check and the write that
+follows it, which can include one `gh` call in `reconcileCi` or `mergeJob`; the controller stops
+at its next check, so at most one step overlaps.
 Closing that gap needs a real mutual-exclusion primitive (an OS file lock or a database lease),
 which would be a lock redesign. The recovery worker's PID file uses a similar beat-based staleness
 and is not changed here.
