@@ -106,15 +106,9 @@ export interface Choice {
 export const MAX_CHOICES = 5;
 export const CHOICE_LABEL_MAX = 120;
 /** Stages a `resume:<stage>` choice may name: every stage the dashboard's Resume can return to. */
-const CHOICE_STAGES: readonly Stage[] = [
-  'spec',
-  'build',
-  'simplify',
-  'review',
-  'approve',
-  'pr',
-  'ci',
-];
+const CHOICE_STAGES: readonly Stage[] = STAGES.filter(
+  (s) => s !== 'needs-human' && s !== 'completed',
+);
 // The same characters notices strip (`stripControl` in flake.ts): a label is shown as one line.
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHAR = /[\u0000-\u001f\u007f-\u009f]/;
