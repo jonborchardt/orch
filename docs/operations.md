@@ -84,9 +84,11 @@ while it is alive), writes its intent to `<data>/runner.json`, and loops:
    A conflict creates one re-land job, which runs the same way.
 6. A ticket whose merge was verified and whose lifecycle says `done` is finished; take the next.
 
-It ends when no ready ticket is left, when `orch stop next` was requested, or at the first
-ticket it could not finish. It exits 0 unless a ticket ended blocked, refused, or waiting for a
-person.
+A ticket whose job waits for a person is released and passed over for the rest of the session;
+the queue takes the next ready ticket, and the end-of-session summary lists the passed-over ticket
+with its next step. It ends when no ready ticket is left, when `orch stop next` was requested, or
+at the first ticket it could not finish (blocked or refused). It exits 0 unless a ticket ended
+blocked, refused, or waiting for a person.
 
 ### 5. `orch start repo`: one repository
 
@@ -167,8 +169,8 @@ orch start                                # takes 0085
 orch status                               # in another terminal: 0085, job at review, waiting for agent
 orch stop next                            # finish 0085, then exit
 # ... 0085 merges and closes; the controller exits 0
-orch start                                # later: takes 0091, whose job escalates
-# the controller prints: ticket 0091 is needs-human: job ... waits for a person at build: ...
+orch start                                # later: takes 0091, whose job escalates, then the rest
+# the summary lists: 0091 needs-human: job ... waits for a person at build: ...
 orch job events <job-id> --limit 20       # runner.stopped says why and what to run next
 orch ui                                   # decide it on the dashboard (Resume at build, Request rework, ...)
 orch do 91                                # continues the same job
@@ -295,7 +297,7 @@ Each ticket the controller attempts ends with one outcome (`TICKET_OUTCOMES` in
 | `done`        | the ticket's lifecycle says done: a verified merge closed it, now or earlier   | continue with the next ticket      |
 | `claimed`     | another process created the ticket's job meanwhile                             | pass that ticket over and continue |
 | `blocked`     | started, and cannot go on without a person (a budget, a refusal, a cancel)     | end the run with the reason        |
-| `needs-human` | its job waits in `needs-human`                                                 | end the run with the reason        |
+| `needs-human` | its job waits in `needs-human`                                                 | pass that ticket over and continue |
 | `refused`     | nothing was started (not open, not authorized for `orch do`, dispatch refused) | end the run with the reason        |
 | `stopped`     | `orch stop` interrupted it                                                     | end the run, resumable             |
 
@@ -420,8 +422,9 @@ failure the skill escalated. End to end:
 
 1. The factory session escalates; `job.blocked` records the reason and the stage it came from.
 2. The controller sees `needs-human` when the child exits, writes `runner.stopped`
-   (`code: needs-human`), releases the job even if the escalating session did not, and ends the
-   run. `orch do` exits 1.
+   (`code: needs-human`), and releases the job even if the escalating session did not. `orch do`
+   ends there; `orch start` passes the ticket over for the rest of the session, goes on with the
+   next ready ticket, and lists it in the end-of-session summary. Either exits 1.
 3. Inspect: `orch factory status <id>`, `orch job events <id>`, and the dashboard's job detail,
    which shows the blocker, the approver's `DECISION` with its rationale, and the newest round's
    blocking findings.
@@ -444,7 +447,8 @@ replaces: `orch ticket reopen <id>` queues it for a new job, or `orch ticket dro
 ## Recovery budgets
 
 Every automatic recovery is bounded. A spent budget is not a success: it stops the ticket with
-its reason, and the run ends there.
+its reason. A `blocked` ticket ends the run there; one that waits in `needs-human` is passed over
+and the queue goes on.
 
 ```mermaid
 flowchart TD
@@ -507,9 +511,10 @@ failures understandable:
   a ticket that waits for a person, with the reason recorded.
 - **No bypass of required CI or merge verification.** No flag skips a gate; the merge is pinned
   to the CI-verified head with `--match-head-commit` and never uses `--admin`.
-- **No silent continuation after a terminal ticket failure.** A blocked, refused, or
-  `needs-human` ticket ends the run: later tickets may depend on it, and a failure hidden behind
-  more work is harder to diagnose.
+- **No silent continuation after a terminal ticket failure.** A blocked or refused ticket ends
+  the run: later tickets may depend on it, and a failure hidden behind more work is harder to
+  diagnose. A `needs-human` ticket is passed over, not hidden: its dependents stay unready until
+  it is done, the summary lists it, and the run exits 1.
 - **No wall-clock termination of Claude children.** A builder or a test run can be quiet for a
   long time; silence is not evidence of failure. Only the process ending ends the wait.
 - **No automatic adoption of surviving child processes.** A PID read from a file cannot prove it
