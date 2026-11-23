@@ -46,10 +46,13 @@ the dashboard, `orch init`, and `cannotAcceptDelivery`.
 
 Not delivered by ticket 0115: the installed `orch` that gates a job is main's build, and its
 `parsePolicy` rejects the unknown `verification.authority` key, so committing the opt-in on the
-job branch would block approval and accept-policy. Follow-up ticket 0116 tracks it:
+job branch would block approval and accept-policy. Follow-up ticket 0116 (job-7143c97f) carries it
+out. Status: step 1 is done; step 2 is committed by job-7143c97f and awaits the human
+accept-policy; steps 3 and 4 are not done yet.
 
-1. After the 0115 PR merges: `npm run build` on main, then `orch install`.
-2. A change sets ORCH's `factory.json` to:
+1. Done: after the 0115 PR merged, `npm run build` on main, then `orch install`; the installed
+   `parsePolicy` accepts `verification.authority`.
+2. Committed by job-7143c97f, awaiting accept-policy: ORCH's `factory.json` set to:
 
 ```json
 {
