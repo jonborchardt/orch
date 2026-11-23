@@ -482,9 +482,8 @@ to it. A person then decides a `needs-human` job on the dashboard (Approve to a 
 rework, Request review, Accept policy, which also returns the job to the stage it was escalated
 from unless that is spec, Accept delivery, Cancel) and runs `orch do <ticket>`, which
 continues the same job; `orch start` afterwards goes on with the queue. Deciding with
-`orch factory resume <job> --to <stage>` instead leaves that session's lease on the job, so pass
-`--release` there (it gives the job up again at once, `token: null`) or `orch do` reports the job
-as held until the lease lapses. To continue a spec the challenger rejected twice, edit
+`orch factory resume <job> --to <stage>` instead works the same way: it gives the job up again at
+once (`token: null`, `--release` is redundant but accepted), so `orch do` can continue it. To continue a spec the challenger rejected twice, edit
 `<artifactDir>/spec.md`, choose Resume at spec (or `orch factory resume <job> --to spec --release`),
 and run `orch do <ticket>`: after a human resume to spec, a spec.md that differs from its
 registered content is registered by the next plan and challenged again.
