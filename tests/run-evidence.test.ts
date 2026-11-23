@@ -7,10 +7,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { REPORTED_EVENTS } from '../src/core/mail-report.ts';
+import type { LaunchInput } from '../src/integrations/claude-session.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { resumeSession, RUNNER_SESSION, startSession } from '../src/ops/run.ts';
 import { readSession } from '../src/ops/runner-state.ts';
+import { sessionLog } from '../src/server/api.ts';
 import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
 import {
   type Act,
@@ -121,6 +123,62 @@ describe('runner.session: one Claude child, from start to exit', () => {
     expect(stops(jobId)).toHaveLength(1);
     expect(status(id)).toBe('done');
     expect(getJob(store.db, jobId).ownerSession).toBeNull();
+  });
+
+  it('ties each child to the job by its --session-id before it starts, for the Session tab', async () => {
+    const id = ticket('Watched');
+    const seen: (string | undefined)[] = [];
+    // At launch the job already names the uuid the child is given.
+    const l = launcher((job, input) => {
+      const attached = eventsOf(job.id, 'session.attached').at(-1)?.payload;
+      expect(attached).toMatchObject({ provider: 'claude-code', ref: input.sessionId });
+      expect(attached?.['cwd']).toBe(input.cwd);
+      seen.push(input.sessionId);
+    });
+
+    await one(l, id);
+
+    const jobId = jobsOf(id)[0]?.id ?? '';
+    expect(seen).toHaveLength(2);
+    expect(new Set(seen).size).toBe(2);
+    expect(sessions(jobId).map((e) => e.payload['sessionId'])).toEqual(seen);
+    // The dashboard's existing read model resolves the newest one, unchanged.
+    expect(sessionLog(store, jobId).ref).toBe(seen[1]);
+  });
+
+  it('keeps the stderr tail and result summary of a child that failed', async () => {
+    const id = ticket('Crashed');
+    const launch = (input: LaunchInput) => {
+      input.onLine?.('Bash: npm test');
+      return {
+        pid: DEAD_PID,
+        startedAt: new Date().toISOString(),
+        done: Promise.resolve({
+          code: 1,
+          signal: null,
+          error: null,
+          stderrTail: 'API Error: 529 overloaded\n',
+          result: { subtype: 'error_during_execution', isError: true, result: null, numTurns: 3 },
+        }),
+        kill: () => undefined,
+      };
+    };
+    const log: string[] = [];
+
+    await startSession(
+      store,
+      { mode: 'ticket', ticket: id },
+      { launch, log: (line) => log.push(line), ...quick },
+    );
+
+    const jobId = jobsOf(id)[0]?.id ?? '';
+    expect(log).toContain('  claude: Bash: npm test');
+    expect(sessions(jobId)[0]?.payload).toMatchObject({
+      outcome: 'exited',
+      exitCode: 1,
+      stderrTail: 'API Error: 529 overloaded\n',
+      result: { subtype: 'error_during_execution', isError: true, numTurns: 3 },
+    });
   });
 
   it('a requested stop records the ended session and no failure', async () => {

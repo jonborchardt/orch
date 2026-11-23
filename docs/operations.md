@@ -76,7 +76,10 @@ while it is alive), writes its intent to `<data>/runner.json`, and loops:
    for an in-progress ticket whose last job completed, go straight to the merge.
 3. In an agent stage (`spec` to `pr`), launch `claude -p "/factory <job>"` in the job's worktree as
    session `orch-runner`, and wait for the process to exit. Only the process ending ends the
-   wait. Then read the job row: the row, not the exit code, is the outcome.
+   wait. Then read the job row: the row, not the exit code, is the outcome. Meanwhile each step
+   it reports is a short `claude:` line on the controller's stderr (its `stream-json` output),
+   its own stderr passes through, and the Session tab shows its transcript: the session id is
+   attached to the job before it starts (decision 2026-11-23-live-claude-output).
 4. In `ci` with a PR, read GitHub itself (the operation behind `orch gh ci`), sleeping the
    returned `waitSeconds` between reads. A verdict that sends the job back to `build` starts a
    new Claude session.
@@ -315,17 +318,20 @@ types:
 
 `runner.session`, each time a Claude process the controller started has ended:
 
-| field      | meaning                                                                           |
-| ---------- | --------------------------------------------------------------------------------- |
-| `outcome`  | `exited` (ended on its own), `stopped` (by `orch stop`), `failed` (did not start) |
-| `exitCode` | the process exit code, or null                                                    |
-| `signal`   | the signal that ended it, or null                                                 |
-| `error`    | why it could not be started, or null                                              |
-| `pid`      | the child's PID; null when it never started                                       |
-| `seconds`  | wall-clock duration                                                               |
-| `moved`    | whether the job's stage, round, CI repairs, or artifact count changed meanwhile   |
-| `stage`    | the job's stage afterwards                                                        |
-| `status`   | the job's status afterwards                                                       |
+| field        | meaning                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| `outcome`    | `exited` (ended on its own), `stopped` (by `orch stop`), `failed` (did not start)            |
+| `exitCode`   | the process exit code, or null                                                               |
+| `signal`     | the signal that ended it, or null                                                            |
+| `error`      | why it could not be started, or null                                                         |
+| `pid`        | the child's PID; null when it never started                                                  |
+| `seconds`    | wall-clock duration                                                                          |
+| `moved`      | whether the job's stage, round, CI repairs, or artifact count changed meanwhile              |
+| `stage`      | the job's stage afterwards                                                                   |
+| `status`     | the job's status afterwards                                                                  |
+| `sessionId`  | the `--session-id` it ran under, also attached to the job before it started                  |
+| `stderrTail` | the last 4000 characters it wrote to stderr, or null                                         |
+| `result`     | its final stream-json `result` (`subtype`, `isError`, `result` clipped, `numTurns`), or null |
 
 **Exit code 0 is not success.** `exited` with `exitCode` 0 says only that the process ended;
 `moved` says whether the job got anywhere, and the job row says where.

@@ -6,6 +6,7 @@
  * decides nothing about a job's stages: every step re-reads the job row, so calling `runTicket`
  * again after any interruption continues from wherever the durable state is.
  */
+import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import {
@@ -27,7 +28,7 @@ import {
 import { listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob, listEvents } from '../storage/events.ts';
-import { claimJob, getJob, recordEvent, releaseJob } from '../storage/jobs.ts';
+import { attachSession, claimJob, getJob, recordEvent, releaseJob } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { ticketJobs } from '../storage/tickets.ts';
 import { dispatchJob } from './dispatch.ts';
@@ -200,6 +201,8 @@ interface ChildRun {
   stopped: boolean;
   /** 0 when the process never started. */
   pid: number;
+  /** The `--session-id` it was started with, attached to the job. */
+  sessionId: string;
 }
 
 /** One Claude session on the job, from claim to exit. Throws when another session holds the job. */
@@ -213,8 +216,25 @@ async function runChild(run: Run, job: Job): Promise<ChildRun> {
   const env: NodeJS.ProcessEnv = { ...process.env, ORCH_SESSION: RUNNER_SESSION };
   delete env['ORCH_TOKEN'];
   const args = loadConfig(store).runnerClaudeArgs;
+  // The conversation's id is fixed up front and tied to the job before the child starts, so the
+  // Session tab reads its transcript from the first minute.
+  const sessionId = randomUUID();
+  attachSession(store, job.id, {
+    session: { provider: 'claude-code', ref: sessionId, cwd },
+    token: resumed.token,
+  });
   run.assertOwned();
-  const child = run.launch({ cwd, prompt: promptFor(job), args, name: `factory ${job.id}`, env });
+  const child = run.launch({
+    cwd,
+    prompt: promptFor(job),
+    args,
+    name: `factory ${job.id}`,
+    sessionId,
+    env,
+    onLine: (line) => {
+      run.log(`  claude: ${line}`);
+    },
+  });
   session.child = { pid: child.pid, startedAt: child.startedAt };
   let exit: ChildExit | undefined;
   let stopped = false;
@@ -252,7 +272,7 @@ async function runChild(run: Run, job: Job): Promise<ChildRun> {
   if (lost !== null) throw lost;
   session.child = null;
   run.save();
-  return { exit, stopped, pid: child.pid };
+  return { exit, stopped, pid: child.pid, sessionId };
 }
 
 /**
@@ -336,7 +356,7 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
     }
     const before = progressOf(store, job);
     const startedMs = Date.now();
-    const { exit, stopped, pid } = await runChild(run, job);
+    const { exit, stopped, pid, sessionId } = await runChild(run, job);
     const after = getJob(store.db, jobId);
     const moved = progressOf(store, after) !== before;
     // The exit code is a hint; the job row is the outcome. `exited` says only that the process
@@ -353,6 +373,10 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
         moved,
         stage: after.stage,
         status: after.status,
+        // What the child left behind, for when it failed: evidence, never decided on.
+        sessionId,
+        stderrTail: exit.stderrTail ?? null,
+        result: exit.result ?? null,
       },
     }));
     if (stopped) return { kind: 'stopped' };
