@@ -383,8 +383,12 @@ that applies:
 | a blocked dependency, a question, a missing checkout | refuses with the ticket's own block reasons                         |
 
 A job runs as session `orch-runner`. In an agent stage the controller claims it, makes sure the
-worktree exists, and starts `claude -p "/factory <job>"` there with `ORCH_SESSION=orch-runner`;
-when the process exits it reads the job row, whatever the exit code. In `ci` with a PR it reads
+worktree exists, attaches a fresh `claude-code` session id to the job, and starts
+`claude -p "/factory <job>" --output-format stream-json --verbose --session-id <id>` there with
+`ORCH_SESSION=orch-runner`. Each step the child reports (text, tool call, result) is one short
+`claude:` line on the controller's stderr, the child's stderr passes through as it comes, and the
+Session tab reads the transcript of that id (decision 2026-11-23-live-claude-output). When the
+process exits it reads the job row, whatever the exit code. In `ci` with a PR it reads
 GitHub itself with `orch gh ci`'s operation, sleeping the returned `waitSeconds` between reads, and
 starts a session again only if the verdict sent the job back to build. A job in `needs-human` or
 cancelled ends the ticket. A completed job goes to `mergeJob`:
@@ -413,10 +417,10 @@ What the controller did is also written to the job's own events, as `orch-runner
 `runner.json` (which the next session replaces) and shows in `orch job events`, the dashboard's
 Events tab, and, for a stop, the status mail (decision 2026-11-21-runner-evidence-on-the-job):
 
-| Event            | Written                                                                    | Payload                                                                                                                                                   |
-| ---------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `runner.session` | each time a Claude process the controller started has ended                | `outcome` (`exited` on its own, `stopped` by `orch stop`, `failed` to start), `exitCode`, `signal`, `error`, `pid`, `seconds`, `moved`, `stage`, `status` |
-| `runner.stopped` | when a ticket ends `blocked` or `needs-human` and its job is not cancelled | `outcome`, `code`, `reason`, `stage`, `status`, `next` (the command that continues it)                                                                    |
+| Event            | Written                                                                    | Payload                                                                                                                                                                                        |
+| ---------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runner.session` | each time a Claude process the controller started has ended                | `outcome` (`exited` on its own, `stopped` by `orch stop`, `failed` to start), `exitCode`, `signal`, `error`, `pid`, `seconds`, `moved`, `stage`, `status`, `sessionId`, `stderrTail`, `result` |
+| `runner.stopped` | when a ticket ends `blocked` or `needs-human` and its job is not cancelled | `outcome`, `code`, `reason`, `stage`, `status`, `next` (the command that continues it)                                                                                                         |
 
 `exited` with `exitCode` 0 says only that the process ended; `moved` says whether the job's
 stage, round, CI repairs, or artifacts changed during it. `runner.stopped` describes the
