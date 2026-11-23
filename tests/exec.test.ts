@@ -77,16 +77,29 @@ async function survivors(file: string, ms = 3000): Promise<number[]> {
   }
 }
 
-/** Run the tree through a shell, as `spawnCommand` runs npm, with a short timeout. */
-function timedOutTree(tag: string, mode = '', timeout = 4000) {
-  const file = join(dir, `${tag}.pids`);
-  trees.push(file);
-  const r = WIN
-    ? spawnCommand('cmd', ['/c', process.execPath, script, file, '0', mode], { timeout })
-    : spawnCommand('sh', ['-c', `"${process.execPath}" "${script}" "${file}" 0 ${mode}`], {
-        timeout,
-      });
-  return { r, file };
+/**
+ * Run the tree through a shell, as `spawnCommand` runs npm, until it times out with all `count`
+ * processes started. A loaded machine can take longer than the 4 s timeout to start three Node
+ * processes; such a run is still swept and must leave nothing behind, and is repeated with twice
+ * the time (up to 32 s) instead of being judged on a tree that never finished starting.
+ */
+async function timedOutTree(tag: string, count: number, mode = '') {
+  for (let timeout = 4000, attempt = 1; ; timeout *= 2, attempt++) {
+    const file = join(dir, `${tag}-${String(attempt)}.pids`);
+    trees.push(file);
+    const r = WIN
+      ? spawnCommand('cmd', ['/c', process.execPath, script, file, '0', mode], { timeout })
+      : spawnCommand('sh', ['-c', `"${process.execPath}" "${script}" "${file}" 0 ${mode}`], {
+          timeout,
+        });
+    if (pidsIn(file).length >= count || timeout >= 32_000) return { r, file };
+    expect(r.timedOut).toBe(true);
+    if (WIN) {
+      expect(r.cleanup?.failed).toEqual([]);
+      expect(r.cleanup?.error).toBeUndefined();
+      expect(await survivors(file)).toEqual([]);
+    }
+  }
 }
 
 describe('spawnCommand', () => {
@@ -111,8 +124,8 @@ describe('spawnCommand', () => {
   it.runIf(WIN)(
     'Windows: a timed-out shell takes its children and grandchildren with it',
     async () => {
-      const sibling = timedSibling('sibling');
-      const { r, file } = timedOutTree('tree');
+      const sibling = await timedSibling('sibling');
+      const { r, file } = await timedOutTree('tree', 3);
       expect(r).toMatchObject({ status: null, timedOut: true });
       const recorded = pidsIn(file);
       expect(recorded).toHaveLength(3); // root, child, grandchild all started before the timeout
@@ -128,7 +141,7 @@ describe('spawnCommand', () => {
   );
 
   it.runIf(WIN)('Windows: a child that already exited is not an error', async () => {
-    const { r, file } = timedOutTree('leaf', 'leaf-exits');
+    const { r, file } = await timedOutTree('leaf', 2, 'leaf-exits');
     expect(r.timedOut).toBe(true);
     const [root, leaf] = pidsIn(file);
     expect(root).toBeDefined();
@@ -141,26 +154,25 @@ describe('spawnCommand', () => {
   it.runIf(!WIN)(
     'POSIX: behaviour is unchanged, the direct child is killed on timeout',
     async () => {
-      const { r, file } = timedOutTree('posix');
+      const { r, file } = await timedOutTree('posix', 1);
       expect(r).toMatchObject({ status: null, timedOut: true, signal: 'SIGKILL' });
       expect(r.cleanup).toBeUndefined();
       // The shell is the direct child and dies; the Node tree under it is reaped by afterEach.
       expect(pidsIn(file).length).toBeGreaterThan(0);
-      await Promise.resolve();
     },
   );
 });
 
 /** An independent tree (detached, its own stdio) that must survive another tree's cleanup. */
-function timedSibling(tag: string): string {
+async function timedSibling(tag: string): Promise<string> {
   const file = join(dir, `${tag}.pids`);
   trees.push(file);
   const child = spawn(process.execPath, [script, file, '0'], { stdio: 'ignore', detached: true });
   child.unref();
-  // Give the whole sibling tree time to start before the test's own tree times out.
-  const until = Date.now() + 10_000;
+  // The whole sibling tree is running before the test's own tree starts, however long that takes.
+  const until = Date.now() + 120_000;
   while (pidsIn(file).length < 3 && Date.now() < until) {
-    /* spin: spawnSync-based callers block anyway */
+    await new Promise((r) => setTimeout(r, 100));
   }
   return file;
 }
@@ -189,6 +201,24 @@ describe('sweepDescendants', () => {
       throw new Error('powershell exited 1: boom');
     });
     expect(out).toEqual({ killed: [], failed: [], error: 'powershell exited 1: boom' });
+  });
+
+  it('reads the table once more when a read fails, before giving up', async () => {
+    // A cold PowerShell under load misses its timeout once; the second read sees the descendant.
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+      stdio: 'ignore',
+    });
+    const pid = child.pid ?? 0;
+    const exited = new Promise((r) => child.on('exit', r));
+    let calls = 0;
+    const out = sweepDescendants(500, 0, () => {
+      calls++;
+      if (calls === 1) throw new Error('spawnSync powershell.exe ETIMEDOUT');
+      return calls === 2 ? [row(pid, 500, 10)] : [];
+    });
+    expect(out).toEqual({ killed: [pid], failed: [] });
+    expect(calls).toBe(3); // the failed read, its retry, and the pass that found nothing
+    await exited;
   });
 
   it('distinguishes already-gone pids from ones that refuse to die, and stops after 3 passes', () => {
