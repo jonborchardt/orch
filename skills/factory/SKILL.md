@@ -271,8 +271,14 @@ unchecked boxes (`plan.reason` lists them), first tick, in `ticket.body` from
 4, re-read and retry). Never tick a box it marks `- [ ] <item> — <reason>`; copy each reason onto
 the ticket with `orch ticket note <key> "<item>: <reason>"`. That note is best effort for the human
 reading the ticket; the `decision.md` line is what `orch` checks: `complete` is refused while an
-unchecked box is neither ticked nor recorded there. Then complete and follow the `pr` stage
-commands.
+unchecked box is neither ticked nor recorded there. A box `decision.md` hands to a follow-up ticket,
+`- [ ] <item> — deferred to <key>[: <why>]`, leaves the original: remove it from the body (or
+rewrite it as plain text, without `[ ]`) in the same `orch ticket edit`, and run
+`orch ticket note <key> "<item>: deferred to <follow-up key>"`. `complete` is refused while a
+deferred box is still unchecked in the body, the note naming the follow-up is missing, or the
+follow-up is not another open or in-progress ticket; once it passes, the ticket closes on its
+verified merge and a follow-up that depends on it becomes ready. Then complete and follow the
+`pr` stage commands.
 `REWORK-BUILD` (the code is less than the spec) or `REWORK-SPEC` (the spec is less than the
 request) is a scope gap, which is rework, not a human decision: run
 `orch job transition <id> rework --reason "<the gap>" --token <t>` and keep going with

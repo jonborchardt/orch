@@ -143,6 +143,13 @@ number of jobs over time (a cancelled attempt, a re-land), and jobs without a ti
   neither ticked nor recorded by such a `- [ ]` line, which is the enforced record of the reason
   (`unaccountedItems` in `src/core/tickets.ts`, decision
   [2026-11-21-approval-accounts-for-the-ticket-checklist](decisions/2026-11-21-approval-accounts-for-the-ticket-checklist.md)).
+- A box handed to a follow-up ticket is `- [ ] <item> — deferred to <key>[: <why>]` there. The
+  session removes the box from the body (or rewrites it as plain text) and runs
+  `orch ticket note <id> "<item>: deferred to <key>"`; completing `approve` is refused while the
+  box is still unchecked, no note names the follow-up, or the follow-up is missing, this ticket,
+  or not open or in progress (`deferredItems`, decision
+  [2026-11-22-deferred-box-leaves-the-ticket](decisions/2026-11-22-deferred-box-leaves-the-ticket.md)).
+  The original then closes on its verified merge and a follow-up that depends on it becomes ready.
 - `orch ticket start <id>` only marks a ticket in progress (work done by hand); it creates no job.
 
 `orch ticket jobs <id>` lists a ticket's jobs; `orch job show <job>` includes `job.ticketId`.

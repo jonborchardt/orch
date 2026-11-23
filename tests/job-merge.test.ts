@@ -526,6 +526,26 @@ describe('the ticket', () => {
     expect(merges()).toHaveLength(1);
   });
 
+  it('closes once a deferred box left the body, and the follow-up that depends on it is ready', () => {
+    const t = ticket('## What\n\n- [x] export button\n- [ ] rebuild the installed orch\n');
+    const next = ticket('## What\n\n- [ ] rebuild the installed orch\n');
+    const blocked = ticketAction(store, next, { action: 'dep-add', target: t });
+    expect(blocked.blockedBy.map((b) => b.kind)).toEqual(['dependency']);
+    ticketAction(store, t, {
+      action: 'edit',
+      body: '## What\n\n- [x] export button\n\nrebuild the installed orch (deferred to 0002)\n',
+    });
+    ticketAction(store, t, {
+      action: 'note',
+      text: 'rebuild the installed orch: deferred to 0002',
+    });
+    expect(merge(completed({ ticket: t }))).toMatchObject({
+      outcome: 'merged',
+      ticket: { status: 'done', completed: true, remaining: [] },
+    });
+    expect(showTicket(store, next).ticket).toMatchObject({ ready: true, blockedBy: [] });
+  });
+
   it('a ticket someone dropped or closed meanwhile is left as they left it', () => {
     for (const action of ['drop', 'done'] as const) {
       const t = ticket();

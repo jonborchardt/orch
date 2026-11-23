@@ -801,7 +801,11 @@ for `- [x]` or the reason for `- [ ]`), the factory session ticks the delivered 
 and `orch job transition <job> complete` in `approve` is refused while an unchecked box is neither
 ticked nor recorded by a `- [ ] <item> — <reason>` line there (`unaccountedItems`, decision
 2026-11-21-approval-accounts-for-the-ticket-checklist). A box deliberately not delivered keeps the
-ticket open after the merge. Otherwise tick what was delivered and run `orch job merge <job>`
+ticket open after the merge, unless the line hands it to a follow-up:
+`- [ ] <item> — deferred to <key>[: <why>]` (`deferredItems`). Then completion is also refused
+until the box is gone from the body (removed or rewritten without `[ ]`), a `ticket.note` names
+the follow-up key, and the follow-up is another open or in-progress ticket, checked even when no
+box remains (decision 2026-11-22-deferred-box-leaves-the-ticket); the merge then closes the ticket. Otherwise tick what was delivered and run `orch job merge <job>`
 again, which settles the ticket without merging anything, or close it with `orch ticket done <id>`.
 
 ## Verification evidence
