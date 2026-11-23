@@ -624,6 +624,13 @@ describe('ticket lifecycle', () => {
     expect(merges()).toHaveLength(1);
     expect(s.tickets[0]?.outcome).toBe('blocked');
     expect(s.tickets[0]?.reason).toContain('the ticket stays in-progress');
+    // Merged and verified: the step is the boxes and ticket done, never a retry.
+    const k = String(id).padStart(4, '0');
+    expect(s.tickets[0]?.code).toBe('ticket-open');
+    expect(s.tickets[0]?.next).toContain('tick the remaining boxes');
+    expect(s.tickets[0]?.next).toContain('move them to a follow-up ticket');
+    expect(s.tickets[0]?.next).toContain(`orch ticket done ${k}`);
+    expect(s.tickets[0]?.next).not.toContain('tries again');
     expect(status(id)).toBe('in-progress');
 
     ticketAction(store, id, { action: 'reopen' });

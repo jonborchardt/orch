@@ -1,5 +1,7 @@
 # The queue passes over a ticket whose merge only a person can unblock
 
+Superseded by 2026-11-23-queue-ends-only-on-run-wide-outcomes (which outcomes end the run).
+
 **Decision.** When `mergeJob` refuses a completed job's merge with a code only a person can lift
 on that one ticket, the controller ends the ticket as `needs-human`, not `blocked`, with the merge
 code as the `runner.stopped` code and that person's step as `next`. The codes and their steps are

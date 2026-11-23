@@ -92,9 +92,16 @@ the queue takes the next ready ticket, and the end-of-session summary lists the 
 with its next step. So is a completed job whose merge only a person can unblock (`personMergeStep`
 in `src/core/workflow.ts`): `workflow-changed` (next step: Merge on the dashboard),
 `not-authorized`, `head-changed`, `pr-closed`, `pr-draft`, and `second-conflict` (decision
-2026-11-23-queue-passes-over-person-merge-blocks). Every other merge refusal ends the run. It ends when no ready ticket is left, when `orch stop next` was requested, or
-at the first ticket it could not finish (blocked or refused). It exits 0 unless a ticket ended
-blocked, refused, or waiting for a person.
+2026-11-23-queue-passes-over-person-merge-blocks). So is every other ticket that ends `blocked`
+or `refused` for a reason of its own, such as a merge that left a checklist box open
+(`ticket-open`; next step: tick or move the remaining boxes, then `orch ticket done <id>`), an
+unverified merge, or a job that made no progress. The run ends when no ready ticket is left,
+when `orch stop next` was requested, or at the first ticket whose outcome would hit every ticket:
+claude cannot start (`claude-failed`), GitHub cannot be read or gives no answer
+(`github-unreadable`, `merge-no-answer`), or GitHub refuses the merge call (`github-refused`).
+Those codes are `RUN_ENDING_CODES` in `src/core/workflow.ts`; a code not named there continues
+the queue (decision 2026-11-23-queue-ends-only-on-run-wide-outcomes). It exits 0 unless a ticket
+ended blocked, refused, or waiting for a person.
 
 ### 5. `orch start repo`: one repository
 
@@ -302,13 +309,16 @@ Each ticket the controller attempts ends with one outcome (`TICKET_OUTCOMES` in
 | ------------- | ------------------------------------------------------------------------------ | ---------------------------------- |
 | `done`        | the ticket's lifecycle says done: a verified merge closed it, now or earlier   | continue with the next ticket      |
 | `claimed`     | another process created the ticket's job meanwhile                             | pass that ticket over and continue |
-| `blocked`     | started, and cannot go on without a person (a budget, a refusal, a cancel)     | end the run with the reason        |
+| `blocked`     | started, and cannot go on without a person (a budget, a refusal, a cancel)     | pass that ticket over and continue |
 | `needs-human` | its job waits in `needs-human`, or its merge only a person can unblock         | pass that ticket over and continue |
-| `refused`     | nothing was started (not open, not authorized for `orch do`, dispatch refused) | end the run with the reason        |
+| `refused`     | nothing was started (not open, not authorized for `orch do`, dispatch refused) | pass that ticket over and continue |
 | `stopped`     | `orch stop` interrupted it                                                     | end the run, resumable             |
 
-A ticket of a repository without the merge opt-in is not an outcome: the queue records it as
-skipped and moves on. `orch do` reports its one ticket's outcome and exits either way.
+The one exception is a result whose code would hit every ticket (`RUN_ENDING_CODES` in
+`src/core/workflow.ts`: `claude-failed`, `github-unreadable`, `merge-no-answer`,
+`github-refused`): it ends the run with the reason. A ticket of a repository without the merge
+opt-in is not an outcome: the queue records it as skipped and moves on. `orch do` reports its one
+ticket's outcome and exits either way.
 
 ### Runner events on the job
 
@@ -460,7 +470,9 @@ replaces: `orch ticket reopen <id>` queues it for a new job, or `orch ticket dro
 ## Recovery budgets
 
 Every automatic recovery is bounded. A spent budget is not a success: it stops the ticket with
-its reason, and a `blocked` ticket ends the run there.
+its reason. The queue passes a `blocked` ticket over and goes on, except for the run-wide codes
+`claude-failed`, `github-unreadable`, and `merge-no-answer` (and `github-refused` at merge),
+which end the run there.
 
 ```mermaid
 flowchart TD
@@ -523,10 +535,11 @@ failures understandable:
   a ticket that waits for a person, with the reason recorded.
 - **No bypass of required CI or merge verification.** No flag skips a gate; the merge is pinned
   to the CI-verified head with `--match-head-commit` and never uses `--admin`.
-- **No silent continuation after a terminal ticket failure.** A blocked or refused ticket ends
-  the run: later tickets may depend on it, and a failure hidden behind more work is harder to
-  diagnose. A `needs-human` ticket is passed over instead (decisions
-  2026-11-22-queue-passes-over-needs-human and 2026-11-23-queue-passes-over-person-merge-blocks).
+- **No silent continuation after a ticket failure.** A ticket that ends blocked, refused, or
+  waiting for a person is passed over, never hidden: it is printed with its next step, recorded
+  as `runner.stopped` on its job, listed in the summary, and makes the exit status 1; tickets
+  that depend on it stay unready. Only an outcome that would hit every ticket ends the run
+  (`RUN_ENDING_CODES`, decision 2026-11-23-queue-ends-only-on-run-wide-outcomes).
 - **No wall-clock termination of Claude children.** A builder or a test run can be quiet for a
   long time; silence is not evidence of failure. Only the process ending ends the wait.
 - **No automatic adoption of surviving child processes.** A PID read from a file cannot prove it

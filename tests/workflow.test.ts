@@ -8,6 +8,7 @@ import {
   challengeSpecHash,
   completionOf,
   describeNext,
+  endsRun,
   latestChallenge,
   type LivePr,
   MAX_CI_REPAIRS_REASON,
@@ -16,6 +17,7 @@ import {
   mergeDecision,
   personMergeStep,
   requiredArtifact,
+  RUN_ENDING_CODES,
   SCOPE_GAP_REASON,
   type Stage,
   STAGES,
@@ -1047,7 +1049,7 @@ describe('personMergeStep: merge refusals only a person can lift', () => {
     );
   });
 
-  it('leaves every other code to end the run', () => {
+  it('gives no step for any other code', () => {
     for (const code of [
       'github-refused',
       'merge-no-answer',
@@ -1056,6 +1058,26 @@ describe('personMergeStep: merge refusals only a person can lift', () => {
       'needs-human',
     ]) {
       expect(personMergeStep(code, 'job-1', '0001'), code).toBeNull();
+    }
+  });
+});
+
+describe('endsRun: only run-wide outcomes end the queue', () => {
+  it('names the four run-wide codes and lets every other code, or none, continue', () => {
+    expect([...RUN_ENDING_CODES].sort()).toEqual(
+      ['claude-failed', 'github-refused', 'github-unreadable', 'merge-no-answer'].sort(),
+    );
+    for (const code of RUN_ENDING_CODES) expect(endsRun(code), code).toBe(true);
+    for (const code of [
+      'ticket-open',
+      'unverified-merge',
+      'no-progress',
+      'conflict',
+      'workflow-changed',
+      'some-code-added-later',
+      undefined,
+    ]) {
+      expect(endsRun(code), String(code)).toBe(false);
     }
   });
 });
