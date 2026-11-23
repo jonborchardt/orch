@@ -101,8 +101,9 @@ the suite in the _same_ checkout (decision #45): the CLI tests load `src/` from 
 CI runs every check on Ubuntu (typecheck, lint, format, migrations, the Vitest suite with coverage,
 the build, the Playwright dashboard checks, and a database initialized from `dist/` outside the
 repository) and fails if `src/storage/schema.ts` has changes without a committed migration. The
-whole Vitest suite runs on Windows too, split across four runners grouped by measured duration,
-plus the built CLI smoke checks (decision 50).
+whole Vitest suite runs on Windows too, split by Vitest's `--shard` across six runners that each
+get a share of the files automatically, so a new test file needs no workflow change; one shard also
+runs the built CLI smoke checks (decisions 50 and 2026-11-23-ci-windows-vitest-shards).
 
 ## Validation
 
@@ -124,8 +125,9 @@ the suite in the _same_ checkout (decision #45): the CLI tests load `src/` from 
 CI runs every check on Ubuntu (typecheck, lint, format, migrations, the Vitest suite with coverage,
 the build, the Playwright dashboard checks, and a database initialized from `dist/` outside the
 repository) and fails if `src/storage/schema.ts` has changes without a committed migration. The
-whole Vitest suite runs on Windows too, split across four runners grouped by measured duration,
-plus the built CLI smoke checks (decision 50).
+whole Vitest suite runs on Windows too, split by Vitest's `--shard` across six runners that each
+get a share of the files automatically, so a new test file needs no workflow change; one shard also
+runs the built CLI smoke checks (decisions 50 and 2026-11-23-ci-windows-vitest-shards).
 
 No test sends real mail. `tests/setup.ts` and the CLI runner in `tests/helpers.ts` delete every
 `MAIL_*` variable, and the test home has no `mail.env`. Mail tests use the in-process fake SMTPS

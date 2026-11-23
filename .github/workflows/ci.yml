@@ -5,10 +5,11 @@ on:
     branches: [main]
   pull_request:
 
-# Hosted runners for this private repository have 2 cores, so Vitest's default (cores - 1) runs
-# every file on one worker. Linux takes 3 workers profitably; Windows is saturated by one (tests
-# spawn Git and Node constantly), so the Windows suite is split across runners instead, grouped
-# by measured duration. A new test file lands in the "rest" group automatically.
+# Linux takes 3 Vitest workers profitably; Windows is saturated by its default (tests spawn Git
+# and Node constantly), so the Windows suite is split across runners instead with Vitest's own
+# --shard, which spreads the files by path hash. Every test file runs in exactly one shard and no
+# file is named here (decision 2026-11-23-ci-windows-vitest-shards). Change the shard count in the
+# matrix, the job name, and the run step together.
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -47,32 +48,12 @@ jobs:
           test -f "$ORCH_HOME/orch.sqlite"
 
   windows:
-    name: windows (${{ matrix.group }})
+    name: windows (${{ matrix.shard }}/6)
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - group: ci
-            files: tests/ci.test.ts tests/ci-repair.test.ts tests/review-budget.test.ts
-          - group: ci-github
-            files: tests/ci-github.test.ts tests/ci-rerun.test.ts tests/delivery.test.ts
-          - group: factory
-            files: >-
-              tests/factory.test.ts tests/factory-delivery.test.ts
-              tests/integration.test.ts tests/integration-resume.test.ts
-          - group: verify
-            files: >-
-              tests/audit.test.ts tests/audit-delivery.test.ts
-              tests/verify.test.ts tests/verify-identity.test.ts tests/sensitive.test.ts
-          - group: rest
-            files: >-
-              --exclude tests/ci.test.ts --exclude tests/ci-repair.test.ts --exclude tests/review-budget.test.ts
-              --exclude tests/ci-github.test.ts --exclude tests/ci-rerun.test.ts --exclude tests/delivery.test.ts
-              --exclude tests/factory.test.ts --exclude tests/factory-delivery.test.ts
-              --exclude tests/integration.test.ts --exclude tests/integration-resume.test.ts
-              --exclude tests/audit.test.ts --exclude tests/audit-delivery.test.ts
-              --exclude tests/verify.test.ts --exclude tests/verify-identity.test.ts --exclude tests/sensitive.test.ts
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -80,9 +61,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx vitest run ${{ matrix.files }}
+      - run: npx vitest run --shard=${{ matrix.shard }}/6
       - name: Built CLI runs on Windows and initializes a database outside the repository
-        if: matrix.group == 'rest'
+        if: matrix.shard == 3
         shell: bash
         run: |
           npm run build
