@@ -47,12 +47,11 @@ the dashboard, `orch init`, and `cannotAcceptDelivery`.
 Not delivered by ticket 0115: the installed `orch` that gates a job is main's build, and its
 `parsePolicy` rejects the unknown `verification.authority` key, so committing the opt-in on the
 job branch would block approval and accept-policy. Follow-up ticket 0116 (job-7143c97f) carries it
-out. Status: step 1 is done; step 2 is committed by job-7143c97f and awaits the human
-accept-policy; steps 3 and 4 are not done yet.
+out. Status: steps 1 to 3 are done (job-7143c97f); step 4 is not done yet.
 
 1. Done: after the 0115 PR merged, `npm run build` on main, then `orch install`; the installed
    `parsePolicy` accepts `verification.authority`.
-2. Committed by job-7143c97f, awaiting accept-policy: ORCH's `factory.json` set to:
+2. Done: committed by job-7143c97f (d378e0c) and accepted: ORCH's `factory.json` set to:
 
 ```json
 {
@@ -68,7 +67,7 @@ accept-policy; steps 3 and 4 are not done yet.
 }
 ```
 
-3. A human accepts it with the dashboard's accept-policy.
+3. Done: a human accepted it for job-7143c97f with the dashboard's accept-policy.
 4. The first CI-authoritative ORCH ticket records its measured whole-ticket verification time
    below, replacing the computed "after" figure; then 0113 is reevaluated.
 
