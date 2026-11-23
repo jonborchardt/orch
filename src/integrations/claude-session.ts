@@ -99,7 +99,7 @@ function toolSubject(input: unknown): string {
  * (`agent` marks a subagent's), the session start, and the result. A line that is not JSON is
  * returned as it is; an unknown type gives nothing.
  */
-function displayLines(raw: string, m = parseLine(raw)): string[] {
+function displayLines(raw: string, m: Record<string, unknown> | null): string[] {
   if (m === null) return raw.trim() === '' ? [] : [raw];
   if (m['type'] === 'system' && m['subtype'] === 'init') {
     return [`session ${str(m['session_id']) ?? '?'} (${str(m['model']) ?? 'model ?'})`];
