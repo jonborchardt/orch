@@ -18,7 +18,7 @@ import { openStore } from '../storage/client.ts';
 
 export const RUN_COMMANDS = ['start', 'do', 'stop', 'status', 'resume'] as const;
 
-export const RUN_HELP = `Usage: orch start [repo] | do <ticket-id> | stop [next] | status | resume [--force]
+export const RUN_HELP = `Usage: orch start [repo] | do <ticket-id> [--fast] | stop [next] | status | resume [--force]
 
 The factory controller: a foreground process that takes ready tickets from the global queue, runs
 each one's job with the /factory skill in a headless Claude Code session (claude -p), reads CI,
@@ -33,6 +33,11 @@ command runs; nothing is left behind when it exits.
   start repo      The same, only for the repository containing the current directory
   do <ticket-id>  One ticket, to its outcome: start its job, or continue the unfinished one, or
                   merge the completed one. A cancelled job is never replaced
+  do <ticket-id> --fast
+                  The same, but a job it creates is a fast job: one agent builds, then PR, CI,
+                  merge; no spec, simplify, review, or approval. For small, low-risk tickets you
+                  pick; a change to factory.json, CI, test configuration, dependencies, or tests
+                  it disables is refused and escalates. An unfinished job keeps its own mode
   stop next       Ask the controller to exit once the current ticket has reached its outcome; no
                   further ticket is started. Kept across an interruption
   stop            End the current execution now: the Claude session is terminated and the job is
@@ -53,6 +58,8 @@ Exit status: 0 unless a ticket ended blocked, refused, or waiting for a person.
 export interface RunCliOptions {
   json?: boolean | undefined;
   force?: boolean | undefined;
+  /** `orch do --fast` only. */
+  fast?: boolean | undefined;
 }
 
 export function formatSummary(s: RunSummary): string {
@@ -122,6 +129,9 @@ export async function runRunner(
       throw new UsageError(`Unexpected argument: ${unexpected}\n\n${RUN_HELP}`);
     }
   };
+  if (o.fast && command !== 'do') {
+    throw new UsageError(`--fast belongs to orch do <ticket-id> only\n\n${RUN_HELP}`);
+  }
   const store = openStore();
   try {
     if (command === 'status') {
@@ -157,8 +167,14 @@ export async function runRunner(
         summary = await resumeSession(store, { force: o.force }, opts);
       } else if (command === 'do') {
         noMore(extra);
-        if (arg === undefined) throw new UsageError(`Usage: orch do <ticket-id>\n\n${RUN_HELP}`);
-        summary = await startSession(store, { mode: 'ticket', ticket: parseTicketId(arg) }, opts);
+        if (arg === undefined) {
+          throw new UsageError(`Usage: orch do <ticket-id> [--fast]\n\n${RUN_HELP}`);
+        }
+        summary = await startSession(
+          store,
+          { mode: 'ticket', ticket: parseTicketId(arg), fast: o.fast },
+          opts,
+        );
       } else {
         noMore(extra);
         if (arg !== undefined && arg !== 'repo') {

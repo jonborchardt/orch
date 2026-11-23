@@ -99,6 +99,8 @@ describe('seeded board and detail', () => {
   it('lists every job across repositories with honest liveness and review state', async () => {
     const rows = (await (await api('/api/jobs')).json()) as BoardRow[];
     expect(rows).toHaveLength(10);
+    // Every row carries its mode; jobs created without one are full jobs.
+    expect(rows.map((r) => r.mode)).toEqual(rows.map(() => 'full'));
     const by = (id: string) => rows.find((r) => r.id === id) ?? ({} as BoardRow);
     expect(by(ids.reviewing).liveness).toBe('running');
     expect(by(ids.reviewing).blocker).toBeNull();

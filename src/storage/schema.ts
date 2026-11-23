@@ -22,7 +22,7 @@ import type {
   VerificationPolicy,
 } from '../core/verification.ts';
 import type { Classified, LinkKind, Priority, TicketStatus, TicketType } from '../core/tickets.ts';
-import type { CiStatus, PrState, Stage, Status, Verdict } from '../core/workflow.ts';
+import type { CiStatus, JobMode, PrState, Stage, Status, Verdict } from '../core/workflow.ts';
 
 /**
  * The global ticket queue: one number sequence for every repository. AUTOINCREMENT, so a number
@@ -120,6 +120,11 @@ export const jobs = sqliteTable(
     worktreePath: text(),
     stage: text().$type<Stage>().notNull(),
     status: text().$type<Status>().notNull(),
+    /**
+     * `full` (the whole workflow) or `fast` (created in build, then pr, ci, completed; chosen only
+     * by `orch do --fast`). Fixed at creation: nothing converts a job between modes.
+     */
+    mode: text().$type<JobMode>().notNull().default('full'),
     /** Current review round; 0 until the first review starts. */
     round: integer().notNull().default(0),
     maxRounds: integer().notNull().default(3),

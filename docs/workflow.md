@@ -132,6 +132,41 @@ spec → build → simplify → pr → ci → review → approve → pr → ci �
                           └ pre-review ┘                └ delivery ┘
 ```
 
+### Fast jobs
+
+A job's `mode` is `full` (the default, everything above) or `fast`, fixed when it is created.
+Only `orch do <ticket> --fast` creates a fast job (decision 2026-11-23-fast-mode); `orch start`,
+`orch factory start|dispatch`, the dashboard, and re-land jobs always create full ones. A fast job
+is the same row, worktree, branch, lease, events, artifacts, PR, CI reconciliation, and `mergeJob`;
+only its route differs, decided in the same `transition`:
+
+```
+build → pr → ci → completed          (under either verification authority)
+  ▲      │    │
+  └──────┴────┴── rework (CI failed, repairs < max; base integration needs the builder)
+any stage ── escalate ──→ needs-human ── resume --to build | pr | ci | completed
+```
+
+- **One agent.** The build plan names only `factory-fast-builder`; no plan of a fast job names
+  the spec writer, challenger, simplifier, a reviewer, or the approver.
+- **The approved head is `build.md`'s.** `approvalEvidence(mode, artifacts)` in
+  `src/core/workflow.ts` says which artifact is the approval: decision.md with
+  `DECISION: APPROVE` for a full job, build.md for a fast one. Every reader of the approved head
+  asks it: pr completion in `transition`, `requireApproved` in `src/ops/gates.ts` (and so push,
+  `pr create`, pr and ci completion), `verifyOnDisk` in `src/storage/jobs.ts`, and the
+  `integrations.decisionHead` column `integrateBase` writes (for a fast job it holds build.md's
+  HEAD; the column keeps its name and is evidence only). The delivery rules are unchanged:
+  HEAD contains the approved head, only clean base merges follow it, clean, verified, authorized
+  policy. A fast job has no pre-review pass under `ci` authority: its CI verdict completes it.
+- **The build gate refuses risk.** Completing a fast build is refused (exit 1, "Escalate") when
+  `sensitiveReport` for HEAD shows a change of kind `policy` (factory.json or a file its commands
+  run), `ci`, `test-config`, or `deps`, a deleted test file, a disabled or removed test, or policy
+  drift. The same diff in a full job goes to the reviewers instead.
+- **Resume limits.** `resume --to spec|simplify|review|approve` on a fast job is refused; to run
+  the full workflow, cancel the job and `orch ticket reopen` the ticket (a new full job and
+  branch; the fast branch is kept).
+- **Measured.** `orch job usage` reports `mode`, each stage visit's duration, and `wallMs`.
+
 **Stage** is where the job is; **status** is what is happening there:
 `pending`, `running`, `blocked`, `interrupted`, `completed`, `failed`, `cancelled`.
 
@@ -373,14 +408,18 @@ interrupted session. One controller per installation; a second start is refused.
 For each ticket, `runTicket` (`src/ops/run.ts`) reads the ticket's jobs and takes the first row
 that applies:
 
-| The ticket has                                       | The controller                                                      |
-| ---------------------------------------------------- | ------------------------------------------------------------------- |
-| status `done`                                        | reports it done                                                     |
-| an unfinished job                                    | continues that job                                                  |
-| status `open`, no unfinished job                     | creates a job (`dispatchJob --ticket`), if merging is enabled there |
-| status `in-progress`, last job completed             | merges it (`mergeJob`), which also records a merge already made     |
-| status `in-progress`, last job cancelled             | stops: a cancelled job is never replaced (`orch ticket reopen`)     |
-| a blocked dependency, a question, a missing checkout | refuses with the ticket's own block reasons                         |
+| The ticket has                                       | The controller                                                                                   |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| status `done`                                        | reports it done                                                                                  |
+| an unfinished job                                    | continues that job                                                                               |
+| status `open`, no unfinished job                     | creates a job (`dispatchJob --ticket`, fast under `orch do --fast`), if merging is enabled there |
+| status `in-progress`, last job completed             | merges it (`mergeJob`), which also records a merge already made                                  |
+| status `in-progress`, last job cancelled             | stops: a cancelled job is never replaced (`orch ticket reopen`)                                  |
+| a blocked dependency, a question, a missing checkout | refuses with the ticket's own block reasons                                                      |
+
+`orch do <ticket> --fast` is kept in the session record, so `orch resume` keeps it; it applies
+only when the controller creates the job for that ticket. An unfinished job continues in its own
+recorded mode, and the controller logs one line saying `--fast` did not apply.
 
 A job runs as session `orch-runner`. In an agent stage the controller claims it, makes sure the
 worktree exists, attaches a fresh `claude-code` session id to the job, and starts

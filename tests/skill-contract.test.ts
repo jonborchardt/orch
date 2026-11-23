@@ -188,6 +188,36 @@ describe('skill', () => {
     expect(checkArtifact('round-1/consolidated.md', template('round-N/consolidated.md'))).toBe('1');
     expect(checkArtifact('decision.md', template('decision.md'))).toBe('approve');
     expect(checkArtifact('pr.md', template('pr.md (also used as the PR body)'))).toBeNull();
+    const fastPr = template('pr.md (fast job)');
+    expect(checkArtifact('pr.md', fastPr)).toBeNull();
+    for (const h of ['## Summary', '## Changed files', '## Validation', '## Known limitations']) {
+      expect(fastPr, h).toContain(h);
+    }
+    // build.md's Validation lists each targeted check as run with its result, or as not run.
+    expect(template('build.md')).toContain('not run');
+  });
+
+  it('the fast builder is the one fast-job agent and escalates instead of widening scope', () => {
+    expect(ROLES.filter((r) => r.kind === 'fast-build').map((r) => r.agent)).toEqual([
+      'factory-fast-builder',
+    ]);
+    const text = readFileSync(join(agentsDir, 'factory-fast-builder.md'), 'utf8').replace(
+      /\s+/g,
+      ' ',
+    );
+    for (const phrase of [
+      'Never widen scope',
+      'ESCALATE: <reason>',
+      'orch verify <jobId> --token <token>',
+      'orch ticket edit <key> --body-file -',
+      'not run',
+      'The file is the deliverable',
+    ]) {
+      expect(text, phrase).toContain(phrase);
+    }
+    const skill = readFileSync(join(skillDir, 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(skill).toContain('factory-fast-builder');
+    expect(skill).toContain('orch ticket reopen');
   });
 });
 

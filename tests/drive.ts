@@ -6,7 +6,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { planJob, startJob } from '../src/ops/factory.ts';
+import { dispatchJob } from '../src/ops/dispatch.ts';
+import { planJob, resumeFactoryJob, startJob } from '../src/ops/factory.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
 import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
 import { verifyJob } from '../src/ops/verify.ts';
@@ -69,6 +70,31 @@ export const SESSION = 'claude-20261113-1200-5b5b';
 export function start(store: Store, clone: string, title = 'Add CSV export'): Ctx {
   const r = startJob(store, { title, description: 'Test request', session: SESSION, cwd: clone });
   return { id: r.job.id, token: r.token, dir: r.plan.artifactDir, wt: r.job.worktreePath ?? '' };
+}
+
+/**
+ * A fast job (what `orch do --fast` dispatches), claimed with a worktree: in build, pending. The
+ * Ctx and every helper below work for it as for a full job.
+ */
+export function startFast(store: Store, clone: string, ticket?: number): Ctx {
+  const { job } = dispatchJob(store, {
+    ...(ticket === undefined ? { title: 'Fix a typo', description: 'Test request' } : { ticket }),
+    session: SESSION,
+    cwd: clone,
+    mode: 'fast',
+  });
+  const r = resumeFactoryJob(store, job.id, { session: SESSION });
+  return { id: job.id, token: r.token, dir: r.plan.artifactDir, wt: r.job.worktreePath ?? '' };
+}
+
+/** A fast build: one commit, verified, build.md registered, completed: pr pending. */
+export function fastBuild(store: Store, c: Ctx, file = 'src/fix.ts', replace = false): string {
+  go(store, c, 'start');
+  const sha = commitFile(c.wt, file, `// ${file}\n`);
+  verify(store, c);
+  add(store, c, 'build.md', fixture('build.md'), replace);
+  go(store, c, 'complete');
+  return sha;
 }
 
 export const go = (

@@ -441,6 +441,8 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: 'done', label: 'Done' },
 ];
 
+const FAST_STEPS: readonly StepId[] = ['build', 'pr', 'ci', 'done'];
+
 /** Step index of a delivery stage; -1 for anything else (needs-human, completed, null). */
 function stepIndex(stage: unknown): number {
   return stage === 'done' ? -1 : STEPS.findIndex((s) => s.id === stage);
@@ -458,28 +460,31 @@ const STOPPED: Partial<Record<Job['status'], string>> = {
  * exhausted CI repair budget is `ci` even though `returnStage` says build.
  */
 export function progressOf(
-  job: Pick<Job, 'stage' | 'status' | 'returnStage'>,
+  job: Pick<Job, 'stage' | 'status' | 'returnStage'> & Partial<Pick<Job, 'mode'>>,
   events: Map<string, Event>,
 ): Progress {
+  // A fast job never visits spec, simplify, review, or approve, so they are not its steps.
+  const list = job.mode === 'fast' ? STEPS.filter((s) => FAST_STEPS.includes(s.id)) : STEPS;
+  const index = (stage: unknown) => list.findIndex((s) => s.id === STEPS[stepIndex(stage)]?.id);
   const steps = (position: number, at: StepState): Progress['steps'] =>
-    STEPS.map((s, i) => ({
+    list.map((s, i) => ({
       ...s,
       state: i < position ? 'done' : i === position ? at : 'not-started',
     }));
   if (job.status === 'completed' || job.stage === 'completed') {
-    return { steps: steps(STEPS.length, 'done'), position: STEPS.length, label: 'Done' };
+    return { steps: steps(list.length, 'done'), position: list.length, label: 'Done' };
   }
-  let position = stepIndex(job.stage);
+  let position = index(job.stage);
   if (job.stage === 'needs-human') {
-    position = stepIndex(text(events.get('job.blocked'), 'from'));
-    if (position < 0) position = stepIndex(job.returnStage);
+    position = index(text(events.get('job.blocked'), 'from'));
+    if (position < 0) position = index(job.returnStage);
   }
   const reason = job.stage === 'needs-human' ? 'needs human' : STOPPED[job.status];
   if (position < 0) {
     const label = reason ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : 'Unknown';
     return { steps: steps(-1, 'current'), position: -1, label };
   }
-  const name = STEPS[position]?.label ?? '';
+  const name = list[position]?.label ?? '';
   return {
     steps: steps(position, reason ? 'stopped' : 'current'),
     position,

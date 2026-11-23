@@ -7,7 +7,8 @@ import { ValidationError } from './errors.ts';
 export const MODELS = ['opus', 'sonnet', 'haiku', 'inherit'] as const;
 export type Model = (typeof MODELS)[number];
 
-export type RoleKind = 'spec' | 'spec-challenge' | 'build' | 'simplify' | 'review' | 'approve';
+export type RoleKind =
+  'spec' | 'spec-challenge' | 'build' | 'fast-build' | 'simplify' | 'review' | 'approve';
 
 export interface Role {
   /** Short name used in `orch job review record --reviewer <name>` and review-<name>.md. */
@@ -29,6 +30,8 @@ export const ROLES: readonly Role[] = [
     kind: 'spec-challenge',
   },
   { name: 'builder', agent: 'factory-builder', model: 'opus', kind: 'build' },
+  // The one agent of a fast job (core/workflow.ts JOB_MODES): build, verify, build.md.
+  { name: 'fast-builder', agent: 'factory-fast-builder', model: 'opus', kind: 'fast-build' },
   { name: 'simplifier', agent: 'factory-simplifier', model: 'sonnet', kind: 'simplify' },
   { name: 'security', agent: 'factory-reviewer-security', model: 'opus', kind: 'review' },
   { name: 'correctness', agent: 'factory-reviewer-correctness', model: 'sonnet', kind: 'review' },

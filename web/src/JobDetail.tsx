@@ -34,6 +34,7 @@ import {
   BlockerNotes,
   BlockerText,
   CopyResume,
+  FastChip,
   FlakeText,
   ResumeBox,
   StatusChip,
@@ -612,6 +613,7 @@ function JobHeader({ detail, error }: { detail: JobDetailView; error: string | n
         </Typography>
         <Typography color="text.secondary">{job.id}</Typography>
         <StatusChip state={detail.liveness} outcome={detail.outcome} tooltipExtra={owner} />
+        {job.mode === 'fast' && <FastChip />}
         <ProgressStrip progress={detail.progress} />
         <RoundIndicator round={job.round} maxRounds={job.maxRounds} chip />
         {job.archivedAt !== null && (

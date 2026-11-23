@@ -7,7 +7,7 @@ import { resolve, sep } from 'node:path';
 
 import { MergeConflictError, ValidationError } from '../core/errors.ts';
 import { canonicalPath, jobWorktreeDir } from '../core/paths.ts';
-import { TERMINAL_STATUSES } from '../core/workflow.ts';
+import { approvalEvidence, TERMINAL_STATUSES } from '../core/workflow.ts';
 import { baseRef, remoteExists } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
 import {
@@ -21,7 +21,7 @@ import {
   type MergeResult,
   type WorktreeInfo,
 } from '../git/worktree.ts';
-import { findArtifact } from '../storage/artifacts.ts';
+import { listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob } from '../storage/events.ts';
 import {
@@ -356,7 +356,8 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
   const fromHead = tree.head;
   const baseSha = git(wt, 'rev-parse', `${ref}^{commit}`);
   const mergeBase = tryGit(wt, 'merge-base', ref, 'HEAD') ?? null;
-  const decision = findArtifact(store.db, id, 'decision.md');
+  // The approved head (build.md's for a fast job); evidence only, requireApproved recomputes it.
+  const approval = approvalEvidence(job.mode, listArtifacts(store.db, id));
   const valid = latestValidRun(store, job, tree);
   let integration = startIntegration(store, id, {
     ...auth,
@@ -364,7 +365,7 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
     baseRef: ref,
     baseSha,
     mergeBase,
-    decisionHead: decision?.marker === 'approve' ? decision.head : null,
+    decisionHead: approval?.head ?? null,
     verificationRunId: valid?.run.id ?? null,
   });
   if (mergeBase === baseSha) {

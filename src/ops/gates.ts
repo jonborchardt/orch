@@ -22,7 +22,13 @@ import {
   uncheckedItems,
 } from '../core/tickets.ts';
 import { type Authority, authorityOf } from '../core/verification.ts';
-import { type Action, requiredArtifact, simplifyArtifact } from '../core/workflow.ts';
+import {
+  type Action,
+  approvalEvidence,
+  approvalName,
+  requiredArtifact,
+  simplifyArtifact,
+} from '../core/workflow.ts';
 import { findArtifact, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import {
@@ -112,6 +118,35 @@ function requireAuthorizedPolicy(
   }
 }
 
+/** Sensitive kinds no fast job may change: they decide what the checks run and see. */
+const FAST_REFUSED_KINDS: readonly string[] = ['policy', 'ci', 'test-config', 'deps'];
+
+/**
+ * A fast build delivers without review, so its diff may not touch what the evidence rests on: the
+ * policy (or a file it runs), CI, test configuration, dependency manifests, or tests it disables
+ * or removes, and the policy may not drift. Such a change needs the full workflow: escalate.
+ */
+function requireFastScope(job: Job, info: Tree): void {
+  const report = sensitiveReport(info, effectivePolicy(job, info));
+  const found = [
+    ...report.changes
+      .filter(
+        (c) =>
+          FAST_REFUSED_KINDS.includes(c.kind) || (c.kind === 'tests' && c.status === 'deleted'),
+      )
+      .map((c) => `${c.path} (${c.kind}, ${c.status})`),
+    ...report.scan.disabled.map((d) => `${d.path}: disabled test: ${d.line}`),
+    ...report.scan.removedTests.map((r) => `${r.path}: ${String(r.removed)} test(s) removed`),
+    ...(report.policy?.changed ? ['the verification policy changed'] : []),
+  ];
+  if (found.length === 0) return;
+  throw new ValidationError(
+    `Completing a fast build is refused: the change is riskier than fast mode allows (${found.join('; ')}). ` +
+      `Escalate (orch job transition ${job.id} escalate --reason "..."); cancel and orch ticket reopen ` +
+      'the ticket to run the full workflow.',
+  );
+}
+
 /** `orch job artifact add`: register with the worktree HEAD; code evidence needs a clean tree. */
 export function addArtifact(
   store: Store,
@@ -171,17 +206,18 @@ function evidenceHead(
 }
 
 /**
- * HEAD is the approved commit or builds on it: decision.md is APPROVE recorded against a commit,
- * HEAD contains that commit, and every commit since then that is not already on the base is a
- * merge whose result matches one of its parents (a clean base integration, no edits inside the
- * merge). A rewind or a divergence has nothing in approved..HEAD, so containment is checked first.
+ * HEAD is the approved commit or builds on it: the approval (`approvalEvidence`: decision.md
+ * APPROVE, or build.md for a fast job) is recorded against a commit, HEAD contains that commit,
+ * and every commit since then that is not already on the base is a merge whose result matches one
+ * of its parents (a clean base integration, no edits inside the merge). A rewind or a divergence
+ * has nothing in approved..HEAD, so containment is checked first.
  */
 function requireApproved(store: Store, job: Job, tree: Tree, what: string): void {
   const { path, head } = tree;
-  const decision = findArtifact(store.db, job.id, 'decision.md');
-  if (decision?.marker !== 'approve' || !decision.head) {
+  const decision = approvalEvidence(job.mode, listArtifacts(store.db, job.id));
+  if (!decision?.head) {
     throw new ValidationError(
-      `No DECISION: APPROVE recorded against a commit; ${what} is refused.`,
+      `No ${approvalName(job.mode)} recorded against a commit; ${what} is refused.`,
     );
   }
   if (decision.head === head) return;
@@ -280,10 +316,15 @@ export function deliveryGate(
   };
 }
 
-/** Whether this job is in the pre-review pass (`ci` authority, no approval for HEAD). */
+/**
+ * Whether this job is in the pre-review pass (`ci` authority, no approval for HEAD). A fast job
+ * has no review, so it never is: its delivery always needs build.md's HEAD to hold.
+ */
 export function isPreReview(store: Store, job: Job, tree: Tree): boolean {
   return (
-    authorityOf(effectivePolicy(job, tree).policy) === 'ci' && !approvalHolds(store, job, tree)
+    job.mode === 'full' &&
+    authorityOf(effectivePolicy(job, tree).policy) === 'ci' &&
+    !approvalHolds(store, job, tree)
   );
 }
 
@@ -445,6 +486,7 @@ export function transitionGuarded(
       if (job.stage === 'build' || job.stage === 'simplify' || job.stage === 'approve') {
         requireVerified(store, job, info, `completing ${job.stage}`);
       }
+      if (job.stage === 'build' && job.mode === 'fast') requireFastScope(job, info);
       if (job.stage === 'approve') requireAuthorizedPolicy(job, info, 'completing approve');
     }
     if (job.stage === 'approve') requireChecklistAccounted(store, job);

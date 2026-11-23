@@ -8,15 +8,16 @@ keep the markers as whole lines.
 
 Every prompt starts with the header block from SKILL.md. Add:
 
-| Stage      | Agent                     | Extra inputs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ---------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spec`     | `factory-spec-writer`     | The request; issue body if any; "read CLAUDE.md / AGENTS.md / README in the worktree first". After a scope-gap rework (`plan.reason` says "Scope gap"): the path to `decision.md` and "revise spec.md to cover every requested case it names".                                                                                                                                                                                                                                                                                                 |
-| `spec`     | `factory-spec-challenger` | The request; issue body if any; path to `spec.md`; for `spec-review-2.md` the path to `spec-review-1.md`; "read CLAUDE.md / AGENTS.md / README in the worktree first". For the writer's revision: the path to the latest `spec-review-N.md` and "answer its material findings, do not expand scope".                                                                                                                                                                                                                                           |
-| `build`    | `factory-builder`         | Path to `spec.md`; round number; for rounds > 1 the path to `round-<N-1>/consolidated.md` and "address every blocking finding, do not expand scope"; validation commands. After a CI rework (`plan.reason` says "CI repair"): the failing check names and the saved log paths under `<artifactDir>/ci/<sha7>/`, and "fix the defect; never weaken checks, tests, CI workflows, or factory.json". After a scope-gap rework (`plan.reason` says "Scope gap"): the path to `decision.md` and "implement every in-scope item it names as missing". |
-| `simplify` | `factory-simplifier`      | Paths to `spec.md` and `build.md`, the base ref (`plan.worktree.baseRef`) for `git diff <baseRef>...HEAD`, round number, and the artifact path `round-N/simplify-review.md`; "read only, never edit the worktree".                                                                                                                                                                                                                                                                                                                             |
-| `simplify` | `factory-builder`         | Paths to `spec.md`, `build.md`, and `round-N/simplify-review.md`; "apply the findings that make sense, never widen scope, commit if anything changed, run orch verify (it returns the build's run when nothing changed), record each applied and declined finding with its reason"; the artifact path `round-N/simplify.md`.                                                                                                                                                                                                                   |
-| `review`   | each `factory-reviewer-*` | Paths to `spec.md`, `build.md`, `round-N/simplify.md`, the evidence dir if one exists, `git diff <baseRef>...HEAD` hint, the base ref (`plan.worktree.baseRef`), round number, and the artifact path.                                                                                                                                                                                                                                                                                                                                          |
-| `approve`  | `factory-approver`        | Paths to `spec.md`, `build.md`, every `round-*/review-*.md` and `consolidated.md`, the base ref for the diff, and the round count.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Stage              | Agent                     | Extra inputs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`             | `factory-spec-writer`     | The request; issue body if any; "read CLAUDE.md / AGENTS.md / README in the worktree first". After a scope-gap rework (`plan.reason` says "Scope gap"): the path to `decision.md` and "revise spec.md to cover every requested case it names".                                                                                                                                                                                                                                                                                                 |
+| `spec`             | `factory-spec-challenger` | The request; issue body if any; path to `spec.md`; for `spec-review-2.md` the path to `spec-review-1.md`; "read CLAUDE.md / AGENTS.md / README in the worktree first". For the writer's revision: the path to the latest `spec-review-N.md` and "answer its material findings, do not expand scope".                                                                                                                                                                                                                                           |
+| `build`            | `factory-builder`         | Path to `spec.md`; round number; for rounds > 1 the path to `round-<N-1>/consolidated.md` and "address every blocking finding, do not expand scope"; validation commands. After a CI rework (`plan.reason` says "CI repair"): the failing check names and the saved log paths under `<artifactDir>/ci/<sha7>/`, and "fix the defect; never weaken checks, tests, CI workflows, or factory.json". After a scope-gap rework (`plan.reason` says "Scope gap"): the path to `decision.md` and "implement every in-scope item it names as missing". |
+| `simplify`         | `factory-simplifier`      | Paths to `spec.md` and `build.md`, the base ref (`plan.worktree.baseRef`) for `git diff <baseRef>...HEAD`, round number, and the artifact path `round-N/simplify-review.md`; "read only, never edit the worktree".                                                                                                                                                                                                                                                                                                                             |
+| `simplify`         | `factory-builder`         | Paths to `spec.md`, `build.md`, and `round-N/simplify-review.md`; "apply the findings that make sense, never widen scope, commit if anything changed, run orch verify (it returns the build's run when nothing changed), record each applied and declined finding with its reason"; the artifact path `round-N/simplify.md`.                                                                                                                                                                                                                   |
+| `review`           | each `factory-reviewer-*` | Paths to `spec.md`, `build.md`, `round-N/simplify.md`, the evidence dir if one exists, `git diff <baseRef>...HEAD` hint, the base ref (`plan.worktree.baseRef`), round number, and the artifact path.                                                                                                                                                                                                                                                                                                                                          |
+| `build` (fast job) | `factory-fast-builder`    | The ticket key (`orch ticket show <key> --json`), the token for `orch verify` and `orch ticket edit`, and the artifact path `build.md`; "implement the ticket and nothing more; escalate instead of widening scope". After a CI or base-integration rework: the reason and the saved log paths, and "replace build.md".                                                                                                                                                                                                                        |
+| `approve`          | `factory-approver`        | Paths to `spec.md`, `build.md`, every `round-*/review-*.md` and `consolidated.md`, the base ref for the diff, and the round count.                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 Builder validation: `orch verify <id> --token <t>`, which runs the repository's `factory.json`
 verification policy (see README, "Verification evidence"). The builder runs targeted tests while
@@ -81,10 +82,11 @@ What was implemented and how; commits on the branch (`git log <baseRef>..HEAD --
 ## Validation
 
 Verification run: `orch verify` run <id> at <HEAD sha>, status passed; checks: <id: passed, ...>.
-Logs: `<artifactDir>/verification/<run>/<check>.log`. Exploratory commands you ran beyond that
-(with the tail of their output):
+Logs: `<artifactDir>/verification/<run>/<check>.log`. Targeted checks, each as run with its
+result or as not run with why (never a check you did not run written as passed):
 
 - `<targeted test command>` → pass (N tests)
+- `<other check>` → not run: <why>
 - ...
 
 ## Acceptance criteria
@@ -305,6 +307,39 @@ Round <K> of <max>: security PASS, correctness PASS, ... Approver: APPROVE.
 
 Every sensitive path (tests, CI, dependencies, factory.json) with what changed and whether the
 verification baseline changed or a human accepted a new policy. "None" when there are none.
+
+## Known limitations
+
+<list, or "none">
+```
+
+## pr.md (fast job)
+
+A fast job (`mode: "fast"`) has no spec, review, or approval to report, so its PR body is short.
+
+```markdown
+# <Title>
+
+Fast factory job `<jobId>` on `<branch>` → `<baseBranch>` (`orch do --fast`: one agent, no
+spec, review, or approval). Ticket <key>.
+
+## Summary
+
+<1-3 lines>
+
+## Changed files
+
+- `<path>` — <why>
+
+## Validation
+
+Verification run <id> at <final HEAD>: passed. Targeted checks: `<command>` → pass, or not run:
+<why>.
+
+## Sensitive changes
+
+Every changed test file, or "None" (a fast build that changes factory.json, CI, test
+configuration, dependencies, or disables or removes a test is refused).
 
 ## Known limitations
 
