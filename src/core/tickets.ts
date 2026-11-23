@@ -155,14 +155,34 @@ export const CHECKLIST_DELIMITER = ' — ';
  * box itself must be ticked in the ticket.
  */
 export function unaccountedItems(body: string, decision: string): string[] {
+  const accounted = new Set(notDelivered(decision).map((l) => l.item));
+  return [...new Set(uncheckedItems(body))].filter((item) => !accounted.has(item));
+}
+
+/** `- [ ] <item> — <reason>` lines (non-empty reason) under decision.md's `## Ticket checklist`. */
+function notDelivered(decision: string): { item: string; reason: string }[] {
   const section = /^## Ticket checklist[ \t]*\r?$([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(decision);
-  const accounted = new Set<string>();
+  const lines: { item: string; reason: string }[] = [];
   for (const line of uncheckedItems(section?.[1] ?? '')) {
     const at = line.indexOf(CHECKLIST_DELIMITER);
-    if (at < 0 || line.slice(at + CHECKLIST_DELIMITER.length).trim() === '') continue;
-    accounted.add(line.slice(0, at).trim());
+    const reason = at < 0 ? '' : line.slice(at + CHECKLIST_DELIMITER.length).trim();
+    if (reason !== '') lines.push({ item: line.slice(0, at).trim(), reason });
   }
-  return [...new Set(uncheckedItems(body))].filter((item) => !accounted.has(item));
+  return lines;
+}
+
+/**
+ * Boxes decision.md hands to a follow-up ticket: a not-delivered line whose reason starts with
+ * `deferred to <id>` (`0116`, `#116`, `116`), optionally followed by `: <why>`. Approval then
+ * requires the box gone from the ticket body and a note naming the follow-up, so the original
+ * closes on its merge (decision 2026-11-22-deferred-box-leaves-the-ticket).
+ */
+export function deferredItems(decision: string): { item: string; to: number }[] {
+  return notDelivered(decision).flatMap(({ item, reason }) => {
+    const m = /^deferred to (#?\d{1,9})(?=$|[:\s])/.exec(reason);
+    const to = m ? Number(m[1]?.replace('#', '')) : 0;
+    return to > 0 ? [{ item, to }] : [];
+  });
 }
 
 /**

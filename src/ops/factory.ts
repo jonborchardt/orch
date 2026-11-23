@@ -704,7 +704,9 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         (boxes.length > 0
           ? ` Ticket ${key} has unchecked checklist item(s): ${boxes.map((b) => `"${b}"`).join(', ')}. ` +
             `decision.md's ## Ticket checklist accounts for each (- [x] <item>${CHECKLIST_DELIMITER}<evidence> or ` +
-            `- [ ] <item>${CHECKLIST_DELIMITER}<reason>, item text verbatim); tick the delivered boxes before completing.`
+            `- [ ] <item>${CHECKLIST_DELIMITER}<reason>, item text verbatim); tick the delivered boxes before completing. ` +
+            `A box handed to a follow-up ticket is - [ ] <item>${CHECKLIST_DELIMITER}deferred to <key>[: <why>]: ` +
+            `remove it from the ticket body (or rewrite it as plain text) and note the follow-up key on ticket ${key}, so the ticket closes on its merge.`
           : '');
       plan.commands = [
         ...start,
@@ -712,8 +714,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         add('decision.md', has('decision.md')),
         ...(boxes.length > 0
           ? [
-              `orch ticket edit ${key} --body-file -   # tick the boxes decision.md marks delivered`,
-              `orch ticket note ${key} "<item>: <reason>"   # each box decision.md marks not delivered`,
+              `orch ticket edit ${key} --body-file -   # tick the boxes decision.md marks delivered; remove (or unbox) those deferred to a follow-up`,
+              `orch ticket note ${key} "<item>: <reason>"   # each box decision.md marks not delivered ("<item>: deferred to <key>" for a deferral)`,
             ]
           : []),
         `${complete}   # only if DECISION: APPROVE`,

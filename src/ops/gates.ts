@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { ValidationError } from '../core/errors.ts';
+import { NotFoundError, ValidationError } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { baseRef } from '../git/repo.ts';
 import { tryGit } from '../git/run.ts';
@@ -15,9 +15,11 @@ import { containsRef, editedMerges } from '../git/worktree.ts';
 import { sensitiveSummary } from '../core/sensitive.ts';
 import {
   CHECKLIST_DELIMITER,
+  deferredItems,
   openChecklist,
   ticketKey,
   unaccountedItems,
+  uncheckedItems,
 } from '../core/tickets.ts';
 import { type Authority, authorityOf } from '../core/verification.ts';
 import { type Action, requiredArtifact, simplifyArtifact } from '../core/workflow.ts';
@@ -33,8 +35,8 @@ import {
   transitionJob,
   type TransitionOptions,
 } from '../storage/jobs.ts';
-import type { Artifact, Job, Review } from '../storage/schema.ts';
-import { getTicket } from '../storage/tickets.ts';
+import type { Artifact, Job, Review, Ticket } from '../storage/schema.ts';
+import { getTicket, listTicketEvents } from '../storage/tickets.ts';
 
 import { effectivePolicy, sensitiveReport, verificationStatus } from './verify.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
@@ -327,14 +329,16 @@ export function completeCi(store: Store, id: string, auth: TransitionOptions): J
 function requireChecklistAccounted(store: Store, job: Job): void {
   if (job.ticketId === null) return;
   const ticket = getTicket(store.db, job.ticketId);
-  if (openChecklist(ticket).length === 0) return;
   const decision = findArtifact(store.db, job.id, 'decision.md');
   // Without an APPROVE decision transitionJob refuses the completion on its own.
   if (decision?.marker !== 'approve') return;
   const text = readFileSync(join(jobArtifactDir(job.id, store.paths), 'decision.md'), 'utf8');
-  const missing = unaccountedItems(ticket.body, text);
-  if (missing.length === 0) return;
   const key = ticketKey(job.ticketId);
+  const missing = openChecklist(ticket).length === 0 ? [] : unaccountedItems(ticket.body, text);
+  if (missing.length === 0) {
+    requireDeferralsApplied(store, ticket, text);
+    return;
+  }
   throw new ValidationError(
     `Ticket ${key} has unchecked checklist item(s) that decision.md does not account for: ` +
       `${missing.map((m) => `"${m}"`).join(', ')}. For each one, either tick it with ` +
@@ -342,6 +346,54 @@ function requireChecklistAccounted(store: Store, job: Job): void {
       `decision.md the line to copy: ${missing.map((m) => `- [ ] ${m}${CHECKLIST_DELIMITER}<reason>`).join(' | ')} ` +
       '(not delivered), register it with --replace, and complete again.',
   );
+}
+
+/**
+ * A box decision.md defers to a follow-up (`- [ ] <item> — deferred to <id>`) has left the ticket:
+ * it is no longer an unchecked box in the body, the follow-up is another active ticket, and a note
+ * names it (decision 2026-11-22-deferred-box-leaves-the-ticket).
+ */
+function requireDeferralsApplied(store: Store, ticket: Ticket, decision: string): void {
+  const key = ticketKey(ticket.id);
+  const unchecked = new Set(uncheckedItems(ticket.body));
+  let notes: string[] | undefined;
+  for (const { item, to } of deferredItems(decision)) {
+    const next = ticketKey(to);
+    const fixLine = `or fix the line in decision.md's ## Ticket checklist, register it with --replace, and complete again.`;
+    if (to === ticket.id) {
+      throw new ValidationError(
+        `"${item}" is deferred to ${next}, which is this ticket; ${fixLine}`,
+      );
+    }
+    let follow: Ticket | undefined;
+    try {
+      follow = getTicket(store.db, to);
+    } catch (err) {
+      if (!(err instanceof NotFoundError)) throw err;
+    }
+    if (!follow || (follow.status !== 'open' && follow.status !== 'in-progress')) {
+      throw new ValidationError(
+        `"${item}" is deferred to ${next}, which ${follow ? `is ${follow.status}` : 'does not exist'}; ` +
+          `file the follow-up with orch ticket add, ${fixLine}`,
+      );
+    }
+    if (unchecked.has(item)) {
+      throw new ValidationError(
+        `"${item}" is deferred to ${next} but is still an unchecked box in ticket ${key}; remove ` +
+          `it or rewrite it as plain text with orch ticket edit ${key} --body-file -, then ` +
+          `orch ticket note ${key} "${item}: deferred to ${next}", and complete again.`,
+      );
+    }
+    notes ??= listTicketEvents(store.db, ticket.id)
+      .filter((e) => e.type === 'ticket.note')
+      .map((e) => (typeof e.payload['text'] === 'string' ? e.payload['text'] : ''));
+    if (!notes.some((n) => n.includes(next))) {
+      throw new ValidationError(
+        `"${item}" is deferred to ${next} but no note on ticket ${key} names ${next}; run ` +
+          `orch ticket note ${key} "${item}: deferred to ${next}" and complete again.`,
+      );
+    }
+  }
 }
 
 /** `orch job transition`: `complete` is refused when the worktree moved past its evidence. */
