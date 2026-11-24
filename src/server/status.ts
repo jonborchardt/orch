@@ -118,7 +118,7 @@ function stoppedBlocker(job: Lease, ev: Evidence): Blocker | null {
   for (const e of ev.events.values()) if (e.id > stop.id) return null;
   return {
     kind: 'stopped',
-    summary: `Factory controller stopped it: ${text(stop, 'code') ?? text(stop, 'outcome') ?? '?'}`,
+    summary: `Factory controller stopped it: ${text(stop, 'code') ?? '?'}`,
     detail: text(stop, 'reason'),
     next: text(stop, 'next'),
   };
