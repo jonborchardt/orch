@@ -1099,7 +1099,13 @@ describe('personMergeStep: merge refusals only a person can lift', () => {
 describe('endsRun: only run-wide outcomes end the queue', () => {
   it('names the four run-wide codes and lets every other code, or none, continue', () => {
     expect([...RUN_ENDING_CODES].sort()).toEqual(
-      ['claude-failed', 'github-refused', 'github-unreadable', 'merge-no-answer'].sort(),
+      [
+        'claude-failed',
+        'github-refused',
+        'github-unreadable',
+        'merge-no-answer',
+        'usage-limit',
+      ].sort(),
     );
     for (const code of RUN_ENDING_CODES) expect(endsRun(code), code).toBe(true);
     for (const code of [
