@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { jobArtifactDir } from '../src/core/paths.ts';
 import type { ClaudeChild, LaunchInput } from '../src/integrations/claude-session.ts';
 import { setMergeAuthorization } from '../src/ops/merge.ts';
-import { CI_MAX_POLLS, RUNNER_SESSION, startSession, TRANSIENT_ATTEMPTS } from '../src/ops/run.ts';
+import { RUNNER_SESSION, startSession, TRANSIENT_ATTEMPTS } from '../src/ops/run.ts';
 import { addTicket, showTicket } from '../src/ops/tickets.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { claimJob, getJob, releaseJob } from '../src/storage/jobs.ts';
@@ -28,8 +28,11 @@ const kept = (j: Job) => ({
   branch: j.branch,
 });
 
+/** A CI observation budget small enough to exhaust quickly (production is `CI_MAX_POLLS`). */
+const BUDGET = 3;
+
 /** Run the ticket with a session that delivers the PR with a queued check, then `after`, and exits. */
-async function stopAtCi(after: () => void = () => undefined) {
+async function stopAtCi(after: () => void = () => undefined, ciMaxPolls?: number) {
   setMergeAuthorization(store, clone, true);
   const id = addTicket(store, { title: 'Export CSV', repo: clone }).id;
   let launches = 0;
@@ -59,7 +62,7 @@ async function stopAtCi(after: () => void = () => undefined) {
   const s = await startSession(
     store,
     { mode: 'ticket', ticket: id },
-    { launch, sleep: () => Promise.resolve() },
+    { launch, sleep: () => Promise.resolve(), ciMaxPolls },
   );
   const [job, ...others] = ticketJobs(store.db, id);
   if (job === undefined || left === undefined) throw new Error('no job was run');
@@ -78,10 +81,10 @@ async function stopAtCi(after: () => void = () => undefined) {
 
 describe('controller: giving up in the ci stage', () => {
   it('CI still pending after every observation: recorded, released, nothing merged', async () => {
-    const r = await stopAtCi();
+    const r = await stopAtCi(undefined, BUDGET);
 
     expect(r.result).toMatchObject({ outcome: 'blocked', jobId: r.job.id });
-    expect(r.result?.reason).toContain(`still pending after ${String(CI_MAX_POLLS)}`);
+    expect(r.result?.reason).toContain(`still pending after ${String(BUDGET)}`);
     expect(r.stops.map((e) => [e.actor, e.payload])).toEqual([
       [
         RUNNER_SESSION,
@@ -95,13 +98,12 @@ describe('controller: giving up in the ci stage', () => {
         },
       ],
     ]);
-    expect(r.observed).toBeGreaterThanOrEqual(CI_MAX_POLLS);
+    expect(r.observed).toBeGreaterThanOrEqual(BUDGET);
     expect(kept(r.job)).toEqual(kept(r.left));
     expect(r.job).toMatchObject({ stage: 'ci', ownerSession: null, ownerToken: null });
     expect(r.ticket).toBe('in-progress');
     expect(ghCalls('merge')).toHaveLength(0);
-    // Sixty real reads of the shim: about two minutes idle, several times that under load.
-  }, 900_000);
+  });
 
   it('GitHub unreadable every time: recorded, released, nothing merged', async () => {
     const r = await stopAtCi(() => {

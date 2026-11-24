@@ -80,6 +80,8 @@ export interface RunOptions {
   pollMs?: number | undefined;
   /** When the process at a PID started (`processStartMs`); tests replace it. */
   startTime?: ((pid: number) => number | null) | undefined;
+  /** CI observations before giving the ticket up; tests lower it. Defaults to `CI_MAX_POLLS`. */
+  ciMaxPolls?: number | undefined;
 }
 
 export interface RunSummary {
@@ -103,6 +105,7 @@ interface Run {
   launch: (input: LaunchInput) => ClaudeChild;
   log: (line: string) => void;
   pollMs: number;
+  ciMaxPolls: number;
   /** Whether this controller still holds the lock it took. */
   owned(): boolean;
   /**
@@ -289,7 +292,7 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
   const auth = { token };
   let failures = 0;
   try {
-    for (let polls = 0; polls < CI_MAX_POLLS; polls++) {
+    for (let polls = 0; polls < run.ciMaxPolls; polls++) {
       if (run.stopNow()) return { kind: 'stopped' };
       const job = getJob(store.db, jobId);
       if (job.stage !== 'ci') return null;
@@ -318,7 +321,7 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
     return {
       kind: 'blocked',
       code: 'ci-pending',
-      reason: `CI was still pending after ${String(CI_MAX_POLLS)} observations by the controller`,
+      reason: `CI was still pending after ${String(run.ciMaxPolls)} observations by the controller`,
     };
   } finally {
     // Completing released it already; anything else goes back for whoever continues the job.
@@ -708,6 +711,7 @@ async function drive(
     launch: opts.launch ?? launchClaude,
     log: opts.log ?? (() => undefined),
     pollMs: opts.pollMs ?? POLL_MS,
+    ciMaxPolls: opts.ciMaxPolls ?? CI_MAX_POLLS,
     owned: () => lock.owned(),
     assertOwned: () => {
       if (!lock.owned()) throw new LostLockError(controllerPid(paths));
