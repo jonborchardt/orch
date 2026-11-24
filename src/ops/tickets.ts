@@ -15,6 +15,7 @@ import {
   blockReasons,
   LIFECYCLE_ACTIONS,
   type LifecycleAction,
+  type MoveTo,
   orderTickets,
   parseTicketId,
   PRIORITIES,
@@ -37,6 +38,7 @@ import {
   type LinkedTicket,
   listAreas,
   listTicketEvents,
+  moveTicket,
   recordTicketEvent,
   setTicketLink,
   ticketJobs,
@@ -87,6 +89,32 @@ function effort(raw: Raw): number | undefined {
   if (typeof n !== 'number' || Number.isNaN(n))
     throw new ValidationError('effort must be a number of days');
   return n;
+}
+
+/** A finite number; null, `null`, or `none` unranks; absent leaves the rank alone. */
+function rank(raw: Raw): number | null | undefined {
+  const v = raw['rank'];
+  if (v === undefined) return undefined;
+  if (v === null || v === 'none' || v === 'null') return null;
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  if (typeof n !== 'number' || !Number.isFinite(n)) {
+    throw new ValidationError(
+      `rank must be a number, or none to unrank (got ${JSON.stringify(v)})`,
+    );
+  }
+  return n;
+}
+
+/** Exactly one of `up`, `down`, `top` (true) or `before` (a ticket id). */
+function moveTo(raw: Raw): MoveTo {
+  const flags = (['up', 'down', 'top'] as const).filter(
+    (k) => raw[k] === true || raw[k] === 'true',
+  );
+  const before = raw['before'] ?? undefined;
+  if (flags.length + (before === undefined ? 0 : 1) !== 1) {
+    throw new ValidationError('move takes exactly one of up, down, top, or before');
+  }
+  return before === undefined ? (flags[0] as MoveTo) : { before: parseTicketId(before, 'before') };
 }
 
 /** `[62, 74]`, `"62,74"`, `"0062 0074"` -> ids. */
@@ -367,6 +395,7 @@ export const TICKET_ACTIONS = [
   'edit',
   'note',
   ...LIFECYCLE_ACTIONS,
+  'move',
   'dep-add',
   'dep-remove',
   'related-add',
@@ -377,7 +406,8 @@ export type TicketAction = (typeof TICKET_ACTIONS)[number];
 /**
  * One mutation of one ticket. `raw.action` picks it; `raw.revision` guards against a concurrent
  * change; the rest depends on the action: field values for `edit` (`repo` re-associates the
- * ticket with the checkout at that path), `text` for `note`, `of` for `duplicate`, `target` for
+ * ticket with the checkout at that path; `rank` a number or `none`), `text` for `note`, exactly
+ * one of `up`, `down`, `top`, `before: <id>` for `move`, `of` for `duplicate`, `target` for
  * the link actions, and an optional `note` on a lifecycle action.
  */
 export function ticketAction(store: Store, id: unknown, raw: Raw): TicketView {
@@ -391,9 +421,17 @@ export function ticketAction(store: Store, id: unknown, raw: Raw): TicketView {
   switch (action) {
     case 'edit': {
       const repo = text(raw, 'repo');
-      editTicket(store, n, { ...fields(raw), ...(repo ? ticketRepository(repo) : {}) }, w);
+      editTicket(
+        store,
+        n,
+        { ...fields(raw), rank: rank(raw), ...(repo ? ticketRepository(repo) : {}) },
+        w,
+      );
       break;
     }
+    case 'move':
+      moveTicket(store, n, moveTo(raw), w);
+      break;
     case 'note':
       addTicketNote(store, n, text(raw, 'text') ?? '', w);
       break;

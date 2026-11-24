@@ -17,6 +17,8 @@ import {
   dependencyPath,
   type LifecycleAction,
   type LinkKind,
+  type MoveTo,
+  planMove,
   type Priority,
   type TicketFields,
   ticketKey,
@@ -273,6 +275,14 @@ interface TicketDecision {
   events: TicketEventInput[];
 }
 
+function checkRevision(ticket: Ticket, w: TicketWrite): void {
+  if (w.expectRevision !== undefined && w.expectRevision !== ticket.revision) {
+    throw new OwnershipError(
+      `Stale revision: expected ${String(w.expectRevision)}, ticket ${ticketKey(ticket.id)} is at ${String(ticket.revision)}.`,
+    );
+  }
+}
+
 /** Revision-checked, revision-bumping transaction around one decision about a ticket. */
 function mutateTicket(
   store: Store,
@@ -283,11 +293,7 @@ function mutateTicket(
   return store.db.transaction(
     (tx) => {
       const ticket = getTicket(tx, id);
-      if (w.expectRevision !== undefined && w.expectRevision !== ticket.revision) {
-        throw new OwnershipError(
-          `Stale revision: expected ${String(w.expectRevision)}, ticket ${ticketKey(id)} is at ${String(ticket.revision)}.`,
-        );
-      }
+      checkRevision(ticket, w);
       const { patch, events } = decide(ticket, tx);
       applyTicket(tx, ticket, patch, events, w.actor ?? null, now());
       return getLinkedTicket(tx, id);
@@ -315,14 +321,16 @@ export interface EditTicketInput extends TicketFields {
   /** Re-associate the ticket with another checkout (resolved by ops/tickets.ts). */
   repo?: string | undefined;
   repoPath?: string | undefined;
+  /** A finite number, or null to unrank (checked by ops/tickets.ts). */
+  rank?: number | null | undefined;
 }
 
 const CLASSIFICATION = ['type', 'area', 'effort', 'classified'] as const;
 
 /**
  * Change fields. History records old and new values, except the body, which is only marked as
- * changed. A priority change is its own event; type, area, effort, and classified are one
- * `ticket.reclassified`.
+ * changed. A priority change and a rank change are each their own event; type, area, effort,
+ * and classified are one `ticket.reclassified`.
  */
 export function editTicket(
   store: Store,
@@ -359,9 +367,40 @@ export function editTicket(
     }
     const priority = changes(['priority'])['priority'];
     if (priority) events.push({ type: 'ticket.priority-changed', payload: priority });
+    const rank = changes(['rank'])['rank'];
+    if (rank) events.push({ type: 'ticket.rank-changed', payload: rank });
     if (events.length === 0) throw new ValidationError('Nothing to change.');
     return { patch: next, events };
   });
+}
+
+/**
+ * Move open ticket `id` in the global order (core/tickets.ts `planMove`): every rank write, each
+ * bumping that ticket's revision with its own `ticket.rank-changed`, in one transaction.
+ * `w.expectRevision` guards the moved ticket only. A refusal writes nothing.
+ */
+export function moveTicket(
+  store: Store,
+  id: number,
+  to: MoveTo,
+  w: TicketWrite = {},
+): LinkedTicket {
+  return store.db.transaction(
+    (tx) => {
+      const ticket = getTicket(tx, id);
+      checkRevision(ticket, w);
+      if (typeof to === 'object') getTicket(tx, to.before);
+      const all = allTickets(tx);
+      const ts = now();
+      for (const { id: other, rank } of planMove(all, id, to)) {
+        const row = getTicket(tx, other);
+        const event = { type: 'ticket.rank-changed', payload: { from: row.rank, to: rank } };
+        applyTicket(tx, row, { rank }, [event], w.actor ?? null, ts);
+      }
+      return getLinkedTicket(tx, id);
+    },
+    { behavior: 'immediate' },
+  );
 }
 
 const LIFECYCLE_EVENT: Record<LifecycleAction, string> = {

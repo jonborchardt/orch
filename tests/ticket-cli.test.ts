@@ -85,6 +85,7 @@ describe('orch ticket', () => {
         'importSource',
         'key',
         'priority',
+        'rank',
         'ready',
         'related',
         'repo',
@@ -133,7 +134,7 @@ describe('orch ticket', () => {
     expect(ok<TicketList>(outside, 'ready').tickets.map((t) => t.id)).not.toContain(8);
     // Text mode is a table, with the reason under a blocked ticket.
     const text = orch(home, outside, ['ticket', 'blocked']).out;
-    expect(text).toMatch(/^ID +PRI +DAYS +STATUS/);
+    expect(text).toMatch(/^ID +RANK +PRI +DAYS +STATUS/);
     expect(text).toContain('blocked: depends on 0007, which is open');
   });
 
@@ -213,6 +214,73 @@ describe('orch ticket', () => {
     expect(failure(outside, 'duplicate', '5').code).toBe(2);
     expect(failure(outside, 'show').code).toBe(2);
     expect(orch(home, outside, ['ticket', '--help']).out).toContain('Usage: orch ticket <command>');
+  });
+
+  it('ranks and moves tickets in the one order, refusing moves that break it', () => {
+    const h = tempDir();
+    const t = (...args: string[]) => orch(h, outside, ['ticket', ...args, '--json']);
+    const view = (...args: string[]) => {
+      const r = t(...args);
+      if (r.code !== 0) throw new Error(`orch ticket ${args.join(' ')}: ${r.err}`);
+      return json<TicketView>(r);
+    };
+    const order = () => json<TicketList>(t('order')).tickets.map((x) => x.id);
+    for (const p of ['P1', 'P2', 'P3', 'P4']) {
+      expect(
+        json<TicketView>(orch(h, alpha, ['ticket', 'add', p, '--priority', p, '--json'])).id,
+      ).toBeGreaterThan(0);
+    }
+    view('add', 'After four', '--repo', alpha, '--priority', 'P3', '--depends-on', '4');
+    expect(order()).toEqual([1, 2, 3, 4, 5]);
+
+    // A rank puts a lower-priority ticket first; none takes it back out.
+    expect(view('edit', '3', '--rank', '5')).toMatchObject({ rank: 5, revision: 2 });
+    expect(json<{ type: string; payload: unknown }[]>(t('history', '3')).at(-1)).toMatchObject({
+      type: 'ticket.rank-changed',
+      payload: { from: null, to: 5 },
+    });
+    expect(order()).toEqual([3, 1, 2, 4, 5]);
+    expect(json<{ ticket: TicketView }>(t('next')).ticket.id).toBe(3);
+    expect(orch(h, outside, ['ticket', 'order']).out).toMatch(/^ID +RANK +PRI[\s\S]*\n0003 +5 +P3/);
+    expect(t('edit', '3', '--rank', 'soon').code).toBe(1);
+    expect(t('edit', '3', '--rank', '1', '--revision', '1').code).toBe(4);
+    expect(view('edit', '3', '--rank', 'none').rank).toBeNull();
+    expect(order()).toEqual([1, 2, 3, 4, 5]);
+
+    // Top lands right after the ticket's own dependencies; the others keep their order.
+    view('move', '5', '--top');
+    expect(order()).toEqual([4, 5, 1, 2, 3]);
+    view('move', '1', '--up');
+    expect(order()).toEqual([4, 1, 5, 2, 3]);
+    view('move', '1', '--down');
+    expect(order()).toEqual([4, 5, 1, 2, 3]);
+    view('move', '3', '--before', '1');
+    expect(order()).toEqual([4, 5, 3, 1, 2]);
+
+    // Refusals write nothing.
+    const before = json<TicketList>(t('list')).tickets.map((x) => [x.id, x.revision, x.rank]);
+    const refused = (...args: string[]) => {
+      const r = t('move', ...args);
+      return { code: r.code, message: r.err };
+    };
+    expect(refused('4', '--up').code).toBe(1);
+    expect(refused('2', '--down').code).toBe(1);
+    expect(refused('5', '--before', '4')).toMatchObject({
+      code: 1,
+      message: expect.stringContaining('depends on 0004') as string,
+    });
+    expect(refused('4', '--down').code).toBe(1);
+    expect(refused('4', '--before', '4').code).toBe(1);
+    expect(refused('4', '--top', '--revision', '1').code).toBe(4);
+    expect(refused('4').code).toBe(2);
+    expect(refused('4', '--up', '--top').code).toBe(2);
+    expect(refused('999', '--top').code).toBe(3);
+    expect(json<TicketList>(t('list')).tickets.map((x) => [x.id, x.revision, x.rank])).toEqual(
+      before,
+    );
+    view('drop', '2');
+    expect(refused('2', '--top').code).toBe(1);
+    expect(refused('1', '--before', '2').code).toBe(1);
   });
 
   it('dispatches a job for a ticket and shows the association from both sides', () => {

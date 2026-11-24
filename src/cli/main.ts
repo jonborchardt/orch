@@ -197,6 +197,11 @@ export async function main(argv: string[]): Promise<number> {
         of: str,
         note: str,
         dir: str,
+        rank: str,
+        up: bool,
+        down: bool,
+        top: bool,
+        before: str,
         // backup
         'data-dir': str,
         // ui
