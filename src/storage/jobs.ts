@@ -27,6 +27,7 @@ import {
   type Action,
   approvalPath,
   challengeSpecHash,
+  type Choice,
   type CiStatus,
   isSpecChallenge,
   type JobMode,
@@ -358,6 +359,8 @@ export interface TransitionOptions extends Auth {
   authority?: Authority | undefined;
   /** See `TransitionContext.approved`; only `completeCi` sets it. */
   approved?: boolean | undefined;
+  /** See `TransitionContext.choices`; only `orch job transition ... escalate --choice` sets it. */
+  choices?: Choice[] | undefined;
 }
 
 export function transitionJob(
@@ -389,6 +392,7 @@ export function transitionJob(
       integration: opts.integration,
       authority: opts.authority,
       approved: opts.approved,
+      choices: opts.choices,
     });
   });
 }

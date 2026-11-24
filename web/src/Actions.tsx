@@ -34,6 +34,7 @@ const LABEL: Record<DashboardAction, string> = {
   'refresh-pr': 'Refresh the PR state from GitHub',
   'remove-worktree': 'Remove the worktree (the branch is kept)',
   'fix-conflicts': 'Fix merge conflicts with the base',
+  answer: 'Answer the question',
 };
 
 const STAGES = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci'] as const;
@@ -96,7 +97,9 @@ function effect(a: DashboardAction, d: JobDetailView, to: string): string {
           : '';
       return `${why}. Merges ${base} into the branch: a conflicting merge is aborted and recorded, and the job returns to build as pending for the builder to resolve it.${ci} No session is started; resume the job from a Claude Code session.`;
     }
+    // An answer is described by the action its choice maps to.
     case 'refresh-pr':
+    case 'answer':
       return '';
   }
 }
@@ -116,6 +119,10 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ActionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The choice the open `answer` dialog is for; the dialog then reads as the action it maps to.
+  const [choice, setChoice] = useState<number | null>(null);
+  const picked = open === 'answer' && choice !== null ? detail.choices?.[choice] : undefined;
+  const shown = picked ? picked.action : open;
 
   const finished = detail.job.status === 'completed' || detail.job.status === 'cancelled';
   // The server lists what the workflow allows here; the client only decides prominence.
@@ -188,7 +195,13 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     if (!plain && reason.trim()) body.reason = reason.trim();
     if (plain || force) body.force = true;
     if (open === 'approve') body.to = to;
+    if (open === 'answer' && choice !== null) body.choice = choice;
     await send(body);
+  };
+
+  const answer = (i: number) => {
+    start('answer');
+    setChoice(i);
   };
 
   // Refresh PR only reads GitHub and records the PR state: no confirm. Finished jobs force, like Archive.
@@ -202,6 +215,30 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         <Typography variant="body2" color="text.secondary">
           No actions: the job is {detail.job.status}.
         </Typography>
+      )}
+      {detail.choices && detail.choices.length > 0 && (
+        <Box component="section" aria-labelledby="choices-title" data-testid="choices">
+          <Typography id="choices-title" variant="subtitle2">
+            Choices
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            The session that escalated offers these answers; picking one continues the job from it.
+          </Typography>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', mt: 1 }}>
+            {detail.choices.map((c, i) => (
+              <Button
+                key={c.label}
+                variant="contained"
+                disabled={busy || !c.available}
+                onClick={() => {
+                  answer(i);
+                }}
+              >
+                {c.label}
+              </Button>
+            ))}
+          </Stack>
+        </Box>
       )}
       <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
         {allowed.has('merge') &&
@@ -416,14 +453,18 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                 ? `${verb} this job?`
                 : open === 'approve'
                   ? resumeAt(to)
-                  : open
-                    ? LABEL[open]
-                    : ''}
+                  : picked
+                    ? picked.label
+                    : open
+                      ? LABEL[open]
+                      : ''}
         </DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={plain ? undefined : { mt: 1 }}>
-            {open && (
-              <Typography data-testid="action-effect">{effect(open, detail, to)}</Typography>
+            {shown && (
+              <Typography data-testid="action-effect">
+                {effect(shown, detail, picked?.to ?? to)}
+              </Typography>
             )}
             {plain ? (
               <>
@@ -482,7 +523,9 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                     label={
                       open === 'accept-delivery'
                         ? 'Reason (required; recorded as the human close-out)'
-                        : "Reason (recorded in the job's events)"
+                        : picked
+                          ? 'Note (optional; recorded and passed to the next session)'
+                          : "Reason (recorded in the job's events)"
                     }
                     required={open === 'accept-delivery'}
                     value={reason}
@@ -508,12 +551,12 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                     label={`Take the job from session ${detail.job.ownerSession ?? ''} (its token stops working)`}
                   />
                 )}
-                {open === 'accept-delivery' ? (
+                {shown === 'accept-delivery' ? (
                   <Alert severity="warning" variant="outlined">
                     This completes the job without a passing CI verdict and records your reason as
                     the human close-out. It does not merge or mark the PR ready.
                   </Alert>
-                ) : open === 'cancel' ? (
+                ) : shown === 'cancel' ? (
                   <Alert severity="warning" variant="outlined">
                     This cannot be undone: a cancelled job is never resumed.
                   </Alert>
@@ -544,7 +587,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
           </Button>
           <Button
             variant="contained"
-            color={open === 'cancel' ? 'error' : open === 'merge' ? 'success' : 'primary'}
+            color={shown === 'cancel' ? 'error' : open === 'merge' ? 'success' : 'primary'}
             onClick={() => {
               void submit();
             }}

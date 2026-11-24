@@ -5,7 +5,7 @@
  * registered results, and returns the new job fields plus the events to append. It performs no
  * I/O. `src/storage/jobs.ts` applies the result inside a transaction.
  */
-import { WorkflowError } from './errors.ts';
+import { UsageError, WorkflowError } from './errors.ts';
 import { ROLES } from './roles.ts';
 import type { Authority } from './verification.ts';
 import type { Artifact, Job, Review } from '../storage/schema.ts';
@@ -90,6 +90,68 @@ export const ACTIONS = [
   'cancel',
 ] as const;
 export type Action = (typeof ACTIONS)[number];
+
+/**
+ * What a session escalating with `--choice` may offer the human: each kind is one existing
+ * dashboard decision (decision 2026-11-23-needs-human-choices). `resume` names its stage.
+ */
+export const CHOICE_KINDS = ['resume', 'rework', 'review', 'accept-delivery', 'cancel'] as const;
+export type ChoiceKind = (typeof CHOICE_KINDS)[number];
+export interface Choice {
+  kind: ChoiceKind;
+  /** `resume` only: the stage the job returns to. */
+  to?: Stage;
+  label: string;
+}
+export const MAX_CHOICES = 5;
+export const CHOICE_LABEL_MAX = 120;
+/** Stages a `resume:<stage>` choice may name: every stage the dashboard's Resume can return to. */
+const CHOICE_STAGES: readonly Stage[] = STAGES.filter(
+  (s) => s !== 'needs-human' && s !== 'completed',
+);
+// The same characters notices strip (`stripControl` in flake.ts): a label is shown as one line.
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHAR = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * Parse `--choice "<kind>[:<stage>]=<label>"` values; undefined when none were given. Refuses
+ * (UsageError) an unknown kind, a stage on anything but resume or a missing or undeliverable one,
+ * and a blank, over-long, control-character, or duplicate label, and more than MAX_CHOICES.
+ */
+export function parseChoices(values: readonly string[] | undefined): Choice[] | undefined {
+  if (values === undefined || values.length === 0) return undefined;
+  if (values.length > MAX_CHOICES) {
+    throw new UsageError(`At most ${String(MAX_CHOICES)} --choice values are allowed.`);
+  }
+  const out: Choice[] = [];
+  for (const value of values) {
+    const bad = (why: string): never => {
+      throw new UsageError(`--choice ${JSON.stringify(value)}: ${why}`);
+    };
+    const eq = value.indexOf('=');
+    if (eq < 0) bad('expected <kind>[:<stage>]=<label>');
+    const [kind, stage, ...extra] = value.slice(0, eq).split(':');
+    const label = value.slice(eq + 1).trim();
+    if (!CHOICE_KINDS.includes(kind as ChoiceKind)) {
+      bad(`kind must be one of ${CHOICE_KINDS.join(', ')}`);
+    }
+    if (extra.length > 0) bad('expected <kind>[:<stage>]=<label>');
+    if (kind === 'resume' && !CHOICE_STAGES.includes(stage as Stage)) {
+      bad(`resume needs :<stage>, one of ${CHOICE_STAGES.join(', ')}`);
+    }
+    if (kind !== 'resume' && stage !== undefined) bad(`only resume takes a :<stage>`);
+    if (label === '') bad('the label is blank');
+    if (label.length > CHOICE_LABEL_MAX) {
+      bad(`the label is longer than ${String(CHOICE_LABEL_MAX)} characters`);
+    }
+    if (CONTROL_CHAR.test(label)) bad('the label contains control characters');
+    if (out.some((c) => c.label === label)) bad('the label is used by another choice');
+    out.push(
+      kind === 'resume' ? { kind, to: stage as Stage, label } : { kind: kind as ChoiceKind, label },
+    );
+  }
+  return out;
+}
 
 export const TERMINAL_STATUSES: readonly Status[] = ['completed', 'cancelled'];
 /** Statuses a session resumes from (`blocked` always comes with stage needs-human). */
@@ -284,6 +346,8 @@ export interface TransitionContext {
    * verdict is the pre-review pass and the job goes to review instead of completing.
    */
   approved?: boolean | undefined;
+  /** `escalate` only: the answers the human may pick (`parseChoices`), kept on `job.blocked`. */
+  choices?: Choice[] | undefined;
 }
 
 export interface TransitionResult {
@@ -455,9 +519,23 @@ export function transition(
 
     case 'escalate': {
       if (stage === 'needs-human') reject('already escalated');
+      // A job's mode never changes, so a choice refused here could never be answered later.
+      const unreachable = ctx.choices?.find((c) => c.to && !FAST_RESUME_TARGETS.includes(c.to));
+      if (job.mode === 'fast' && unreachable) {
+        reject(
+          `choice "${unreachable.label}" resumes to ${String(unreachable.to)}, but a fast job ` +
+            `resumes only to ${FAST_RESUME_TARGETS.join(', ')}`,
+        );
+      }
+      const payload = { from: stage, reason: ctx.reason ?? null };
       return {
         patch: { stage: 'needs-human', status: 'blocked', returnStage: stage },
-        events: [{ type: 'job.blocked', payload: { from: stage, reason: ctx.reason ?? null } }],
+        events: [
+          {
+            type: 'job.blocked',
+            payload: ctx.choices ? { ...payload, choices: ctx.choices } : payload,
+          },
+        ],
       };
     }
 

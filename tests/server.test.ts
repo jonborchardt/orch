@@ -855,6 +855,67 @@ describe('mutations', () => {
     expect((await row(ids.completed))?.archivedAt).toBeNull();
   });
 
+  it('shows needs-human choices and answers one; choice is a non-negative integer, only with answer', async () => {
+    const h = { ...same(), 'X-Orch-Csrf': csrf };
+    const j = createJob(store, {
+      title: 'Choose',
+      description: 'Pick one',
+      repo: 'github.com/acme/alpha',
+      repoPath: tempDir('choose-'),
+      baseBranch: 'main',
+    });
+    dirs.push(j.repoPath);
+    let { token } = claimJob(store, j.id, { session: 's' });
+    transitionJob(store, j.id, 'start', { token });
+    transitionJob(store, j.id, 'escalate', {
+      token,
+      reason: 'which way',
+      choices: [
+        { kind: 'resume', to: 'spec', label: 'Go on' },
+        { kind: 'review', label: 'Review it' },
+      ],
+    });
+    const d = detail(store, j.id);
+    expect(d.actions).toContain('answer');
+    // Round 0: nothing was built, so a review is not available, as the action list says.
+    expect(d.actions).not.toContain('request-review');
+    expect(d.choices).toEqual([
+      { kind: 'resume', to: 'spec', label: 'Go on', action: 'approve', available: true },
+      { kind: 'review', label: 'Review it', action: 'request-review', available: false },
+    ]);
+    expect(detail(store, ids.fresh).choices).toBeNull();
+    expect(detail(store, ids.blocked).choices).toBeNull();
+
+    const before = getJob(store.db, j.id);
+    for (const body of [
+      { action: 'answer' },
+      { action: 'answer', choice: -1 },
+      { action: 'answer', choice: 1.5 },
+      { action: 'answer', choice: '0' },
+      { action: 'approve', choice: 0 },
+      { action: 'answer', choice: 2 },
+    ]) {
+      expect((await post(j.id, body, h)).status, JSON.stringify(body)).toBe(422);
+    }
+    const body = { action: 'answer', choice: 0 };
+    expect((await post(j.id, body, same())).status).toBe(403);
+    expect((await post(j.id, body, { ...h, Origin: 'http://evil.example' })).status).toBe(403);
+    expect(getJob(store.db, j.id)).toEqual(before);
+
+    const ok = await post(j.id, { ...body, reason: 'fine' }, h);
+    expect(ok.status).toBe(200);
+    const r = (await ok.json()) as ActionResponse;
+    expect([r.job.stage, r.job.status, r.job.ownerSession]).toEqual(['spec', 'pending', null]);
+    expect(r.resumeCommand).toBe(`orch factory resume ${j.id} --session <name>`);
+    expect(detail(store, j.id).choices).toBeNull();
+
+    // A later escalation without choices replaces them: nothing is offered.
+    token = claimJob(store, j.id, { session: 's' }).token;
+    transitionJob(store, j.id, 'escalate', { token, reason: 'again' });
+    expect(detail(store, j.id).choices).toBeNull();
+    expect(detail(store, j.id).actions).not.toContain('answer');
+  });
+
   it('dashboardAction enforces the same rules in-process', () => {
     expect(() => dashboardAction(store, ids.cancelled, { action: 'cancel' })).toThrow(
       /already cancelled/,

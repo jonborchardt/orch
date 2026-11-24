@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { WorkflowError } from '../src/core/errors.ts';
+import { UsageError, WorkflowError } from '../src/core/errors.ts';
 import {
   type Action,
+  parseChoices,
   cannotAcceptDelivery,
   challengeSlot,
   challengeSpecHash,
@@ -1079,5 +1080,105 @@ describe('endsRun: only run-wide outcomes end the queue', () => {
     ]) {
       expect(endsRun(code), String(code)).toBe(false);
     }
+  });
+});
+
+describe('needs-human choices (escalate --choice)', () => {
+  it('parses kinds, the resume stage, and trimmed labels in order', () => {
+    expect(parseChoices(undefined)).toBeUndefined();
+    expect(parseChoices([])).toBeUndefined();
+    expect(
+      parseChoices([
+        'resume:approve=Approve as is',
+        'cancel= Drop it ',
+        'rework=Build again',
+        'review=Review again',
+        'accept-delivery=Close it out',
+      ]),
+    ).toEqual([
+      { kind: 'resume', to: 'approve', label: 'Approve as is' },
+      { kind: 'cancel', label: 'Drop it' },
+      { kind: 'rework', label: 'Build again' },
+      { kind: 'review', label: 'Review again' },
+      { kind: 'accept-delivery', label: 'Close it out' },
+    ]);
+    // A label may itself contain = and :.
+    expect(parseChoices(['resume:ci=Retry: a=b'])).toEqual([
+      { kind: 'resume', to: 'ci', label: 'Retry: a=b' },
+    ]);
+  });
+
+  it.each([
+    ['an unknown kind', ['merge=Ship it']],
+    ['no =', ['cancel']],
+    ['resume with no stage', ['resume=Go on']],
+    ['resume:needs-human', ['resume:needs-human=Wait']],
+    ['resume:completed', ['resume:completed=Done']],
+    ['resume to an unknown stage', ['resume:deploy=Deploy']],
+    ['a stage on another kind', ['cancel:build=Drop']],
+    ['a blank label', ['cancel=   ']],
+    ['a duplicate label', ['cancel=Same', 'rework=Same']],
+    ['an over-long label', [`cancel=${'x'.repeat(121)}`]],
+    ['a control character', ['cancel=Drop\u001b[31m it']],
+    ['more than five', ['rework=a', 'rework=b', 'rework=c', 'rework=d', 'rework=e', 'rework=f']],
+  ])('refuses %s with a UsageError', (_name, values) => {
+    expect(() => parseChoices(values)).toThrow(UsageError);
+  });
+
+  it('accepts a 120-character label', () => {
+    expect(parseChoices([`cancel=${'x'.repeat(120)}`])?.[0]?.label).toHaveLength(120);
+  });
+
+  const ctx = (choices: string[]): TransitionContext => ({
+    artifacts: [],
+    reviews: [],
+    reason: 'r',
+    choices: parseChoices(choices),
+  });
+
+  it('records the choices on job.blocked, and no choices key without them', () => {
+    const r = transition(
+      job('approve', 'running'),
+      'escalate',
+      ctx(['resume:approve=Approve as is']),
+    );
+    expect(r.events[0]?.payload).toEqual({
+      from: 'approve',
+      reason: 'r',
+      choices: [{ kind: 'resume', to: 'approve', label: 'Approve as is' }],
+    });
+    const plain = transition(job('approve', 'running'), 'escalate', { artifacts: [], reviews: [] });
+    expect(plain.events[0]?.payload).not.toHaveProperty('choices');
+  });
+
+  it.each(['approve', 'spec', 'review', 'simplify'])(
+    'refuses a fast job escalating with resume:%s, naming the fast resume targets',
+    (stage) => {
+      const fast = job('build', 'running', { mode: 'fast' });
+      expect(() => transition(fast, 'escalate', ctx([`resume:${stage}=Go`]))).toThrow(
+        /fast job resumes only to build, pr, ci, completed/,
+      );
+      expect(() => transition(fast, 'escalate', ctx([`resume:${stage}=Go`]))).toThrow(
+        WorkflowError,
+      );
+    },
+  );
+
+  it.each(['build', 'ci'])('lets a fast job offer resume:%s', (stage) => {
+    const fast = job('build', 'running', { mode: 'fast' });
+    const r = transition(fast, 'escalate', ctx([`resume:${stage}=Go`, 'cancel=Drop']));
+    expect(r.events[0]?.payload['choices']).toEqual([
+      { kind: 'resume', to: stage, label: 'Go' },
+      { kind: 'cancel', label: 'Drop' },
+    ]);
+  });
+
+  it('lets a full job offer resume:approve', () => {
+    const r = transition(
+      job('approve', 'running', { mode: 'full' }),
+      'escalate',
+      ctx(['resume:approve=Go']),
+    );
+    expect(r.patch).toMatchObject({ stage: 'needs-human', status: 'blocked' });
   });
 });

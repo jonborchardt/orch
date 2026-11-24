@@ -391,6 +391,43 @@ describe('a job that needs a person', () => {
     expect(eventsOf(jobId, 'job.resumed')[0]?.actor).toBe('dashboard');
     expect(stops(jobId)).toHaveLength(1);
   });
+
+  it('answered from its recorded choices, is continued by orch do with the answer as a notice', async () => {
+    const id = ticket('Offers choices');
+    const offer: Act = (job) => {
+      const { token } = claimJob(store, job.id, { session: RUNNER_SESSION });
+      transitionJob(store, job.id, 'start', { token });
+      transitionJob(store, job.id, 'escalate', {
+        token,
+        reason: 'two designs are possible',
+        choices: [
+          { kind: 'resume', to: 'spec', label: 'Take the first design' },
+          { kind: 'cancel', label: 'Drop it' },
+        ],
+      });
+    };
+    const l = launcher(offer, done);
+    await one(l, id);
+    const jobId = jobsOf(id)[0]?.id ?? '';
+    expect(getJob(store.db, jobId)).toMatchObject({ stage: 'needs-human', ownerSession: null });
+
+    const answered = dashboardAction(store, jobId, {
+      action: 'answer',
+      choice: 0,
+      reason: 'keep it small',
+    });
+    expect(answered.job).toMatchObject({ stage: 'spec', status: 'pending', ownerSession: null });
+    expect(answered.resumeCommand).toBe(`orch do ${key(id)}`);
+    expect(eventsOf(jobId, 'notice.posted').map((e) => e.payload['text'])).toEqual([
+      'Human answered "Take the first design": keep it small',
+    ]);
+
+    const again = await one(l, id);
+
+    expect(l.calls.map((c) => c.jobId)).toEqual([jobId, jobId]);
+    expect(again.tickets[0]).toMatchObject({ outcome: 'done', jobId });
+    expect(status(id)).toBe('done');
+  });
 });
 
 describe('resume in the middle of a re-land', () => {

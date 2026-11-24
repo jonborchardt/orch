@@ -186,6 +186,17 @@ Claude requests an action; `orch job transition <id> <action>` validates and app
 | `rework`   | stage `approve` with `decision.md` saying `REWORK-BUILD` or `REWORK-SPEC` (scope gap)       | stage `build` or `spec`, status `pending`; `scopeReworks` + 1; the second scope gap goes to `needs-human` instead                                                            |
 | `cancel`   | any job not already finished                                                                | status `cancelled`                                                                                                                                                           |
 
+`escalate` takes up to five `--choice "<kind>[:<stage>]=<label>"` values: answers a human can pick
+in the dashboard's Choices block (decision 2026-11-23-needs-human-choices). `<kind>` is
+`resume:<stage>` (spec through ci), `rework`, `review`, `accept-delivery`, or `cancel`, the
+dashboard actions Resume at, Request rework, Request review round, Accept delivery, and Cancel.
+Labels are trimmed, non-blank, unique, at most 120 characters, and free of control characters; a
+bad choice, or `--choice` on any other action, is a usage error (exit 2). The choices are kept on
+the `job.blocked` event (`choices: [{ kind, to?, label }]`); only the newest `job.blocked` counts,
+and only while the job is in `needs-human`, so escalating again replaces them. A fast job's
+escalate is refused (exit 1, nothing written) when a `resume` choice names a stage outside build,
+pr, ci, and completed: its mode never changes, so such a choice could never be answered.
+
 Required artifacts, relative to the job's artifact directory and registered with
 `orch job artifact add`: `spec.md`, `build.md`, `round-N/simplify.md` (with
 `round-N/simplify-review.md`), `round-N/consolidated.md`, `decision.md`, `pr.md`.

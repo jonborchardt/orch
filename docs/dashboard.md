@@ -313,6 +313,7 @@ control stays neutral, since the right transition is a human call.
 | Accept verification policy | worktree `factory.json` differs                                                                                                                                                                                                                          | snapshot it as the job's policy (`jobs.policy`)                                                                                             |
 | Accept delivery            | `needs-human` from `ci`, PR head observed, and GitHub reported no checks at all or the PR was merged by hand; a reason is required                                                                                                                       | `resume --to completed`, recorded as a human close-out                                                                                      |
 | Cancel job                 | not finished                                                                                                                                                                                                                                             | `cancel`                                                                                                                                    |
+| A choice (`answer`)        | stage `needs-human` and the newest `job.blocked` recorded choices; the button is enabled when the action the choice maps to is allowed                                                                                                                   | that action, with reason `dashboard: answer "<label>"` plus the note; a notice for the next session unless the job finished                 |
 | Archive                    | status `completed` or `cancelled`, not archived                                                                                                                                                                                                          | sets `jobs.archivedAt`; event `job.archived`                                                                                                |
 | Unarchive                  | status `completed` or `cancelled`, archived                                                                                                                                                                                                              | clears `jobs.archivedAt`; event `job.unarchived`                                                                                            |
 | Merge                      | completed on GitHub's verdict, `prState` `ready`, `ciStatus` `passing`, `ciHead` set                                                                                                                                                                     | `gh pr merge --merge --match-head-commit <ciHead>`                                                                                          |
@@ -334,6 +335,23 @@ Start it with `/factory <new id>` in a new session; once its PR merges, close th
 recorded on `pr.observed` and `ci.observed` (Refresh PR, `orch gh ci`), so it is only as fresh as
 the last read; an observation without the field counts as unknown
 (`docs/decisions/2026-11-19-dashboard-fixes-base-conflicts-as-rework.md`).
+
+**Choices.** A session that escalates with `orch job transition <id> escalate --choice
+"<kind>[:<stage>]=<label>"` (`docs/workflow.md`) offers the human concrete answers. While the job
+is in `needs-human`, the detail view's `choices` lists the newest `job.blocked` event's choices in
+order, each with the dashboard action it maps to (`resume:<stage>` is Resume at that stage,
+`rework` Request rework, `review` Request review round, `accept-delivery` Accept delivery, `cancel`
+Cancel) and whether that action is in `actions`. The job detail shows them as a **Choices** block
+above the other controls, one button per choice labelled with its label (plain text); a button
+whose action is not allowed is disabled. A button opens a confirm dialog with the mapped action's
+effect sentence and an optional note. Confirm posts `{ action: 'answer', choice: <index>, reason?:
+<note> }`: the server re-reads the choices inside the lease, refuses (422) an index out of range or
+a job no longer offering that choice, and otherwise runs exactly the mapped action, with its own
+refusals; the label stands in for the reason Accept delivery requires. When the job is still
+unfinished afterwards the answer is posted as a notice (`Human answered "<label>": <note>`), which
+the next `orch factory next` shows to whichever session continues the job, and the message names
+the command that continues it (`orch do <ticket>` for a ticketed job). No session is started. The
+other controls stay available.
 
 Accept delivery is the only control that completes a job by hand. It is listed by the same rule the
 transition applies (`cannotAcceptDelivery` in `src/core/workflow.ts`), so it never appears while
