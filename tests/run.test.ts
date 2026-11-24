@@ -502,21 +502,21 @@ describe('stop and resume', () => {
   it('resume never starts a second Claude while the first may be alive', async () => {
     const id = ticket('Orphaned child');
     const job = dispatchJob(store, { ticket: id, session: RUNNER_SESSION, cwd: clone }).job;
-    // The controller died; the child it started is this very process, which is certainly alive.
+    // The controller died; the child it started is this very process, recorded with its real
+    // start time, so the OS lookup (real here) confirms it is the original.
+    const startedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
     writeSession(
       store.paths,
-      interrupted({
-        ticketId: id,
-        jobId: job.id,
-        child: { pid: process.pid, startedAt: new Date().toISOString() },
-      }),
+      interrupted({ ticketId: id, jobId: job.id, child: { pid: process.pid, startedAt } }),
     );
     const l = launcher(done);
 
-    await expect(resumeSession(store, {}, { launch: l.launch, ...quick })).rejects.toThrow(
-      /may still be running/,
-    );
+    const refusal = resumeSession(store, {}, { launch: l.launch, ...quick });
+    await expect(refusal).rejects.toThrow(/is still running|may still be running/);
+    await expect(refusal).rejects.toThrow(`PID ${String(process.pid)}`);
+    await expect(refusal).rejects.toThrow(startedAt);
     expect(() => stopSession(store, 'now')).toThrow(/does not signal a PID/);
+    expect(() => stopSession(store, 'now')).toThrow(startedAt);
     expect(l.calls).toHaveLength(0);
     expect(runnerStatus(store)).toMatchObject({
       state: 'interrupted',
@@ -529,6 +529,49 @@ describe('stop and resume', () => {
     expect(l.calls.map((c) => c.jobId)).toEqual([job.id]);
     expect(r.completed).toBe(1);
     expect(jobsOf(id)).toHaveLength(1);
+  }, 300_000);
+
+  it('a PID another program reused, by its start time, blocks neither stop nor resume', async () => {
+    const id = ticket('Reused PID');
+    const job = dispatchJob(store, { ticket: id, session: RUNNER_SESSION, cwd: clone }).job;
+    const startedAt = new Date().toISOString();
+    const orphan = interrupted({
+      ticketId: id,
+      jobId: job.id,
+      child: { pid: process.pid, startedAt },
+    });
+    // The live process at that PID started an hour after the child was launched.
+    const reused = () => Date.parse(startedAt) + 3_600_000;
+
+    writeSession(store.paths, orphan);
+    expect(stopSession(store, 'now', 0, reused).message).toMatch(/discarded/);
+
+    writeSession(store.paths, orphan);
+    const l = launcher(done);
+    const r = await resumeSession(store, {}, { launch: l.launch, startTime: reused, ...quick });
+    expect(l.calls.map((c) => c.jobId)).toEqual([job.id]);
+    expect(r.completed).toBe(1);
+  });
+
+  it('a child whose start time cannot be read still blocks stop and resume', async () => {
+    const id = ticket('Unknown identity');
+    const job = dispatchJob(store, { ticket: id, session: RUNNER_SESSION, cwd: clone }).job;
+    const startedAt = new Date().toISOString();
+    writeSession(
+      store.paths,
+      interrupted({ ticketId: id, jobId: job.id, child: { pid: process.pid, startedAt } }),
+    );
+    const unknown = () => null;
+    const l = launcher(done);
+
+    await expect(
+      resumeSession(store, {}, { launch: l.launch, startTime: unknown, ...quick }),
+    ).rejects.toThrow(/identity unknown/);
+    expect(() => stopSession(store, 'now', 0, unknown)).toThrow(
+      `PID ${String(process.pid)}, recorded start ${startedAt}`,
+    );
+    expect(l.calls).toHaveLength(0);
+    expect(readSession(store.paths)?.finished).toBeNull();
   });
 
   it('a controller that died before dispatching anything resumes into its queue', async () => {

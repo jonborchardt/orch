@@ -515,8 +515,17 @@ current lock), `runner.json`, `runner.stop-next`, and `runner.stop-now`.
 flight; everything else `orch status` prints is read from the job row. After a crash,
 `orch resume` re-runs `runTicket` for the ticket in flight, which continues the same job or
 finishes the same merge, and then goes on as the session was configured. It refuses while the
-recorded child PID is alive (`--force` when that PID is another program); `orch start` and
-`orch do` refuse while an interrupted session exists.
+recorded child PID is alive and is still the child: `childIdentity` (`src/ops/runner-state.ts`)
+reads the OS start time of the process at that PID (`processStartMs` in `src/core/exec.ts`:
+`Win32_Process.CreationDate` on Windows, `ps -o lstart=` elsewhere) and compares it with the
+recorded `startedAt`. Inside the window (10 s before to 60 s after) it is the original child and
+resume and `orch stop` refuse; outside it the PID was reused and they go ahead. When the start time
+cannot be read (unsupported, error, timeout) the answer is unknown and they refuse. The refusal
+names the PID, the recorded start, and an inspect command: end the process yourself if it is
+Claude and rerun, or use `--force` only if it is another program. `orch` never signals or adopts
+it. `orch status` and the dashboard keep the cheap PID-and-boot check, so they may still say "may
+still be running" for a reused PID. `orch start` and `orch do` refuse while an interrupted session
+exists.
 
 A live controller can look dead: after the machine sleeps past the stale threshold its heartbeat
 is old until the next beat, and a starter in that window takes the next generation. So the holder

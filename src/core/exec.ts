@@ -119,6 +119,46 @@ function processTable(): ProcRow[] {
 }
 
 /**
+ * When the live process at `pid` started (Unix ms), read-only; null when the platform or the
+ * lookup cannot say (no such process, unsupported, error, timeout, unparseable output).
+ * Windows: `Win32_Process.CreationDate` for that PID only. POSIX: `ps -o lstart=`, whole seconds,
+ * with `LC_ALL=C` so the date parses.
+ */
+export function processStartMs(pid: number): number | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const r = WIN
+    ? spawnSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          // pid is a validated integer, the only value in this fixed command.
+          `Get-CimInstance Win32_Process -Filter 'ProcessId=${String(pid)}' -Property CreationDate | ` +
+            'ForEach-Object { if ($_.CreationDate) { ' +
+            '([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } }',
+        ],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: TABLE_TIMEOUT_MS,
+          windowsHide: true,
+        },
+      )
+    : spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: TABLE_TIMEOUT_MS,
+        env: { ...process.env, LC_ALL: 'C' },
+      });
+  if (r.error || r.status !== 0) return null;
+  const out = r.stdout.trim();
+  if (out === '') return null;
+  const ms = WIN ? Number(out) : Date.parse(out);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
  * Terminate what a killed command left running. `spawnSync` kills only the direct child; on
  * Windows a shell between us and the real work (the npm shim is `cmd.exe`) dies alone and the
  * tree under it survives, still holding files and CPU. Each pass reads the table and kills every

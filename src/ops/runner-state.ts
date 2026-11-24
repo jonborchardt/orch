@@ -22,6 +22,7 @@ import { uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { ValidationError } from '../core/errors.ts';
+import { processStartMs } from '../core/exec.ts';
 import { runnerPaths, type RuntimePaths } from '../core/paths.ts';
 import { freshRecord } from './recover.ts';
 import { alive, sleep } from './verify-lock.ts';
@@ -246,13 +247,51 @@ export function clearStop(paths: RuntimePaths, which: keyof StopRequests): void 
 }
 
 /**
- * Whether the Claude process a dead controller left behind may still be running. Only the PID
- * and the boot time are known, so a reused PID reads as alive: the caller refuses rather than
- * start a second agent on the job, and `orch resume --force` is the person's answer.
+ * Whether the Claude process a dead controller left behind may still be running, from the PID
+ * and the boot time only, so a reused PID reads as alive. Cheap: `runnerStatus` uses it; resume
+ * and stop decide with `childIdentity`, which also asks the OS when that PID started.
  */
 export function childMayBeAlive(session: RunnerSession, nowMs = Date.now()): boolean {
   const child = session.child;
   if (!child || !alive(child.pid)) return false;
   const started = Date.parse(child.startedAt);
   return Number.isNaN(started) || started >= bootMs(nowMs) - 60_000;
+}
+
+/**
+ * How far the OS start time may sit before the recorded `startedAt` (taken just before the
+ * spawn) and still be the child: POSIX `ps` reports whole seconds, and the OS process clock can
+ * differ from `Date.now()` by a little.
+ */
+export const START_SLACK_BEFORE_MS = 10_000;
+/** How far after `startedAt` it may sit: the spawn itself can be delayed on a loaded machine. */
+export const START_SLACK_AFTER_MS = 60_000;
+
+/**
+ * `original`: the live process started when the child was launched. `reused`: it started at
+ * another time, so it is another program on the same PID. `unknown`: no start time was read.
+ */
+export function classifyStart(
+  recordedMs: number,
+  observedMs: number | null,
+): 'original' | 'reused' | 'unknown' {
+  if (observedMs === null || !Number.isFinite(recordedMs)) return 'unknown';
+  return observedMs >= recordedMs - START_SLACK_BEFORE_MS &&
+    observedMs <= recordedMs + START_SLACK_AFTER_MS
+    ? 'original'
+    : 'reused';
+}
+
+/**
+ * Whether the recorded child is still the process at its PID. `gone` and `reused` let resume
+ * and stop go ahead; `original` and `unknown` refuse. Never signals the process.
+ */
+export function childIdentity(
+  session: RunnerSession,
+  startTime: (pid: number) => number | null = processStartMs,
+  nowMs = Date.now(),
+): 'gone' | 'original' | 'reused' | 'unknown' {
+  const child = session.child;
+  if (!child || !childMayBeAlive(session, nowMs)) return 'gone';
+  return classifyStart(Date.parse(child.startedAt), startTime(child.pid));
 }

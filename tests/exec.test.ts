@@ -10,7 +10,13 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { descendantsOf, type ProcRow, spawnCommand, sweepDescendants } from '../src/core/exec.ts';
+import {
+  descendantsOf,
+  processStartMs,
+  type ProcRow,
+  spawnCommand,
+  sweepDescendants,
+} from '../src/core/exec.ts';
 import { tempDir } from './helpers.ts';
 
 const WIN = process.platform === 'win32';
@@ -238,4 +244,14 @@ describe('sweepDescendants', () => {
     expect(out.failed).toEqual([4]);
     expect(out.killed).toEqual([]);
   });
+});
+
+describe('processStartMs', () => {
+  it("reads this process's start time and gives null for a PID nobody has", () => {
+    const started = processStartMs(process.pid);
+    expect(started).not.toBeNull();
+    expect(Math.abs((started ?? 0) - (Date.now() - process.uptime() * 1000))).toBeLessThan(5_000);
+    expect(processStartMs(2 ** 31 - 1)).toBeNull();
+    expect(processStartMs(-1)).toBeNull();
+  }, 150_000);
 });
