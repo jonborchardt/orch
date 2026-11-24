@@ -418,6 +418,13 @@ function requireChecklistAccounted(store: Store, job: Job): void {
   );
 }
 
+/** The text of every note on a ticket. */
+function ticketNotes(store: Store, ticketId: number): string[] {
+  return listTicketEvents(store.db, ticketId)
+    .filter((e) => e.type === 'ticket.note')
+    .map((e) => (typeof e.payload['text'] === 'string' ? e.payload['text'] : ''));
+}
+
 /**
  * A box decision.md defers to a follow-up (`- [ ] <item> — deferred to <id>`) has left the ticket:
  * it is no longer an unchecked box in the body, the follow-up is another active ticket, and a note
@@ -454,9 +461,7 @@ function requireDeferralsApplied(store: Store, ticket: Ticket, decision: string)
           `orch ticket note ${key} "${item}: deferred to ${next}", and complete again.`,
       );
     }
-    notes ??= listTicketEvents(store.db, ticket.id)
-      .filter((e) => e.type === 'ticket.note')
-      .map((e) => (typeof e.payload['text'] === 'string' ? e.payload['text'] : ''));
+    notes ??= ticketNotes(store, ticket.id);
     if (!notes.some((n) => n.includes(next))) {
       throw new ValidationError(
         `"${item}" is deferred to ${next} but no note on ticket ${key} names ${next}; run ` +
@@ -484,9 +489,7 @@ function requireInapplicableRemoved(store: Store, ticket: Ticket, decision: stri
           `${command}, and complete again.`,
       );
     }
-    notes ??= listTicketEvents(store.db, ticket.id)
-      .filter((e) => e.type === 'ticket.note')
-      .map((e) => (typeof e.payload['text'] === 'string' ? e.payload['text'] : ''));
+    notes ??= ticketNotes(store, ticket.id);
     if (!notes.some((n) => n.includes(`${item}: does not apply`))) {
       throw new ValidationError(
         `"${item}" does not apply but no note on ticket ${key} records it; run ${command} and ` +
