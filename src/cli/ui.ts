@@ -1,5 +1,7 @@
 /** `orch ui`: the one long-running command. Serves the dashboard on loopback until Ctrl+C. */
 import { spawn } from 'node:child_process';
+import { constants, fstatSync } from 'node:fs';
+import { isatty } from 'node:tty';
 
 import { UsageError } from '../core/errors.ts';
 import { DEFAULT_PORT, webDistDir } from '../core/paths.ts';
@@ -14,7 +16,8 @@ export interface UiOptions {
 export const UI_HELP = `Usage: orch ui [--port <n>] [--open]
 
 Starts the local factory dashboard at http://127.0.0.1:${String(DEFAULT_PORT)}/ (loopback only)
-and keeps running until interrupted. It reads the shared database and the job artifacts; its
+and keeps running until interrupted (Ctrl+C, SIGINT, SIGTERM, or a parent closing a piped stdin;
+a closed or null stdin is ignored, so a script or task can launch it). It reads the shared database and the job artifacts; its
 actions (approve, request review/rework, cancel) use the same validated workflow operations as
 the CLI and never pretend to wake a Claude session. Factory jobs do not need it to be running.
 `;
@@ -30,6 +33,21 @@ function openBrowser(url: string): void {
     spawn(exe, args, { stdio: 'ignore', detached: true }).unref();
   } catch {
     /* no browser available; the URL was printed */
+  }
+}
+
+/**
+ * Whether a closed stdin should stop the server: only a terminal or a pipe/socket a parent holds.
+ * The null device, a file, or a closed or invalid fd 0 reaches end at once, so it is ignored
+ * (ticket 0094). Mode bits, not `isFIFO()`, which reports false for a Windows pipe.
+ */
+function stdinOwnsLifetime(): boolean {
+  try {
+    if (isatty(0)) return true;
+    const type = fstatSync(0).mode & constants.S_IFMT;
+    return type === constants.S_IFIFO || type === constants.S_IFSOCK;
+  } catch {
+    return false;
   }
 }
 
@@ -65,8 +83,10 @@ export async function runUi(o: UiOptions): Promise<number> {
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
     // Windows consoles deliver Ctrl+C as SIGINT; a closed stdin also stops us when run as a child.
-    process.stdin.on('end', stop);
-    process.stdin.resume();
+    if (stdinOwnsLifetime()) {
+      process.stdin.on('end', stop);
+      process.stdin.resume();
+    }
   });
   return 0;
 }
