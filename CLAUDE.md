@@ -48,9 +48,10 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   claim runs in the job's insert transaction; `jobs_active_ticket_idx` allows one unfinished job
   per ticket); nothing completes a ticket except `orch ticket done` and a verified merge recorded
   by `recordMerge`. `core/todo-register.ts` and `ops/ticket-import.ts` exist only for the one-shot
-  `orch ticket import`. The skills `.claude/skills/log-todo` and `.claude/skills/dotodo` call
-  `orch` only (`dotodo` merges through `orch job merge`, never `gh`); `orch install` links them
-  globally along with `skills/factory`.
+  `orch ticket import`. The skill `.claude/skills/log-todo` calls `orch` only; `orch install`
+  links it globally along with `skills/factory`. `orch do <ticket>` is the one autonomous way to
+  run a ticket; the manual path is `/factory <job>` in a session, then `orch do <ticket>` or
+  `orch job merge` (decision 2026-11-23-manual-and-autonomous-ticket-runs).
 - Merging is one operation: `mergeJob` in `src/ops/merge.ts`, the only caller of `mergePr`, behind
   both `orch job merge` and the dashboard's Merge (decision 2026-11-20-orch-job-merge). Its rule
   is the pure `mergeDecision` in `core/workflow.ts`, fed GitHub's fresh answer; add a merge

@@ -103,8 +103,8 @@ function inspect(entry: Omit<LinkEntry, 'state'>): LinkEntry {
 /** Discover skills/agents under `sourceRoot` and inspect their targets under `claudeDir`. */
 export function planInstall(sourceRoot: string, claudeDir: string): LinkEntry[] {
   const entries: LinkEntry[] = [];
-  // `skills/` is the product skill; `.claude/skills/` holds the ticket skills (log-todo, dotodo),
-  // which stay usable in this checkout as project skills and are linked for every other repository.
+  // `skills/` is the product skill; `.claude/skills/` holds the ticket skill (log-todo),
+  // which stays usable in this checkout as a project skill and is linked for every other repository.
   for (const skillsDir of [join(sourceRoot, 'skills'), join(sourceRoot, '.claude', 'skills')]) {
     if (!existsSync(skillsDir)) continue;
     for (const d of readdirSync(skillsDir, { withFileTypes: true })) {
