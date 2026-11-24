@@ -1,11 +1,12 @@
 /** Dashboard API: read models, security guards, actions through the domain layer. */
+import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { jobArtifactDir } from '../src/core/paths.ts';
+import { installRoot, jobArtifactDir } from '../src/core/paths.ts';
 import {
   MAX_CI_REPAIRS_REASON,
   MAX_ROUNDS_REASON,
@@ -1255,33 +1256,37 @@ describe('blocker and resume derivation', () => {
 });
 
 describe('orch ui command', () => {
-  it('starts on a free port, answers on loopback, and stops when its stdin closes', async () => {
-    const home = tempDir('orch-ui-cli-');
-    dirs.push(home);
-    const { spawn } = await import('node:child_process');
-    const { installRoot } = await import('../src/core/paths.ts');
+  /** Spawns `orch ui --port 0` and resolves once it prints its URL; rejects if it exits first. */
+  async function startUi(home: string, stdin: 'pipe' | 'ignore') {
     const child = spawn(
       process.execPath,
       [join(installRoot(), 'src', 'cli', 'main.ts'), 'ui', '--port', '0'],
-      { env: { ...process.env, ORCH_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] },
+      { env: { ...process.env, ORCH_HOME: home }, stdio: [stdin, 'pipe', 'pipe'] },
     );
+    const exit = new Promise<number | null>((resolve) => child.once('exit', resolve));
     const url = await new Promise<string>((resolve, reject) => {
       let out = '';
-      child.stdout.on('data', (d: Buffer) => {
+      child.stdout?.on('data', (d: Buffer) => {
         out += d.toString();
         const m = /orch dashboard: (http:\/\/127\.0\.0\.1:\d+\/)/.exec(out);
         if (m?.[1]) resolve(m[1]);
       });
-      child.once('exit', (code) => {
+      void exit.then((code) => {
         reject(new Error(`exited ${String(code)}`));
       });
     });
+    return { child, url, exit };
+  }
+
+  it('starts on a free port, answers on loopback, and stops when its stdin closes', async () => {
+    const home = tempDir('orch-ui-cli-');
+    dirs.push(home);
+    const { child, url, exit } = await startUi(home, 'pipe');
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
     const r = await fetch(new URL('/api/jobs', url));
     expect(await r.json()).toEqual([]);
-    child.stdin.end();
-    const code = await new Promise<number | null>((resolve) => child.once('exit', resolve));
-    expect(code).toBe(0);
+    child.stdin?.end();
+    expect(await exit).toBe(0);
     await expect(fetch(new URL('/api/jobs', url))).rejects.toThrow();
     // Factory commands keep working with no dashboard running.
     const list = await orchAsync(home, home, ['--json', 'job', 'list']);
@@ -1292,38 +1297,14 @@ describe('orch ui command', () => {
   it('keeps serving when started with stdin closed (ticket 0094)', async () => {
     const home = tempDir('orch-ui-null-');
     dirs.push(home);
-    const { spawn } = await import('node:child_process');
-    const { installRoot } = await import('../src/core/paths.ts');
-    const child = spawn(
-      process.execPath,
-      [join(installRoot(), 'src', 'cli', 'main.ts'), 'ui', '--port', '0'],
-      { env: { ...process.env, ORCH_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    let exited = false;
-    const exit = new Promise<void>((resolve) =>
-      child.once('exit', () => {
-        exited = true;
-        resolve();
-      }),
-    );
-    const url = await new Promise<string>((resolve, reject) => {
-      let out = '';
-      child.stdout.on('data', (d: Buffer) => {
-        out += d.toString();
-        const m = /orch dashboard: (http:\/\/127\.0\.0\.1:\d+\/)/.exec(out);
-        if (m?.[1]) resolve(m[1]);
-      });
-      void exit.then(() => {
-        reject(new Error('exited before serving'));
-      });
-    });
+    const { child, url, exit } = await startUi(home, 'ignore');
     await new Promise((r) => setTimeout(r, 1500));
-    expect(exited).toBe(false);
+    expect(child.exitCode).toBeNull();
+    expect(child.signalCode).toBeNull();
     const r = await fetch(new URL('/api/jobs', url), { headers: { Connection: 'close' } });
     expect(await r.json()).toEqual([]);
     child.kill();
     await exit;
-    expect(exited).toBe(true);
   });
 });
 
