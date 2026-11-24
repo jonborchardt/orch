@@ -10,13 +10,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { FACTORY_HELP } from '../src/cli/factory.ts';
 import { runInstall } from '../src/cli/install.ts';
-import { JOB_HELP } from '../src/cli/job.ts';
 import { TICKET_HELP } from '../src/cli/ticket.ts';
 import { checkArtifact } from '../src/core/artifact-rules.ts';
 import { installRoot } from '../src/core/paths.ts';
 import { MODELS, ROLES } from '../src/core/roles.ts';
-import { MERGE_BLOCKS } from '../src/core/workflow.ts';
-import { MERGE_OUTCOMES } from '../src/ops/merge.ts';
 import { tempDir } from './helpers.ts';
 
 const root = installRoot();
@@ -228,12 +225,7 @@ describe('orch install with the real skill and agents', () => {
     const dry = runInstall({ source: root, 'claude-dir': claude, 'dry-run': true });
     expect(dry.problems).toBe(false);
     expect(dry.entries.map((e) => `${e.kind}:${e.name}`).sort()).toEqual(
-      [
-        'skill:factory',
-        'skill:log-todo',
-        'skill:dotodo',
-        ...ROLES.map((r) => `agent:${r.agent}`),
-      ].sort(),
+      ['skill:factory', 'skill:log-todo', ...ROLES.map((r) => `agent:${r.agent}`)].sort(),
     );
     const real = runInstall({ source: root, 'claude-dir': claude });
     expect(real.problems).toBe(false);
@@ -242,12 +234,10 @@ describe('orch install with the real skill and agents', () => {
       'name: factory',
     );
     expect(existsSync(join(claude, 'skills', 'factory', 'reference.md'))).toBe(true);
-    // The ticket skills are installed for every repository, from their project-skill location.
-    for (const name of ['log-todo', 'dotodo']) {
-      expect(readFileSync(join(claude, 'skills', name, 'SKILL.md'), 'utf8')).toContain(
-        `name: ${name}`,
-      );
-    }
+    // The ticket skill is installed for every repository, from its project-skill location.
+    expect(readFileSync(join(claude, 'skills', 'log-todo', 'SKILL.md'), 'utf8')).toContain(
+      'name: log-todo',
+    );
     expect(frontmatter(join(claude, 'agents', 'factory-builder.md'))['name']).toBe(
       'factory-builder',
     );
@@ -261,41 +251,20 @@ describe('the todo skills use the ticket commands that exist', () => {
   const skill = (name: string) =>
     readFileSync(join(root, '.claude', 'skills', name, 'SKILL.md'), 'utf8');
 
-  it('every orch ticket command a skill names is in orch ticket --help', () => {
-    for (const name of ['log-todo', 'dotodo']) {
-      const used = new Set([...skill(name).matchAll(/orch ticket ([a-z]+)/g)].map((m) => m[1]));
-      expect(used.size).toBeGreaterThan(3);
-      for (const cmd of used) {
-        expect(TICKET_HELP, `${name} uses orch ticket ${String(cmd)}`).toContain(
-          `\n  ${String(cmd)} `,
-        );
-      }
+  it('every orch ticket command log-todo names is in orch ticket --help', () => {
+    const used = new Set([...skill('log-todo').matchAll(/orch ticket ([a-z]+)/g)].map((m) => m[1]));
+    expect(used.size).toBeGreaterThan(3);
+    for (const cmd of used) {
+      expect(TICKET_HELP, `log-todo uses orch ticket ${String(cmd)}`).toContain(
+        `\n  ${String(cmd)} `,
+      );
     }
   });
 
-  it('neither skill writes the Markdown register any more, and dotodo links its job', () => {
-    for (const name of ['log-todo', 'dotodo']) {
-      expect(skill(name)).not.toMatch(/index\.mjs|INDEX\.md|todo\/NNNN/);
-    }
+  it('log-todo no longer writes the Markdown register, and a manual job can link a ticket', () => {
+    expect(skill('log-todo')).not.toMatch(/index\.mjs|INDEX\.md|todo\/NNNN/);
     expect(existsSync(join(root, '.claude', 'skills', 'log-todo', 'index.mjs'))).toBe(false);
-    expect(skill('dotodo')).toContain('--ticket <id>');
+    // The manual path starts a ticket's job with `orch factory start ... --ticket <id>`.
     expect(FACTORY_HELP).toContain('--ticket <id>');
-  });
-
-  it('dotodo merges only through orch job merge and knows every outcome it can print', () => {
-    const text = skill('dotodo');
-    expect(text).toContain('orch job merge <job> --json');
-    expect(JOB_HELP).toContain('\n  merge <id> ');
-    // No merge rule or gh merge command of its own: those live in mergeDecision and mergePr.
-    expect(text).not.toMatch(/match-head-commit|headRefOid|mergeable/);
-    expect(text).toContain('Never run `gh pr merge`');
-    for (const outcome of MERGE_OUTCOMES) expect(text).toContain(`\`${outcome}\``);
-    const codes = [...text.matchAll(/`code: ([a-z-]+)`/g)].map((m) => m[1]);
-    expect(codes).toEqual(['not-authorized', 'second-conflict']);
-    for (const code of codes) expect(MERGE_BLOCKS).toContain(code);
-    // The opt-in is the user's: the skill names the command and is told not to run it.
-    expect(text).toContain('orch factory config merge enable');
-    expect(text).toContain('do not run it yourself');
-    expect(FACTORY_HELP).toContain('config merge enable|disable|status');
   });
 });

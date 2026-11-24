@@ -250,13 +250,18 @@ Keep the `todo/` directory until the report has been checked; it is the backup.
 
 ## Skills
 
-`orch install` links both skills into `~/.claude/skills` next to `factory`, so `/log-todo` and
-`/dotodo` work in every repository; in this checkout they are also project skills.
+`orch install` links `log-todo` into `~/.claude/skills` next to `factory`, so `/log-todo` works
+in every repository; in this checkout it is also a project skill.
 
 `.claude/skills/log-todo` files and maintains tickets through `orch ticket --json`: it decides the
 split, the duplicate check, and the classification; `orch` allocates ids and enforces every rule.
-`.claude/skills/dotodo` runs one ticket through the factory with `--ticket <id>`, then calls
-`orch job merge`, which merges the PR and closes the ticket.
+
+`orch do <ticket>` runs a ticket autonomously: it creates or continues the ticket's job, runs
+`/factory <job>` headless, reads CI, and merges. To run one by hand, continue its job with
+`/factory <job>` in an interactive session, then merge with `orch do <ticket>` or
+`orch job merge <job>`. A ticket whose work is already on `main` is closed by a person:
+`orch factory cancel` on the job, then `orch ticket done <id> --note ...`
+(decision 2026-11-23-manual-and-autonomous-ticket-runs).
 
 ## What was taken from Beads
 
