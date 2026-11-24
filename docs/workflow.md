@@ -432,7 +432,9 @@ reason and releases, so the next pass or a human can pick the job up. The fifth 
 for the same head escalates to `needs-human` with `recovery retries exhausted: <last error>`. A
 claim by any other session resets the count. After a successful probe the next pass waits the
 smallest CI `waitSeconds`, at least 60 s. The worker never launches, resumes, or messages a Claude
-session and never removes a worktree.
+session and never removes a worktree. Before every pass and every episode the worker checks that
+`recovery.pid` still names it; once another worker has taken the file it stops and writes nothing
+more (decision 2026-11-24-recovery-worker-checks-its-pid-file).
 
 ## Factory controller
 

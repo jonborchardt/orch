@@ -147,11 +147,15 @@ function episode(store: Store, job: Job, entry: RecoveryJob): void {
   }
 }
 
-/** One pass: probe, classify every unfinished job, continue the recoverable ones. */
-export function recoverPass(store: Store): RecoveryPass {
+/**
+ * One pass: probe, classify every unfinished job, continue the recoverable ones. `owned` runs
+ * before each episode; once it returns false no further episode starts.
+ */
+export function recoverPass(store: Store, owned?: () => boolean): RecoveryPass {
   const at = now();
   const probeError = probeGitHub();
   const online = probeError === null;
+  let lost = false;
   const open = listJobs(store.db).filter(
     (j) => !TERMINAL_STATUSES.includes(j.status) && j.archivedAt === null,
   );
@@ -179,7 +183,10 @@ export function recoverPass(store: Store): RecoveryPass {
       waitSeconds:
         job.stage === 'ci' && job.ciStatus === 'pending' ? waitSeconds(pollsOf(job, events)) : null,
     };
-    if (online && c.class === 'recoverable') episode(store, job, entry);
+    if (online && c.class === 'recoverable' && !lost) {
+      if (owned && !owned()) lost = true;
+      else episode(store, job, entry);
+    }
     return entry;
   });
   return { at, online, probeError, jobs, nextSeconds: null };
@@ -219,7 +226,8 @@ function record(paths: RuntimePaths, pass: RecoveryPass): void {
  * Run passes until `signal` aborts (or once). Each pass writes the status file and one log line.
  * A pass that throws is logged as offline and retried with backoff, so the worker keeps going.
  * `beat` runs after every pass; when it returns false (another worker took the PID file) the
- * loop ends.
+ * loop ends. `owned` is checked before every pass, before every job episode, and after the pass;
+ * once it is false the worker returns a `superseded: ...` pass, unrecorded, and writes nothing more (no mail, status, log).
  */
 export async function runWorker(
   store: Store,
@@ -227,14 +235,25 @@ export async function runWorker(
     once?: boolean | undefined;
     signal?: AbortSignal | undefined;
     beat?: (() => boolean) | undefined;
+    owned?: (() => boolean) | undefined;
   } = {},
 ): Promise<RecoveryPass> {
+  const owned = opts.owned;
+  const superseded = (): RecoveryPass => ({
+    at: now(),
+    online: false,
+    probeError: 'superseded: another recovery worker holds the PID file',
+    jobs: [],
+    nextSeconds: null,
+  });
   let backoff: number | null = null;
   for (;;) {
+    // Loop top: runs before the first pass and after every delay (a machine sleep lands here).
+    if (owned && !owned()) return superseded();
     let pass: RecoveryPass;
     const mark = mailWatermark(store);
     try {
-      pass = recoverPass(store);
+      pass = recoverPass(store, owned);
     } catch (err) {
       pass = {
         at: now(),
@@ -244,6 +263,7 @@ export async function runWorker(
         nextSeconds: null,
       };
     }
+    if (owned && !owned()) return superseded();
     await reportJobMail(store, mark);
     const next = nextDelay(pass, backoff);
     backoff = next.backoff;
@@ -347,16 +367,22 @@ export function refuseIfRunning(paths: RuntimePaths, self?: number): void {
 }
 
 /**
- * Take the PID file for a foreground worker in this process. `beat` refreshes the heartbeat and
- * returns false once another worker holds the file; `release` removes it while it is still ours.
+ * Take the PID file for a foreground worker in this process. `owned` reports whether the file
+ * still names this process, writing nothing; `beat` refreshes the heartbeat and returns false once
+ * another worker holds the file; `release` removes it while it is still ours.
  */
-export function holdPidFile(paths: RuntimePaths): { beat: () => boolean; release: () => void } {
+export function holdPidFile(paths: RuntimePaths): {
+  owned: () => boolean;
+  beat: () => boolean;
+  release: () => void;
+} {
   const file = recoveryPaths(paths).pid;
   refuseIfRunning(paths, process.pid);
   const startedAt = now();
   writePid(file, { pid: process.pid, startedAt });
   const ours = () => readPid(file)?.pid === process.pid;
   return {
+    owned: ours,
     beat: () => {
       if (!ours()) return false;
       writePid(file, { pid: process.pid, startedAt, beatAt: now() });
