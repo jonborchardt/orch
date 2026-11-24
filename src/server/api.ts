@@ -18,6 +18,7 @@ import {
   TERMINAL_STATUSES,
 } from '../core/workflow.ts';
 import {
+  afterAction,
   allowedActions,
   CHOICE_ACTIONS,
   currentChoices,
@@ -368,6 +369,7 @@ export function detail(store: Store, id: string): JobDetailView {
         const action = CHOICE_ACTIONS[c.kind];
         return { ...c, action, available: actions.includes(action) };
       }) ?? null,
+    afterAction: choices === null ? null : afterAction(store, job),
     conflicts,
     links: {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,

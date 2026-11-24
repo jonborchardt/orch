@@ -69,7 +69,9 @@ orch start
 The controller takes the controller lock (one per installation; a second `orch start` is refused
 while it is alive), writes its intent to `<data>/runner.json`, and loops:
 
-1. First look for a stranded in-progress ticket: its active job is `pending` or `running`, not in
+1. First take again a ticket passed over in this session for a person whose job a person has
+   since moved on (decision 2026-11-24-default-needs-human-choices). Else look for a stranded
+   in-progress ticket: its active job is `pending` or `running`, not in
    `needs-human` or `completed`, and unowned or with an expired lease (for example one sent back
    with `orch factory resume <job> --to build --release`), and the ticket was not passed over in
    this session. Take the first in queue order and continue its job the way `orch do` does. Only
@@ -92,8 +94,10 @@ while it is alive), writes its intent to `<data>/runner.json`, and loops:
    A conflict creates one re-land job, which runs the same way.
 6. A ticket whose merge was verified and whose lifecycle says `done` is finished; take the next.
 
-A ticket whose job waits for a person is released and passed over for the rest of the session;
-the queue takes the next ready ticket, and the end-of-session summary lists the passed-over ticket
+A ticket whose job waits for a person is released and passed over for the rest of the session,
+until a person decides it on the dashboard: the running queue then takes it again before the next
+ready ticket (decision 2026-11-24-default-needs-human-choices). The queue takes the next ready
+ticket, and the end-of-session summary lists the passed-over ticket
 with its next step. So is a completed job whose merge only a person can unblock (`personMergeStep`
 in `src/core/workflow.ts`): `workflow-changed` (next step: Merge on the dashboard),
 `not-authorized`, `head-changed`, `pr-closed`, `pr-draft`, and `second-conflict` (decision
@@ -344,21 +348,21 @@ types:
 
 `runner.session`, each time a Claude process the controller started has ended:
 
-| field        | meaning                                                                                         |
-| ------------ | ----------------------------------------------------------------------------------------------- |
-| `outcome`    | `exited` (ended on its own), `stopped` (by `orch stop`), `failed` (did not start)               |
-| `exitCode`   | the process exit code, or null                                                                  |
-| `signal`     | the signal that ended it, or null                                                               |
-| `error`      | why it could not be started, or null                                                            |
-| `pid`        | the child's PID; null when it never started                                                     |
-| `seconds`    | wall-clock duration                                                                             |
-| `moved`      | whether the job's stage, round, CI repairs, or artifact count changed meanwhile                 |
-| `stage`      | the job's stage afterwards                                                                      |
-| `status`     | the job's status afterwards                                                                     |
-| `sessionId`  | the `--session-id` it ran under, also attached to the job before it started                     |
-| `stderrTail` | the last 4000 characters it wrote to stderr, or null                                            |
-| `result`     | its final stream-json `result` (`subtype`, `isError`, `result` clipped, `numTurns`), or null    |
-| `pick`       | how the queue took the ticket: `resume` (stranded in-progress) or `ready`; absent for `orch do` |
+| field        | meaning                                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------------------------- |
+| `outcome`    | `exited` (ended on its own), `stopped` (by `orch stop`), `failed` (did not start)                               |
+| `exitCode`   | the process exit code, or null                                                                                  |
+| `signal`     | the signal that ended it, or null                                                                               |
+| `error`      | why it could not be started, or null                                                                            |
+| `pid`        | the child's PID; null when it never started                                                                     |
+| `seconds`    | wall-clock duration                                                                                             |
+| `moved`      | whether the job's stage, round, CI repairs, or artifact count changed meanwhile                                 |
+| `stage`      | the job's stage afterwards                                                                                      |
+| `status`     | the job's status afterwards                                                                                     |
+| `sessionId`  | the `--session-id` it ran under, also attached to the job before it started                                     |
+| `stderrTail` | the last 4000 characters it wrote to stderr, or null                                                            |
+| `result`     | its final stream-json `result` (`subtype`, `isError`, `result` clipped, `numTurns`), or null                    |
+| `pick`       | how the queue took the ticket: `resume` (stranded in-progress, or taken again) or `ready`; absent for `orch do` |
 
 **Exit code 0 is not success.** `exited` with `exitCode` 0 says only that the process ended;
 `moved` says whether the job got anywhere, and the job row says where.

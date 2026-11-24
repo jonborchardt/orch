@@ -239,6 +239,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     choices: null,
+    afterAction: null,
     conflicts: null,
     links: {
       vscode: 'vscode://file//wt/g',
@@ -865,6 +866,14 @@ describe('Job detail', () => {
     mount();
     const block = await screen.findByTestId('choices');
     expect(within(block).getByRole('button', { name: 'Approve as is' })).toBeEnabled();
+    // The first choice is the primary one; the others are outlined.
+    expect(within(block).getByRole('button', { name: 'Approve as is' })).toHaveClass(
+      'MuiButton-contained',
+    );
+    expect(within(block).getByRole('button', { name: 'Drop it' })).toHaveClass(
+      'MuiButton-outlined',
+    );
+    expect(within(block).queryByTestId('after-action')).not.toBeInTheDocument();
     expect(within(block).getByRole('button', { name: 'Review again' })).toBeDisabled();
     // The existing controls stay.
     expect(screen.getByRole('button', { name: 'Resume at approve' })).toBeInTheDocument();
@@ -897,9 +906,13 @@ describe('Job detail', () => {
         { kind: 'resume', to: 'ci', label: 'Retry CI', action: 'approve', available: true },
         { kind: 'cancel', label: 'Drop it', action: 'cancel', available: true },
       ],
+      afterAction: 'the controller continues it',
     });
     window.location.hash = '#/jobs/job-00000003';
     mount();
+    expect(await screen.findByTestId('after-action')).toHaveTextContent(
+      'After an answer, the controller continues it.',
+    );
     fireEvent.click(await screen.findByRole('button', { name: 'Retry CI' }));
     const dialog = await screen.findByRole('dialog', { name: 'Retry CI' });
     expect(within(dialog).getByTestId('action-effect')).toHaveTextContent(

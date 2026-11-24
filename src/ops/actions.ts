@@ -12,8 +12,10 @@ import {
   type Choice,
   type ChoiceKind,
   type Completion,
+  defaultChoices,
   type Stage,
   TERMINAL_STATUSES,
+  withDefaultChoice,
 } from '../core/workflow.ts';
 import { prWorkflowState, viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
@@ -36,6 +38,7 @@ import { completionFor, mergeJob, type MergeResult, relandJob, ticketText } from
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
 import { launchFor } from './dispatch.ts';
+import { controllerContinues } from './runner-state.ts';
 import {
   type BaseConflicts,
   baseConflicts,
@@ -68,17 +71,22 @@ export const CHOICE_ACTIONS: Record<ChoiceKind, DashboardAction> = {
   rework: 'request-rework',
   review: 'request-review',
   'accept-delivery': 'accept-delivery',
+  'accept-policy': 'accept-policy',
   cancel: 'cancel',
 };
 
 /**
- * The choices a human may answer: the newest `job.blocked` event's, while the job waits in
- * needs-human; null otherwise or when it recorded none. Every reader of choices uses this rule.
+ * The choices a human may answer while the job waits in needs-human, null otherwise: the newest
+ * `job.blocked` event's, with the default primary in front when none of them continues the job
+ * (`withDefaultChoice`), so an event that recorded none still offers `defaultChoices`. Every
+ * reader of choices uses this rule.
  */
 export function currentChoices(store: Store, job: Job): Choice[] | null {
   if (job.stage !== 'needs-human' || TERMINAL_STATUSES.includes(job.status)) return null;
-  const choices = eventsOfTypes(store.db, job.id, ['job.blocked'])[0]?.payload['choices'];
-  return Array.isArray(choices) && choices.length > 0 ? (choices as Choice[]) : null;
+  const payload = eventsOfTypes(store.db, job.id, ['job.blocked'])[0]?.payload ?? {};
+  const recorded = Array.isArray(payload['choices']) ? (payload['choices'] as Choice[]) : [];
+  const reason = typeof payload['reason'] === 'string' ? payload['reason'] : null;
+  return withDefaultChoice(recorded, defaultChoices(job, reason));
 }
 
 export interface ActionInput {
@@ -369,6 +377,22 @@ function observePr(store: Store, job: Job, token: string) {
 
 const resumeCommand = (id: string): string => `orch factory resume ${id} --session <name>`;
 
+/** The command that continues the job when no controller will: `orch do` for a ticket. */
+const continueCommand = (job: Job): string =>
+  job.ticketId === null ? resumeCommand(job.id) : `orch do ${ticketKey(job.ticketId)}`;
+
+/**
+ * What happens to the job after a human acts on it, in words (`controllerContinues`): the running
+ * queue controller takes it again, or a person runs the command that continues it. The detail
+ * view's after-action line, the action results, and the controller's next step say the same.
+ */
+export function afterAction(store: Store, job: Job): string {
+  if (controllerContinues(store.paths, job)) return 'the controller continues it';
+  return job.ticketId === null
+    ? `no session is running it; resume it from a Claude Code session with: ${resumeCommand(job.id)}`
+    : `no session is running it; run ${continueCommand(job)}`;
+}
+
 /**
  * A completed job whose open PR GitHub reports CONFLICTING cannot transition, so it is replaced:
  * re-read the PR, then create a `(re-land)` job that supersedes this one in the same transaction
@@ -446,6 +470,8 @@ function fixConflicts(store: Store, before: Job, force: boolean | undefined): Ac
   };
 }
 
+const capital = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
 export function dashboardAction(store: Store, id: string, input: ActionInput): ActionResult {
   return input.action === 'answer' ? answer(store, id, input) : runAction(store, id, input);
 }
@@ -462,9 +488,7 @@ function answer(store: Store, id: string, input: ActionInput): ActionResult {
     }
     const choices = currentChoices(store, job);
     if (!choices) {
-      throw new ValidationError(
-        'Only a job waiting in needs-human with recorded choices can be answered.',
-      );
+      throw new ValidationError('Only a job waiting in needs-human can be answered.');
     }
     const c = input.choice === undefined ? undefined : choices[input.choice];
     if (!c) {
@@ -498,13 +522,12 @@ function answer(store: Store, id: string, input: ActionInput): ActionResult {
   // Outside the transition's transaction: if this fails the job has moved, and the note is still
   // in the recorded reason.
   postNotice(store, id, { text: `Human answered ${said}`, actor: DASHBOARD_SESSION });
-  const next = job.ticketId === null ? resumeCommand(id) : `orch do ${ticketKey(job.ticketId)}`;
   return {
     job: withoutToken(job),
     message:
       `Answered "${choice.label}": the job returned to ${job.stage} (pending), and the answer is ` +
-      `posted as a notice for its next session. No session is running it; continue it with: ${next}`,
-    resumeCommand: next,
+      `posted as a notice for its next session. ${capital(afterAction(store, job))}.`,
+    resumeCommand: continueCommand(job),
   };
 }
 
@@ -624,20 +647,22 @@ function runAction(
       `Verification policy from factory.json at ${job.policyHead?.slice(0, 7) ?? '?'} accepted (${reason}). ` +
       'Earlier verification runs are stale; the next orch verify uses the accepted checks.';
     const returned = before.stage === 'needs-human' && job.stage !== 'needs-human';
-    const next = !returned || job.ticketId === null ? resume : `orch do ${ticketKey(job.ticketId)}`;
     return {
       job: safe,
       message: returned
-        ? `${accepted} The job returned to ${job.stage} (pending); continue it with: ${next}`
+        ? `${accepted} The job returned to ${job.stage} (pending). ${capital(afterAction(store, job))}.`
         : accepted,
-      resumeCommand: next,
+      resumeCommand: returned ? continueCommand(job) : resume,
     };
   }
+  const after = before.stage === 'needs-human' ? afterAction(store, job) : null;
   return {
     job: safe,
     message:
-      `Recorded: job returned to ${job.stage} (pending). No session is running it; ` +
-      `resume it from a Claude Code session with: ${resume}`,
-    resumeCommand: resume,
+      after === null
+        ? `Recorded: job returned to ${job.stage} (pending). No session is running it; ` +
+          `resume it from a Claude Code session with: ${resume}`
+        : `Recorded: job returned to ${job.stage} (pending). ${capital(after)}.`,
+    resumeCommand: after === null ? resume : continueCommand(job),
   };
 }

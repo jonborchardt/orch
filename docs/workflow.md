@@ -55,8 +55,9 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
 17. **Settlement.** In the transaction that records the merge, the ticket becomes `done` only if
     the merged head is the verified one and nothing is left on the ticket
     ([Verified integration and reconciliation](#verified-integration-and-reconciliation)).
-18. **Next ticket.** The controller continues a stranded in-progress ticket first (its job
-    released, pending or running, not waiting for a person), else takes the next ready ticket,
+18. **Next ticket.** The controller first takes again an escalation a person has since decided,
+    then continues a stranded in-progress ticket (its job released, pending or running, not
+    waiting for a person), else takes the next ready ticket,
     passing over one it could not finish, or ends the run on an outcome that would hit every ticket
     ([Factory controller](#factory-controller)).
 
@@ -189,14 +190,28 @@ Claude requests an action; `orch job transition <id> <action>` validates and app
 
 `escalate` takes up to five `--choice "<kind>[:<stage>]=<label>"` values: answers a human can pick
 in the dashboard's Choices block (decision 2026-11-23-needs-human-choices). `<kind>` is
-`resume:<stage>` (spec through ci), `rework`, `review`, `accept-delivery`, or `cancel`, the
-dashboard actions Resume at, Request rework, Request review round, Accept delivery, and Cancel.
+`resume:<stage>` (spec through ci), `rework`, `review`, `accept-delivery`, `accept-policy`, or
+`cancel`, the dashboard actions Resume at, Request rework, Request review round, Accept delivery,
+Accept policy, and Cancel.
 Labels are trimmed, non-blank, unique, at most 120 characters, and free of control characters; a
 bad choice, or `--choice` on any other action, is a usage error (exit 2). The choices are kept on
 the `job.blocked` event (`choices: [{ kind, to?, label }]`); only the newest `job.blocked` counts,
 and only while the job is in `needs-human`, so escalating again replaces them. A fast job's
 escalate is refused (exit 1, nothing written) when a `resume` choice names a stage outside build,
 pr, ci, and completed: its mode never changes, so such a choice could never be answered.
+
+Every `job.blocked` the transition writes records choices, with or without `--choice` (decision
+2026-11-24-default-needs-human-choices): session and gate escalations, the review round limit, a
+repeated scope gap, and the CI repair limit. `defaultChoices` in `src/core/workflow.ts` builds them
+from the job and the reason: a stage the reason names (`resume --to <stage>`, `resume to <stage>`,
+`resumes --to <stage>`, any case; `completed` is Accept delivery) first, then the return stage
+("Send back to spec|build|simplify", "Retry review|approve|pr|ci"); Send back to build and Retry
+review for the round limit; Accept policy for a reason naming the verification policy; Cancel
+last. A fast job never gets a stage outside its resume targets. Recorded `--choice` values are kept
+as given when one of them continues the job (`resume`, `rework`, `review`, `accept-policy`);
+otherwise the default primary goes in front of them. `currentChoices` applies the same rule to an
+older `job.blocked` that recorded none, so every job waiting in `needs-human` offers at least one
+answer that continues it.
 
 Required artifacts, relative to the job's artifact directory and registered with
 `orch job artifact add`: `spec.md`, `build.md`, `round-N/simplify.md` (with
@@ -465,7 +480,13 @@ Budgets: two sessions in a row that exit without changing the job's stage, round
 artifacts; 60 CI reads; five unreadable answers from GitHub. A ticket that ends blocked, refused,
 or waiting for a person ends only `orch do`: in queue mode the controller releases its job,
 passes the ticket over for the rest of the session (`orch resume` included), takes the next ready
-ticket, and lists it with the reason and its next step in the end-of-session summary. Only an
+ticket, and lists it with the reason and its next step in the end-of-session summary. One
+passed-over ticket is taken again in the same session (`orch resume` included): an escalation
+(code `needs-human`) whose job a person has since moved on, out of `needs-human`, not cancelled,
+and with no live lease. It is checked before each stranded or ready ticket and once more before the
+session ends; Accept delivery leaves the job completed, so the retake merges it. A completed job
+whose merge only a person can make is not taken again: Merge on the dashboard completes the ticket
+by itself (decision 2026-11-24-default-needs-human-choices). Only an
 outcome that would hit every ticket ends the whole session there: `claude-failed`, `usage-limit`
 (left unfinished, so `orch resume` continues the same ticket),
 `github-unreadable`, `merge-no-answer`, or `github-refused` (`RUN_ENDING_CODES` in

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { expect, type Locator, type Page, test } from '@playwright/test';
 
-import { type E2eState, STATE_ENV } from './global-setup.ts';
+import { type E2eState, seedOlderEscalation, STATE_ENV } from './global-setup.ts';
 
 /** This run's seeded ids and server URL, written by global-setup under its own scratch home. */
 const state = (): E2eState => {
@@ -698,4 +698,28 @@ test('tickets: the queue lists the seeded tickets, one opens, and the list comes
     .getByRole('link', { name: 'Jobs' })
     .click();
   await expect(page.getByRole('table', { name: 'Factory jobs' })).toBeVisible();
+});
+
+// Last: it adds a job, and the checks above count the seeded ten.
+test('a needs-human job without recorded choices offers the default ones, primary first', async ({
+  page,
+}) => {
+  const id = seedOlderEscalation(state().home);
+  await page.goto(`/#/jobs/${id}`);
+  const block = page.getByTestId('choices');
+  const buttons = block.getByRole('button');
+  await expect(buttons.first()).toHaveText('Send back to build');
+  await expect(buttons.first()).toHaveClass(/MuiButton-contained/);
+  await expect(block.getByRole('button', { name: 'Cancel' })).toHaveClass(/MuiButton-outlined/);
+  await expect(page.getByTestId('after-action')).toContainText(
+    `After an answer, no session is running it; resume it from a Claude Code session with: orch factory resume ${id}`,
+  );
+  await buttons.first().click();
+  const dialog = page.getByRole('dialog', { name: 'Send back to build' });
+  await dialog.getByRole('button', { name: 'Confirm' }).click();
+  await expect(page.getByRole('status')).toContainText('Answered "Send back to build"');
+  const job = (await (await page.request.get(`/api/jobs/${id}`)).json()) as {
+    job: { stage: string; status: string };
+  };
+  expect(job.job).toMatchObject({ stage: 'build', status: 'pending' });
 });

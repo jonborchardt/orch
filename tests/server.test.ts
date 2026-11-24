@@ -241,6 +241,7 @@ describe('seeded board and detail', () => {
     expect(none.actions).toEqual([
       'refresh-pr',
       'approve',
+      'answer',
       'request-review',
       'request-rework',
       'accept-delivery',
@@ -251,6 +252,7 @@ describe('seeded board and detail', () => {
     expect(exhausted.actions).toEqual([
       'refresh-pr',
       'approve',
+      'answer',
       'request-review',
       'request-rework',
       'cancel',
@@ -347,7 +349,23 @@ describe('seeded board and detail', () => {
     expect(blocked.plan?.step).toBe('needs-human');
     expect(blocked.plan?.blockedReason).toContain('deployment');
     expect(blocked.blocker?.kind).toBe('decision');
-    expect(blocked.actions).toEqual(['approve', 'request-review', 'request-rework', 'cancel']);
+    expect(blocked.actions).toEqual([
+      'approve',
+      'answer',
+      'request-review',
+      'request-rework',
+      'cancel',
+    ]);
+    // An escalation that recorded no choices offers the default ones (ticket 0132).
+    expect(blocked.choices?.[0]).toMatchObject({
+      kind: 'resume',
+      to: 'approve',
+      label: 'Retry approve',
+      available: true,
+    });
+    expect(blocked.afterAction).toBe(
+      `no session is running it; resume it from a Claude Code session with: orch factory resume ${ids.blocked} --session <name>`,
+    );
     expect(blocked.resume?.command).toBeNull();
     expect(blocked.resume?.heldBy?.session).toBe('claude-20261113-0800-1d2e');
     const failed = (await (await api(`/api/jobs/${ids.failed}`)).json()) as JobDetailView;
@@ -885,6 +903,7 @@ describe('mutations', () => {
       { kind: 'review', label: 'Review it', action: 'request-review', available: false },
     ]);
     expect(detail(store, ids.fresh).choices).toBeNull();
+    // Answered (approved) by an earlier test: it no longer waits in needs-human.
     expect(detail(store, ids.blocked).choices).toBeNull();
 
     const before = getJob(store.db, j.id);
@@ -910,11 +929,14 @@ describe('mutations', () => {
     expect(r.resumeCommand).toBe(`orch factory resume ${j.id} --session <name>`);
     expect(detail(store, j.id).choices).toBeNull();
 
-    // A later escalation without choices replaces them: nothing is offered.
+    // A later escalation without choices replaces them with the default ones.
     token = claimJob(store, j.id, { session: 's' }).token;
     transitionJob(store, j.id, 'escalate', { token, reason: 'again' });
-    expect(detail(store, j.id).choices).toBeNull();
-    expect(detail(store, j.id).actions).not.toContain('answer');
+    expect(detail(store, j.id).choices?.map((c) => c.label)).toEqual([
+      'Send back to spec',
+      'Cancel',
+    ]);
+    expect(detail(store, j.id).actions).toContain('answer');
   });
 
   it('dashboardAction enforces the same rules in-process', () => {

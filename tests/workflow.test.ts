@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { UsageError, WorkflowError } from '../src/core/errors.ts';
+import { RECOVERY_EXHAUSTED_REASON } from '../src/core/recovery.ts';
 import {
   type Action,
   parseChoices,
@@ -279,7 +280,15 @@ describe('transition: CI repair cycle', () => {
     expect(r.events).toEqual([
       {
         type: 'job.blocked',
-        payload: { from: 'ci', reason: 'max CI repair cycles reached', detail: 'again' },
+        payload: {
+          from: 'ci',
+          reason: 'max CI repair cycles reached',
+          detail: 'again',
+          choices: [
+            { kind: 'resume', to: 'build', label: 'Send back to build' },
+            { kind: 'cancel', label: 'Cancel' },
+          ],
+        },
       },
     ]);
     // maxCiRepairs 0 means the first failure already needs a human.
@@ -519,6 +528,12 @@ describe('transition: review loop', () => {
     const last = reject(4, 4);
     expect(last.patch.stage).toBe('needs-human');
     expect(last.events[1]?.payload['reason']).toBe(MAX_ROUNDS_REASON);
+    // Ticket 0132: the block offers build, then review.
+    expect(last.events[1]?.payload['choices']).toEqual([
+      { kind: 'resume', to: 'build', label: 'Send back to build' },
+      { kind: 'resume', to: 'review', label: 'Retry review' },
+      { kind: 'cancel', label: 'Cancel' },
+    ]);
     // Rounds already past the maximum (jobs from before raises were recorded) escalate too.
     expect(reject(5, 3).patch.stage).toBe('needs-human');
     // A passing review never escalates, even past the maximum.
@@ -780,6 +795,10 @@ describe('transition: scope-gap rework from approve', () => {
             from: 'approve',
             reason: SCOPE_GAP_REASON,
             detail: 'two requested cases missing',
+            choices: [
+              { kind: 'resume', to, label: `Send back to ${to}` },
+              { kind: 'cancel', label: 'Cancel' },
+            ],
           },
         },
       ]);
@@ -1175,7 +1194,7 @@ describe('needs-human choices (escalate --choice)', () => {
     choices: parseChoices(choices),
   });
 
-  it('records the choices on job.blocked, and no choices key without them', () => {
+  it('records the choices on job.blocked, and the default ones without them', () => {
     const r = transition(
       job('approve', 'running'),
       'escalate',
@@ -1187,7 +1206,10 @@ describe('needs-human choices (escalate --choice)', () => {
       choices: [{ kind: 'resume', to: 'approve', label: 'Approve as is' }],
     });
     const plain = transition(job('approve', 'running'), 'escalate', { artifacts: [], reviews: [] });
-    expect(plain.events[0]?.payload).not.toHaveProperty('choices');
+    expect(plain.events[0]?.payload['choices']).toEqual([
+      { kind: 'resume', to: 'approve', label: 'Retry approve' },
+      { kind: 'cancel', label: 'Cancel' },
+    ]);
   });
 
   it.each(['approve', 'spec', 'review', 'simplify'])(
@@ -1219,5 +1241,35 @@ describe('needs-human choices (escalate --choice)', () => {
       ctx(['resume:approve=Go']),
     );
     expect(r.patch).toMatchObject({ stage: 'needs-human', status: 'blocked' });
+  });
+});
+
+describe('escalations record the default choices (ticket 0132)', () => {
+  const labels = (reason: string) =>
+    (
+      run(job('ci', 'running'), 'escalate', { ...none, reason }).events[0]?.payload['choices'] as {
+        label: string;
+      }[]
+    ).map((c) => c.label);
+
+  it.each([
+    [
+      'a gate escalate from orch gh ci naming resume --to ci',
+      'CI is broken. Not a code defect: a human re-runs the workflow or fixes CI, then resumes --to ci.',
+      ['Retry ci', 'Cancel'],
+    ],
+    ['recovery exhausted', `${RECOVERY_EXHAUSTED_REASON}: gh failed`, ['Retry ci', 'Cancel']],
+    [
+      'a reason naming the verification policy',
+      'verification policy needs human acceptance',
+      ['Retry ci', 'Accept policy', 'Cancel'],
+    ],
+    [
+      'a gate escalate naming another stage first',
+      'the branch changed outside the job (resume --to pr re-pushes; resume --to ci re-reads checks)',
+      ['Retry pr', 'Retry ci', 'Cancel'],
+    ],
+  ])('%s', (_what, reason, expected) => {
+    expect(labels(reason)).toEqual(expected);
   });
 });
