@@ -429,6 +429,15 @@ export function TicketsPage({
       // The queue is re-read either way: the order is the server's to give.
       .finally(() => void load());
   };
+  // Up and Down move within the global order, not the filtered rows (as `orch ticket move`).
+  const move = (t: TicketSummary, to: 'up' | 'down' | 'top') => {
+    setRefused(null);
+    ticketAction(t.id, { action: 'move', [to]: true, revision: t.revision })
+      .catch((err: unknown) => {
+        setRefused(`Ticket ${ticketKey(t.id)}: ${errorText(err)}`);
+      })
+      .finally(() => void load());
+  };
 
   return (
     <>
@@ -521,7 +530,7 @@ export function TicketsPage({
             <TableHead>
               <TableRow>
                 <TableCell align="right">
-                  <Tooltip title="Position among the open tickets in the server's proposed order: dependencies first, then priority, effort, area, id. Blocked tickets keep their place.">
+                  <Tooltip title="Position among the open tickets in the server's proposed order: dependencies first, then ranked tickets by rank (Up, Down, Top set it), then priority, effort, area, id. Blocked tickets keep their place.">
                     <span>Queue</span>
                   </Tooltip>
                 </TableCell>
@@ -545,8 +554,22 @@ export function TicketsPage({
                 const at = rank.get(t.id);
                 return (
                   <TableRow key={t.id} hover data-ticket-id={t.id}>
-                    <TableCell align="right" sx={{ color: 'text.secondary' }}>
+                    <TableCell align="right" sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>
                       {at === undefined ? '' : String(at + 1)}
+                      {t.status === 'open' &&
+                        (['up', 'down', 'top'] as const).map((to) => (
+                          <Button
+                            key={to}
+                            size="small"
+                            aria-label={`Move ${key} ${to === 'top' ? 'to the top' : to}`}
+                            onClick={() => {
+                              move(t, to);
+                            }}
+                            sx={{ minWidth: 0, px: 0.5, ml: 0.5 }}
+                          >
+                            {to === 'up' ? 'Up' : to === 'down' ? 'Down' : 'Top'}
+                          </Button>
+                        ))}
                     </TableCell>
                     <TableCell>{key}</TableCell>
                     <TableCell sx={{ minWidth: 200, overflowWrap: 'anywhere' }}>

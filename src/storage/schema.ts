@@ -42,6 +42,8 @@ export const tickets = sqliteTable(
     priority: text().$type<Priority>().notNull(),
     /** Days of elapsed wall-clock time (24 hours each), one of core/tickets.ts EFFORTS. */
     effort: real().notNull(),
+    /** A person's explicit place in the global queue, lowest first; null is unranked. */
+    rank: real(),
     /** Set exactly when status is `duplicate`. */
     duplicateOf: integer().references((): AnySQLiteColumn => tickets.id),
     classified: text().$type<Classified>().notNull(),

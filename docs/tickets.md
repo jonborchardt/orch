@@ -48,6 +48,7 @@ unchanged and reported as blocked by its repository.
 | `area`        | one of the thirteen built-in areas (`orch ticket area list`) or one added with `area add` |
 | `priority`    | `P1` fix now, `P2` next, `P3` someday, `P4` parked                                        |
 | `effort`      | 24-hour days: `0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2, 3, 5` (see [Effort](#effort))     |
+| `rank`        | a person's explicit place in the order, any number, lowest first; empty is unranked       |
 | `classified`  | `auto` or `user`: whether a person gave the area, priority, or effort                     |
 | `body`        | the whole Markdown description, stored as text: What, Why, checklists, Screenshot         |
 | `duplicateOf` | set exactly while `status` is `duplicate`                                                 |
@@ -90,8 +91,23 @@ reason says what to do (remove the dependency, or depend on the original).
 ## Order and readiness
 
 `orch ticket order` is the proposed order of the open tickets: dependencies before dependents, then
-priority, effort (smallest first), area, id. It is deterministic. An in-progress dependency no
-longer holds its dependents back in this order.
+ranked tickets by rank, then priority, effort (smallest first), area, id. A ticket's effective rank
+is the lowest rank among itself and its open dependents (transitively), so an unranked dependency
+of a ranked ticket comes right before it. With no ticket ranked the order is priority first. It is
+deterministic. An in-progress dependency no longer holds its dependents back in this order.
+`orch ticket order|ready|next`, `GET /api/tickets`, the dashboard, and the controller
+(`orch start`, `orch do`) all take this one order from `orderTickets` in `src/core/tickets.ts`.
+
+Priority stays the label of importance; rank is the explicit order a person sets.
+`orch ticket edit <id> --rank <n>` sets it (`--rank none` clears it). `orch ticket move <id>`
+with `--up`, `--down`, `--top`, or `--before <other>` moves an open ticket in the global order by
+writing ranks in one transaction: the moved ticket gets a rank between its new neighbours, and
+every unranked ticket above it gets one too (a ticket below is ranked only when that is what keeps
+its place). `--top` places it right after its own open dependencies. A move is refused (exit 1,
+nothing written) when the ticket or `--before` target is not open, `--up` is on the first,
+`--down` on the last, or it would pass one of its dependencies or let a dependent pass it; the
+message names the dependency. `--revision` guards the moved ticket. Rank is global, like ids
+(decision [2026-11-24-explicit-ticket-rank](decisions/2026-11-24-explicit-ticket-rank.md)).
 
 `orch ticket ready` is that order filtered to tickets that can be executed now. A ticket is ready
 when it is `open`, is not a `question`, every dependency is `done`, no unfinished job is linked to
@@ -104,7 +120,7 @@ rest of the open tickets, each with `blockedBy`: a list of `{kind, detail}` wher
 
 `ticket_events` is an append-only log per ticket, separate from job events:
 `ticket.created`, `.edited` (title, body, repository), `.reclassified` (type, area, effort,
-classified), `.priority-changed`, `.dependency-added` / `-removed`, `.related-added` / `-removed`,
+classified), `.priority-changed`, `.rank-changed`, `.dependency-added` / `-removed`, `.related-added` / `-removed`,
 `.started`, `.completed`, `.dropped`, `.reopened`, `.duplicate-marked`, `.job-linked`, `.note`,
 `.asset-added`, `.imported`. Field changes carry `from` and `to`; a body change records only its
 size. `orch ticket note <id> <text>` adds a dated note; lifecycle commands take `--note`.
@@ -177,6 +193,7 @@ orch ticket list --repo . --status open        # also: order, ready, blocked, ne
 orch ticket show 85 --json
 orch ticket edit 85 --effort 2 --body-file -    # Markdown body from stdin
 orch ticket dep add 85 62
+orch ticket move 85 --top                       # also --up, --down, --before <id>; edit --rank <n|none>
 orch ticket done 85 --note "merged https://github.com/o/r/pull/7"
 ```
 
@@ -186,15 +203,15 @@ orch ticket done 85 --note "merged https://github.com/o/r/pull/7"
 `src/ops/tickets.ts`) under the dashboard's guards: loopback only, Host check, and for writes a
 same-origin `Origin`, `Content-Type: application/json`, and the CSRF token from `/api/session`.
 
-| request                          | does                                                                                                                                                                                               |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/tickets`               | list; query `view=all\|order\|ready\|blocked`, `repo`, `status`, `priority`, `area`, `type`, `limit`, `offset`                                                                                     |
-| `POST /api/tickets`              | create: `{title, repo, type?, area?, priority?, effort?, classified?, body?, dependsOn?, related?}`; `repo` is a path inside the repository                                                        |
-| `GET /api/tickets/<id>`          | the ticket, dependents, jobs, asset names                                                                                                                                                          |
-| `GET /api/tickets/<id>/history`  | its history                                                                                                                                                                                        |
-| `GET /api/tickets/<id>/jobs`     | its jobs                                                                                                                                                                                           |
-| `POST /api/tickets/<id>/actions` | `{action, revision?, ...}`: `edit` (fields), `note` (`text`), `start`, `done`, `drop`, `reopen` (`note?`), `duplicate` (`of`), `dep-add`, `dep-remove`, `related-add`, `related-remove` (`target`) |
-| `GET`, `POST /api/tickets/areas` | list areas; add `{name, description}`                                                                                                                                                              |
+| request                          | does                                                                                                                                                                                                                                                                       |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/tickets`               | list; query `view=all\|order\|ready\|blocked`, `repo`, `status`, `priority`, `area`, `type`, `limit`, `offset`                                                                                                                                                             |
+| `POST /api/tickets`              | create: `{title, repo, type?, area?, priority?, effort?, classified?, body?, dependsOn?, related?}`; `repo` is a path inside the repository                                                                                                                                |
+| `GET /api/tickets/<id>`          | the ticket, dependents, jobs, asset names                                                                                                                                                                                                                                  |
+| `GET /api/tickets/<id>/history`  | its history                                                                                                                                                                                                                                                                |
+| `GET /api/tickets/<id>/jobs`     | its jobs                                                                                                                                                                                                                                                                   |
+| `POST /api/tickets/<id>/actions` | `{action, revision?, ...}`: `edit` (fields, `rank`), `move` (one of `up`, `down`, `top`: `true`, or `before: <id>`), `note` (`text`), `start`, `done`, `drop`, `reopen` (`note?`), `duplicate` (`of`), `dep-add`, `dep-remove`, `related-add`, `related-remove` (`target`) |
+| `GET`, `POST /api/tickets/areas` | list areas; add `{name, description}`                                                                                                                                                                                                                                      |
 
 Errors use the dashboard's mapping: 404 no such ticket, 422 invalid input, 409 a refused status
 change or a stale `revision`. Creating a job for a ticket and attaching assets are CLI only.
