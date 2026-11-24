@@ -303,7 +303,11 @@ rewrite it as plain text, without `[ ]`) in the same `orch ticket edit`, and run
 `orch ticket note <key> "<item>: deferred to <follow-up key>"`. `complete` is refused while a
 deferred box is still unchecked in the body, the note naming the follow-up is missing, or the
 follow-up is not another open or in-progress ticket; once it passes, the ticket closes on its
-verified merge and a follow-up that depends on it becomes ready. Then complete and follow the
+verified merge and a follow-up that depends on it becomes ready. A box the approver marks
+`- [ ] <item> — does not apply: <why>` (the PR shows its condition false or its branch not taken)
+leaves the same way: remove it from the body in that `orch ticket edit` and run
+`orch ticket note <key> "<item>: does not apply: <why>"`; `complete` is refused while it is still
+unchecked in the body or that note is missing. Then complete and follow the
 `pr` stage commands.
 `REWORK-BUILD` (the code is less than the spec) or `REWORK-SPEC` (the spec is less than the
 request) is a scope gap, which is rework, not a human decision: run

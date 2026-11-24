@@ -16,6 +16,7 @@ import { sensitiveSummary } from '../core/sensitive.ts';
 import {
   CHECKLIST_DELIMITER,
   deferredItems,
+  inapplicableItems,
   openChecklist,
   ticketKey,
   unaccountedItems,
@@ -405,6 +406,7 @@ function requireChecklistAccounted(store: Store, job: Job): void {
   const missing = openChecklist(ticket).length === 0 ? [] : unaccountedItems(ticket.body, text);
   if (missing.length === 0) {
     requireDeferralsApplied(store, ticket, text);
+    requireInapplicableRemoved(store, ticket, text);
     return;
   }
   throw new ValidationError(
@@ -459,6 +461,36 @@ function requireDeferralsApplied(store: Store, ticket: Ticket, decision: string)
       throw new ValidationError(
         `"${item}" is deferred to ${next} but no note on ticket ${key} names ${next}; run ` +
           `orch ticket note ${key} "${item}: deferred to ${next}" and complete again.`,
+      );
+    }
+  }
+}
+
+/**
+ * A box decision.md says does not apply (`- [ ] <item> — does not apply: <why>`) has left the
+ * ticket: it is no longer an unchecked box in the body and a note records it (decision
+ * 2026-11-23-inapplicable-box-leaves-the-ticket).
+ */
+function requireInapplicableRemoved(store: Store, ticket: Ticket, decision: string): void {
+  const key = ticketKey(ticket.id);
+  const unchecked = new Set(uncheckedItems(ticket.body));
+  let notes: string[] | undefined;
+  for (const { item, why } of inapplicableItems(decision)) {
+    const command = `orch ticket note ${key} "${item}: does not apply: ${why}"`;
+    if (unchecked.has(item)) {
+      throw new ValidationError(
+        `"${item}" does not apply but is still an unchecked box in ticket ${key}; remove it or ` +
+          `rewrite it as plain text with orch ticket edit ${key} --body-file -, then ` +
+          `${command}, and complete again.`,
+      );
+    }
+    notes ??= listTicketEvents(store.db, ticket.id)
+      .filter((e) => e.type === 'ticket.note')
+      .map((e) => (typeof e.payload['text'] === 'string' ? e.payload['text'] : ''));
+    if (!notes.some((n) => n.includes(`${item}: does not apply`))) {
+      throw new ValidationError(
+        `"${item}" does not apply but no note on ticket ${key} records it; run ${command} and ` +
+          'complete again.',
       );
     }
   }

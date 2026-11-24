@@ -150,6 +150,13 @@ number of jobs over time (a cancelled attempt, a re-land), and jobs without a ti
   or not open or in progress (`deferredItems`, decision
   [2026-11-22-deferred-box-leaves-the-ticket](decisions/2026-11-22-deferred-box-leaves-the-ticket.md)).
   The original then closes on its verified merge and a follow-up that depends on it becomes ready.
+- A box the PR shows does not apply (its condition is false, its branch was not taken) is
+  `- [ ] <item> — does not apply: <why>` there, with a non-empty why; only the approver's line
+  permits it, never for work left undone. The session removes the box from the body and runs
+  `orch ticket note <id> "<item>: does not apply: <why>"`; completing `approve` is refused while the
+  box is still unchecked or no note contains `<item>: does not apply` (`inapplicableItems`, decision
+  [2026-11-23-inapplicable-box-leaves-the-ticket](decisions/2026-11-23-inapplicable-box-leaves-the-ticket.md)).
+  The ticket then closes on its verified merge.
 - `orch ticket start <id>` only marks a ticket in progress (work done by hand); it creates no job.
 
 `orch ticket jobs <id>` lists a ticket's jobs; `orch job show <job>` includes `job.ticketId`.
