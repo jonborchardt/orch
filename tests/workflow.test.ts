@@ -866,7 +866,7 @@ describe('describeNext / requiredArtifact', () => {
 describe('reviewedHeadRefusal: a reviewed head may follow the built head by clean merges only', () => {
   const built = 'b'.repeat(40);
   const reviewed = 'r'.repeat(40);
-  const clean = { contains: true, ownCommits: [], editedMerges: [] };
+  const clean = { ownCommits: [], editedMerges: [] };
   const refuse = (facts?: Parameters<typeof reviewedHeadRefusal>[4]) =>
     reviewedHeadRefusal(1, 'round-1/simplify.md', built, reviewed, facts);
   const changed = /simplify.md describes bbbbbbb; the code changed after the build/;
@@ -876,10 +876,9 @@ describe('reviewedHeadRefusal: a reviewed head may follow the built head by clea
     expect(refuse(clean)).toBeNull();
   });
 
-  it('refuses no built head, missing facts, a head that does not contain it, or own commits', () => {
+  it('refuses no built head, missing facts (not contained), or own commits', () => {
     expect(reviewedHeadRefusal(1, 'build.md', null, reviewed, clean)).toMatch(/no commit/);
     expect(refuse()).toMatch(changed);
-    expect(refuse({ ...clean, contains: false })).toMatch(changed);
     expect(refuse({ ...clean, ownCommits: ['c'.repeat(40)] })).toMatch(changed);
     // Git could not answer: fail closed.
     expect(refuse({ ...clean, ownCommits: undefined })).toMatch(changed);

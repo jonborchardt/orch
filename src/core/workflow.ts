@@ -211,10 +211,8 @@ export function simplifyArtifact(round: number): string {
   return `round-${String(round)}/simplify.md`;
 }
 
-/** Git facts about the commits from the built head to the reviewed head, gathered by the gate. */
+/** Git facts about the commits from the built head to a reviewed head that contains it. */
 export interface ReviewedHeadFacts {
-  /** The reviewed head contains the built head. */
-  contains: boolean;
   /** Non-merge commits in built..reviewed that are not on the base; undefined when Git could not answer. */
   ownCommits: readonly string[] | undefined;
   /** Merges in built..reviewed, not on the base, whose result matches neither parent. */
@@ -225,7 +223,8 @@ export interface ReviewedHeadFacts {
  * Whether review verdicts for `reviewed` may complete a round whose code evidence (`what`:
  * simplify.md or build.md) describes `built`. The same head always may; a later head may only
  * when it follows `built` by clean base integration merges (the rule `requireApproved` applies to
- * the approval). `facts` is needed only when the heads differ; without it the round is refused.
+ * the approval). `facts` is needed only when the heads differ; without it (including when
+ * `reviewed` does not contain `built`) the round is refused.
  * Returns null when the review may complete, or the refusal.
  */
 export function reviewedHeadRefusal(
@@ -237,12 +236,7 @@ export function reviewedHeadRefusal(
 ): string | null {
   if (built === reviewed) return null;
   const verdicts = `round ${String(round)} verdicts describe ${reviewed.slice(0, 7)}`;
-  if (
-    built === null ||
-    !facts?.contains ||
-    facts.ownCommits === undefined ||
-    facts.ownCommits.length > 0
-  ) {
+  if (built === null || facts?.ownCommits === undefined || facts.ownCommits.length > 0) {
     return (
       `${verdicts} but ${what} describes ${built?.slice(0, 7) ?? 'no commit'}; ` +
       'the code changed after the build. Return the job to build and review again.'

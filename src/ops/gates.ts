@@ -248,27 +248,20 @@ function requireApproved(store: Store, job: Job, tree: Tree, what: string): void
     );
   }
   if (decision.head === head) return;
-  if (!containsRef(path, decision.head, head)) {
+  const facts = followFacts(path, decision.head, head, job.baseBranch);
+  if (!facts) {
     throw new ValidationError(
       `HEAD ${head.slice(0, 7)} does not contain the approved commit ${decision.head.slice(0, 7)}; ` +
         `${what} is refused. ${back}`,
     );
   }
-  const base = baseRef(path, job.baseBranch);
-  const unreviewed = tryGit(
-    path,
-    'rev-list',
-    '--no-merges',
-    `${decision.head}..${head}`,
-    ...(base ? [`^${base}`] : []),
-  );
-  if (unreviewed === undefined || unreviewed !== '') {
+  if (facts.ownCommits === undefined || facts.ownCommits.length > 0) {
     throw new ValidationError(
       `HEAD ${head.slice(0, 7)} has commits that were not approved (approved: ${decision.head.slice(0, 7)}); ` +
         `only base integration merges may follow an approval, so ${what} is refused. ${back}`,
     );
   }
-  const edited = editedMerges(path, decision.head, head, base);
+  const edited = facts.editedMerges;
   if (edited.length > 0) {
     const list = edited.map((m) => `${m.sha.slice(0, 7)}: ${m.files.join(', ')}`).join('; ');
     throw new ValidationError(
@@ -279,20 +272,22 @@ function requireApproved(store: Store, job: Job, tree: Tree, what: string): void
   }
 }
 
-/** Git facts for `reviewedHeadRefusal`: what lies between `from` and `to` that is not on the base. */
+/**
+ * What lies between `from` and `to` that is not on the base, for `requireApproved` and
+ * `reviewedHeadRefusal`; undefined when `to` does not contain `from`.
+ */
 function followFacts(
   path: string,
   from: string,
   to: string,
   baseBranch: string,
-): ReviewedHeadFacts {
-  if (!containsRef(path, from, to)) return { contains: false, ownCommits: [], editedMerges: [] };
+): ReviewedHeadFacts | undefined {
+  if (!containsRef(path, from, to)) return undefined;
   const base = baseRef(path, baseBranch);
   const range = [`${from}..${to}`, ...(base ? [`^${base}`] : [])];
-  // Fail closed: undefined (Git could not answer) refuses the review.
+  // Fail closed: undefined (Git could not answer) refuses.
   const own = tryGit(path, 'rev-list', '--no-merges', ...range);
   return {
-    contains: true,
     ownCommits: own === undefined ? undefined : own.split(/\r?\n/).filter(Boolean),
     editedMerges: editedMerges(path, from, to, base),
   };
