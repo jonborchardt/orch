@@ -82,7 +82,9 @@ differs, is in [../overview.md](../overview.md#compared-with-agent-orchestrator-
 2.1.323, Windows, a disposable repository): `orch start` took a ticket through every stage, a
 passing GitHub check, a verified merge, and the ticket's completion in ten minutes with the
 default permission arguments and nobody intervening. In that run the session saw CI pass itself,
-so the controller's own CI reads, the re-land, and stop and resume are covered by tests only. A
+so the controller's own CI reads, the re-land, and stop and resume are covered by tests only.
+Since 2026-11-24 they have also run with real Claude sessions against a `gh` stand-in, and the
+POSIX group kill and real GitHub remain untested ([../runner-validation.md](../runner-validation.md)). A
 Claude installed as a `.cmd` shim is refused, because the prompt
 cannot be passed through `cmd.exe` safely. The child-alive check knows only a PID and the boot
 time; a reused PID reads as alive until `--force`.
