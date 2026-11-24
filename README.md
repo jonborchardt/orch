@@ -285,8 +285,11 @@ Optional email reports of every job change: [docs/operations.md](docs/operations
 - Restarting after a stop: `orch do <ticket>` or `orch resume` for the controller, `/factory <id>`
   in any session otherwise. The opt-in recovery worker (`orch recover start`) continues only the
   `ci` stage on its own.
-- Ending a Claude process that outlived a crashed controller: `orch resume` refuses while it may be
-  alive and never signals or adopts it.
+- Ending a Claude process that outlived a crashed controller: `orch resume` and `orch stop` refuse
+  while the process at the recorded PID started when the child did (or its start time cannot be
+  read), and never signal or adopt it. The refusal says how to inspect the PID; end it yourself
+  and rerun, or use `orch resume --force` only if it is another program. A PID reused by another
+  program is recognised by its start time and does not block.
 - Anything cooperative: subagents staying inside the worktree, reviewers reading the logs they are
   given, the parent recording the child session before the child claims the job. These are stated in
   prose and verified after the fact (fingerprints, dirty-file lists), not prevented.
