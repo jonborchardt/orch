@@ -605,6 +605,7 @@ describe('ticket list', () => {
     expect(db.posts).toEqual([]);
 
     db.order = [2, 9, 1];
+    two.focus();
     fireEvent.change(two, { target: { value: '1' } });
     fireEvent.keyDown(two, { key: 'Enter' });
     await waitFor(() => {
@@ -613,7 +614,10 @@ describe('ticket list', () => {
     expect(db.posts).toEqual([
       { url: '/api/tickets/2/actions', body: { action: 'move', position: 1, revision: 1 } },
     ]);
-    expect(screen.getByLabelText('Position of 0002')).toHaveValue(1);
+    // The same input, now showing the new place, still has keyboard focus.
+    expect(screen.getByLabelText('Position of 0002')).toBe(two);
+    expect(two).toHaveValue(1);
+    expect(two).toHaveFocus();
 
     db.refuse = {
       status: 422,

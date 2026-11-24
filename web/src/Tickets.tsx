@@ -194,6 +194,56 @@ interface Repo {
   repoPath: string;
 }
 
+// Enter moves the ticket to the typed place; leaving the field undoes the edit. One input per
+// row, never keyed by position, so focus stays on it when a move reloads the list.
+function PositionInput({
+  label,
+  at,
+  max,
+  onMove,
+}: {
+  label: string;
+  at: number;
+  max: number;
+  onMove: (n: number) => void;
+}) {
+  const [value, setValue] = useState(String(at));
+  useEffect(() => {
+    setValue(String(at));
+  }, [at]);
+  return (
+    <Box
+      component="input"
+      type="number"
+      min={1}
+      max={max}
+      value={value}
+      aria-label={label}
+      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+        setValue(e.currentTarget.value);
+      }}
+      onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key !== 'Enter') return;
+        const n = Number(value);
+        setValue(String(at));
+        if (n > 0 && n !== at) onMove(n);
+      }}
+      onBlur={() => {
+        setValue(String(at));
+      }}
+      sx={{
+        width: '4.5em',
+        font: 'inherit',
+        color: 'inherit',
+        bgcolor: 'transparent',
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: 1,
+      }}
+    />
+  );
+}
+
 /** File a ticket through POST /api/tickets, which validates everything. */
 function CreateTicket({
   repos,
@@ -532,7 +582,7 @@ export function TicketsPage({
             <TableHead>
               <TableRow>
                 <TableCell align="right">
-                  <Tooltip title="Position among the open tickets in the server's proposed order: dependencies first, then ranked tickets by rank (Up, Down, Top, or a typed position set it), then priority, effort, area, id. Blocked tickets keep their place.">
+                  <Tooltip title="Position among the open tickets in the server's proposed order: dependencies first, then ranked tickets by rank (Up, Down, Top, or a typed position and Enter set it), then priority, effort, area, id. Blocked tickets keep their place.">
                     <span>Queue</span>
                   </Tooltip>
                 </TableCell>
@@ -560,32 +610,12 @@ export function TicketsPage({
                       {at === undefined ? (
                         ''
                       ) : t.status === 'open' ? (
-                        // Enter moves the ticket to the typed place; leaving the field undoes the edit.
-                        <Box
-                          component="input"
-                          key={at}
-                          type="number"
-                          min={1}
+                        <PositionInput
+                          label={`Position of ${key}`}
+                          at={at + 1}
                           max={rank.size}
-                          defaultValue={at + 1}
-                          aria-label={`Position of ${key}`}
-                          onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                            if (e.key !== 'Enter') return;
-                            const n = Number(e.currentTarget.value);
-                            e.currentTarget.value = String(at + 1);
-                            if (n > 0 && n !== at + 1) move(t, { position: n });
-                          }}
-                          onBlur={(e: React.FocusEvent<HTMLInputElement>) => {
-                            e.currentTarget.value = String(at + 1);
-                          }}
-                          sx={{
-                            width: '4.5em',
-                            font: 'inherit',
-                            color: 'inherit',
-                            bgcolor: 'transparent',
-                            border: 1,
-                            borderColor: 'divider',
-                            borderRadius: 1,
+                          onMove={(n) => {
+                            move(t, { position: n });
                           }}
                         />
                       ) : (
