@@ -243,7 +243,7 @@ builds, verifies, and writes `build.md`, then PR, CI, and merge as usual, with n
 review, or approval. The gates still hold (verification, `build.md`'s HEAD binds delivery, CI,
 merge rules), and a fast build that touches `factory.json`, CI, test configuration, dependencies,
 or disables a test is refused and escalates. Nothing classifies tickets for you, and a fast job
-never turns into a full one: cancel it and `orch ticket reopen` the ticket instead
+never turns into a full one: cancel it instead, which reopens the ticket for a new full job
 ([docs/workflow.md](docs/workflow.md#fast-jobs)).
 
 Optional email reports of every job change: [docs/operations.md](docs/operations.md#email-reports).

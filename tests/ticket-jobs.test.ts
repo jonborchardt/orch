@@ -1,7 +1,9 @@
 /** Tickets and jobs: explicit association, one unfinished job per ticket, no premature completion. */
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ValidationError, WorkflowError } from '../src/core/errors.ts';
+import { cancelJob, dashboardAction } from '../src/ops/actions.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { startJob } from '../src/ops/factory.ts';
 import {
@@ -12,8 +14,13 @@ import {
   ticketAction,
   ticketHistory,
 } from '../src/ops/tickets.ts';
+import { listEvents } from '../src/storage/events.ts';
 import { claimJob, createJob, getJob, listJobs, transitionJob } from '../src/storage/jobs.ts';
-import { jobs as jobsTable } from '../src/storage/schema.ts';
+import {
+  jobs as jobsTable,
+  ticketEvents as ticketEventsTable,
+  tickets as ticketsTable,
+} from '../src/storage/schema.ts';
 import { gitIn, makeRepoWithOrigin, tempDir, type TempStore, tempStore } from './helpers.ts';
 
 let store: TempStore;
@@ -87,11 +94,19 @@ describe('a job for a ticket', () => {
     const t = add('Retry me');
     const first = dispatch(t.id);
     cancel(first.id);
-    // Cancelled or completed, the job leaves the ticket in progress: closing is explicit.
-    expect(showTicket(store, t.id).ticket).toMatchObject({
-      status: 'in-progress',
-      activeJob: null,
+    // Cancelling the job reopens the ticket in the same transaction; closing is still explicit.
+    expect(showTicket(store, t.id).ticket).toMatchObject({ status: 'open', activeJob: null });
+    expect(ticketHistory(store, t.id).at(-1)).toMatchObject({
+      type: 'ticket.reopened',
+      actor: 's',
+      payload: {
+        from: 'in-progress',
+        to: 'open',
+        job: first.id,
+        note: `job ${first.id} was cancelled: test`,
+      },
     });
+    expect(listTickets(store, { view: 'ready' }).tickets.map((x) => x.id)).toContain(t.id);
     const second = dispatch(t.id, {
       title: 'Ticket 0003: Retry me (re-land)',
       description: 'again',
@@ -104,6 +119,62 @@ describe('a job for a ticket', () => {
     cancel(second.id);
     expect(ticketAction(store, t.id, { action: 'done', note: 'merged' }).status).toBe('done');
     expect(() => dispatch(t.id)).toThrow(/is done; only an open or in-progress ticket/);
+  });
+
+  it('cancelling through cancelJob or the dashboard reopens the ticket too', () => {
+    for (const via of ['cancelJob', 'dashboard'] as const) {
+      const t = add(`Cancel via ${via}`);
+      const job = dispatch(t.id);
+      if (via === 'cancelJob') cancelJob(store, job.id, { session: 'human', reason: 'stop' });
+      else dashboardAction(store, job.id, { action: 'cancel', reason: 'stop', force: true });
+      expect(showTicket(store, t.id).ticket).toMatchObject({ status: 'open', activeJob: null });
+      const cancelled = listEvents(store.db, job.id, 1000).find((e) => e.type === 'job.cancelled');
+      expect(ticketHistory(store, t.id).at(-1)).toMatchObject({
+        type: 'ticket.reopened',
+        actor: cancelled?.actor,
+        payload: { from: 'in-progress', to: 'open', job: job.id },
+      });
+      expect(dispatch(t.id).id).not.toBe(job.id);
+    }
+  });
+
+  it('cancelling leaves a ticket that is not in progress, or a ticketless job, alone', () => {
+    const opened = add('Reopened by hand');
+    const a = dispatch(opened.id);
+    ticketAction(store, opened.id, { action: 'reopen' });
+    const dropped = add('Dropped by hand');
+    const b = dispatch(dropped.id);
+    store.db
+      .update(ticketsTable)
+      .set({ status: 'dropped' })
+      .where(eq(ticketsTable.id, dropped.id))
+      .run();
+    const before = [opened.id, dropped.id].map((id) => ({
+      ticket: showTicket(store, id).ticket,
+      events: ticketHistory(store, id).length,
+    }));
+    cancel(a.id);
+    cancel(b.id);
+    [opened.id, dropped.id].forEach((id, i) => {
+      const { status, revision } = showTicket(store, id).ticket;
+      expect({ status, revision }).toEqual({
+        status: before[i]?.ticket.status,
+        revision: before[i]?.ticket.revision,
+      });
+      expect(ticketHistory(store, id)).toHaveLength(before[i]?.events ?? -1);
+    });
+
+    const plain = createJob(store, {
+      title: 'x',
+      description: 'd',
+      repo: 'r',
+      repoPath: alpha,
+      baseBranch: 'main',
+    });
+    const events = store.db.select().from(ticketEventsTable).all().length;
+    cancel(plain.id);
+    expect(getJob(store.db, plain.id).status).toBe('cancelled');
+    expect(store.db.select().from(ticketEventsTable).all()).toHaveLength(events);
   });
 
   it('is refused, creating nothing, while the ticket is blocked, a question, or elsewhere', () => {

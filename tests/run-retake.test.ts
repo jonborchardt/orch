@@ -86,6 +86,8 @@ describe('the queue takes a decided escalation again', () => {
     expect(l.calls.map((x) => x.jobId)).toEqual([jobOf(a).id, jobOf(c).id, jobOf(b).id]);
     expect(getJob(store.db, jobOf(a).id).stage).toBe('needs-human');
     expect(getJob(store.db, jobOf(c).id).status).toBe('cancelled');
+    // The cancel reopened the ticket; this session still passes it over.
+    expect(status(c)).toBe('open');
     expect(s.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([
       [a, 'needs-human'],
       [c, 'needs-human'],
