@@ -151,6 +151,39 @@ describe('pure rules', () => {
     expect(refused(1, 'up')).toThrow(ValidationError);
   });
 
+  it('moves a ticket to a typed position, the others shifting by one', () => {
+    const all = [
+      t(1, { priority: 'P1' }),
+      t(2, { priority: 'P2' }),
+      t(3, { priority: 'P3' }),
+      t(4, { priority: 'P4' }),
+      t(5, { priority: 'P4', dependsOn: [4] }),
+      t(6, { status: 'done' }),
+    ];
+    const after = (id: number, position: number) => {
+      const ranks = new Map(planMove(all, id, { position }).map((w) => [w.id, w.rank]));
+      return orderTickets(all.map((x) => ({ ...x, rank: ranks.get(x.id) ?? null }))).map(
+        (x) => x.id,
+      );
+    };
+    expect(orderTickets(all).map((x) => x.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(after(4, 1)).toEqual([4, 1, 2, 3, 5]);
+    expect(after(3, 2)).toEqual([1, 3, 2, 4, 5]);
+    expect(after(1, 3)).toEqual([2, 3, 1, 4, 5]);
+    expect(after(2, 4)).toEqual([1, 3, 4, 2, 5]);
+    // The last place, which --before cannot name.
+    expect(after(1, 5)).toEqual([2, 3, 4, 5, 1]);
+    const refused = (id: number, position: number) => () => planMove(all, id, { position });
+    for (const bad of [0, 6, 1.5, Number.NaN]) {
+      expect(refused(1, bad)).toThrow(ValidationError);
+      expect(refused(1, bad)).toThrow(/from 1 to 5/);
+    }
+    expect(refused(3, 3)).toThrow(/already at position 3/);
+    expect(refused(5, 3)).toThrow(/cannot move before 0004: it depends on 0004/);
+    expect(refused(4, 5)).toThrow(/cannot move after 0005: 0005 depends on it/);
+    expect(refused(6, 1)).toThrow(/not open/);
+  });
+
   it('finds the path that would close a dependency cycle', () => {
     const deps = new Map([
       [3, [2]],

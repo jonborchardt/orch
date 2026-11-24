@@ -202,6 +202,7 @@ export async function main(argv: string[]): Promise<number> {
         down: bool,
         top: bool,
         before: str,
+        position: str,
         // backup
         'data-dir': str,
         // ui

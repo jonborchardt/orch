@@ -100,12 +100,14 @@ deterministic. An in-progress dependency no longer holds its dependents back in 
 
 Priority stays the label of importance; rank is the explicit order a person sets.
 `orch ticket edit <id> --rank <n>` sets it (`--rank none` clears it). `orch ticket move <id>`
-with `--up`, `--down`, `--top`, or `--before <other>` moves an open ticket in the global order by
+with `--up`, `--down`, `--top`, `--before <other>`, or `--position <n>` moves an open ticket in the global order by
 writing ranks in one transaction: the moved ticket gets a rank between its new neighbours, and
 every unranked ticket above it gets one too (a ticket below is ranked only when that is what keeps
-its place). `--top` places it right after its own open dependencies. A move is refused (exit 1,
-nothing written) when the ticket or `--before` target is not open, `--up` is on the first,
-`--down` on the last, or it would pass one of its dependencies or let a dependent pass it; the
+its place). `--top` places it right after its own open dependencies. `--position <n>` puts it at
+place `n` of the order (1 is first, the numbering `orch ticket order` and the dashboard's Queue
+column show) and shifts the tickets in between by one. A move is refused (exit 1, nothing
+written) when the ticket or `--before` target is not open, `--up` is on the first, `--down` on
+the last, `--position` is outside 1 to the open count or is the ticket's current place, or it would pass one of its dependencies or let a dependent pass it; the
 message names the dependency. `--revision` guards the moved ticket. Rank is global, like ids
 (decision [2026-11-24-explicit-ticket-rank](decisions/2026-11-24-explicit-ticket-rank.md)).
 
@@ -193,7 +195,7 @@ orch ticket list --repo . --status open        # also: order, ready, blocked, ne
 orch ticket show 85 --json
 orch ticket edit 85 --effort 2 --body-file -    # Markdown body from stdin
 orch ticket dep add 85 62
-orch ticket move 85 --top                       # also --up, --down, --before <id>; edit --rank <n|none>
+orch ticket move 85 --top                       # also --up, --down, --before <id>, --position <n>; edit --rank <n|none>
 orch ticket done 85 --note "merged https://github.com/o/r/pull/7"
 ```
 

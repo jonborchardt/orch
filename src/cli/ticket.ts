@@ -49,6 +49,7 @@ export interface TicketOptions {
   down?: boolean;
   top?: boolean;
   before?: string;
+  position?: string;
 }
 
 export const TICKET_HELP = `Usage: orch ticket <command> [options]
@@ -77,9 +78,10 @@ order are global. Ids are numbers (85, 0085, #85 all name the same ticket).
       [--classified auto|user] [--body <md> | --body-file <file|->] [--repo <path>]
       [--rank <n|none>]       --body-file - reads the Markdown body from stdin; --rank sets the
                               explicit place in the order (lowest first), none unranks
-  move <id> --up|--down|--top|--before <other>
+  move <id> --up|--down|--top|--before <other>|--position <n>
                               Move an open ticket in the order by ranking it (and the tickets
-                              above it); refused past one of its dependencies
+                              above it); --position puts it at place n (1 is first) and shifts
+                              the tickets in between; refused past one of its dependencies
   note <id> <text>            Append a dated note to the history
   start <id> [--note <n>]     open -> in-progress, without a job (for a job, use
                               orch factory start --ticket <id> or orch factory dispatch --ticket <id>)
@@ -174,11 +176,21 @@ export function runTicket(
     case 'edit':
       return act(id(), 'edit', { ...fieldFlags, repo: o.repo, rank: o.rank });
     case 'move': {
-      const given = [o.up, o.down, o.top, o.before].filter((v) => v !== undefined && v !== false);
+      const given = [o.up, o.down, o.top, o.before, o.position].filter(
+        (v) => v !== undefined && v !== false,
+      );
       if (given.length !== 1) {
-        throw new UsageError('Usage: orch ticket move <id> --up|--down|--top|--before <other>');
+        throw new UsageError(
+          'Usage: orch ticket move <id> --up|--down|--top|--before <other>|--position <n>',
+        );
       }
-      return act(id(), 'move', { up: o.up, down: o.down, top: o.top, before: o.before });
+      return act(id(), 'move', {
+        up: o.up,
+        down: o.down,
+        top: o.top,
+        before: o.before,
+        position: o.position,
+      });
     }
     case 'note':
       return act(id(), 'note', { text: rest.slice(1).join(' ') || o.note });

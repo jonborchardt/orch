@@ -429,10 +429,12 @@ export function TicketsPage({
       // The queue is re-read either way: the order is the server's to give.
       .finally(() => void load());
   };
-  // Up and Down move within the global order, not the filtered rows (as `orch ticket move`).
-  const move = (t: TicketSummary, to: 'up' | 'down' | 'top') => {
+  // Up, Down, and a typed position move within the global order, not the filtered rows (as
+  // `orch ticket move`); the server places the ticket, this only sends the number typed.
+  const move = (t: TicketSummary, to: 'up' | 'down' | 'top' | { position: number }) => {
     setRefused(null);
-    ticketAction(t.id, { action: 'move', [to]: true, revision: t.revision })
+    const where = typeof to === 'string' ? { [to]: true } : to;
+    ticketAction(t.id, { action: 'move', ...where, revision: t.revision })
       .catch((err: unknown) => {
         setRefused(`Ticket ${ticketKey(t.id)}: ${errorText(err)}`);
       })
@@ -530,7 +532,7 @@ export function TicketsPage({
             <TableHead>
               <TableRow>
                 <TableCell align="right">
-                  <Tooltip title="Position among the open tickets in the server's proposed order: dependencies first, then ranked tickets by rank (Up, Down, Top set it), then priority, effort, area, id. Blocked tickets keep their place.">
+                  <Tooltip title="Position among the open tickets in the server's proposed order: dependencies first, then ranked tickets by rank (Up, Down, Top, or a typed position set it), then priority, effort, area, id. Blocked tickets keep their place.">
                     <span>Queue</span>
                   </Tooltip>
                 </TableCell>
@@ -555,7 +557,40 @@ export function TicketsPage({
                 return (
                   <TableRow key={t.id} hover data-ticket-id={t.id}>
                     <TableCell align="right" sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>
-                      {at === undefined ? '' : String(at + 1)}
+                      {at === undefined ? (
+                        ''
+                      ) : t.status === 'open' ? (
+                        // Enter moves the ticket to the typed place; leaving the field undoes the edit.
+                        <Box
+                          component="input"
+                          key={at}
+                          type="number"
+                          min={1}
+                          max={rank.size}
+                          defaultValue={at + 1}
+                          aria-label={`Position of ${key}`}
+                          onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                            if (e.key !== 'Enter') return;
+                            const n = Number(e.currentTarget.value);
+                            e.currentTarget.value = String(at + 1);
+                            if (n > 0 && n !== at + 1) move(t, { position: n });
+                          }}
+                          onBlur={(e: React.FocusEvent<HTMLInputElement>) => {
+                            e.currentTarget.value = String(at + 1);
+                          }}
+                          sx={{
+                            width: '4.5em',
+                            font: 'inherit',
+                            color: 'inherit',
+                            bgcolor: 'transparent',
+                            border: 1,
+                            borderColor: 'divider',
+                            borderRadius: 1,
+                          }}
+                        />
+                      ) : (
+                        String(at + 1)
+                      )}
                       {t.status === 'open' &&
                         (['up', 'down', 'top'] as const).map((to) => (
                           <Button

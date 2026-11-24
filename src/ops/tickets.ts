@@ -105,15 +105,17 @@ function rank(raw: Raw): number | null | undefined {
   return n;
 }
 
-/** Exactly one of `up`, `down`, `top` (true) or `before` (a ticket id). */
+/** Exactly one of `up`, `down`, `top` (true), `before` (a ticket id), or `position` (1-based). */
 function moveTo(raw: Raw): MoveTo {
   const flags = (['up', 'down', 'top'] as const).filter(
     (k) => raw[k] === true || raw[k] === 'true',
   );
   const before = raw['before'] ?? undefined;
-  if (flags.length + (before === undefined ? 0 : 1) !== 1) {
-    throw new ValidationError('move takes exactly one of up, down, top, or before');
+  const position = count(raw, 'position', 1);
+  if (flags.length + (before === undefined ? 0 : 1) + (position === undefined ? 0 : 1) !== 1) {
+    throw new ValidationError('move takes exactly one of up, down, top, before, or position');
   }
+  if (position !== undefined) return { position };
   return before === undefined ? (flags[0] as MoveTo) : { before: parseTicketId(before, 'before') };
 }
 

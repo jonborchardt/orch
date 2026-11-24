@@ -256,6 +256,10 @@ describe('orch ticket', () => {
     expect(order()).toEqual([4, 5, 1, 2, 3]);
     view('move', '3', '--before', '1');
     expect(order()).toEqual([4, 5, 3, 1, 2]);
+    view('move', '3', '--position', '5');
+    expect(order()).toEqual([4, 5, 1, 2, 3]);
+    view('move', '3', '--position', '3');
+    expect(order()).toEqual([4, 5, 3, 1, 2]);
 
     // Refusals write nothing.
     const before = json<TicketList>(t('list')).tickets.map((x) => [x.id, x.revision, x.rank]);
@@ -274,6 +278,10 @@ describe('orch ticket', () => {
     expect(refused('4', '--top', '--revision', '1').code).toBe(4);
     expect(refused('4').code).toBe(2);
     expect(refused('4', '--up', '--top').code).toBe(2);
+    expect(refused('3', '--position', '6').code).toBe(1);
+    expect(refused('3', '--position', '0').code).toBe(1);
+    expect(refused('3', '--position', '3').code).toBe(1);
+    expect(refused('3', '--position', '1', '--up').code).toBe(2);
     expect(refused('999', '--top').code).toBe(3);
     expect(json<TicketList>(t('list')).tickets.map((x) => [x.id, x.revision, x.rank])).toEqual(
       before,

@@ -444,7 +444,12 @@ server validates.
   Created (local date and time), Job, and Blocked by. Queue is the ticket's position in `GET /api/tickets?view=order`, the server's proposed
   order of the open tickets; an open row's Up, Down, and Top buttons post the `move` action and
   read the queue again. They move within the global order, not the filtered rows, as
-  `orch ticket move` does, so with a filter on a click may pass a hidden ticket. **Show** picks `current` (the default: tickets in progress, then the
+  `orch ticket move` does, so with a filter on a click may pass a hidden ticket. An open row's
+  Queue cell is a number input (`Position of <key>`) holding its position: typing a number and
+  pressing Enter posts one `move` with `position` and the row's revision, so the ticket lands
+  there and the tickets in between shift by one; leaving the field without Enter puts the
+  current position back and sends nothing. A refusal (out of range, past a dependency, stale
+  revision) shows in the banner. **Show** picks `current` (the default: tickets in progress, then the
   open ones in queue order), `ready`, `blocked`, `in-progress`, `done`, `dropped`, `duplicate`,
   or `all`; Repository, Priority, Area, and Type narrow it, and Search matches the key (`0085`),
   the id (`#85`), and the title. The filters are

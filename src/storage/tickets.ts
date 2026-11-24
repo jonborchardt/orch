@@ -389,7 +389,7 @@ export function moveTicket(
     (tx) => {
       const ticket = getTicket(tx, id);
       checkRevision(ticket, w);
-      if (typeof to === 'object') getTicket(tx, to.before);
+      if (typeof to === 'object' && 'before' in to) getTicket(tx, to.before);
       const all = allTickets(tx);
       const ts = now();
       for (const { id: other, rank } of planMove(all, id, to)) {
