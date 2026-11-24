@@ -30,23 +30,8 @@ with a lowercase drive: any resolved id under `node_modules` gets the CLI's driv
 loads `vitest` (directly or through a package) from the same URL as the runner. Project files are
 left as Vite resolves them. Uppercase cwds, PowerShell, and Linux CI get no plugin.
 
-A `process.chdir` to an uppercase drive in the config would not help: the CLI's modules are
-already loaded under the lowercase URL.
-
 ## Evidence
 
-Reproduction (from the worktree, forward slashes):
-`node -e "const r=require('child_process').spawnSync(process.execPath,['node_modules/vitest/vitest.mjs','run','tests/workflow.test.ts'],{cwd:'c:/<repo>',encoding:'utf8'});console.log(r.stdout)"`
-
-- Before: `FAIL tests/workflow.test.ts`, `Error: Vitest failed to find the current suite`,
-  `❯ tests/setup.ts:20:1`, `Test Files 1 failed (1)`, `Tests no tests`. With `C:/<repo>`: `Tests 83 passed (83)`.
-- After: `c:/<repo>` and `C:/<repo>` both print `Tests 83 passed (83)`. `npx vitest run` with a
-  lowercase cwd on `tests/workflow.test.ts`, `web/src/Tickets.test.tsx`, and `web/src/App.test.tsx`:
-  `Tests 224 passed (224)` (before the node_modules part of the fix, the two web files failed with
-  `Invalid Chai property`).
-
-## Regression check
-
-`tests/vitest-config.test.ts` (Windows only) spawns the CLI with the repository config from the
-lowercase spelling of the checkout on `tests/fixtures/lowercase-drive.test.ts`, which uses
-`tests/setup.ts`, a test, and a jest-dom matcher. It fails with the suite error without the plugin.
+`vitest run tests/workflow.test.ts` from `c:/<repo>`, before: `Error: Vitest failed to find the
+current suite` at `tests/setup.ts:20:1`, `Tests no tests`. After: `Tests 83 passed (83)`, same as
+from `C:/<repo>`. `tests/vitest-config.test.ts` reproduces this on Windows.
