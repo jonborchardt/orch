@@ -158,6 +158,8 @@ resolve the conflicts", but job B's worktree was created from the base `16f25f1`
 `main` was therefore a clean merge with no conflicts, and the builder wrote `hello.txt` again from
 the ticket. `5b2c077` (job A's commit) is not an ancestor of the merged head `52f71d7`. The result
 is correct for this ticket, but the reviewed work was redone, not re-landed.
+Fixed by ticket 0135: a re-land's branch now starts at the superseded job's branch head, and its
+builder merges `main` (decision 2026-11-24-reland-starts-from-the-superseded-branch).
 
 ## S3: stop and resume during real Claude execution
 

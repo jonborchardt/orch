@@ -44,7 +44,15 @@ import type { WorktreeInfo } from '../git/worktree.ts';
 import { validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { eventsOfTypes } from '../storage/events.ts';
-import { claimJob, createJob, getJob, jobDetail, releaseJob, resumeJob } from '../storage/jobs.ts';
+import {
+  claimJob,
+  createJob,
+  getJob,
+  jobDetail,
+  predecessorsOf,
+  releaseJob,
+  resumeJob,
+} from '../storage/jobs.ts';
 import type { Artifact, Event, Integration, Job, Review } from '../storage/schema.ts';
 import { getTicket } from '../storage/tickets.ts';
 import { latestRun, listIntegrations } from '../storage/verification.ts';
@@ -179,11 +187,51 @@ export interface Notice {
   eventId: number | null;
 }
 
+/** A re-land job's single predecessor, and whether this job's branch started at its branch. */
+interface Reland {
+  from: Job;
+  seeded: boolean;
+}
+
+// ponytail: a job with several predecessors is not treated as a re-land here; relandJob makes one.
+function relandOf(store: Store, job: Job): Reland | null {
+  const preds = predecessorsOf(store.db, job.id);
+  const [from] = preds;
+  if (preds.length !== 1 || !from) return null;
+  const created = eventsOfTypes(store.db, job.id, ['worktree.created'])[0];
+  const ref = (created?.payload['from'] as { ref?: unknown } | undefined)?.ref;
+  const seeded = from.branch !== null && (ref === from.branch || ref === `origin/${from.branch}`);
+  return { from, seeded };
+}
+
+/** What a re-land job in spec or build is told about its starting point, or null. */
+function relandNote(job: Job, reland: Reland | null, worktree: WorktreeInfo): string | null {
+  if (!reland || (job.stage !== 'spec' && job.stage !== 'build')) return null;
+  const a = reland.from;
+  if (!reland.seeded) {
+    return (
+      `Re-land of ${a.id}: ${a.branch ? `its branch ${a.branch} was not found` : 'it had no branch'}, ` +
+      `so this branch starts from ${job.baseBranch} and the work is re-implemented from the request.`
+    );
+  }
+  if ((worktree.behind ?? 0) === 0) return null;
+  return (
+    `Re-land of ${a.id}: this branch starts at the head of ${a.id}'s branch ${a.branch ?? '?'}. ` +
+    `In build, the builder merges ${job.baseBranch} (git merge ${worktree.baseRef ?? job.baseBranch}), ` +
+    `resolves the conflicts keeping ${a.id}'s changes and the original scope, and commits the merge; ` +
+    'the result is reviewed as new code. Do not run orch worktree integrate before that.' +
+    (job.stage === 'spec'
+      ? ` The spec describes a conflict resolution of ${a.id}'s change, not a fresh implementation.`
+      : '')
+  );
+}
+
 function noticesFor(
   store: Store,
   job: Job,
   worktree: WorktreeInfo | null,
   fetchError: string | undefined,
+  reland: Reland | null,
 ): Notice[] {
   const id = job.id;
   const out: Notice[] = [];
@@ -203,9 +251,13 @@ function noticesFor(
       derived(
         'base-moved',
         `Base ${job.baseBranch} moved: ${String(behind)} commit(s) ahead of this branch at ${sha}; ` +
-          (job.stage === 'review'
-            ? `integrate after this round completes (${integrate}).`
-            : `run \`${integrate}\` before the next \`orch verify\`.`),
+          (reland?.seeded && (job.stage === 'spec' || job.stage === 'build')
+            ? `this job re-lands ${reland.from.id} and its branch starts at ${reland.from.id}'s head: ` +
+              `in build, the builder merges ${worktree.baseRef} into it, resolves the conflicts, and ` +
+              'commits the merge. Do not run `orch worktree integrate` before that.'
+            : job.stage === 'review'
+              ? `integrate after this round completes (${integrate}).`
+              : `run \`${integrate}\` before the next \`orch verify\`.`),
       ),
     );
   }
@@ -409,7 +461,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   // Every mutating command carries the token explicitly: shells spawned by Claude Code do not
   // keep environment variables between calls, so the skill substitutes <token> each time.
   const tok = ' --token <token>';
-  const notices = noticesFor(store, job, worktree, opts.fetchError);
+  const reland = relandOf(store, job);
+  const notices = noticesFor(store, job, worktree, opts.fetchError, reland);
   const newestMessage = notices.filter((n) => n.kind === 'message').at(-1)?.eventId;
   const noticeAck =
     newestMessage != null && !TERMINAL_STATUSES.includes(job.status)
@@ -521,6 +574,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const verify = `orch verify ${id}${tok}`;
   const verifyIfStale = verification?.valid ? [] : [verify];
   const notes: string[] = [];
+  const relanding = relandNote(job, reland, worktree);
+  if (relanding) notes.push(relanding);
   if (planProblem) notes.push(`Policy problem: ${planProblem}.`);
   if (verification && !verification.configured) {
     notes.push(

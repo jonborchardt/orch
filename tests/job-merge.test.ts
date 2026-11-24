@@ -614,6 +614,7 @@ describe('a conflict is re-landed once', () => {
       ownerSession: null,
     });
     expect(next.description).toContain(`Re-land the work of ${old.id}`);
+    expect(next.description).toContain(`branch starts from ${String(old.branch)}'s head`);
     expect(getJob(store.db, old.id).supersededBy).toBe(next.id);
     expect(showTicket(store, t).ticket).toMatchObject({
       status: 'in-progress',

@@ -169,8 +169,8 @@ export function completionFor(store: Store, job: Job): Completion {
 export function relandJob(store: Store, before: Job, token: string, session: string): Job {
   const sentence =
     `Re-land the work of ${before.id} (PR ${before.prUrl ?? '?'}, branch ${before.branch ?? '?'}) ` +
-    `on the current ${before.baseBranch}: start from that branch's changes, resolve the conflicts ` +
-    `with ${before.baseBranch}, keep the original scope.`;
+    `on the current ${before.baseBranch}: this job's branch starts from ${before.branch ?? '?'}'s ` +
+    `head; merge ${before.baseBranch} into it and resolve the conflicts, keeping the original scope.`;
   return dispatchJob(store, {
     repo: before.repoPath,
     base: before.baseBranch,

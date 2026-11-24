@@ -228,18 +228,21 @@ export function addWorktree(
   path: string,
   branch: string,
   baseBranch: string,
-): void {
+  start?: string,
+): { ref: string; sha: string } {
   tryGit(repoRoot, 'worktree', 'prune');
   mkdirSync(dirname(path), { recursive: true });
   if (refExists(repoRoot, `refs/heads/${branch}`)) {
     git(repoRoot, 'worktree', 'add', path, branch);
-    return;
+    return { ref: branch, sha: git(path, 'rev-parse', 'HEAD') };
   }
-  const base = baseRef(repoRoot, baseBranch);
-  if (!base) {
+  // A new branch starts at `start` when the caller names one, else at the base.
+  const from = start ?? baseRef(repoRoot, baseBranch);
+  if (!from) {
     throw new ToolError(`Base branch ${baseBranch} not found in ${repoRoot} (local or origin).`);
   }
-  git(repoRoot, 'worktree', 'add', '-b', branch, path, base);
+  git(repoRoot, 'worktree', 'add', '-b', branch, path, from);
+  return { ref: from, sha: git(path, 'rev-parse', 'HEAD') };
 }
 
 /** Remove a worktree directory and its registration. Callers check for uncommitted work first. */

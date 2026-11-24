@@ -92,7 +92,8 @@ while it is alive), writes its intent to `<data>/runner.json`, and loops:
    returned `waitSeconds` between reads. A verdict that sends the job back to `build` starts a
    new Claude session.
 5. When the job is `completed`, merge through `mergeJob`, the same operation as `orch job merge`.
-   A conflict creates one re-land job, which runs the same way.
+   A conflict creates one re-land job, which runs the same way. Its branch starts at the old
+   job's branch head, and its builder merges the base and resolves the conflicts.
 6. A ticket whose merge was verified and whose lifecycle says `done` is finished; take the next.
 
 A ticket whose job waits for a person is released and passed over for the rest of the session,
@@ -456,7 +457,9 @@ The controller reads CI with the same rules as `orch gh ci` ([workflow.md](workf
 A conflict creates the re-land job, marks the old job superseded, and keeps the ticket, all in
 one transaction, so there is no half-created re-land. The re-land is the ticket's unfinished job
 from then on: `orch resume` (for the interrupted session) or `orch do <ticket>` continues it from
-its stage like any job. `orch ticket jobs <id>` lists both jobs; the superseded job's PR is left
+its stage like any job. Its worktree, once created, starts at the old job's branch head
+(`worktree.created` records `from`); if that branch is gone, it starts from the base and the plan
+says the work is re-implemented. `orch ticket jobs <id>` lists both jobs; the superseded job's PR is left
 open (orch closes no PRs). If the re-land conflicts too, the merge stops with `second-conflict`
 and no third job is created.
 
