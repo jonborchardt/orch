@@ -401,8 +401,7 @@ export function transitionJob(
     });
     // Same transaction as the cancel: a cancelled job never leaves its ticket in progress.
     if (decided.patch.status === 'cancelled' && job.ticketId !== null) {
-      const reason = opts.reason ?? null;
-      releaseTicketForCancel(tx, job.ticketId, { id, reason }, job.ownerSession, ts);
+      releaseTicketForCancel(tx, job.ticketId, id, opts.reason, job.ownerSession, ts);
     }
     return decided;
   });

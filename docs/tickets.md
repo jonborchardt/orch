@@ -143,8 +143,8 @@ number of jobs over time (a cancelled attempt, a re-land), and jobs without a ti
 - A partial unique index (`jobs_active_ticket_idx`, on `ticketId` where the job is not completed or
   cancelled) makes a second unfinished job for a ticket impossible, whatever races.
 - Cancelling a job returns its ticket to `open` in the same transaction (`ticket.reopened`
-  with the job and the cancel reason as its note), when the ticket was `in-progress` and no other
-  job is working on it; any other ticket is left alone. The controller then gives it a new job,
+  with the job and the cancel reason as its note), when the ticket was `in-progress` (the index
+  above makes the cancelled job its only unfinished one); any other ticket is left alone. The controller then gives it a new job,
   so to stop the work for good, `orch ticket drop` it
   (decision 2026-11-24-cancel-returns-ticket-to-open).
 - A re-land (created by `orch job merge` or the dashboard's Fix merge conflicts when the PR
