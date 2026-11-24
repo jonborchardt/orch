@@ -49,6 +49,7 @@ export const BLOCKER_EVENTS = [
   'job.cancelled',
   'ci.observed',
   'job.completed',
+  'runner.stopped',
 ] as const;
 
 export interface Evidence {
@@ -106,15 +107,33 @@ function ciBlocker(
   };
 }
 
+/**
+ * The factory controller's newest `runner.stopped`, while it is still the job's last news: the job
+ * is at the stage and status the stop recorded and no other loaded event is newer. Display only.
+ */
+function stoppedBlocker(job: Lease, ev: Evidence): Blocker | null {
+  const stop = ev.events.get('runner.stopped');
+  if (stop === undefined) return null;
+  if (stop.payload['stage'] !== job.stage || stop.payload['status'] !== job.status) return null;
+  for (const e of ev.events.values()) if (e.id > stop.id) return null;
+  return {
+    kind: 'stopped',
+    summary: `Factory controller stopped it: ${text(stop, 'code') ?? text(stop, 'outcome') ?? '?'}`,
+    detail: text(stop, 'reason'),
+    next: text(stop, 'next'),
+  };
+}
+
 export function blockerOf(
-  job: Lease & Pick<Job, 'round' | 'ciRepairs' | 'maxCiRepairs'>,
+  job: Lease & Pick<Job, 'round' | 'ciRepairs' | 'maxCiRepairs'> & Partial<Pick<Job, 'prState'>>,
   state: Liveness,
   ev: Evidence,
 ): Blocker | null {
   switch (state) {
     case 'running':
-    case 'completed':
       return null;
+    case 'completed':
+      return job.prState === 'merged' ? null : stoppedBlocker(job, ev);
     case 'cancelled': {
       const e = ev.events.get('job.cancelled');
       return {
@@ -124,11 +143,13 @@ export function blockerOf(
       };
     }
     case 'stale':
-      return {
-        kind: 'interrupted',
-        summary: `Session ${job.ownerSession ?? '?'} stopped renewing its lease; presumed gone`,
-        detail: null,
-      };
+      return (
+        stoppedBlocker(job, ev) ?? {
+          kind: 'interrupted',
+          summary: `Session ${job.ownerSession ?? '?'} stopped renewing its lease; presumed gone`,
+          detail: null,
+        }
+      );
     case 'interrupted': {
       const prev = text(ev.events.get('job.interrupted'), 'previousSession');
       return {
@@ -192,14 +213,22 @@ export function blockerOf(
     }
     case 'idle': {
       if (job.ownerSession === null) {
-        return { kind: 'waiting', summary: 'No session owns this job', detail: null };
+        return (
+          stoppedBlocker(job, ev) ?? {
+            kind: 'waiting',
+            summary: 'No session owns this job',
+            detail: null,
+          }
+        );
       }
       if (leaseExpired(job, now())) {
-        return {
-          kind: 'waiting',
-          summary: `Lease held by ${job.ownerSession} lapsed; presumed gone`,
-          detail: null,
-        };
+        return (
+          stoppedBlocker(job, ev) ?? {
+            kind: 'waiting',
+            summary: `Lease held by ${job.ownerSession} lapsed; presumed gone`,
+            detail: null,
+          }
+        );
       }
       return null;
     }

@@ -40,6 +40,7 @@ export type BlockerKind =
   | 'escalated' // escalated for a reason the persisted state does not classify
   | 'ci' // the ci stage stopped: repairs exhausted, no checks, checks that never ran, PR closed or moved
   | 'waiting' // no live session owns it; a session must resume it
+  | 'stopped' // the factory controller gave the ticket up (runner.stopped) and nothing happened since
   | 'cancelled';
 
 export interface Blocker {
@@ -48,6 +49,8 @@ export interface Blocker {
   summary: string;
   /** The recorded free-text reason, verbatim, when one exists. */
   detail: string | null;
+  /** For `stopped`: the command the controller recorded as what a person does next. */
+  next?: string | null;
 }
 
 /**
