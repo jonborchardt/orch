@@ -3,6 +3,7 @@
  * assignments are data here and overridable from <config>/factory.json, never spread through code.
  */
 import { ValidationError } from './errors.ts';
+import { classifyPath } from './sensitive.ts';
 
 export const MODELS = ['opus', 'sonnet', 'haiku', 'inherit'] as const;
 export type Model = (typeof MODELS)[number];
@@ -198,10 +199,18 @@ export function resolveRoles(config: FactoryConfig): Role[] {
   return ROLES.map((r) => ({ ...r, model: config.models[r.name] ?? r.model }));
 }
 
-/** True when any changed file looks like rendered UI. */
+/**
+ * True when any changed file looks like rendered UI. Test files never count, whichever pattern
+ * matches them: a path `classifyPath` (core/sensitive.ts) labels `tests` or `test-config` is
+ * skipped, so that classifier stays the one definition of "test file".
+ */
 export function detectUi(files: readonly string[], patterns: readonly string[]): boolean {
   const regexes = patterns.map((p) => new RegExp(p, 'i'));
-  return files.some((f) => regexes.some((re) => re.test(f)));
+  return files.some((f) => {
+    const kind = classifyPath(f)?.kind;
+    if (kind === 'tests' || kind === 'test-config') return false;
+    return regexes.some((re) => re.test(f));
+  });
 }
 
 /** Reviewers for a round: the always-on ones plus UI reviewers when the change renders. */
