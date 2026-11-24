@@ -16,6 +16,11 @@ orch ui --port 0 --open # free port, open the browser
 ORCH_HOME=/tmp/demo npm run ui:seed && ORCH_HOME=/tmp/demo orch ui   # representative demo data
 ```
 
+`orch ui` serves in the foreground until Ctrl+C, SIGINT, or SIGTERM, or until a parent that
+started it with a piped stdin closes that pipe. A null or closed stdin is ignored, so a script, a
+scheduled task, or a background shell can launch it (`orch ui --port 0 < /dev/null &`, or `< NUL`
+on Windows) and it keeps serving; a pipe that closes at once (`echo | orch ui`) still stops it.
+
 **Sections.** The app bar has two: **Jobs** (`#/`, and `#/jobs/<id>` for one job) and **Tickets**
 (`#/tickets`, and `#/tickets/<id>` for one ticket). Each is a link, so every view can be opened,
 reloaded, and bookmarked by its URL. The job counts and the job filters show only in Jobs; a

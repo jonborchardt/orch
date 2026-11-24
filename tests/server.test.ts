@@ -1288,6 +1288,43 @@ describe('orch ui command', () => {
     expect(list.code).toBe(0);
     expect((await orchAsync(home, home, ['ui', '--port', 'abc'])).code).toBe(2);
   });
+
+  it('keeps serving when started with stdin closed (ticket 0094)', async () => {
+    const home = tempDir('orch-ui-null-');
+    dirs.push(home);
+    const { spawn } = await import('node:child_process');
+    const { installRoot } = await import('../src/core/paths.ts');
+    const child = spawn(
+      process.execPath,
+      [join(installRoot(), 'src', 'cli', 'main.ts'), 'ui', '--port', '0'],
+      { env: { ...process.env, ORCH_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let exited = false;
+    const exit = new Promise<void>((resolve) =>
+      child.once('exit', () => {
+        exited = true;
+        resolve();
+      }),
+    );
+    const url = await new Promise<string>((resolve, reject) => {
+      let out = '';
+      child.stdout.on('data', (d: Buffer) => {
+        out += d.toString();
+        const m = /orch dashboard: (http:\/\/127\.0\.0\.1:\d+\/)/.exec(out);
+        if (m?.[1]) resolve(m[1]);
+      });
+      void exit.then(() => {
+        reject(new Error('exited before serving'));
+      });
+    });
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(exited).toBe(false);
+    const r = await fetch(new URL('/api/jobs', url), { headers: { Connection: 'close' } });
+    expect(await r.json()).toEqual([]);
+    child.kill();
+    await exit;
+    expect(exited).toBe(true);
+  });
 });
 
 describe('recorded logs on the artifact route (todo 0019)', () => {
