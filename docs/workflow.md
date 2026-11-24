@@ -96,15 +96,15 @@ flowchart TD
 Every failure path ends in a bounded loop or with a person. Stages, who works in each, and what
 `orch` requires before the next one:
 
-| Stage      | Who                                                   | Produces                                                   | `orch` requires before the next stage                                                                                                                                                |
-| ---------- | ----------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `spec`     | `factory-spec-writer`, then `factory-spec-challenger` | `spec.md`, `spec-review-N.md`                              | Goal, Scope, Acceptance criteria; the latest challenge says `VERDICT: PASS` for the current `spec.md`                                                                                |
-| `build`    | `factory-builder`                                     | commits, an `orch verify` run, `build.md`                  | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD                                                                                         |
-| `simplify` | `factory-simplifier`, then `factory-builder`          | `round-N/simplify-review.md`, fixes, `round-N/simplify.md` | both files registered; `simplify.md` against a clean, verified HEAD                                                                                                                  |
-| `review`   | 3 reviewers (7 for UI changes)                        | `round-N/review-*.md`, `consolidated.md`                   | all three always-on verdicts recorded against the HEAD `simplify.md` (or, without one, `build.md`) describes; `BLOCKING: 0` to advance                                               |
-| `approve`  | `factory-approver`                                    | `decision.md`                                              | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid. A scope gap (`REWORK-BUILD`, `REWORK-SPEC`) goes back to `build` or `spec` once on its own |
-| `pr`       | the coordinator                                       | base integrated, pushed branch, draft PR                   | only clean base-integration merges since the approval; verified HEAD; policy unchanged                                                                                               |
-| `ci`       | the coordinator + `orch gh ci`                        | GitHub's verdict for the PR head                           | the job's own PR; checks passed for that commit, still the approved one (plus clean base merges)                                                                                     |
+| Stage      | Who                                                   | Produces                                                   | `orch` requires before the next stage                                                                                                                                                    |
+| ---------- | ----------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`     | `factory-spec-writer`, then `factory-spec-challenger` | `spec.md`, `spec-review-N.md`                              | Goal, Scope, Acceptance criteria; the latest challenge says `VERDICT: PASS` for the current `spec.md`                                                                                    |
+| `build`    | `factory-builder`                                     | commits, an `orch verify` run, `build.md`                  | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD                                                                                             |
+| `simplify` | `factory-simplifier`, then `factory-builder`          | `round-N/simplify-review.md`, fixes, `round-N/simplify.md` | both files registered; `simplify.md` against a clean, verified HEAD                                                                                                                      |
+| `review`   | 3 reviewers (7 for UI changes)                        | `round-N/review-*.md`, `consolidated.md`                   | all three always-on verdicts recorded against the HEAD `simplify.md` (or, without one, `build.md`) describes, or one that follows it by clean base merges only; `BLOCKING: 0` to advance |
+| `approve`  | `factory-approver`                                    | `decision.md`                                              | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid. A scope gap (`REWORK-BUILD`, `REWORK-SPEC`) goes back to `build` or `spec` once on its own     |
+| `pr`       | the coordinator                                       | base integrated, pushed branch, draft PR                   | only clean base-integration merges since the approval; verified HEAD; policy unchanged                                                                                                   |
+| `ci`       | the coordinator + `orch gh ci`                        | GitHub's verdict for the PR head                           | the job's own PR; checks passed for that commit, still the approved one (plus clean base merges)                                                                                         |
 
 Default models per role: spec writer, builder, security reviewer, and approver Opus; spec
 challenger, simplifier, and the other reviewers Sonnet. They are configurable in
@@ -265,7 +265,13 @@ runs, then with `--verdict pass|changes`); the verdict is read from that reviewe
 always-on reviewers (`security`, `correctness`, `code-quality`) have a verdict (UI reviewers join for
 UI changes), and when the verdicts describe a commit other than the one this round's `simplify.md`
 was registered for (or, in a round with no `simplify.md`, such as a `request-review` or `resume --to
-review`, the one `build.md` was registered for). If every verdict is `pass` and `BLOCKING: 0`, the job moves to `approve`; otherwise the round is
+review`, the one `build.md` was registered for), unless the reviewed commit follows that one by
+clean base merges only: it contains it, and every commit since then that is not on the base is a
+merge whose result matches one of its parents (the rule delivery applies to the approval). Under
+`ci` authority that is how a clean base merge in `pr`, between simplify and review, reaches
+review without a rebuild. A commit of the job's own after `simplify.md`, or a merge with edits
+inside it, is new code and is refused (decision
+[2026-11-24-clean-base-merge-keeps-simplify-evidence](decisions/2026-11-24-clean-base-merge-keeps-simplify-evidence.md)). If every verdict is `pass` and `BLOCKING: 0`, the job moves to `approve`; otherwise the round is
 a rejection and the job returns to `build`, unless the round is the last allowed one (`round >=
 maxRounds`, from `--max-rounds`, default 3), in which case it escalates to `needs-human` with `max
 review rounds reached`. Rounds that are not review-driven raise `maxRounds` by one instead of
@@ -674,7 +680,9 @@ neither parent, from `git diff-tree --cc`). Outcomes: `up-to-date` (no commit), 
 material edits, moves the job back to `build` (`rework`): the builder merges and resolves, and the
 result is verified, reviewed, and approved again. A clean merge only needs a fresh `orch verify` on
 the new commit, except in `ci`, where it reworks too: only the `pr` stage pushes, so the new head
-comes back through verification, approval, and `pr` to the same PR. A base-integration rework never
+comes back through verification, approval, and `pr` to the same PR. Under `ci` authority a clean
+merge in the pre-review `pr` pass keeps `simplify.md` valid: review judges the merged head, which
+follows the simplified one by that clean merge only. A base-integration rework never
 spends a CI repair (a base conflict is not a CI failure), so a job whose repairs are exhausted still
 goes to `build`. A completed job cannot rework; the dashboard's Fix merge conflicts re-lands it as a
 new job instead (`docs/dashboard.md`).

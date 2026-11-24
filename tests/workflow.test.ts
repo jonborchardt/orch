@@ -18,6 +18,7 @@ import {
   mergeDecision,
   personMergeStep,
   requiredArtifact,
+  reviewedHeadRefusal,
   RUN_ENDING_CODES,
   SCOPE_GAP_REASON,
   type Stage,
@@ -859,6 +860,39 @@ describe('describeNext / requiredArtifact', () => {
     });
     const done = describeNext({ stage: 'completed', status: 'completed', round: 1 });
     expect(done.requiredArtifacts).toEqual([]);
+  });
+});
+
+describe('reviewedHeadRefusal: a reviewed head may follow the built head by clean merges only', () => {
+  const built = 'b'.repeat(40);
+  const reviewed = 'r'.repeat(40);
+  const clean = { contains: true, ownCommits: [], editedMerges: [] };
+  const refuse = (facts?: Parameters<typeof reviewedHeadRefusal>[4]) =>
+    reviewedHeadRefusal(1, 'round-1/simplify.md', built, reviewed, facts);
+  const changed = /simplify.md describes bbbbbbb; the code changed after the build/;
+
+  it('allows the same head without facts, and a contained head with only clean merges', () => {
+    expect(reviewedHeadRefusal(1, 'round-1/simplify.md', built, built)).toBeNull();
+    expect(refuse(clean)).toBeNull();
+  });
+
+  it('refuses no built head, missing facts, a head that does not contain it, or own commits', () => {
+    expect(reviewedHeadRefusal(1, 'build.md', null, reviewed, clean)).toMatch(/no commit/);
+    expect(refuse()).toMatch(changed);
+    expect(refuse({ ...clean, contains: false })).toMatch(changed);
+    expect(refuse({ ...clean, ownCommits: ['c'.repeat(40)] })).toMatch(changed);
+    // Git could not answer: fail closed.
+    expect(refuse({ ...clean, ownCommits: undefined })).toMatch(changed);
+  });
+
+  it('refuses an edited merge, naming its short sha and files as new code', () => {
+    const r = refuse({
+      ...clean,
+      editedMerges: [{ sha: 'm'.repeat(40), files: ['src/app.ts', 'src/b.ts'] }],
+    });
+    expect(r).toContain('mmmmmmm: src/app.ts, src/b.ts');
+    expect(r).toContain('new code');
+    expect(r).not.toContain('m'.repeat(8));
   });
 });
 

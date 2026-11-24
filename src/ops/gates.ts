@@ -28,6 +28,8 @@ import {
   approvalEvidence,
   approvalName,
   requiredArtifact,
+  type ReviewedHeadFacts,
+  reviewedHeadRefusal,
   simplifyArtifact,
 } from '../core/workflow.ts';
 import { findArtifact, listArtifacts } from '../storage/artifacts.ts';
@@ -275,6 +277,25 @@ function requireApproved(store: Store, job: Job, tree: Tree, what: string): void
         (job.mode === 'fast' ? back : 'Rework, re-review, and re-approve first.'),
     );
   }
+}
+
+/** Git facts for `reviewedHeadRefusal`: what lies between `from` and `to` that is not on the base. */
+function followFacts(
+  path: string,
+  from: string,
+  to: string,
+  baseBranch: string,
+): ReviewedHeadFacts {
+  if (!containsRef(path, from, to)) return { contains: false, ownCommits: [], editedMerges: [] };
+  const base = baseRef(path, baseBranch);
+  const range = [`${from}..${to}`, ...(base ? [`^${base}`] : [])];
+  // Fail closed: undefined (Git could not answer) refuses the review.
+  const own = tryGit(path, 'rev-list', '--no-merges', ...range);
+  return {
+    contains: true,
+    ownCommits: own === undefined ? undefined : own.split(/\r?\n/).filter(Boolean),
+    editedMerges: editedMerges(path, from, to, base),
+  };
 }
 
 /** Whether `requireApproved` holds for HEAD. */
@@ -531,19 +552,22 @@ export function transitionGuarded(
       }
       if (job.stage === 'review') {
         // Reviewers judge the commit this round's simplify pass left (or, when the round skipped
-        // simplify, the one the builder built); a later commit was never built against the spec.
+        // simplify, the one the builder built), plus clean base merges since; a later commit of
+        // the job's own was never built against the spec.
         const source =
           findArtifact(store.db, id, simplifyArtifact(job.round)) ??
           findArtifact(store.db, id, 'build.md');
-        const what = source?.path ?? 'build.md';
         const built = source?.head ?? null;
-        if (built !== evidence.head) {
-          throw new ValidationError(
-            `round ${String(job.round)} verdicts describe ${evidence.head.slice(0, 7)} but ${what} ` +
-              `describes ${built?.slice(0, 7) ?? 'no commit'}; the code changed after the build. ` +
-              'Return the job to build and review again.',
-          );
-        }
+        const refusal = reviewedHeadRefusal(
+          job.round,
+          source?.path ?? 'build.md',
+          built,
+          evidence.head,
+          built && built !== evidence.head
+            ? followFacts(info.path, built, evidence.head, job.baseBranch)
+            : undefined,
+        );
+        if (refusal) throw new ValidationError(refusal);
       }
       if (job.stage === 'build' || job.stage === 'simplify' || job.stage === 'approve') {
         requireVerified(store, job, info, `completing ${job.stage}`);
