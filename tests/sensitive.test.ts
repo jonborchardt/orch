@@ -135,6 +135,33 @@ describe('classification (pure)', () => {
     expect(scanDiff('')).toEqual({ disabled: [], removedTests: [] });
   });
 
+  it('credits a test file turned into a symlink (typechange) with its removed tests', () => {
+    // The shape Git prints for a typechange: a deletion patch, then a creation patch.
+    const diff = [
+      'diff --git a/tests/y.test.ts b/tests/y.test.ts',
+      '--- a/tests/y.test.ts',
+      '+++ b/tests/y.test.ts',
+      '@@',
+      "+  it('new', () => {});",
+      'diff --git a/tests/x.test.ts b/tests/x.test.ts',
+      'deleted file mode 100644',
+      '--- a/tests/x.test.ts',
+      '+++ /dev/null',
+      '@@ -1,2 +0,0 @@',
+      "-it('a', () => {});",
+      "-it('b', () => {});",
+      'diff --git a/tests/x.test.ts b/tests/x.test.ts',
+      'new file mode 120000',
+      '--- /dev/null',
+      '+++ b/tests/x.test.ts',
+      '@@ -0,0 +1 @@',
+      '+target',
+    ].join('\n');
+    expect(scanDiff(diff).removedTests).toEqual([
+      { path: 'tests/x.test.ts', removed: 2, added: 0 },
+    ]);
+  });
+
   it('compares policies: added, removed, modified, and weakened checks', () => {
     const base = parsePolicy({
       verification: {
