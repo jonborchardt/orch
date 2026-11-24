@@ -97,8 +97,12 @@ or `refused` for a reason of its own, such as a merge that left a checklist box 
 (`ticket-open`; next step: tick or move the remaining boxes, then `orch ticket done <id>`), an
 unverified merge, or a job that made no progress. The run ends when no ready ticket is left,
 when `orch stop next` was requested, or at the first ticket whose outcome would hit every ticket:
-claude cannot start (`claude-failed`), GitHub cannot be read or gives no answer
-(`github-unreadable`, `merge-no-answer`), or GitHub refuses the merge call (`github-refused`).
+claude cannot start (`claude-failed`), Claude's usage or rate limit is reached (`usage-limit`),
+GitHub cannot be read or gives no answer (`github-unreadable`, `merge-no-answer`), or GitHub
+refuses the merge call (`github-refused`). A `usage-limit` stop leaves the session unfinished
+with its ticket in flight: the summary names the limit and its reset time when Claude printed
+one, and `orch resume` continues the same ticket and job once the limit has reset (decision
+2026-11-24-usage-limit-ends-run-resumably).
 Those codes are `RUN_ENDING_CODES` in `src/core/workflow.ts`; a code not named there continues
 the queue (decision 2026-11-23-queue-ends-only-on-run-wide-outcomes). It exits 0 unless a ticket
 ended blocked, refused, or waiting for a person.
@@ -322,8 +326,8 @@ Each ticket the controller attempts ends with one outcome (`TICKET_OUTCOMES` in
 | `stopped`     | `orch stop` interrupted it                                                     | end the run, resumable             |
 
 The one exception is a result whose code would hit every ticket (`RUN_ENDING_CODES` in
-`src/core/workflow.ts`: `claude-failed`, `github-unreadable`, `merge-no-answer`,
-`github-refused`): it ends the run with the reason. A ticket of a repository without the merge
+`src/core/workflow.ts`: `claude-failed`, `usage-limit`, `github-unreadable`, `merge-no-answer`,
+`github-refused`): it ends the run with the reason; after `usage-limit` the run stays resumable. A ticket of a repository without the merge
 opt-in is not an outcome: the queue records it as skipped and moves on. `orch do` reports its one
 ticket's outcome and exits either way.
 
@@ -367,7 +371,8 @@ types:
 Stop codes `src/ops/run.ts` can write:
 
 - the controller's own: `no-progress` (two Claude sessions in a row without moving the job),
-  `claude-failed` (Claude could not be started), `ci-pending` (60 CI reads without a verdict),
+  `claude-failed` (Claude could not be started), `usage-limit` (the session ended on a Claude
+  usage or rate limit; next step `orch resume`), `ci-pending` (60 CI reads without a verdict),
   `github-unreadable` (five unreadable GitHub answers in a row during CI), `unverified-merge` (the
   PR merged at a head other than the verified one), `ticket-open` (merged and verified, but the
   ticket stays open, for example an unchecked checklist item), `reland-refused` (a conflict, and no
@@ -478,8 +483,8 @@ replaces: `orch ticket reopen <id>` queues it for a new job, or `orch ticket dro
 
 Every automatic recovery is bounded. A spent budget is not a success: it stops the ticket with
 its reason. The queue passes a `blocked` ticket over and goes on, except for the run-wide codes
-`claude-failed`, `github-unreadable`, and `merge-no-answer` (and `github-refused` at merge),
-which end the run there.
+`claude-failed`, `usage-limit`, `github-unreadable`, and `merge-no-answer` (and `github-refused`
+at merge), which end the run there.
 
 ```mermaid
 flowchart TD
@@ -513,6 +518,7 @@ flowchart TD
 | PR conflicts at merge              | one re-land job; a second conflict blocks with `second-conflict`                                                                                                                                                                    | job rows (`supersededBy`)                   | yes, durable                              |
 | Claude exits without progress      | `MAX_IDLE_LAUNCHES` = 2 consecutive exits that change none of stage, round, CI repairs, artifact count (`no-progress`)                                                                                                              | the running controller                      | no: reset by `orch do`, `resume`, `start` |
 | Claude cannot be started           | none: stops at once (`claude-failed`)                                                                                                                                                                                               | –                                           | –                                         |
+| Claude usage or rate limit         | none: ends the run at once, unfinished, for `orch resume` (`usage-limit`)                                                                                                                                                           | the session file                            | yes, until `orch resume` or `orch stop`   |
 | CI pending                         | `CI_MAX_POLLS` = 60 controller reads (`ci-pending`)                                                                                                                                                                                 | the running controller                      | no: reset                                 |
 | GitHub unreadable during CI        | `TRANSIENT_ATTEMPTS` = 5 consecutive failed reads (`github-unreadable`)                                                                                                                                                             | the running controller                      | no: reset                                 |
 | merge `waiting` or `error`         | 5 attempts in total, `RETRY_SECONDS` = 30 s apart (`merge-no-answer`)                                                                                                                                                               | the running controller                      | no: reset                                 |

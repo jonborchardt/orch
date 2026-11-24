@@ -465,7 +465,8 @@ artifacts; 60 CI reads; five unreadable answers from GitHub. A ticket that ends 
 or waiting for a person ends only `orch do`: in queue mode the controller releases its job,
 passes the ticket over for the rest of the session (`orch resume` included), takes the next ready
 ticket, and lists it with the reason and its next step in the end-of-session summary. Only an
-outcome that would hit every ticket ends the whole session there: `claude-failed`,
+outcome that would hit every ticket ends the whole session there: `claude-failed`, `usage-limit`
+(left unfinished, so `orch resume` continues the same ticket),
 `github-unreadable`, `merge-no-answer`, or `github-refused` (`RUN_ENDING_CODES` in
 `src/core/workflow.ts`; any other code continues, decision
 2026-11-23-queue-ends-only-on-run-wide-outcomes). For `ticket-open` (merged and verified, a box
@@ -488,7 +489,7 @@ Events tab, and, for a stop, the status mail (decision 2026-11-21-runner-evidenc
 `exited` with `exitCode` 0 says only that the process ended; `moved` says whether the job's
 stage, round, CI repairs, or artifacts changed during it. `runner.stopped` describes the
 controller, not the job: the job keeps the stage and status it had, and `code` says what stopped
-the ticket: `no-progress`, `claude-failed`, `ci-pending`, `github-unreadable`, `needs-human`,
+the ticket: `no-progress`, `claude-failed`, `usage-limit`, `ci-pending`, `github-unreadable`, `needs-human`,
 `unverified-merge`, `ticket-open`, `reland-refused`, `merge-no-answer`, `ownership` (another
 session held the job), `error` (any other `orch` refusal), any `mergeJob` block code
 (`MERGE_BLOCKS` in `src/core/workflow.ts`, listed under [Merging](#merging)), or `merge-blocked`
