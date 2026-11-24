@@ -121,10 +121,19 @@ export function scanDiff(diff: string): DiffScan {
   const disabled: DisabledTest[] = [];
   const counts = new Map<string, { removed: number; added: number }>();
   let path = '';
+  let prev = '';
   for (const raw of diff.split(/\r?\n/)) {
+    const last = prev;
+    prev = raw;
     const header = /^\+\+\+ b\/(.+)$/.exec(raw);
     if (header) {
       path = header[1] ?? '';
+      continue;
+    }
+    // A deletion patch (a deleted file, or the old half of a typechange such as file -> symlink)
+    // names its file only in the `--- a/` line just before `+++ /dev/null`.
+    if (raw === '+++ /dev/null') {
+      path = /^--- a\/(.+)$/.exec(last)?.[1] ?? '';
       continue;
     }
     if (raw.startsWith('+++') || raw.startsWith('---') || !path) continue;

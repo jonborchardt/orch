@@ -4,7 +4,8 @@
  * job; the fast build gate; and escalation. Delivery under `ci` authority and CI repairs are in
  * fast-delivery.test.ts, base integration in fast-integration.test.ts.
  */
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -92,6 +93,15 @@ describe('a fast job', () => {
       gitIn(c.wt, 'mv', from, to);
       gitIn(c.wt, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', `mv ${from}`);
     };
+    // A test file turned into a symlink (a typechange), written into the index as mode 120000 so
+    // it works without symlink privilege on Windows; checkout then materializes it per platform.
+    const symlink = (file: string) => () => {
+      writeFileSync(join(c.wt, file), 'target');
+      const sha = gitIn(c.wt, 'hash-object', '-w', '--', file);
+      gitIn(c.wt, 'update-index', '--cacheinfo', `120000,${sha},${file}`);
+      gitIn(c.wt, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', `link ${file}`);
+      gitIn(c.wt, 'checkout', '--', file);
+    };
     const risky: [() => unknown, RegExp][] = [
       [write('package.json', '{ "name": "x" }\n'), /package\.json \(deps/],
       [write('.github/workflows/ci.yml', 'on: push\n'), /ci\.yml \(ci/],
@@ -102,6 +112,7 @@ describe('a fast job', () => {
       [write('factory.json', `${JSON.stringify(POLICY)}\n`), /factory\.json \(policy/],
       [mv('tests/a.test.ts', 'a.ts'), /tests\/a\.test\.ts \(tests, deleted/],
       [mv('vitest.config.ts', 'vitest.config.bak'), /vitest\.config\.ts \(test-config, deleted/],
+      [symlink('tests/a.test.ts'), /tests\/a\.test\.ts: 2 test\(s\) removed/],
     ];
     let replace = false;
     for (const [act, why] of risky) {
@@ -124,6 +135,30 @@ describe('a fast job', () => {
     verify(store, full);
     add(store, full, 'build.md');
     expect(go(store, full, 'complete').stage).toBe('simplify');
+  });
+
+  it('a build whose fast-scope diff Git cannot read is refused (fails closed)', () => {
+    const c = startFast(store, clone);
+    go(store, c, 'start');
+    commitFile(c.wt, 'scope-probe/x.md', 'x\n');
+    expect(verify(store, c).status).toBe('passed');
+    add(store, c, 'build.md');
+    // Drop the tree object only HEAD has: `git diff --name-status base...HEAD` now fails, while
+    // status, merge-base, and the policy read still work. Restored afterwards for later tests.
+    const tree = gitIn(c.wt, 'rev-parse', 'HEAD:scope-probe');
+    const objects = resolve(c.wt, gitIn(c.wt, 'rev-parse', '--git-path', 'objects'));
+    const file = join(objects, tree.slice(0, 2), tree.slice(2));
+    const bytes = readFileSync(file);
+    chmodSync(file, 0o644);
+    unlinkSync(file);
+    try {
+      expect(() => go(store, c, 'complete')).toThrow(ValidationError);
+      expect(() => go(store, c, 'complete')).toThrow(/fast-scope diff .* could not be read/);
+      expect(job(c).stage).toBe('build');
+    } finally {
+      writeFileSync(file, bytes);
+    }
+    expect(go(store, c, 'complete').stage).toBe('pr');
   });
 
   it('a refused build resumed past the build gate is still refused at delivery', () => {
