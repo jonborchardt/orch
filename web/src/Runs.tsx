@@ -73,7 +73,7 @@ export function Polled({
   );
 }
 
-const duration = (ms: number | null) => (ms === null ? UNAVAILABLE : elapsedCell(ms));
+export const duration = (ms: number | null) => (ms === null ? UNAVAILABLE : elapsedCell(ms));
 
 export function RunsPage({ refreshMs = 4000 }: { refreshMs?: number }) {
   const { data, error } = usePolled(fetchRuns, refreshMs);

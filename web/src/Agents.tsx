@@ -8,13 +8,10 @@ import {
   Typography,
 } from '@mui/material';
 
-import { Polled, UNAVAILABLE, usePolled } from './Runs.tsx';
+import { duration, Polled, usePolled } from './Runs.tsx';
 import { fetchAgents } from './api.ts';
-import { elapsedCell } from './format.ts';
 
 const COUNTS = ['invocations', 'success', 'failure', 'other', 'open', 'measured'] as const;
-
-const duration = (ms: number | null) => (ms === null ? UNAVAILABLE : elapsedCell(ms));
 
 export function AgentsPage({ refreshMs = 4000 }: { refreshMs?: number }) {
   const { data, error } = usePolled(fetchAgents, refreshMs);
