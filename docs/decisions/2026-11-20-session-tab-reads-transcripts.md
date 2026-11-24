@@ -25,7 +25,12 @@ parameter that selects a file; every file must resolve, by real path, inside the
 directory (subagent files also inside their real `subagents/`) and be a regular file. Reads are
 tails capped per file, per request, and per meta file; entries, entry text, and the response are
 capped; the client renders plain text only. The route is loopback-only behind the detail route's
-`Host` and `Sec-Fetch-Site` guards, with `no-store` and `nosniff`.
+`Host` and `Sec-Fetch-Site` guards, with `no-store` and `nosniff`. A residual race remains: a
+directory on the path swapped to a link out at the open, back at the path check, and out again at
+the identity check. It is closed on Linux by resolving the open handle's own path
+(`/proc/self/fd/<fd>`) and remains on Windows and macOS, where Node exposes no handle-to-path
+call. It needs write access to the user's own Claude projects directory, whose owner can already
+read every transcript, so the impact is low (ticket 0086).
 
 **Limits.** The transcript format, `CLAUDE_CODE_SESSION_ID`, and the `subagents/*.meta.json` layout
 are Claude Code's and undocumented (observed in 2.1.326); unknown shapes are skipped or give null

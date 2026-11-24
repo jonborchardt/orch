@@ -1,5 +1,15 @@
 /** The Session tab reader: parsing, subagents, read bounds, and real-path confinement (todo 0074). */
-import { mkdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -10,6 +20,7 @@ import {
   MAX_RESPONSE_BYTES,
   MAX_SUBAGENT_FILES,
   confined,
+  heldPath,
   mergeEntries,
   NO_SESSION,
   parseTranscript,
@@ -313,6 +324,35 @@ describe('readSessionLog', () => {
     // A directory is never read as a transcript.
     expect(readConfined(join(root, 'd-old'), root, 64)).toBeNull();
   });
+
+  it.runIf(process.platform === 'linux')(
+    'resolves the open handle, not the name, on Linux (ticket 0086)',
+    () => {
+      const root = tempDir('claude-');
+      const outside = tempDir('outside-');
+      mkdirSync(join(root, 'd'));
+      writeFileSync(join(root, 'd', 'agent-a.jsonl'), 'inside');
+      const fd = openSync(join(root, 'd', 'agent-a.jsonl'), 'r');
+      try {
+        // A directory on the path moves after the open: the handle's path follows it, which
+        // resolving the old name cannot produce (that name is gone).
+        renameSync(join(root, 'd'), join(root, 'moved'));
+        expect(heldPath(fd, join(root, 'd', 'agent-a.jsonl'))).toBe(
+          join(root, 'moved', 'agent-a.jsonl'),
+        );
+        expect(() => realpathSync(join(root, 'd', 'agent-a.jsonl'))).toThrow();
+      } finally {
+        closeSync(fd);
+      }
+      // A handle whose own path lies outside root is refused, though its name is under root.
+      writeFileSync(join(outside, 'agent-b.jsonl'), 'outside');
+      symlinkSync(outside, join(root, 'link'));
+      expect(readConfined(join(root, 'link', 'agent-b.jsonl'), root, 64)).toBeNull();
+      expect(readConfined(join(root, 'moved', 'agent-a.jsonl'), root, 64)?.buf.toString()).toBe(
+        'inside',
+      );
+    },
+  );
 
   it('proves the file at read time, so inode reuse cannot pass a stale identity (CI round 3)', () => {
     // Round 2 compared a stat taken at listing with an fstat taken after the open. On Linux a

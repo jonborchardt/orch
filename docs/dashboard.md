@@ -206,7 +206,12 @@ cannot lead out. That listing check only filters: each file is opened once, and 
 must then prove itself, a regular file whose path resolved after the open lies inside the same
 root with the handle's device and inode (compared as bigints), before anything is read through
 it; the open handle pins its inode, so a reused inode number cannot pass, and a path swapped
-between the listing and the read is not followed. **Bounds** (exported
+between the listing and the read is not followed. One race remains where the path is resolved by
+name: a directory on the path swapped to a link out at the open, back to the real directory at
+the path check, and out again at the identity check. It is closed on Linux, where the path checked
+is the open handle's own (`/proc/self/fd/<fd>`), and remains on Windows and macOS, where Node has
+no handle-to-path call; winning it needs write access to the user's own Claude projects directory,
+whose owner can already read every transcript, so its impact is low. **Bounds** (exported
 constants): each file is read only from its end, at most `TAIL_WINDOW_BYTES` (256 KB); at most
 `TOTAL_READ_BYTES` (2 MB) per request, newest file first; the newest `MAX_SUBAGENT_FILES` (24)
 subagent files, ordered by one `lstat` each and only those resolved, the rest counted;
