@@ -24,7 +24,8 @@ flowchart LR
   types, areas, efforts, dependencies that may cross repositories, history, and computed
   readiness ([docs/tickets.md](docs/tickets.md)).
 - **Autonomous ticket execution.** `orch start` works the ready queue in the foreground, one
-  ticket at a time, launching `claude -p "/factory <job>"` for each job.
+  ticket at a time, continuing a stranded in-progress ticket (its job released) before a new
+  one, launching `claude -p "/factory <job>"` for each job.
 - **A multi-stage engineering workflow.** Eight stages, `spec` to `completed`, each gated by
   TypeScript on a validated artifact and a verification run for the exact commit
   ([docs/workflow.md](docs/workflow.md#the-ticket-lifecycle-end-to-end)).

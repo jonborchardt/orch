@@ -69,8 +69,15 @@ orch start
 The controller takes the controller lock (one per installation; a second `orch start` is refused
 while it is alive), writes its intent to `<data>/runner.json`, and loops:
 
-1. Read the ready queue (`orch ticket ready` across every repository). Pass over and record as
-   skipped any ticket whose repository lacks the merge opt-in.
+1. First take again a ticket passed over in this session for a person whose job a person has
+   since moved on (decision 2026-11-24-default-needs-human-choices). Else look for a stranded
+   in-progress ticket: its active job is `pending` or `running`, not in
+   `needs-human` or `completed`, and unowned or with an expired lease (for example one sent back
+   with `orch factory resume <job> --to build --release`), and the ticket was not passed over in
+   this session. Take the first in queue order and continue its job the way `orch do` does. Only
+   when there is none, read the ready queue (`orch ticket ready` across every repository). Either
+   way, pass over and record as skipped any ticket whose repository lacks the merge opt-in
+   (decision 2026-11-24-queue-resumes-stranded-tickets).
 2. For the first remaining ticket, find its job: continue the unfinished one, create one
    (`orch factory dispatch --ticket`, which claims the ticket in the job's insert transaction), or,
    for an in-progress ticket whose last job completed, go straight to the merge.
@@ -341,34 +348,36 @@ types:
 
 `runner.session`, each time a Claude process the controller started has ended:
 
-| field        | meaning                                                                                      |
-| ------------ | -------------------------------------------------------------------------------------------- |
-| `outcome`    | `exited` (ended on its own), `stopped` (by `orch stop`), `failed` (did not start)            |
-| `exitCode`   | the process exit code, or null                                                               |
-| `signal`     | the signal that ended it, or null                                                            |
-| `error`      | why it could not be started, or null                                                         |
-| `pid`        | the child's PID; null when it never started                                                  |
-| `seconds`    | wall-clock duration                                                                          |
-| `moved`      | whether the job's stage, round, CI repairs, or artifact count changed meanwhile              |
-| `stage`      | the job's stage afterwards                                                                   |
-| `status`     | the job's status afterwards                                                                  |
-| `sessionId`  | the `--session-id` it ran under, also attached to the job before it started                  |
-| `stderrTail` | the last 4000 characters it wrote to stderr, or null                                         |
-| `result`     | its final stream-json `result` (`subtype`, `isError`, `result` clipped, `numTurns`), or null |
+| field        | meaning                                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------------------------- |
+| `outcome`    | `exited` (ended on its own), `stopped` (by `orch stop`), `failed` (did not start)                               |
+| `exitCode`   | the process exit code, or null                                                                                  |
+| `signal`     | the signal that ended it, or null                                                                               |
+| `error`      | why it could not be started, or null                                                                            |
+| `pid`        | the child's PID; null when it never started                                                                     |
+| `seconds`    | wall-clock duration                                                                                             |
+| `moved`      | whether the job's stage, round, CI repairs, or artifact count changed meanwhile                                 |
+| `stage`      | the job's stage afterwards                                                                                      |
+| `status`     | the job's status afterwards                                                                                     |
+| `sessionId`  | the `--session-id` it ran under, also attached to the job before it started                                     |
+| `stderrTail` | the last 4000 characters it wrote to stderr, or null                                                            |
+| `result`     | its final stream-json `result` (`subtype`, `isError`, `result` clipped, `numTurns`), or null                    |
+| `pick`       | how the queue took the ticket: `resume` (stranded in-progress, or taken again) or `ready`; absent for `orch do` |
 
 **Exit code 0 is not success.** `exited` with `exitCode` 0 says only that the process ended;
 `moved` says whether the job got anywhere, and the job row says where.
 
 `runner.stopped`, when a ticket ends `blocked` or `needs-human` and its job is not cancelled:
 
-| field     | meaning                                                |
-| --------- | ------------------------------------------------------ |
-| `outcome` | `blocked` or `needs-human`                             |
-| `code`    | the structured stop code (below)                       |
-| `reason`  | the human-readable reason                              |
-| `stage`   | the job's stage when the controller gave the ticket up |
-| `status`  | the job's status then                                  |
-| `next`    | the command or decision that continues it              |
+| field     | meaning                                                           |
+| --------- | ----------------------------------------------------------------- |
+| `outcome` | `blocked` or `needs-human`                                        |
+| `code`    | the structured stop code (below)                                  |
+| `reason`  | the human-readable reason                                         |
+| `stage`   | the job's stage when the controller gave the ticket up            |
+| `status`  | the job's status then                                             |
+| `next`    | the command or decision that continues it                         |
+| `pick`    | `resume` or `ready`, as on `runner.session`; absent for `orch do` |
 
 Stop codes `src/ops/run.ts` can write:
 
