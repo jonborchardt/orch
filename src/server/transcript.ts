@@ -15,6 +15,7 @@ import {
   openSync,
   readdirSync,
   readSync,
+  readlinkSync,
   realpathSync,
   statSync,
 } from 'node:fs';
@@ -193,6 +194,22 @@ export function confined(p: string, root: string, dir = false): Found | null {
 const READ_FLAGS = constants.O_RDONLY | ((constants as Partial<typeof constants>).O_NONBLOCK ?? 0);
 
 /**
+ * The real path of the file open as `fd`, opened by the name `p`. On Linux the handle's own path,
+ * from `/proc/self/fd/<fd>` (a deleted file reads `<path> (deleted)` and fails the identity check
+ * that follows); elsewhere, or without `/proc`, `p` resolved again by name.
+ */
+export function heldPath(fd: number, p: string): string {
+  if (process.platform === 'linux') {
+    try {
+      return readlinkSync(`/proc/self/fd/${String(fd)}`);
+    } catch {
+      // No /proc mounted: fall back to the by-name check below.
+    }
+  }
+  return realpathSync(p);
+}
+
+/**
  * Open `p` once, then prove that this open handle is a regular file whose path, resolved after the
  * open, lies inside the real directory `root`: the file at that real path must have the handle's
  * device and inode (compared as bigints; NTFS file ids exceed a double). Read only through that
@@ -201,9 +218,14 @@ const READ_FLAGS = constants.O_RDONLY | ((constants as Partial<typeof constants>
  *
  * Why after the open: an open handle pins its inode, so no other file can take its number while
  * the identities are compared. Never trust an identity taken before the open: a deleted file's
- * inode number goes to the next file created (at once on Linux). Not closed: two won races that
- * move a directory on the path to a link and back, which needs write access to the user's own
- * Claude projects directory.
+ * inode number goes to the next file created (at once on Linux).
+ *
+ * The swap race: a directory on the path that is a link out at the open, the real directory at
+ * the path check, and a link out again at the identity check. Closed on Linux, where `heldPath`
+ * reads the open handle's own path. It remains on Windows and macOS, where Node has no
+ * handle-to-path call (no `GetFinalPathNameByHandle`, no `F_GETPATH`) and the path is resolved
+ * by name. Winning it needs write access to the user's own Claude projects directory, whose owner
+ * can already read every transcript.
  */
 export function readConfined(
   p: string,
@@ -220,7 +242,7 @@ export function readConfined(
   try {
     const held = fstatSync(fd, { bigint: true });
     if (!held.isFile()) return null;
-    const real = realpathSync(p);
+    const real = heldPath(fd, p);
     if (!real.startsWith(root + sep)) return null;
     const there = statSync(real, { bigint: true });
     if (there.dev !== held.dev || there.ino !== held.ino) return null;
