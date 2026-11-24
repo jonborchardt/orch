@@ -186,6 +186,19 @@ export function deferredItems(decision: string): { item: string; to: number }[] 
 }
 
 /**
+ * Boxes decision.md says do not apply: a not-delivered line whose reason is
+ * `does not apply: <why>` with a non-empty why. Approval then requires the box gone from the
+ * ticket body and a note `<item>: does not apply`, so the ticket closes on its merge
+ * (decision 2026-11-23-inapplicable-box-leaves-the-ticket).
+ */
+export function inapplicableItems(decision: string): { item: string; why: string }[] {
+  return notDelivered(decision).flatMap(({ item, reason }) => {
+    const why = /^does not apply:(.*)$/.exec(reason)?.[1]?.trim() ?? '';
+    return why === '' ? [] : [{ item, why }];
+  });
+}
+
+/**
  * The path `from -> ... -> to` through existing dependencies, when there is one: adding
  * "`to` depends on `from`" would then close a cycle. `deps` maps a ticket to what it depends on.
  */
