@@ -222,12 +222,20 @@ function record(paths: RuntimePaths, pass: RecoveryPass): void {
   );
 }
 
+const superseded = (): RecoveryPass => ({
+  at: now(),
+  online: false,
+  probeError: 'superseded: another recovery worker holds the PID file',
+  jobs: [],
+  nextSeconds: null,
+});
+
 /**
  * Run passes until `signal` aborts (or once). Each pass writes the status file and one log line.
  * A pass that throws is logged as offline and retried with backoff, so the worker keeps going.
  * `beat` runs after every pass; when it returns false (another worker took the PID file) the
- * loop ends. `owned` is checked before every pass, before every job episode, and after the pass;
- * once it is false the worker returns a `superseded: ...` pass, unrecorded, and writes nothing more (no mail, status, log).
+ * loop ends. `owned` is checked before every pass, episode and mail; once false the worker
+ * returns unrecorded.
  */
 export async function runWorker(
   store: Store,
@@ -239,13 +247,6 @@ export async function runWorker(
   } = {},
 ): Promise<RecoveryPass> {
   const owned = opts.owned;
-  const superseded = (): RecoveryPass => ({
-    at: now(),
-    online: false,
-    probeError: 'superseded: another recovery worker holds the PID file',
-    jobs: [],
-    nextSeconds: null,
-  });
   let backoff: number | null = null;
   for (;;) {
     // Loop top: runs before the first pass and after every delay (a machine sleep lands here).

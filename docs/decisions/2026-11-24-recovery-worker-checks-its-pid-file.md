@@ -10,12 +10,7 @@ file', jobs: [], nextSeconds: null }` and writes nothing more: no episode, no ma
 file, no log line, no PID write. This is decision 2026-11-21-controller-checks-its-lock moved to
 the recovery worker.
 
-**Why.** A worker that slept past `HEARTBEAT_STALE_SECONDS` (a long machine sleep) has a stale PID
-file, so a second `orch recover start` or `run` takes it. Before this, the first worker asked
-`beat()` only after a pass, so on waking it ran one more full pass first: GitHub probes, an
-`orch-recovery` episode per recoverable `ci` job, mail, and an overwrite of the new worker's
-status file (ticket 0111). Leases kept job state safe; the cost was duplicate GitHub reads and
-confusing events. The check runs before a step, not around it, so one step already started (a
-`gh` call inside `reconcileCi`) may still overlap, as 0096 accepts. Mail for events of a pass cut
-short is left to the new worker's watermark. Replacing the PID file with a generation lock, which
-would also close `beat()`'s read-then-write gap, is left for a later ticket.
+**Why.** A worker that slept past `HEARTBEAT_STALE_SECONDS` loses its PID file to a second
+worker, and before this it ran one more full pass on waking (GitHub probes, episodes, mail, an
+overwritten status file; ticket 0111). The check runs before a step, not around it, so a `gh`
+call already started may still overlap; a generation lock is left for a later ticket.
