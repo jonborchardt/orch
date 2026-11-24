@@ -129,11 +129,24 @@ const FAST_REFUSED_KINDS: readonly string[] = ['policy', 'ci', 'test-config', 'd
  * at its old path. Checked when the build completes and again at every delivery.
  */
 function requireFastScope(job: Job, info: Tree, what: string): void {
-  const changes = info.baseRef
-    ? parseNameStatus(
-        tryGit(info.path, 'diff', '--name-status', '--no-renames', `${info.baseRef}...HEAD`) ?? '',
-      )
-    : info.changes;
+  let changes = info.changes;
+  if (info.baseRef) {
+    const out = tryGit(
+      info.path,
+      'diff',
+      '--name-status',
+      '--no-renames',
+      `${info.baseRef}...HEAD`,
+    );
+    // Fail closed: when Git cannot answer, the scope is unknown, so the fast job is refused.
+    if (out === undefined) {
+      throw new ValidationError(
+        `${what} (fast job) is refused: the fast-scope diff against ${info.baseRef} could not be read. ` +
+          `Escalate (orch job transition ${job.id} escalate --reason "...") or repair the worktree.`,
+      );
+    }
+    changes = parseNameStatus(out);
+  }
   const report = sensitiveReport({ ...info, changes }, effectivePolicy(job, info));
   const found = [
     ...report.changes
