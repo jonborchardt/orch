@@ -79,6 +79,11 @@ export interface RunnerSession {
   fast?: boolean | undefined;
   /** The ticket and job in flight. */
   ticketId: number | null;
+  /**
+   * How the queue took the ticket in flight: `resume` a stranded in-progress one, or `ready` a new
+   * one. Null for `orch do` and between tickets; absent in older records.
+   */
+  pick?: 'resume' | 'ready' | null | undefined;
   jobId: string | null;
   /** The Claude process started for that job, until its exit was seen. */
   child: { pid: number; startedAt: string } | null;

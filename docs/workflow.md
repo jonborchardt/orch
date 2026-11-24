@@ -55,8 +55,9 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
 17. **Settlement.** In the transaction that records the merge, the ticket becomes `done` only if
     the merged head is the verified one and nothing is left on the ticket
     ([Verified integration and reconciliation](#verified-integration-and-reconciliation)).
-18. **Next ticket.** The controller takes the next ready ticket, passing over one it could not
-    finish, or ends the run on an outcome that would hit every ticket
+18. **Next ticket.** The controller continues a stranded in-progress ticket first (its job
+    released, pending or running, not waiting for a person), else takes the next ready ticket,
+    passing over one it could not finish, or ends the run on an outcome that would hit every ticket
     ([Factory controller](#factory-controller)).
 
 Any stage can escalate to `needs-human`, which waits for a person's decision
