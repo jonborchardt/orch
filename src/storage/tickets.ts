@@ -4,7 +4,7 @@
  * appends history. Ticket numbers come from SQLite's AUTOINCREMENT, so concurrent CLI processes
  * never share or reuse one. Tickets are never deleted.
  */
-import { and, asc, desc, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, notInArray } from 'drizzle-orm';
 
 import { NotFoundError, OwnershipError, ValidationError, WorkflowError } from '../core/errors.ts';
 import {
@@ -589,6 +589,41 @@ export function claimTicketForJob(
   }
   events.push({ type: 'ticket.job-linked', payload: { job: job.id } });
   applyTicket(tx, ticket, patch, events, actor, ts);
+}
+
+/**
+ * Inside the transaction that cancels `job`: return its ticket to `open` when the ticket is
+ * still in progress and no other unfinished job works on it, so a cancelled job never strands its
+ * ticket. Any other ticket is left as it is.
+ */
+export function releaseTicketForCancel(
+  tx: Db,
+  ticketId: number,
+  job: { id: string; reason: string | null },
+  actor: string | null,
+  ts: string,
+): void {
+  const ticket = getTicket(tx, ticketId);
+  if (ticket.status !== 'in-progress') return;
+  // The cancelled row is written after this runs, so the job itself still looks unfinished.
+  const other = tx
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.ticketId, ticketId),
+        ne(jobs.id, job.id),
+        notInArray(jobs.status, [...TERMINAL_STATUSES]),
+      ),
+    )
+    .get();
+  if (other) return;
+  const note = `job ${job.id} was cancelled${job.reason ? `: ${job.reason}` : ''}`;
+  const event = {
+    type: 'ticket.reopened',
+    payload: { from: 'in-progress', to: 'open', job: job.id, note },
+  };
+  applyTicket(tx, ticket, { status: 'open' }, [event], actor, ts);
 }
 
 /** A job's PR that GitHub reports merged, as the ticket needs to know it. */

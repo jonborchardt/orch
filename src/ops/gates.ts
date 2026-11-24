@@ -165,8 +165,8 @@ function requireFastScope(job: Job, info: Tree, what: string): void {
   if (found.length === 0) return;
   throw new ValidationError(
     `${what} (fast job) is refused: the change is riskier than fast mode allows (${found.join('; ')}). ` +
-      `Escalate (orch job transition ${job.id} escalate --reason "..."); cancel and orch ticket reopen ` +
-      'the ticket to run the full workflow.',
+      `Escalate (orch job transition ${job.id} escalate --reason "..."), or cancel the job, ` +
+      'which reopens the ticket, and run it again in full mode.',
   );
 }
 

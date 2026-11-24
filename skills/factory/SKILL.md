@@ -246,7 +246,8 @@ answers `ESCALATE: <reason>`: run `orch job transition <id> escalate --reason "<
 and completing pr or ci are refused for anything else (only clean base merges may follow). In
 `pr`, write the concise fast `pr.md` from reference.md. A CI failure reworks to `build` within the
 repair budget, as for any job. A fast job resumes only to build, pr, ci, or completed; to run the
-full workflow, a human cancels it and reopens the ticket (`orch ticket reopen`).
+full workflow, a human cancels it, which reopens its ticket for a new job (`orch ticket reopen`
+is only for a ticket stranded in progress before that).
 
 ### Spec stage
 

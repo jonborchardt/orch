@@ -201,7 +201,7 @@ describe('a fast job', () => {
 
     for (const to of ['spec', 'simplify', 'review', 'approve'] as const) {
       expect(() => resumeFactoryJob(store, c.id, { session: 'human', to, force: true })).toThrow(
-        /cancel the job and `orch ticket reopen` it to run the full workflow/,
+        /cancel the job \(its ticket reopens\) and run the ticket again for the full workflow/,
       );
     }
     expect(job(c)).toMatchObject({ stage: 'needs-human', mode: 'fast' });
