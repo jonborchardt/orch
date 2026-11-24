@@ -56,7 +56,7 @@ export interface UsageReport {
 }
 
 /** Events that close a stage visit. */
-const ENDS = new Set([
+export const ENDS = new Set([
   'stage.completed',
   'stage.failed',
   'job.blocked',
@@ -67,7 +67,8 @@ const ENDS = new Set([
 
 const ms = (from: string, to: string) => Math.max(0, Date.parse(to) - Date.parse(from));
 
-function visits(events: Event[]): StageVisit[] {
+/** Pairs each `stage.started` with the next event in `ENDS`; reused by the Agents read model. */
+export function visits(events: Event[]): StageVisit[] {
   const out: StageVisit[] = [];
   let round = 0;
   for (let i = 0; i < events.length; i++) {

@@ -17,8 +17,10 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { BoardRow } from '../../src/server/types.ts';
+import { AgentsPage } from './Agents.tsx';
 import { JobBoard } from './JobBoard.tsx';
 import { type DetailActivity, JobDetail } from './JobDetail.tsx';
+import { RunsPage } from './Runs.tsx';
 import { NO_FILTERS, type TicketFilters, TicketsPage } from './Tickets.tsx';
 import { ApiFailure, fetchBoard, fetchRepos } from './api.ts';
 
@@ -40,6 +42,8 @@ function useHashRoute(): string {
 const SECTIONS = [
   { label: 'Jobs', href: '#/' },
   { label: 'Tickets', href: '#/tickets' },
+  { label: 'Runs', href: '#/runs' },
+  { label: 'Agents', href: '#/agents' },
 ] as const;
 
 const STATUS_FILTERS = [
@@ -111,7 +115,11 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const [detailActivity, setDetailActivity] = useState<DetailActivity>('loading');
   const [ticketFilters, setTicketFilters] = useState<TicketFilters>(NO_FILTERS);
   const ticketMatch = /^#\/tickets(?:\/(\d{1,9}))?\/?$/.exec(hash);
-  const section = ticketMatch ? 'Tickets' : 'Jobs';
+  const runsMatch = /^#\/runs\/?$/.test(hash);
+  const agentsMatch = /^#\/agents\/?$/.test(hash);
+  const section = ticketMatch ? 'Tickets' : runsMatch ? 'Runs' : agentsMatch ? 'Agents' : 'Jobs';
+  // Tickets, Runs, and Agents poll what they show; the board, its alert, and filters rest.
+  const other = section !== 'Jobs';
 
   const load = useCallback(() => {
     setInFlight((n) => n + 1);
@@ -133,7 +141,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   }, [repo]);
 
   useEffect(() => {
-    // The Tickets section polls what it shows itself; the job board rests meanwhile.
+    // The other sections poll what they show themselves; the job board rests meanwhile.
     if (section !== 'Jobs') return;
     load();
     const timer = setInterval(() => {
@@ -161,7 +169,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   );
   // A background poll after the first load; never shown alongside a first-load bar.
   const boardPolling = inFlight > 0 && rows !== null;
-  const refreshing = ticketMatch
+  const refreshing = other
     ? false
     : jobMatch
       ? detailActivity === 'refreshing' || (detailActivity === 'idle' && boardPolling)
@@ -200,7 +208,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             ))}
           </Box>
           {/* Job counts and filters belong to the Jobs section only. */}
-          {!ticketMatch && (
+          {!other && (
             <Stack direction="row" spacing={0.5} aria-label="Summary">
               {CHIPS.map((c) => {
                 const pressed = status === c.filter;
@@ -226,7 +234,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             </Stack>
           )}
           {/* Board-only controls, wrapping as one group; detail routes have nothing to filter. */}
-          {!jobMatch && !ticketMatch && (
+          {!jobMatch && !other && (
             <Box sx={{ ml: 'auto', display: 'flex', flexWrap: 'wrap', columnGap: 1.5, rowGap: 2 }}>
               <TextField
                 size="small"
@@ -287,7 +295,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           {refreshing && <LinearProgress aria-label="Refreshing" sx={{ height: 4 }} />}
         </Box>
       </AppBar>
-      {error && !ticketMatch && (
+      {error && !other && (
         <Alert severity="error" sx={{ m: 1 }} role="alert">
           {error}
         </Alert>
@@ -300,6 +308,10 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             filters={ticketFilters}
             onFilters={setTicketFilters}
           />
+        ) : runsMatch ? (
+          <RunsPage refreshMs={refreshMs} />
+        ) : agentsMatch ? (
+          <AgentsPage refreshMs={refreshMs} />
         ) : jobMatch ? (
           <JobDetail id={jobMatch[1] ?? ''} refreshMs={refreshMs} onActivity={setDetailActivity} />
         ) : rows === null ? (

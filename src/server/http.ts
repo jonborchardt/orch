@@ -32,7 +32,17 @@ import {
   ticketHistory,
 } from '../ops/tickets.ts';
 import type { Store } from '../storage/client.ts';
-import { act, artifactContent, assertJobId, board, detail, repos, sessionLog } from './api.ts';
+import {
+  act,
+  agents,
+  artifactContent,
+  assertJobId,
+  board,
+  detail,
+  repos,
+  runs,
+  sessionLog,
+} from './api.ts';
 import type { ApiError, SessionInfo } from './types.ts';
 
 const HOST = '127.0.0.1';
@@ -232,6 +242,15 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
       }
       if (root === 'repos' && !id) {
         send(res, 200, repos(store));
+        return;
+      }
+      // Analytics read models: aggregates over persisted rows, never a write.
+      if (root === 'runs' && !id) {
+        send(res, 200, runs(store));
+        return;
+      }
+      if (root === 'agents' && !id) {
+        send(res, 200, agents(store));
         return;
       }
       // What `orch status` prints. Read-only: the controller is started and stopped from the CLI.
