@@ -12,19 +12,16 @@ is labelled with its tier:
   local bare `origin`. GitHub is the stateful `gh` stand-in described below.
 - **untested**: not run, with the reason.
 
-No scenario is **real** in the full sense: none ran against GitHub itself (see
-[Not validated](#not-validated)).
-
 ## Environment
 
-| Item                            | Value                                                                                                                                                                                                                                                               |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Host                            | Windows 10 Pro N 10.0.19045, Git Bash                                                                                                                                                                                                                               |
-| `claude --version`              | 2.1.323 (Claude Code), the child ran `claude-opus-5-5`                                                                                                                                                                                                              |
-| `node --version`                | v24.19.0                                                                                                                                                                                                                                                            |
-| `orch` (controller and child)   | The installed `orch` (`E:\github2\orch\dist`, the primary checkout clean on `main` at `e4670b917d8cb80d5817ec8df511ec618d069bb3`, `dist/` built 2026-11-23 23:56, after that commit). The controller was run as `orch`, and the child's gates call the same binary  |
-| Default child arguments         | `-p --permission-mode auto --allowedTools "Bash(orch *)" "Bash(git *)" "Bash(npm *)" "Bash(npx *)" "Bash(node *)" "Bash(cd *)"` (no `runnerClaudeArgs` set)                                                                                                         |
-| Skill and agents the child read | The user's global `/factory` skill and agents (linked from `E:\github2\orch` by `orch install`). They were not changed. The child writes its own transcripts under `~/.claude/projects`, which is Claude Code's normal behaviour and not an edit by this validation |
+| Item                            | Value                                                                                                                                                                                                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Host                            | Windows 10 Pro N 10.0.19045, Git Bash                                                                                                                                                                                                                              |
+| `claude --version`              | 2.1.323 (Claude Code), the child ran `claude-opus-5-5`                                                                                                                                                                                                             |
+| `node --version`                | v24.19.0                                                                                                                                                                                                                                                           |
+| `orch` (controller and child)   | The installed `orch` (`E:\github2\orch\dist`, the primary checkout clean on `main` at `e4670b917d8cb80d5817ec8df511ec618d069bb3`, `dist/` built 2026-11-23 23:56, after that commit). The controller was run as `orch`, and the child's gates call the same binary |
+| Child arguments                 | The defaults (no `runnerClaudeArgs` set)                                                                                                                                                                                                                           |
+| Skill and agents the child read | The user's global `/factory` skill and agents, unchanged; the child wrote its own transcripts under `~/.claude/projects`, as Claude Code always does                                                                                                               |
 
 ### Isolation
 
@@ -32,17 +29,10 @@ Every run used its own fresh temporary `ORCH_HOME` and its own disposable reposi
 `C:\Users\Jon\AppData\Local\Temp\orch0099\<scenario>\`. Nothing from these runs reached the real
 store or a real repository:
 
-- The validation itself ran as a child of an outer `orch start` controller, with
-  `ORCH_SESSION=orch-runner` and the real `ORCH_HOME`. Before the first run, every scenario shell
-  sourced an `env.sh` that set `ORCH_HOME`, `ORCH_GH_SHIM` and `ORCH_GH_SHIM_STATE` to the
-  scenario's own paths. It also unset `ORCH_SESSION` and `ORCH_TOKEN`, and the outer Claude
-  session's variables (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_CHILD_SESSION`,
-  `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
-  `CLAUDE_CODE_MESSAGING_TOKEN` and others), so that each inner child started like one launched
-  from a person's terminal. The inner controller sets `ORCH_SESSION=orch-runner` for its own
-  child. That name is the same as the outer session's, but it lives in a different store, so it
-  never touched the outer job, its lease or its controller lock. A check with the stand-in and
-  `orch status --json` ran before the first run: it showed `state: idle` in the temp home.
+- This validation ran inside an outer `orch start` session. Each scenario shell set a fresh
+  `ORCH_HOME`, `ORCH_GH_SHIM` and `ORCH_GH_SHIM_STATE` and unset the outer session's `ORCH_*` and
+  Claude variables, so the inner controller never saw the outer job, lease or lock; `orch status
+--json` showed `state: idle` in each temp home before the first run.
 - Each disposable repository `val-sN` has a bare `origin.git` beside it. Its remote is
   `git@github.com:orch-validation/val-sN.git`, rewritten to the bare repository with
   `url.<bare>.insteadOf` (the same mechanism as `makeRepoWithOrigin` in `tests/helpers.ts`).
@@ -97,13 +87,9 @@ head `44eb493`. The session then polled CI itself. It observed `pending` 20 time
 session ran `orch job release` and exited 0. The controller then read CI itself and merged:
 
 ```text
-  claude: I released job-456ce246 in the `ci` stage. CI had not finished when the plan told me to release it, …
-  claude: exited (code 0); job is ci/running
   ci: complete: required check(s) passed: check
   merge: merged: https://github.com/orch-validation/val-s1/pull/1 is merged into main at 44eb493 (merge commit ccccccc). Ticket 0001 is done.
-  ticket 0001: done: merged and verified (job job-456ce246)
 tickets   1 attempted, 1 verified and completed, 0 blocked
-elapsed   58 min 48 s
 ```
 
 **Evidence** (`orch job events job-456ce246 --json`):
@@ -121,16 +107,10 @@ elapsed   58 min 48 s
 `pr merge --match-head-commit 44eb493…`) all came from one parent PID (157096): the controller
 process, not a shell of the session. Afterwards, `orch ticket list` showed `0001 done`.
 
-**Observations.**
-
-- The session sleeps through one more wait (240 s) after its 20th pending observation, before
-  `orch factory next` tells it to release. The skill is doing what it says: the release comes from
-  the next plan, not from `orch gh ci`. As a result, a pending CI keeps the session alive for about
-  55 minutes before the controller takes over. This is the configured budget
-  (`CI_MAX_SESSION_POLLS = 20`), not a defect.
-- In `-p` mode the child ran each wait as a background Bash task, ended its turn
-  (`result success, 4 turns`), and was woken by the task's completion within the same process.
-  The controller treated the child as one process from start to exit, as intended.
+**Observation.** The session sleeps through one more wait (240 s) after its 20th pending
+observation, before `orch factory next` tells it to release, so a pending CI keeps the session
+alive for about 55 minutes before the controller takes over. This is the configured budget
+(`CI_MAX_SESSION_POLLS = 20`), not a defect.
 
 ## S2: merge-conflict re-land
 
@@ -155,18 +135,9 @@ orch do 1 --fast        # 10:07:46Z to 10:18:55Z, exit 0
 **Outcome.** The run passed. The controller log, with tool lines left out:
 
 ```text
-  job job-24805fea: dispatched (fast)
-  claude: exited (code 0); job is completed/completed
   merge: reland: GitHub reports the PR CONFLICTING with main. Created job-8a8eeca8 to re-land the work; job-24805fea is superseded and its PR must not merge. …
-  job job-8a8eeca8: re-land
-  claude: started (pid 169396) in …\worktrees\github.com-orch-validation-val-s2\job-8a8eeca8
-  claude: Spec written and registered; base moved, so I'm integrating main (no commits yet, should fast-forward), …
-  claude: exited (code 0); job is completed/completed
   merge: merged: https://github.com/orch-validation/val-s2/pull/2 is merged into main at 52f71d7 (merge commit ccccccc). Ticket 0001 is done.
-  ticket 0001: done: merged and verified (job job-8a8eeca8)
 tickets   1 attempted, 1 verified and completed, 0 blocked
-re-lands  1
-elapsed   11 min 7 s
 ```
 
 **Evidence.**
@@ -181,20 +152,12 @@ and it triggered the push at 10:10:34Z. The controller's `mergeJob` reads at 10:
 parent PID, 168376) saw `CONFLICTING` and created the re-land. Afterwards, `orch ticket list`
 showed `0001 done`.
 
-**Observations.**
-
-- **Defect, reproduced once, filed as [0135](#tickets-filed):** the re-land does not start from
-  the superseded branch. `relandJob` asks the session in prose to "start from that branch's
-  changes, resolve the conflicts", but job B's worktree was created from the base `16f25f1`.
-  Integrating `main` was therefore a clean merge with no conflicts, and the builder wrote
-  `hello.txt` again from the ticket. `5b2c077` (job A's commit) is not an ancestor of the merged
-  head `52f71d7`. The result is correct for this ticket, but the reviewed work was redone, not
-  re-landed.
-- A re-land of a fast job is a full job (spec, simplify, three reviewers, approval), because
-  `relandJob` dispatches without a mode. That is stricter and costs more. It is mentioned in 0135
-  and is not filed separately.
-- The superseded PR #1 stays open. `orch` does not close it, and the merge message says that it
-  "must not merge". On real GitHub a person would close it.
+**Defect, reproduced once, filed as [0135](#tickets-filed):** the re-land does not start from the
+superseded branch. `relandJob` asks the session in prose to "start from that branch's changes,
+resolve the conflicts", but job B's worktree was created from the base `16f25f1`. Integrating
+`main` was therefore a clean merge with no conflicts, and the builder wrote `hello.txt` again from
+the ticket. `5b2c077` (job A's commit) is not an ancestor of the merged head `52f71d7`. The result
+is correct for this ticket, but the reviewed work was redone, not re-landed.
 
 ## S3: stop and resume during real Claude execution
 
@@ -232,25 +195,13 @@ Afterwards, `orch factory list` held only `job-d2f04ff8`, and `orch ticket list`
 `0001 done` and `0002 open`. No job was created for 0002. The request was consumed: run 2's status
 showed `stop: {next: false}`.
 
-**Outcome, `orch stop` during the child.** This step passed. Run 2 dispatched `job-031bb6ec` for 0002. Two minutes later, while the builder agent was starting, the child's process tree was
-(`Get-CimInstance Win32_Process` by parent id):
-
-```text
-pid 1756 parent 168800 claude.exe :: claude.exe -p --permission-mode auto --allowedTools "Bash(orch *)" …
-  child 61664  parent 1756   conhost.exe
-  child 161996 parent 1756   cmd.exe :: cmd.exe /d /s /c "npx "@playwright/mcp@latest""
-  child 168536 parent 161996 conhost.exe
-  child 160656 parent 161996 node.exe :: node.exe npx-cli.js @playwright/mcp@latest
-  child 160116 parent 160656 cmd.exe :: cmd.exe /d /s /c playwright-mcp
-  child 150092 parent 160116 node.exe :: node …\@playwright\mcp\cli.js
-descendants: 6
-```
-
-`orch stop` printed "The controller stopped. Its job is kept as it was; orch resume continues the
-session." Run 2 ended with `0002 stopped: stopped on request; the job is kept as it is`,
-`next: orch resume`. Fifteen seconds later, `Get-Process` found **none** of 1756, 61664, 161996,
-168536, 160656, 160116, 150092, or the controller 168800. The Windows sweep removed the child and
-all of its descendants, including the grandchild `node` MCP server started by `npx`.
+**Outcome, `orch stop` during the child.** This step passed. Run 2 dispatched `job-031bb6ec` for 0002. Two minutes later, while the builder
+agent was starting, `Get-CimInstance Win32_Process` showed the child `claude.exe` (pid 1756, parent
+controller 168800) plus 6 descendants, including the `node` Playwright MCP server started by
+`npx`. `orch stop` printed "The controller stopped. Its job is kept as it was; orch resume
+continues the session." Run 2 ended with `0002 stopped: stopped on request; the job is kept as it
+is`, `next: orch resume`. Fifteen seconds later, `Get-Process` found **none** of the child, its 6
+descendants, or the controller alive: the Windows sweep removed the whole tree.
 `orch status --json` reported `state: interrupted`, `current: {ticket: 0002, job: job-031bb6ec,
 stage: build, status: running, childPid: null, childAlive: false}`, and `next: orch resume
 continues the session`. `orch job show job-031bb6ec --json` showed `stage: build`,
@@ -264,12 +215,10 @@ Events on `job-031bb6ec` from the stop:
 | 59  | 10:21:15 | `runner.session` | `outcome: stopped, exitCode: null, signal: SIGTERM, pid: 1756, seconds: 146, moved: true, stage: build, status: running` |
 | 60  | 10:21:15 | `job.released`   | `session: orch-runner`                                                                                                   |
 
-**No `runner.stopped` event was written, and that is correct.** The spec for this validation
-expected one, but decision
+**No `runner.stopped` event was written, as designed:** decision
 [2026-11-21-runner-evidence-on-the-job](decisions/2026-11-21-runner-evidence-on-the-job.md) says
-"A stop on request records the ended session and no stop": `runner.stopped` is only for a ticket
-that ends blocked or waiting for a person, and `runTicket` writes it only for those outcomes. The
-stop is recorded as `runner.session` with `outcome: stopped`. This is not a defect.
+"A stop on request records the ended session and no stop", so the stop is the `runner.session`
+event with `outcome: stopped`.
 
 **Outcome, `orch resume`.** This step passed. The resumed run kept the same session (`runner.json`
 `startedAt` 10:18:47.802Z, `mode: queue`, `repo: null`) and continued the same job:
@@ -331,12 +280,3 @@ only writes to the real store.
 | ---- | ----- | ----------------------------------------------------------------------------------------------------------------------------- |
 | 0134 | chore | Run the controller recovery paths 0099 could not: POSIX group kill, real-GitHub CI polling and re-land                        |
 | 0135 | bug   | A re-land job starts from the base, not the superseded branch, so its session re-implements instead of resolving the conflict |
-
-## Repeating a scenario
-
-The helper scripts (`setup.cjs`, `gh-shim.cjs`, `tree.ps1`) and the run logs were kept under
-`%TEMP%\orch0099` and are not in the repository. To repeat S1 to S3: build a disposable repository
-and bare `origin` as in [Isolation](#isolation), copy the `ghShim` source from `tests/helpers.ts`
-and add the per-scenario rules from [The GitHub stand-in](#the-github-stand-in), set `ORCH_HOME`,
-`ORCH_GH_SHIM` and `ORCH_GH_SHIM_STATE` to fresh paths, unset `ORCH_SESSION` and `ORCH_TOKEN`, file
-the ticket in that home, enable merging there, and run the commands given for the scenario.
