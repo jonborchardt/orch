@@ -8,7 +8,7 @@ import { resolve, sep } from 'node:path';
 import { MergeConflictError, ValidationError } from '../core/errors.ts';
 import { canonicalPath, jobWorktreeDir } from '../core/paths.ts';
 import { approvalEvidence, TERMINAL_STATUSES } from '../core/workflow.ts';
-import { baseRef, remoteExists } from '../git/repo.ts';
+import { baseRef, refExists, remoteExists } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
 import {
   addWorktree,
@@ -30,6 +30,7 @@ import {
   clearWorktree,
   getJob,
   listJobs,
+  predecessorsOf,
   setWorktree,
   transitionJob,
 } from '../storage/jobs.ts';
@@ -44,6 +45,8 @@ export interface WorktreeResult {
   worktree: WorktreeInfo;
   /** True when this call created the worktree (false when it already existed). */
   created?: boolean;
+  /** Where the worktree's branch started, when this call created the worktree. */
+  from?: { ref: string; sha: string };
 }
 
 /** Branch name for a job: factory/<id>-<title slug>. */
@@ -112,13 +115,14 @@ export function createWorktree(
     }
     return { job, worktree: existing, created: false };
   }
-  addWorktree(root, path, branch, job.baseBranch);
+  const from = addWorktree(root, path, branch, job.baseBranch, relandStart(store, job, root));
   try {
     job = setWorktree(store, id, {
       ...auth,
       path,
       branch,
       how: 'created',
+      from,
       repoPath: root === job.repoPath ? undefined : root,
     });
   } catch (err) {
@@ -130,7 +134,21 @@ export function createWorktree(
     }
     throw err;
   }
-  return { job, worktree: inspectWorktree(root, path, job.baseBranch), created: true };
+  return { job, worktree: inspectWorktree(root, path, job.baseBranch), created: true, from };
+}
+
+/**
+ * A re-land job's new branch starts at its single predecessor's branch head (local, else origin),
+ * so the reviewed commits are its ancestors and merging the base meets the real conflict.
+ * Undefined (start from the base) for any other job or when that branch is not found.
+ */
+function relandStart(store: Store, job: Job, root: string): string | undefined {
+  const preds = predecessorsOf(store.db, job.id);
+  const branch = preds.length === 1 ? preds[0]?.branch : null;
+  if (!branch) return undefined;
+  if (refExists(root, `refs/heads/${branch}`)) return branch;
+  if (refExists(root, `refs/remotes/origin/${branch}`)) return `origin/${branch}`;
+  return undefined;
 }
 
 /** Record an existing worktree directory (same repository, on a branch) as the job's. */

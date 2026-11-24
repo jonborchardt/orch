@@ -340,6 +340,8 @@ too, because only the `pr` stage may push the new head. A completed job cannot t
 one whose open PR GitHub reports `CONFLICTING` the click re-reads the PR, requires `OPEN` and
 `CONFLICTING`, creates a job titled `<title> (re-land)` (created only: no claim, worktree, or
 session) whose description adds the re-land sentence, and records the old job as superseded by it.
+When its worktree is created, its branch starts at the old job's branch head, and its builder
+merges the base and resolves the conflicts in `build`.
 Start it with `/factory <new id>` in a new session; once its PR merges, close the old PR with
 `gh pr close <old url> --comment "Superseded by <new url>."`. GitHub's `mergeable` answer is
 recorded on `pr.observed` and `ci.observed` (Refresh PR, `orch gh ci`), so it is only as fresh as

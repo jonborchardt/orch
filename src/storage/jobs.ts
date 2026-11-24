@@ -532,6 +532,8 @@ export interface WorktreeInput extends Auth {
   how: 'created' | 'adopted';
   /** Current clone the worktree was made from, when it differs from the recorded one. */
   repoPath?: string | undefined;
+  /** Where a created worktree's branch started (recorded on the `worktree.created` event). */
+  from?: { ref: string; sha: string } | undefined;
 }
 
 /** Record a job's worktree and branch. The unique indexes refuse a path or branch in use. */
@@ -560,7 +562,14 @@ export function setWorktree(store: Store, id: string, input: WorktreeInput): Job
     return {
       patch,
       events: [
-        { type: `worktree.${input.how}`, payload: { path: input.path, branch: input.branch } },
+        {
+          type: `worktree.${input.how}`,
+          payload: {
+            path: input.path,
+            branch: input.branch,
+            ...(input.from ? { from: input.from } : {}),
+          },
+        },
       ],
     };
   });
