@@ -174,6 +174,7 @@ const resumeAt = (stage: string) =>
 /** The detail's one "Next:" line, from fields the detail view already carries; null when cancelled. */
 export function nextAction(d: JobDetailView): string | null {
   if (d.liveness === 'cancelled') return null;
+  if (d.blocker?.kind === 'stopped' && d.blocker.next) return d.blocker.next;
   if (d.liveness === 'completed' || d.blocker?.kind === 'ci') return d.ci.guidance || null;
   switch (d.blocker?.kind) {
     case 'decision':

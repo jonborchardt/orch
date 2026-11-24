@@ -503,6 +503,42 @@ describe('App board', () => {
     expect(await screen.findByRole('tooltip')).toHaveTextContent(full);
   });
 
+  it('shows why the factory controller stopped a job on the board and in the detail', async () => {
+    const stopped = {
+      kind: 'stopped' as const,
+      summary: 'Factory controller stopped it: no-progress',
+      detail: 'Two Claude sessions in a row changed nothing.',
+      next: 'orch do 0088',
+    };
+    data.rows = [
+      row({
+        id: 'job-00000003',
+        title: 'Gamma blocked',
+        status: 'pending',
+        liveness: 'idle',
+        owner: null,
+        blocker: stopped,
+      }),
+    ];
+    const base = detail();
+    data.detail = detail({
+      job: { ...base.job, stage: 'build', status: 'pending' },
+      liveness: 'idle',
+      blocker: stopped,
+    });
+    mockFetch();
+    mount();
+    const table = await screen.findByRole('table', { name: 'Factory jobs' });
+    const line = must(table.querySelector<HTMLElement>('[data-blocker="stopped"]'));
+    expect(line).toHaveTextContent(`${stopped.summary}: ${stopped.detail}`);
+    window.location.hash = '#/jobs/job-00000003';
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByTestId('status-summary')).toHaveTextContent(
+      `Stopped by the controller. ${stopped.summary}: ${stopped.detail}`,
+    );
+    expect(screen.getByTestId('status-next')).toHaveTextContent('Next: orch do 0088');
+  });
+
   it('shows workflow progress in the Stage cell: where it stopped, with glyphs and a focus tooltip', async () => {
     mockFetch();
     mount();

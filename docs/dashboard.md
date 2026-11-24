@@ -240,7 +240,12 @@ exhausted review rounds, Request rework or cancel; for a failed verification, Re
 resume; for an unclassified escalation, no recommended control; for a failed, interrupted,
 waiting, or lapsed job, resume from a Claude Code session in the checkout; while a session holds a
 live lease or runs the job, continue from or wait for that session. A cancelled job has no next
-line. When a session may resume the job, a **Copy resume command** button for
+line. A job the factory controller gave up (its newest `runner.stopped` event, while the job is
+still at the stage and status it recorded, no newer blocker event exists, no live session or
+escalation explains it, and a completed job is not merged) shows `Stopped by the controller`
+with the recorded code and reason on the board and in the summary, and the recorded `next`
+command as its next line; this is display only and decides nothing. When a session may resume
+the job, a **Copy resume command** button for
 `/factory resume <id>` sits beside those two lines. Details holds the rest: a `CI stopped` job's
 recorded reason, the command with the checkout to run it in (the repository the job was started
 from, with an "open in VS Code" link) and the worktree, the note that copying changes nothing
