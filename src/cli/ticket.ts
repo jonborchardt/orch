@@ -44,6 +44,11 @@ export interface TicketOptions {
   'dry-run'?: boolean;
   session?: string;
   by?: string;
+  rank?: string;
+  up?: boolean;
+  down?: boolean;
+  top?: boolean;
+  before?: string;
 }
 
 export const TICKET_HELP = `Usage: orch ticket <command> [options]
@@ -57,7 +62,8 @@ order are global. Ids are numbers (85, 0085, #85 all name the same ticket).
                               File a ticket for the repository containing the cwd (or --repo)
   list [filters]              Every ticket, by id
   order [filters]             Proposed order of the open tickets: dependencies first, then
-                              priority, effort, area, id
+                              ranked tickets by rank (a dependency takes its dependents' rank),
+                              then priority, effort, area, id
   ready [filters]             The open tickets nothing stands in the way of, in that order
   blocked [filters]           The open tickets that are not ready, each with its reasons
   next [filters]              The first ready ticket (JSON: {"ticket": null} when there is none)
@@ -69,7 +75,11 @@ order are global. Ids are numbers (85, 0085, #85 all name the same ticket).
   jobs <id>                   Every job that worked on it
   edit <id> [--title <t>] [--type <t>] [--area <a>] [--priority <p>] [--effort <d>]
       [--classified auto|user] [--body <md> | --body-file <file|->] [--repo <path>]
-                              --body-file - reads the Markdown body from stdin
+      [--rank <n|none>]       --body-file - reads the Markdown body from stdin; --rank sets the
+                              explicit place in the order (lowest first), none unranks
+  move <id> --up|--down|--top|--before <other>
+                              Move an open ticket in the order by ranking it (and the tickets
+                              above it); refused past one of its dependencies
   note <id> <text>            Append a dated note to the history
   start <id> [--note <n>]     open -> in-progress, without a job (for a job, use
                               orch factory start --ticket <id> or orch factory dispatch --ticket <id>)
@@ -162,7 +172,14 @@ export function runTicket(
     case 'jobs':
       return jobsOfTicket(store, id());
     case 'edit':
-      return act(id(), 'edit', { ...fieldFlags, repo: o.repo });
+      return act(id(), 'edit', { ...fieldFlags, repo: o.repo, rank: o.rank });
+    case 'move': {
+      const given = [o.up, o.down, o.top, o.before].filter((v) => v !== undefined && v !== false);
+      if (given.length !== 1) {
+        throw new UsageError('Usage: orch ticket move <id> --up|--down|--top|--before <other>');
+      }
+      return act(id(), 'move', { up: o.up, down: o.down, top: o.top, before: o.before });
+    }
     case 'note':
       return act(id(), 'note', { text: rest.slice(1).join(' ') || o.note });
     case 'start':
@@ -211,6 +228,7 @@ export function formatTicketList(list: TicketList): string {
   if (list.tickets.length === 0) return '(none)';
   const rows = list.tickets.map((t) => [
     t.key,
+    t.rank === null ? '-' : String(t.rank),
     t.priority,
     String(t.effort),
     t.status,
@@ -219,7 +237,7 @@ export function formatTicketList(list: TicketList): string {
     t.repo.split('/').pop() ?? t.repo,
     t.title,
   ]);
-  const table = [['ID', 'PRI', 'DAYS', 'STATUS', 'TYPE', 'AREA', 'REPO', 'TITLE'], ...rows];
+  const table = [['ID', 'RANK', 'PRI', 'DAYS', 'STATUS', 'TYPE', 'AREA', 'REPO', 'TITLE'], ...rows];
   const widths = table[0]?.map((_, i) => Math.max(...table.map((r) => r[i]?.length ?? 0))) ?? [];
   const lines = table.map((r) =>
     r

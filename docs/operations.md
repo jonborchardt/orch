@@ -37,8 +37,9 @@ orch ticket blocked                # what cannot, each with its reasons
 
 Readiness is more than priority. A ticket is ready when it is `open`, is not a `question`, every
 dependency is `done`, no unfinished job is linked to it, and its repository checkout exists. The
-order is dependencies first, then priority, effort (smallest first), area, and id. The controller
-takes the first ready ticket, so changing a priority or adding a dependency changes what runs
+order is dependencies first, then ranked tickets by rank, then priority, effort (smallest first),
+area, and id. The controller takes the first ready ticket, so moving a ticket
+(`orch ticket move <id> --top`), changing a priority, or adding a dependency changes what runs
 next. Rules: [tickets.md](tickets.md#order-and-readiness).
 
 ### 3. Configure the repository
