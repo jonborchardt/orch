@@ -591,6 +591,29 @@ export function claimTicketForJob(
   applyTicket(tx, ticket, patch, events, actor, ts);
 }
 
+/**
+ * Inside the transaction that cancels `jobId`: return its ticket to `open` when the ticket is
+ * still in progress, so a cancelled job never strands its ticket. `jobs_active_ticket_idx` makes
+ * the cancelled job the ticket's only unfinished one. Any other ticket is left as it is.
+ */
+export function releaseTicketForCancel(
+  tx: Db,
+  ticketId: number,
+  jobId: string,
+  reason: string | undefined,
+  actor: string | null,
+  ts: string,
+): void {
+  const ticket = getTicket(tx, ticketId);
+  if (ticket.status !== 'in-progress') return;
+  const note = `job ${jobId} was cancelled${reason ? `: ${reason}` : ''}`;
+  const event = {
+    type: 'ticket.reopened',
+    payload: { from: 'in-progress', to: 'open', job: jobId, note },
+  };
+  applyTicket(tx, ticket, { status: 'open' }, [event], actor, ts);
+}
+
 /** A job's PR that GitHub reports merged, as the ticket needs to know it. */
 export interface TicketMerge {
   job: Pick<Job, 'id' | 'supersededBy'>;

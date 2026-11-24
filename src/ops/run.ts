@@ -545,7 +545,8 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
   }
 
   // The unfinished job if there is one; else, for a ticket still in progress, its last job. An
-  // open ticket (never started, or reopened by a person) gets a new job whatever its history.
+  // open ticket (never started, reopened by a person or by cancelling its job) gets a new job
+  // whatever its history.
   const jobs = ticketJobs(store.db, ticketId);
   let job =
     jobs.find((j) => !TERMINAL_STATUSES.includes(j.status)) ??
@@ -604,7 +605,12 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       }
       const after = getJob(store.db, jobId);
       if (after.status === 'cancelled') {
-        return out('blocked', `job ${jobId} was cancelled`, jobId, `orch ticket reopen ${key}`);
+        return out(
+          'blocked',
+          `job ${jobId} was cancelled; its ticket was reopened`,
+          jobId,
+          `orch do ${key} runs it with a new job; orch ticket drop ${key} stops it for good`,
+        );
       }
       if (after.stage === 'needs-human') {
         return out(

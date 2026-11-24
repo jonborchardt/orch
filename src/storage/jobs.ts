@@ -48,7 +48,12 @@ import { findArtifact, listArtifacts, upsertArtifact, validateArtifact } from '.
 import type { Db, Store } from './client.ts';
 import { appendEvent, eventsOfTypes, latestEventsByJob, listEvents } from './events.ts';
 import { type Artifact, type Event, type Job, jobs, type Review, reviews } from './schema.ts';
-import { claimTicketForJob, settleTicketForMerge, type TicketMergeOutcome } from './tickets.ts';
+import {
+  claimTicketForJob,
+  releaseTicketForCancel,
+  settleTicketForMerge,
+  type TicketMergeOutcome,
+} from './tickets.ts';
 
 export interface CreateJobInput {
   title: string;
@@ -369,7 +374,7 @@ export function transitionJob(
   action: Action,
   opts: TransitionOptions,
 ): Job {
-  return mutate(store, id, opts, (job, tx) => {
+  return mutate(store, id, opts, (job, tx, ts) => {
     const artifacts = listArtifacts(tx, id);
     const dir = jobArtifactDir(id, store.paths);
     if (action === 'complete') verifyOnDisk(dir, job, job.stage, artifacts);
@@ -383,7 +388,7 @@ export function transitionJob(
     ) {
       verifyOnDisk(dir, job, 'spec', artifacts);
     }
-    return transition(job, action, {
+    const decided = transition(job, action, {
       artifacts,
       reviews: listReviews(tx, id),
       to: opts.to,
@@ -394,6 +399,11 @@ export function transitionJob(
       approved: opts.approved,
       choices: opts.choices,
     });
+    // Same transaction as the cancel: a cancelled job never leaves its ticket in progress.
+    if (decided.patch.status === 'cancelled' && job.ticketId !== null) {
+      releaseTicketForCancel(tx, job.ticketId, id, opts.reason, job.ownerSession, ts);
+    }
+    return decided;
   });
 }
 

@@ -657,7 +657,7 @@ export function transition(
         if (job.mode === 'fast' && to && !FAST_RESUME_TARGETS.includes(to)) {
           reject(
             `a fast job resumes only to ${FAST_RESUME_TARGETS.join(', ')}; ` +
-              'cancel the job and `orch ticket reopen` it to run the full workflow',
+              'cancel the job (its ticket reopens) and run the ticket again for the full workflow',
           );
         }
         if (to === 'completed') return acceptDelivery(job, ctx);

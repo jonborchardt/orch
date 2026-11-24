@@ -302,19 +302,35 @@ describe('orch do: one ticket, from wherever it is', () => {
     expect(status(id)).toBe('in-progress');
   });
 
-  it('does not replace a cancelled job', async () => {
+  it('gives a ticket whose job was cancelled a new job: the cancel reopened it', async () => {
     const id = ticket('Cancelled');
     const job = dispatchJob(store, { ticket: id, session: 'earlier', cwd: clone }).job;
     cancelJob(store, job.id, { session: 'human', reason: 'not wanted' });
+    expect(status(id)).toBe('open');
     const l = launcher(done);
 
     const s = await one(l, id);
 
-    expect(s.tickets[0]?.outcome).toBe('blocked');
-    expect(s.tickets[0]?.reason).toContain('cancelled');
-    expect(s.tickets[0]?.next).toContain('orch ticket reopen');
+    expect(s.tickets[0]?.outcome).toBe('done');
+    expect(jobsOf(id).map((j) => j.status)).toEqual(['cancelled', 'completed']);
+    expect(l.calls.map((c) => c.jobId)).toEqual([jobsOf(id)[1]?.id]);
+  });
+
+  it('passes over, for the rest of the session, a ticket whose job was cancelled during it', async () => {
+    const id = ticket('Cancelled mid-run');
+    const l = launcher((job) => {
+      cancelJob(store, job.id, { session: 'human', reason: 'not wanted', force: true });
+    });
+
+    const s = await queue(l);
+
+    expect(l.calls).toHaveLength(1);
+    expect(s.tickets).toHaveLength(1);
+    expect(s.tickets[0]).toMatchObject({ ticketId: id, outcome: 'blocked' });
+    expect(s.tickets[0]?.next).toContain(`orch do ${String(id).padStart(4, '0')}`);
+    expect(s.tickets[0]?.next).not.toContain('orch ticket reopen');
+    expect(status(id)).toBe('open');
     expect(jobsOf(id)).toHaveLength(1);
-    expect(l.calls).toHaveLength(0);
   });
 
   it('a session that exits without moving the job is retried once, then the ticket stops', async () => {

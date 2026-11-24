@@ -135,8 +135,8 @@ orch do 85
 Runs that one ticket to its outcome and exits, whatever the outcome: start its job, continue the
 unfinished one, or merge the completed one. Without the merge opt-in it refuses to create a new
 job, but it still continues an existing one; that job's merge is then refused with
-`not-authorized`, which ends the ticket as `blocked`. A ticket whose last job was cancelled is
-never given a new job automatically: `orch ticket reopen 85` queues it for one.
+`not-authorized`, which ends the ticket as `blocked`. Cancelling a job reopens its ticket, so `orch do 85`
+then gives it a new job; `orch ticket drop 85` stops it for good.
 
 ### 7. `orch status`: what is happening
 
@@ -491,8 +491,8 @@ failure the skill escalated. End to end:
 5. Continue: `orch do <ticket>` runs the same job from the chosen stage; `orch start` afterwards
    goes on with the queue.
 
-After a Cancel the ticket stays in progress with a cancelled job, which the controller never
-replaces: `orch ticket reopen <id>` queues it for a new job, or `orch ticket drop <id>` closes it.
+A Cancel returns the job's ticket to open, so the controller gives it a new job on its next pass;
+`orch ticket drop <id>` closes it instead.
 
 ## Recovery budgets
 

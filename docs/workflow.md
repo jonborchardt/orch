@@ -25,7 +25,8 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
    ([tickets.md](tickets.md#tickets-and-jobs)).
 5. **Job create or recover.** The controller (`runTicket`) continues the ticket's unfinished job if
    there is one, merges its last job if that one completed, and creates a job only for an `open`
-   ticket. A cancelled job is never replaced automatically ([Factory controller](#factory-controller)).
+   ticket. Cancelling a job reopens its ticket, so the next run gives it a new job
+   ([Factory controller](#factory-controller)).
    The job gets an isolated worktree on `factory/<id>-<slug>` ([Worktrees](#worktrees)).
 6. **Specification.** `factory-spec-writer` writes `spec.md` (Goal, Scope, Acceptance criteria).
 7. **Specification challenge.** `factory-spec-challenger` judges it against the request and the
@@ -170,8 +171,8 @@ any stage ── escalate ──→ needs-human ── resume --to build | pr | 
   Every delivery (push, `pr create`, pr and ci complete) repeats the check, so resuming past a
   refused build does not skip it. The same diff in a full job goes to the reviewers instead.
 - **Resume limits.** `resume --to spec|simplify|review|approve` on a fast job is refused; to run
-  the full workflow, cancel the job and `orch ticket reopen` the ticket (a new full job and
-  branch; the fast branch is kept).
+  the full workflow, cancel the job, which reopens the ticket for a new full job and branch (the
+  fast branch is kept).
 - **Measured.** `orch job usage` reports `mode`, each stage visit's duration, and `wallMs`.
 
 **Stage** is where the job is; **status** is what is happening there:
@@ -454,7 +455,7 @@ that applies:
 | an unfinished job                                    | continues that job                                                                               |
 | status `open`, no unfinished job                     | creates a job (`dispatchJob --ticket`, fast under `orch do --fast`), if merging is enabled there |
 | status `in-progress`, last job completed             | merges it (`mergeJob`), which also records a merge already made                                  |
-| status `in-progress`, last job cancelled             | stops: a cancelled job is never replaced (`orch ticket reopen`)                                  |
+| status `in-progress`, last job cancelled             | stops (a ticket stranded before cancelling reopened it): `orch ticket reopen` queues it          |
 | a blocked dependency, a question, a missing checkout | refuses with the ticket's own block reasons                                                      |
 
 `orch do <ticket> --fast` is kept in the session record, so `orch resume` keeps it; it applies

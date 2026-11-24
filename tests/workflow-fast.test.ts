@@ -145,10 +145,10 @@ describe('the fast route', () => {
 describe('resume of a fast job', () => {
   const blocked = job('needs-human', 'blocked', { returnStage: 'build' });
 
-  it('is refused to a stage a fast job never visits, naming cancel and ticket reopen', () => {
+  it('is refused to a stage a fast job never visits, naming cancel and the ticket reopening', () => {
     for (const to of ['spec', 'simplify', 'review', 'approve'] as const) {
       expect(() => run(blocked, 'resume', ctx([], { to }))).toThrow(
-        /cancel the job and `orch ticket reopen` it to run the full workflow/,
+        /cancel the job \(its ticket reopens\) and run the ticket again for the full workflow/,
       );
     }
   });
