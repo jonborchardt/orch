@@ -313,7 +313,7 @@ export function orderTickets<T extends Schedulable>(all: readonly T[]): T[] {
 }
 
 /** Where `orch ticket move` puts a ticket in the global order. */
-export type MoveTo = 'up' | 'down' | 'top' | { before: number };
+export type MoveTo = 'up' | 'down' | 'top' | { before: number } | { position: number };
 export interface RankWrite {
   id: number;
   rank: number;
@@ -322,7 +322,8 @@ export interface RankWrite {
 /**
  * The rank writes that put open ticket `id` where `to` says in `orderTickets(all)` and change no
  * other ticket's relative order, or a ValidationError naming why not: the ticket or `before` is
- * not open, `up` on the first, `down` on the last, or the move would pass one of its open
+ * not open, `up` on the first, `down` on the last, a `position` (1-based final place) outside
+ * the open order or equal to the current one, or the move would pass one of its open
  * dependencies (or let a dependent pass it). `top` lands right after its own open dependencies.
  * Every ticket from the top down to the moved one ends up ranked; tickets further down are ranked
  * only when that is what keeps their order.
@@ -351,6 +352,17 @@ export function planMove(all: readonly Schedulable[], id: number, to: MoveTo): R
       if (at === order.length - 1) throw new ValidationError(`Ticket ${key} is already last.`);
       pos = at + 1;
       passed = order.slice(at + 1, at + 2);
+    } else if ('position' in to) {
+      const n = to.position;
+      if (!Number.isInteger(n) || n < 1 || n > order.length) {
+        throw new ValidationError(
+          `Position must be a whole number from 1 to ${String(order.length)} (got ${String(n)}).`,
+        );
+      }
+      if (n - 1 === at)
+        throw new ValidationError(`Ticket ${key} is already at position ${String(n)}.`);
+      pos = n - 1;
+      passed = pos < at ? order.slice(pos, at) : order.slice(at + 1, pos + 1);
     } else {
       if (to.before === id) throw new ValidationError(`Ticket ${key} cannot move before itself.`);
       const j = order.findIndex((t) => t.id === to.before);

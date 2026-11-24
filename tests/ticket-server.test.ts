@@ -265,6 +265,12 @@ describe('ticket API', () => {
     expect(
       (await body<TicketList>(get('/api/tickets?view=ready'))).tickets.map((t) => t.id),
     ).toEqual([4, 2, 5]);
+    // A typed position: the final place, tickets in between shift by one.
+    const four = (await body<TicketDetail>(get('/api/tickets/4'))).ticket;
+    await body<TicketView>(act(4, 'move', { position: 3, revision: four.revision }));
+    expect(await order()).toEqual([2, 5, 4]);
+    await body<TicketView>(act(4, 'move', { position: 1 }));
+    expect(await order()).toEqual([4, 2, 5]);
 
     const cases: [Promise<Response>, number][] = [
       [act(5, 'move', { down: true }), 422], // already last
@@ -272,6 +278,11 @@ describe('ticket API', () => {
       [act(3, 'move', { top: true }), 422], // a duplicate is not open
       [act(4, 'move', {}), 422],
       [act(4, 'move', { up: true, down: true }), 422],
+      [act(4, 'move', { position: 4 }), 422], // out of range
+      [act(4, 'move', { position: 0 }), 422],
+      [act(4, 'move', { position: 1 }), 422], // already there
+      [act(4, 'move', { position: 2, up: true }), 422], // exactly one of
+      [act(4, 'move', { position: 2, revision: 1 }), 409],
       [act(4, 'move', { top: true, revision: 1 }), 409],
       [act(999, 'move', { top: true }), 404],
       [post('/api/tickets/5/actions', { action: 'move', top: true }, { 'X-Orch-Csrf': '' }), 403],

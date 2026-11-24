@@ -418,8 +418,10 @@ describe('ticket list', () => {
       'blocked',
     ]);
     const cells = (n: number) => within(rowOf(n)).getAllByRole('cell');
-    expect(cells(9)[0]).toHaveTextContent(/^1UpDownTop$/);
-    expect(cells(2)[0]).toHaveTextContent(/^3UpDownTop$/);
+    // An open row's place is its position input.
+    expect(cells(9)[0]).toHaveTextContent(/^UpDownTop$/);
+    expect(within(rowOf(9)).getByLabelText('Position of 0009')).toHaveValue(1);
+    expect(within(rowOf(2)).getByLabelText('Position of 0002')).toHaveValue(3);
     expect(cells(3)[0]).toHaveTextContent(/^$/);
     expect(cells(1)[1]).toHaveTextContent('0001');
     expect(within(rowOf(1)).getByRole('link', { name: 'Fix the race' })).toHaveAttribute(
@@ -581,6 +583,54 @@ describe('ticket list', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Ticket 0001: Ticket 0001 is already first.',
     );
+  });
+
+  it('moves an open ticket to a typed position with one request, from the keyboard', async () => {
+    mount('#/tickets');
+    await table();
+    expect(screen.queryByLabelText('Position of 0003')).toBeNull();
+    for (const [key, at] of [
+      ['0009', '1'],
+      ['0001', '2'],
+      ['0002', '3'],
+    ] as const) {
+      expect(screen.getByLabelText(`Position of ${key}`)).toHaveValue(Number(at));
+    }
+    const two = screen.getByLabelText('Position of 0002');
+    // Unchanged, or typed and left without Enter: nothing is sent.
+    fireEvent.keyDown(two, { key: 'Enter' });
+    fireEvent.change(two, { target: { value: '1' } });
+    fireEvent.blur(two);
+    expect(two).toHaveValue(3);
+    expect(db.posts).toEqual([]);
+
+    db.order = [2, 9, 1];
+    two.focus();
+    fireEvent.change(two, { target: { value: '1' } });
+    fireEvent.keyDown(two, { key: 'Enter' });
+    await waitFor(() => {
+      expect(ids().slice(-3)).toEqual(['2', '9', '1']);
+    });
+    expect(db.posts).toEqual([
+      { url: '/api/tickets/2/actions', body: { action: 'move', position: 1, revision: 1 } },
+    ]);
+    // The same input, now showing the new place, still has keyboard focus.
+    expect(screen.getByLabelText('Position of 0002')).toBe(two);
+    expect(two).toHaveValue(1);
+    expect(two).toHaveFocus();
+
+    db.refuse = {
+      status: 422,
+      type: 'ValidationError',
+      message: 'Ticket 0001 cannot move before 0009: it depends on 0009.',
+    };
+    const one = screen.getByLabelText('Position of 0001');
+    fireEvent.change(one, { target: { value: '1' } });
+    fireEvent.keyDown(one, { key: 'Enter' });
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Ticket 0001: Ticket 0001 cannot move before 0009: it depends on 0009.',
+    );
+    expect(db.posts).toHaveLength(2);
   });
 
   it('files a ticket for a known checkout and opens it', async () => {
