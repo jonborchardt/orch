@@ -843,8 +843,8 @@ export function personMergeStep(code: string, jobId: string, ticketKey: string):
 /**
  * The stop codes of a ticket result that would hit every ticket, so the factory controller's
  * queue ends on them: claude cannot start or hit its account's usage limit, GitHub cannot be
- * read, answers nothing, or refuses the merge call. Any other code, including one added later, concerns only its ticket: it is
- * reported and passed over, and the queue goes on (decision
+ * read, answers nothing, or refuses the merge call. Any other code, including one added later,
+ * concerns only its ticket: it is reported and passed over, and the queue goes on (decision
  * 2026-11-23-queue-ends-only-on-run-wide-outcomes). A stop request and a lost lock end the run
  * on their own and are not ticket codes.
  */
