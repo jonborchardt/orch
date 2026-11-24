@@ -119,6 +119,32 @@ function processTable(): ProcRow[] {
 }
 
 /**
+ * When the live process at `pid` started (Unix ms), read-only; null when the platform or the
+ * lookup cannot say (no such process, unsupported, error, timeout, unparseable output).
+ * Windows: the creation time from `processTable()`. POSIX: `ps -o lstart=`, whole seconds,
+ * with `LC_ALL=C` so the date parses.
+ */
+export function processStartMs(pid: number): number | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (WIN) {
+    try {
+      return processTable().find((row) => row.pid === pid)?.created ?? null;
+    } catch {
+      return null;
+    }
+  }
+  const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: TABLE_TIMEOUT_MS,
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (r.error || r.status !== 0) return null;
+  const ms = Date.parse(r.stdout.trim());
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
  * Terminate what a killed command left running. `spawnSync` kills only the direct child; on
  * Windows a shell between us and the real work (the npm shim is `cmd.exe`) dies alone and the
  * tree under it survives, still holding files and CPU. Each pass reads the table and kills every

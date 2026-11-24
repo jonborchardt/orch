@@ -39,6 +39,7 @@ import { mailWatermark, reportJobMail } from './mail.ts';
 import { mergeAuthorized, mergeJob } from './merge.ts';
 import {
   acquireRunnerLock,
+  childIdentity,
   childMayBeAlive,
   clearStop,
   controllerPid,
@@ -77,6 +78,8 @@ export interface RunOptions {
   signal?: AbortSignal | undefined;
   /** How often the stop request and the child are looked at. */
   pollMs?: number | undefined;
+  /** When the process at a PID started (`processStartMs`); tests replace it. */
+  startTime?: ((pid: number) => number | null) | undefined;
 }
 
 export interface RunSummary {
@@ -858,18 +861,39 @@ export async function resumeSession(
           'there is nothing to resume. Start a new one with orch start.',
       );
     }
-    if (childMayBeAlive(session) && !input.force) {
-      const pid = String(session.child?.pid ?? '?');
-      throw new ValidationError(
-        `The Claude process the interrupted controller started (PID ${pid}) may still be running ` +
-          `on job ${session.jobId ?? '?'}. Wait for it to exit, or end it yourself, then run orch ` +
-          'resume again. If that PID is now another program, orch resume --force says so.',
-      );
+    if (!input.force) {
+      const identity = childIdentity(session, opts.startTime);
+      if (identity === 'original' || identity === 'unknown')
+        throw new ValidationError(orphanRefusal(session, identity, 'orch resume'));
     }
     return await drive(store, release, session, true, opts);
   } finally {
     release();
   }
+}
+
+/** Why resume or stop refuses while the dead controller's child may still run, and what to do. */
+function orphanRefusal(
+  session: RunnerSession,
+  identity: 'original' | 'unknown',
+  rerun: string,
+): string {
+  const pid = String(session.child?.pid ?? '?');
+  const inspect =
+    process.platform === 'win32'
+      ? `Get-Process -Id ${pid} | Select-Object Id,StartTime,Path`
+      : `ps -o pid,lstart,command -p ${pid}`;
+  return (
+    `The Claude process the interrupted controller started on job ${session.jobId ?? '?'} ` +
+    `(PID ${pid}, recorded start ${session.child?.startedAt ?? '?'}) ` +
+    (identity === 'original'
+      ? 'is still running: the process at that PID started then (identity confirmed). '
+      : 'may still be running: the start time of the process at that PID could not be read ' +
+        '(identity unknown). ') +
+    `orch does not signal a PID it only read from a file. Inspect it with: ${inspect}. ` +
+    `If it is that Claude process, wait for it to exit or end it yourself, then run ${rerun} ` +
+    'again. Only if it is another program, run orch resume --force.'
+  );
 }
 
 export interface StopResult {
@@ -885,7 +909,12 @@ export interface StopResult {
  * is kept for `orch resume`, and `now` discards the session, handing its job back as it is.
  * Nothing is cancelled, and a PID read from a file is never signalled.
  */
-export function stopSession(store: Store, which: keyof StopRequests, waitMs = 30_000): StopResult {
+export function stopSession(
+  store: Store,
+  which: keyof StopRequests,
+  waitMs = 30_000,
+  startTime?: (pid: number) => number | null,
+): StopResult {
   const paths = store.paths;
   const pid = controllerPid(paths);
   const session = readSession(paths);
@@ -918,13 +947,9 @@ export function stopSession(store: Store, which: keyof StopRequests, waitMs = 30
     };
   }
   if (session === null) throw new Error('unreachable: an open session exists');
-  if (childMayBeAlive(session)) {
-    throw new ValidationError(
-      `The interrupted controller's Claude process (PID ${String(session.child?.pid)}) may still ` +
-        `be running on job ${session.jobId ?? '?'}. orch does not signal a PID it only read from a ` +
-        'file: end that process yourself, then run orch stop again (or orch resume).',
-    );
-  }
+  const identity = childIdentity(session, startTime);
+  if (identity === 'original' || identity === 'unknown')
+    throw new ValidationError(orphanRefusal(session, identity, 'orch stop'));
   const release = acquireRunnerLock(paths);
   let kept: string | null = null;
   try {
@@ -1019,7 +1044,7 @@ export function runnerStatus(store: Store): RunnerStatus {
   else if (state === 'interrupted') {
     next = current?.childAlive
       ? `The controller is gone but its Claude process (PID ${String(current.childPid)}) may still be running; ` +
-        'when it has exited, orch resume continues the session.'
+        'orch resume checks whether that PID is still the same process, and continues once it is not.'
       : 'The controller is gone. orch resume continues the session; orch stop discards it.';
   } else if (stop.now) next = 'Stopping now: the current job is kept as it is.';
   else if (current === null)

@@ -279,20 +279,27 @@ interrupted is redone, from its registered artifacts.
 
 The controller records its child's PID and start time in `runner.json`. If the controller died,
 that child may still be running and still working on the job. Two agents must never work one job,
-so `orch resume` (and `orch stop` against an interrupted session) refuses while the recorded PID is
-alive and was started since the last boot:
+so `orch resume` (and `orch stop` against an interrupted session) reads the OS start time of the
+process at the recorded PID. If it started within 10 s before to 60 s after the recorded start, it
+is the child (identity confirmed) and the command refuses. If it started at another time, the PID
+was reused and the command goes ahead. If the start time cannot be read, the identity is unknown
+and the command refuses:
 
 ```
-The Claude process the interrupted controller started (PID 12345) may still be running on job
-job-1a2b3c4d. Wait for it to exit, or end it yourself, then run orch resume again.
+The Claude process the interrupted controller started on job job-1a2b3c4d (PID 12345, recorded
+start 2026-11-23T10:00:00.000Z) is still running: the process at that PID started then (identity
+confirmed). orch does not signal a PID it only read from a file. Inspect it with: Get-Process -Id
+12345 | Select-Object Id,StartTime,Path. If it is that Claude process, wait for it to exit or end
+it yourself, then run orch resume again. Only if it is another program, run orch resume --force.
 ```
 
 What to do:
 
-1. Check whether the PID is the Claude process (Task Manager, `ps`, or your process tool).
-2. If it is, either wait for it to finish its turn and exit, or end it yourself.
-3. Run `orch resume`.
-4. Only if that PID now belongs to another program (a reused PID), run `orch resume --force`.
+1. Inspect the PID with the command the message gives (`Get-Process -Id <pid>` on Windows,
+   `ps -o pid,lstart,command -p <pid>` elsewhere).
+2. If it is the Claude process, either wait for it to finish its turn and exit, or end it yourself.
+3. Run `orch resume` (or `orch stop`) again.
+4. Only if that PID belongs to another program, run `orch resume --force`.
 
 `orch` never signals a PID it only read from a file and never adopts a surviving process: it
 cannot prove the process is still its child, and attaching to an agent mid-turn would have no
