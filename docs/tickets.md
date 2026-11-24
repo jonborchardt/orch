@@ -95,9 +95,10 @@ longer holds its dependents back in this order.
 
 `orch ticket ready` is that order filtered to tickets that can be executed now. A ticket is ready
 when it is `open`, is not a `question`, every dependency is `done`, no unfinished job is linked to
-it, and its repository checkout exists. `orch ticket blocked` is the rest of the open tickets, each
-with `blockedBy`: a list of `{kind, detail}` where `kind` is `dependency`, `question`, `active-job`,
-or `repository`. `orch ticket next` is the first ready ticket. Reading never claims anything.
+it, and its repository checkout exists and answers a Git check within the read's 2 s budget (a
+checkout that timed out stays blocked and is asked again after 60 s). `orch ticket blocked` is the
+rest of the open tickets, each with `blockedBy`: a list of `{kind, detail}` where `kind` is
+`dependency`, `question`, `active-job`, or `repository`. `orch ticket next` is the first ready ticket. Reading never claims anything.
 
 ## History
 
