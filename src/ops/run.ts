@@ -16,6 +16,7 @@ import {
   ToolError,
   ValidationError,
 } from '../core/errors.ts';
+import { claudeLimit } from '../core/claude-limit.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { ticketKey } from '../core/tickets.ts';
 import { endsRun, now, personMergeStep, TERMINAL_STATUSES } from '../core/workflow.ts';
@@ -67,6 +68,8 @@ export const TRANSIENT_ATTEMPTS = 5;
 export const RETRY_SECONDS = 30;
 const POLL_MS = 2000;
 const BEAT_MS = 30_000;
+/** The stop code of a child that hit a Claude usage or rate limit; the run stays resumable. */
+const USAGE_LIMIT = 'usage-limit';
 
 export interface RunOptions {
   /** Starts the Claude child; tests replace it. */
@@ -383,6 +386,17 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
       },
     }));
     if (stopped) return { kind: 'stopped' };
+    // A spent account would fail every ticket the same way: end the run, resumably, before the
+    // exit counts as idle (decision 2026-11-24-usage-limit-ends-run-resumably).
+    const limit = claudeLimit(exit.stderrTail, exit.result);
+    if (limit !== null) {
+      const resets = limit.resetsAt === null ? '' : ` (resets ${limit.resetsAt})`;
+      return {
+        kind: 'blocked',
+        code: USAGE_LIMIT,
+        reason: `Claude ${limit.limit} reached${resets}; orch resume continues the session`,
+      };
+    }
     run.log(
       `  claude: exited (${exit.error ?? `code ${String(exit.code ?? exit.signal)}`}); ` +
         `job is ${after.stage}/${after.status}`,
@@ -567,7 +581,10 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       if (r.kind === 'stopped') {
         return out('stopped', 'stopped on request; the job is kept as it is', jobId, 'orch resume');
       }
-      if (r.kind === 'blocked') return out('blocked', r.reason, jobId, retry, r.code);
+      if (r.kind === 'blocked') {
+        const next = r.code === USAGE_LIMIT ? 'orch resume' : retry;
+        return out('blocked', r.reason, jobId, next, r.code);
+      }
       const after = getJob(store.db, jobId);
       if (after.status === 'cancelled') {
         return out('blocked', `job ${jobId} was cancelled`, jobId, `orch ticket reopen ${key}`);
@@ -747,8 +764,8 @@ async function drive(
     run.assertOwned();
     await reportJobMail(store, mark);
     session.results = [...session.results.filter((r) => r.ticketId !== ticketId), result];
-    // A stopped ticket stays the one in flight, for `orch resume`.
-    if (result.outcome !== 'stopped') {
+    // A stopped or limit-hit ticket stays the one in flight, for `orch resume`.
+    if (result.outcome !== 'stopped' && result.code !== USAGE_LIMIT) {
       session.ticketId = null;
       session.jobId = null;
     }
@@ -775,6 +792,15 @@ async function drive(
       run.save(); // first: a lost lock leaves the stop request to the controller that has it
       clearStop(paths, 'now');
       return summarize(session, 'stopped on request; orch resume continues the session', true);
+    }
+    // Only a limit-hit ticket is still in flight here (`attempt`): the run ended on it, and the
+    // session stays unfinished with it, so `orch resume` continues it.
+    const limited = session.results.find(
+      (r) => r.ticketId === session.ticketId && r.code === USAGE_LIMIT,
+    );
+    if (limited !== undefined) {
+      run.save();
+      return summarize(session, limited.reason, false);
     }
     session.finished = { at: now(), reason };
     session.ticketId = null;
