@@ -9,12 +9,15 @@ import {
   cannotAcceptDelivery,
   cannotMerge,
   cannotRefreshPr,
+  type Choice,
+  type ChoiceKind,
   type Completion,
   type Stage,
   TERMINAL_STATUSES,
 } from '../core/workflow.ts';
 import { prWorkflowState, viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
+import { eventsOfTypes } from '../storage/events.ts';
 import { policyFingerprint } from '../core/verification.ts';
 import { ticketKey } from '../core/tickets.ts';
 import {
@@ -54,9 +57,29 @@ export const DASHBOARD_ACTIONS = [
   'refresh-pr',
   'remove-worktree',
   'fix-conflicts',
+  'answer',
 ] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 export const DASHBOARD_SESSION = 'dashboard';
+
+/** The dashboard action that answers a needs-human choice of each kind. */
+export const CHOICE_ACTIONS: Record<ChoiceKind, DashboardAction> = {
+  resume: 'approve',
+  rework: 'request-rework',
+  review: 'request-review',
+  'accept-delivery': 'accept-delivery',
+  cancel: 'cancel',
+};
+
+/**
+ * The choices a human may answer: the newest `job.blocked` event's, while the job waits in
+ * needs-human; null otherwise or when it recorded none. Every reader of choices uses this rule.
+ */
+export function currentChoices(store: Store, job: Job): Choice[] | null {
+  if (job.stage !== 'needs-human' || TERMINAL_STATUSES.includes(job.status)) return null;
+  const choices = eventsOfTypes(store.db, job.id, ['job.blocked'])[0]?.payload['choices'];
+  return Array.isArray(choices) && choices.length > 0 ? (choices as Choice[]) : null;
+}
 
 export interface ActionInput {
   action: DashboardAction;
@@ -65,6 +88,8 @@ export interface ActionInput {
   force?: boolean | undefined;
   /** For `approve`: stage to return to (defaults to the stage the job was escalated from). */
   to?: Stage | undefined;
+  /** For `answer`: the index of the picked choice in `currentChoices`. */
+  choice?: number | undefined;
 }
 
 /** Job row minus the credential; the only shape that leaves the process. */
@@ -97,6 +122,8 @@ export function allowedActions(
   completion: Completion = null,
   /** `baseConflicts` for the job: what reports conflicts with the base, or null for none. */
   conflicts: BaseConflicts | null = null,
+  /** `currentChoices` found choices to answer. */
+  choices = false,
 ): DashboardAction[] {
   const pr: DashboardAction[] = [];
   if (cannotMerge(job, completion) === null) pr.push('merge');
@@ -115,6 +142,7 @@ export function allowedActions(
   }
   const out: DashboardAction[] = [...pr];
   if (job.stage === 'needs-human') out.push('approve');
+  if (job.stage === 'needs-human' && choices) out.push('answer');
   if (fix) out.push('fix-conflicts');
   if (job.round > 0) out.push('request-review');
   out.push('request-rework');
@@ -168,6 +196,8 @@ export interface CancelInput {
   force?: boolean | undefined;
   /** Defaults to `session` (a CLI caller); the dashboard passes `dashboard`. */
   mode?: LeaseMode | undefined;
+  /** Run inside the lease on the re-read job before cancelling; throws to refuse (`answer`). */
+  check?: ((current: Job) => void) | undefined;
 }
 
 /**
@@ -188,7 +218,10 @@ export function cancelJob(store: Store, id: string, input: CancelInput): ActionR
     before,
     input.session,
     input.force,
-    (token) => transitionJob(store, id, 'cancel', { token, reason: input.reason }),
+    (token) => {
+      input.check?.(getJob(store.db, id));
+      transitionJob(store, id, 'cancel', { token, reason: input.reason });
+    },
     input.mode ?? 'session',
   );
   return { job: withoutToken(getJob(store.db, id)), message: `Job cancelled (${input.reason}).` };
@@ -414,6 +447,73 @@ function fixConflicts(store: Store, before: Job, force: boolean | undefined): Ac
 }
 
 export function dashboardAction(store: Store, id: string, input: ActionInput): ActionResult {
+  return input.action === 'answer' ? answer(store, id, input) : runAction(store, id, input);
+}
+
+/**
+ * Answer a needs-human choice: run exactly the action it maps to, with that action's refusals,
+ * after checking inside its lease that the job still offers the same choice. An unfinished job
+ * then carries the answer to its next session as a notice.
+ */
+function answer(store: Store, id: string, input: ActionInput): ActionResult {
+  const pick = (job: Job): Choice => {
+    if (TERMINAL_STATUSES.includes(job.status)) {
+      throw new ValidationError(`Job is already ${job.status}.`);
+    }
+    const choices = currentChoices(store, job);
+    if (!choices) {
+      throw new ValidationError(
+        'Only a job waiting in needs-human with recorded choices can be answered.',
+      );
+    }
+    const c = input.choice === undefined ? undefined : choices[input.choice];
+    if (!c) {
+      throw new ValidationError(`choice must be 0 to ${String(choices.length - 1)}.`);
+    }
+    return c;
+  };
+  const choice = pick(getJob(store.db, id));
+  const note = input.reason?.trim() ?? '';
+  const said = `"${choice.label}"${note === '' ? '' : `: ${note}`}`;
+  const r = runAction(
+    store,
+    id,
+    {
+      action: CHOICE_ACTIONS[choice.kind],
+      to: choice.to,
+      reason: `answer ${said}`,
+      force: input.force,
+    },
+    (current) => {
+      const again = pick(current);
+      if (again.kind !== choice.kind || again.to !== choice.to || again.label !== choice.label) {
+        throw new ValidationError('The job was escalated again with other choices; reload it.');
+      }
+    },
+  );
+  const job = getJob(store.db, id);
+  if (TERMINAL_STATUSES.includes(job.status)) {
+    return { ...r, message: `Answered "${choice.label}": ${r.message}` };
+  }
+  // Outside the transition's transaction: if this fails the job has moved, and the note is still
+  // in the recorded reason.
+  postNotice(store, id, { text: `Human answered ${said}`, actor: DASHBOARD_SESSION });
+  const next = job.ticketId === null ? resumeCommand(id) : `orch do ${ticketKey(job.ticketId)}`;
+  return {
+    job: withoutToken(job),
+    message:
+      `Answered "${choice.label}": the job returned to ${job.stage} (pending), and the answer is ` +
+      `posted as a notice for its next session. No session is running it; continue it with: ${next}`,
+    resumeCommand: next,
+  };
+}
+
+function runAction(
+  store: Store,
+  id: string,
+  input: ActionInput,
+  check: (current: Job) => void = () => undefined,
+): ActionResult {
   const before = getJob(store.db, id);
   if (input.action === 'merge' || input.action === 'refresh-pr') {
     return prAction(store, before, input);
@@ -471,10 +571,12 @@ export function dashboardAction(store: Store, id: string, input: ActionInput): A
       reason,
       force: input.force,
       mode: 'dashboard',
+      check,
     });
   }
   withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
     const current = getJob(store.db, id);
+    check(current);
     if (input.action === 'accept-delivery') {
       // The pure transition re-checks the rule; this is the only path that completes a job by hand.
       transitionJob(store, id, 'resume', { token, to: 'completed', reason });

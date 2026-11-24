@@ -161,6 +161,7 @@ export async function main(argv: string[]): Promise<number> {
         limit: str,
         replace: bool,
         by: str,
+        choice: { type: 'string', multiple: true },
         // job notice
         message: str,
         through: str,

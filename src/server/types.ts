@@ -1,7 +1,7 @@
 /** Shapes shared by the API (src/server/api.ts) and the web client (web/src). Types only. */
 import type { Flake } from '../core/flake.ts';
 import type { SessionLinks, SessionRef } from '../core/session.ts';
-import type { Completion, PrPhase } from '../core/workflow.ts';
+import type { Choice, Completion, PrPhase } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
 import type { Plan } from '../ops/factory.ts';
 import type { MergeView } from '../ops/merge-view.ts';
@@ -241,6 +241,12 @@ export interface JobDetailView {
   /** Dashboard actions the workflow allows in this state (the server re-checks on POST). */
   actions: DashboardAction[];
   /**
+   * The answers the escalating session offered (`currentChoices`): the newest `job.blocked`
+   * event's choices while the job waits in needs-human, in order; null otherwise. Answered with
+   * the `answer` action by index; `action` is what that runs, `available` whether it is in `actions`.
+   */
+  choices: ChoiceView[] | null;
+  /**
    * What reports merge conflicts with the base (approve, pr, ci, or a completed job with an open
    * PR not yet superseded): files from the local base ref probe and/or GitHub's last recorded
    * CONFLICTING; null when neither does or the action does not apply. Backs Fix merge conflicts.
@@ -349,6 +355,13 @@ export interface ActionRequest {
   reason?: string;
   force?: boolean;
   to?: string;
+  /** `answer` only: the index into `JobDetailView.choices`. */
+  choice?: number;
+}
+
+export interface ChoiceView extends Choice {
+  action: DashboardAction;
+  available: boolean;
 }
 
 export interface ActionResponse {

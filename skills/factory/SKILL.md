@@ -199,6 +199,16 @@ Failures:
   `orch job transition <id> fail --reason "<what was malformed>" --token <t>` and escalate
   (`orch job transition <id> escalate --reason "..." --token <t>`).
 
+When an escalation's question has a few concrete answers, offer them: add one
+`--choice "<kind>[:<stage>]=<label>"` per answer (1 to 5) to the escalate command. `<kind>` is
+`resume:<stage>`, `rework`, `review`, `accept-delivery`, or `cancel`, and the label is a short
+line for the human, for example
+`--choice "resume:approve=Approve as is" --choice "cancel=Drop the ticket"`. The dashboard shows
+them as a Choices block; the human's pick runs that action, and the answer reaches the next
+session as a notice in `orch factory next`. A fast job refuses a `resume` to a stage it never
+visits (exit 1): escalate again with valid choices or none. Leave `--choice` out when the question
+has no such answers.
+
 ### Launching an agent
 
 Use the harness's subagent tool (Claude Code: the `Agent` tool with `subagent_type` set to the

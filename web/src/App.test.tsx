@@ -238,6 +238,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     timeline: { entries: [], truncated: false },
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
+    choices: null,
     conflicts: null,
     links: {
       vscode: 'vscode://file//wt/g',
@@ -806,6 +807,73 @@ describe('Job detail', () => {
     const calls = f.mock.calls as [RequestInfo | URL, RequestInit | undefined][];
     const posted = calls.find(([, init]) => init?.method === 'POST');
     expect(JSON.parse(posted?.[1]?.body as string)).toEqual({ action: 'approve', to: 'review' });
+  });
+
+  it('offers the recorded choices as buttons and answers one with an optional note', async () => {
+    const f = mockFetch();
+    data.detail = detail({
+      actions: ['approve', 'answer', 'request-rework', 'cancel'],
+      choices: [
+        {
+          kind: 'resume',
+          to: 'approve',
+          label: 'Approve as is',
+          action: 'approve',
+          available: true,
+        },
+        { kind: 'review', label: 'Review again', action: 'request-review', available: false },
+        { kind: 'cancel', label: 'Drop it', action: 'cancel', available: true },
+      ],
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    const block = await screen.findByTestId('choices');
+    expect(within(block).getByRole('button', { name: 'Approve as is' })).toBeEnabled();
+    expect(within(block).getByRole('button', { name: 'Review again' })).toBeDisabled();
+    // The existing controls stay.
+    expect(screen.getByRole('button', { name: 'Resume at approve' })).toBeInTheDocument();
+    fireEvent.click(within(block).getByRole('button', { name: 'Drop it' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Drop it' });
+    expect(within(dialog).getByTestId('action-effect')).toHaveTextContent(
+      'Ends the job as cancelled',
+    );
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Note \(optional/ }), {
+      target: { value: ' not needed ' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument();
+    });
+    const calls = f.mock.calls as [RequestInfo | URL, RequestInit | undefined][];
+    const posted = calls.find(([, init]) => init?.method === 'POST');
+    expect(JSON.parse(posted?.[1]?.body as string)).toEqual({
+      action: 'answer',
+      choice: 2,
+      reason: 'not needed',
+    });
+  });
+
+  it('shows the effect of a resume choice and renders no Choices block without choices', async () => {
+    mockFetch();
+    data.detail = detail({
+      actions: ['approve', 'answer', 'cancel'],
+      choices: [
+        { kind: 'resume', to: 'ci', label: 'Retry CI', action: 'approve', available: true },
+        { kind: 'cancel', label: 'Drop it', action: 'cancel', available: true },
+      ],
+    });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry CI' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Retry CI' });
+    expect(within(dialog).getByTestId('action-effect')).toHaveTextContent(
+      'Moves the job to ci as pending',
+    );
+    cleanup();
+    data.detail = detail();
+    mount();
+    await screen.findByRole('button', { name: 'Resume at approve' });
+    expect(screen.queryByTestId('choices')).not.toBeInTheDocument();
   });
 
   it('labels Resume by the current return stage, even when it changes under a mounted view', async () => {
