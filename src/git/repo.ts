@@ -47,6 +47,20 @@ export function commonGitDir(cwd: string): string {
   return canonicalPath(resolve(cwd, git(cwd, 'rev-parse', '--git-common-dir')));
 }
 
+/**
+ * `commonGitDir` bounded by `timeoutMs`, like `fetchBase`: `{ timedOut: true }` when Git did not
+ * answer in time, undefined when `cwd` is not inside a repository.
+ */
+export function commonGitDirWithin(
+  cwd: string,
+  timeoutMs: number,
+): string | undefined | { timedOut: true } {
+  const r = spawnTool('git', ['rev-parse', '--git-common-dir'], { cwd, timeout: timeoutMs });
+  if (r.timedOut) return { timedOut: true };
+  if (r.status !== 0) return undefined;
+  return canonicalPath(resolve(cwd, r.stdout.trim()));
+}
+
 export interface CheckoutIdentity {
   /** Canonical Git directory: `.git` for the primary checkout, `.git/worktrees/<n>` for a linked one. */
   key: string;
