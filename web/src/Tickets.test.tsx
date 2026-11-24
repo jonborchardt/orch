@@ -633,6 +633,7 @@ describe('factory status', () => {
       stop: { next: true, now: false },
       current: {
         ticket: '0003',
+        pick: 'ready',
         job: 'job-00000003',
         repo: ALPHA,
         stage: 'build',
@@ -662,6 +663,7 @@ describe('factory status', () => {
       stop: { next: false, now: true },
       current: {
         ticket: '0005',
+        pick: null,
         job: 'job-00000005',
         repo: ALPHA,
         stage: 'needs-human',

@@ -55,8 +55,10 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
 17. **Settlement.** In the transaction that records the merge, the ticket becomes `done` only if
     the merged head is the verified one and nothing is left on the ticket
     ([Verified integration and reconciliation](#verified-integration-and-reconciliation)).
-18. **Next ticket.** The controller takes the next ready ticket, passing over one it could not
-    finish, or ends the run on an outcome that would hit every ticket
+18. **Next ticket.** The controller first takes again an escalation a person has since decided,
+    then continues a stranded in-progress ticket (its job released, pending or running, not
+    waiting for a person), else takes the next ready ticket,
+    passing over one it could not finish, or ends the run on an outcome that would hit every ticket
     ([Factory controller](#factory-controller)).
 
 Any stage can escalate to `needs-human`, which waits for a person's decision
@@ -481,7 +483,7 @@ passes the ticket over for the rest of the session (`orch resume` included), tak
 ticket, and lists it with the reason and its next step in the end-of-session summary. One
 passed-over ticket is taken again in the same session (`orch resume` included): an escalation
 (code `needs-human`) whose job a person has since moved on, out of `needs-human`, not cancelled,
-and with no live lease. It is checked before each next ready ticket and once more before the
+and with no live lease. It is checked before each stranded or ready ticket and once more before the
 session ends; Accept delivery leaves the job completed, so the retake merges it. A completed job
 whose merge only a person can make is not taken again: Merge on the dashboard completes the ticket
 by itself (decision 2026-11-24-default-needs-human-choices). Only an
