@@ -40,7 +40,8 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
 11. **Review.** `security`, `correctness`, and `code-quality` always review. `ui-design`, `ux`,
     `accessibility`, and `web-platform` join when the diff matches `uiPatterns` (by default
     `DEFAULT_UI_PATTERNS` in `src/core/roles.ts`: `.tsx`, `.jsx`, `.vue`, `.svelte`, `.astro`,
-    `.html`, `.htm`, and style-sheet files, and images under `public/`, `static/`, or `assets/`). A
+    `.html`, `.htm`, and style-sheet files, and images under `public/`, `static/`, or `assets/`).
+    Test files (paths `src/core/sensitive.ts` labels `tests` or `test-config`) never count. A
     consolidation records `BLOCKING: <n>` ([Review rounds](#workflow)).
 12. **Rework.** Blocking findings or a `CHANGES` verdict send the job back to build, until a
     rejection in round `maxRounds` escalates. A scope gap at approval reworks once on its own.

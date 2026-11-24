@@ -164,6 +164,12 @@ describe('review rounds', () => {
       'web-platform',
     ]);
     expect(next(u.id, false).agents).toHaveLength(3);
+
+    const t = start('Test the app');
+    toReview(t, ['web/src/App.test.tsx']);
+    const tp = next(t.id);
+    expect(tp.ui).toBe(false);
+    expect(tp.agents).toHaveLength(3);
   });
 
   it('aggregates parallel verdicts: any CHANGES returns to build with the consolidated findings', () => {
