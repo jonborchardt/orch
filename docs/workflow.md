@@ -11,8 +11,9 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
 1. **Creation.** `orch ticket add` (or the dashboard's New ticket) files a ticket in one
    repository with a global id, a type (`bug`, `feature`, `chore`, `question`), an area, a priority
    (`P1`–`P4`), an effort, and a Markdown body ([tickets.md](tickets.md#fields)).
-2. **Priority and dependencies.** `orch ticket edit --priority` and `orch ticket dep add` shape the
-   proposed order: dependencies first, then priority, effort, area, id
+2. **Rank, priority, and dependencies.** `orch ticket move`, `orch ticket edit --priority`, and
+   `orch ticket dep add` shape the proposed order: dependencies first, then ranked tickets by rank,
+   then priority, effort, area, id
    ([tickets.md](tickets.md#order-and-readiness)).
 3. **Readiness.** A ticket is ready when it is `open`, not a `question`, every dependency is
    `done`, no unfinished job is linked to it, and its repository checkout exists. Anything else is
@@ -39,7 +40,8 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
 11. **Review.** `security`, `correctness`, and `code-quality` always review. `ui-design`, `ux`,
     `accessibility`, and `web-platform` join when the diff matches `uiPatterns` (by default
     `DEFAULT_UI_PATTERNS` in `src/core/roles.ts`: `.tsx`, `.jsx`, `.vue`, `.svelte`, `.astro`,
-    `.html`, `.htm`, and style-sheet files, and images under `public/`, `static/`, or `assets/`). A
+    `.html`, `.htm`, and style-sheet files, and images under `public/`, `static/`, or `assets/`).
+    Test files (paths `src/core/sensitive.ts` labels `tests` or `test-config`) never count. A
     consolidation records `BLOCKING: <n>` ([Review rounds](#workflow)).
 12. **Rework.** Blocking findings or a `CHANGES` verdict send the job back to build, until a
     rejection in round `maxRounds` escalates. A scope gap at approval reworks once on its own.
@@ -55,8 +57,10 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
 17. **Settlement.** In the transaction that records the merge, the ticket becomes `done` only if
     the merged head is the verified one and nothing is left on the ticket
     ([Verified integration and reconciliation](#verified-integration-and-reconciliation)).
-18. **Next ticket.** The controller takes the next ready ticket, passing over one it could not
-    finish, or ends the run on an outcome that would hit every ticket
+18. **Next ticket.** The controller first takes again an escalation a person has since decided,
+    then continues a stranded in-progress ticket (its job released, pending or running, not
+    waiting for a person), else takes the next ready ticket,
+    passing over one it could not finish, or ends the run on an outcome that would hit every ticket
     ([Factory controller](#factory-controller)).
 
 Any stage can escalate to `needs-human`, which waits for a person's decision
@@ -96,15 +100,15 @@ flowchart TD
 Every failure path ends in a bounded loop or with a person. Stages, who works in each, and what
 `orch` requires before the next one:
 
-| Stage      | Who                                                   | Produces                                                   | `orch` requires before the next stage                                                                                                                                                |
-| ---------- | ----------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `spec`     | `factory-spec-writer`, then `factory-spec-challenger` | `spec.md`, `spec-review-N.md`                              | Goal, Scope, Acceptance criteria; the latest challenge says `VERDICT: PASS` for the current `spec.md`                                                                                |
-| `build`    | `factory-builder`                                     | commits, an `orch verify` run, `build.md`                  | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD                                                                                         |
-| `simplify` | `factory-simplifier`, then `factory-builder`          | `round-N/simplify-review.md`, fixes, `round-N/simplify.md` | both files registered; `simplify.md` against a clean, verified HEAD                                                                                                                  |
-| `review`   | 3 reviewers (7 for UI changes)                        | `round-N/review-*.md`, `consolidated.md`                   | all three always-on verdicts recorded against the HEAD `simplify.md` (or, without one, `build.md`) describes; `BLOCKING: 0` to advance                                               |
-| `approve`  | `factory-approver`                                    | `decision.md`                                              | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid. A scope gap (`REWORK-BUILD`, `REWORK-SPEC`) goes back to `build` or `spec` once on its own |
-| `pr`       | the coordinator                                       | base integrated, pushed branch, draft PR                   | only clean base-integration merges since the approval; verified HEAD; policy unchanged                                                                                               |
-| `ci`       | the coordinator + `orch gh ci`                        | GitHub's verdict for the PR head                           | the job's own PR; checks passed for that commit, still the approved one (plus clean base merges)                                                                                     |
+| Stage      | Who                                                   | Produces                                                   | `orch` requires before the next stage                                                                                                                                                    |
+| ---------- | ----------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`     | `factory-spec-writer`, then `factory-spec-challenger` | `spec.md`, `spec-review-N.md`                              | Goal, Scope, Acceptance criteria; the latest challenge says `VERDICT: PASS` for the current `spec.md`                                                                                    |
+| `build`    | `factory-builder`                                     | commits, an `orch verify` run, `build.md`                  | clean worktree; a passing verification run for HEAD; `build.md` registered against that HEAD                                                                                             |
+| `simplify` | `factory-simplifier`, then `factory-builder`          | `round-N/simplify-review.md`, fixes, `round-N/simplify.md` | both files registered; `simplify.md` against a clean, verified HEAD                                                                                                                      |
+| `review`   | 3 reviewers (7 for UI changes)                        | `round-N/review-*.md`, `consolidated.md`                   | all three always-on verdicts recorded against the HEAD `simplify.md` (or, without one, `build.md`) describes, or one that follows it by clean base merges only; `BLOCKING: 0` to advance |
+| `approve`  | `factory-approver`                                    | `decision.md`                                              | `DECISION: APPROVE` for the current HEAD; no blocking findings; verification still valid. A scope gap (`REWORK-BUILD`, `REWORK-SPEC`) goes back to `build` or `spec` once on its own     |
+| `pr`       | the coordinator                                       | base integrated, pushed branch, draft PR                   | only clean base-integration merges since the approval; verified HEAD; policy unchanged                                                                                                   |
+| `ci`       | the coordinator + `orch gh ci`                        | GitHub's verdict for the PR head                           | the job's own PR; checks passed for that commit, still the approved one (plus clean base merges)                                                                                         |
 
 Default models per role: spec writer, builder, security reviewer, and approver Opus; spec
 challenger, simplifier, and the other reviewers Sonnet. They are configurable in
@@ -188,14 +192,28 @@ Claude requests an action; `orch job transition <id> <action>` validates and app
 
 `escalate` takes up to five `--choice "<kind>[:<stage>]=<label>"` values: answers a human can pick
 in the dashboard's Choices block (decision 2026-11-23-needs-human-choices). `<kind>` is
-`resume:<stage>` (spec through ci), `rework`, `review`, `accept-delivery`, or `cancel`, the
-dashboard actions Resume at, Request rework, Request review round, Accept delivery, and Cancel.
+`resume:<stage>` (spec through ci), `rework`, `review`, `accept-delivery`, `accept-policy`, or
+`cancel`, the dashboard actions Resume at, Request rework, Request review round, Accept delivery,
+Accept policy, and Cancel.
 Labels are trimmed, non-blank, unique, at most 120 characters, and free of control characters; a
 bad choice, or `--choice` on any other action, is a usage error (exit 2). The choices are kept on
 the `job.blocked` event (`choices: [{ kind, to?, label }]`); only the newest `job.blocked` counts,
 and only while the job is in `needs-human`, so escalating again replaces them. A fast job's
 escalate is refused (exit 1, nothing written) when a `resume` choice names a stage outside build,
 pr, ci, and completed: its mode never changes, so such a choice could never be answered.
+
+Every `job.blocked` the transition writes records choices, with or without `--choice` (decision
+2026-11-24-default-needs-human-choices): session and gate escalations, the review round limit, a
+repeated scope gap, and the CI repair limit. `defaultChoices` in `src/core/workflow.ts` builds them
+from the job and the reason: a stage the reason names (`resume --to <stage>`, `resume to <stage>`,
+`resumes --to <stage>`, any case; `completed` is Accept delivery) first, then the return stage
+("Send back to spec|build|simplify", "Retry review|approve|pr|ci"); Send back to build and Retry
+review for the round limit; Accept policy for a reason naming the verification policy; Cancel
+last. A fast job never gets a stage outside its resume targets. Recorded `--choice` values are kept
+as given when one of them continues the job (`resume`, `rework`, `review`, `accept-policy`);
+otherwise the default primary goes in front of them. `currentChoices` applies the same rule to an
+older `job.blocked` that recorded none, so every job waiting in `needs-human` offers at least one
+answer that continues it.
 
 Required artifacts, relative to the job's artifact directory and registered with
 `orch job artifact add`: `spec.md`, `build.md`, `round-N/simplify.md` (with
@@ -265,7 +283,13 @@ runs, then with `--verdict pass|changes`); the verdict is read from that reviewe
 always-on reviewers (`security`, `correctness`, `code-quality`) have a verdict (UI reviewers join for
 UI changes), and when the verdicts describe a commit other than the one this round's `simplify.md`
 was registered for (or, in a round with no `simplify.md`, such as a `request-review` or `resume --to
-review`, the one `build.md` was registered for). If every verdict is `pass` and `BLOCKING: 0`, the job moves to `approve`; otherwise the round is
+review`, the one `build.md` was registered for), unless the reviewed commit follows that one by
+clean base merges only: it contains it, and every commit since then that is not on the base is a
+merge whose result matches one of its parents (the rule delivery applies to the approval). Under
+`ci` authority that is how a clean base merge in `pr`, between simplify and review, reaches
+review without a rebuild. A commit of the job's own after `simplify.md`, or a merge with edits
+inside it, is new code and is refused (decision
+[2026-11-24-clean-base-merge-keeps-simplify-evidence](decisions/2026-11-24-clean-base-merge-keeps-simplify-evidence.md)). If every verdict is `pass` and `BLOCKING: 0`, the job moves to `approve`; otherwise the round is
 a rejection and the job returns to `build`, unless the round is the last allowed one (`round >=
 maxRounds`, from `--max-rounds`, default 3), in which case it escalates to `needs-human` with `max
 review rounds reached`. Rounds that are not review-driven raise `maxRounds` by one instead of
@@ -410,7 +434,9 @@ reason and releases, so the next pass or a human can pick the job up. The fifth 
 for the same head escalates to `needs-human` with `recovery retries exhausted: <last error>`. A
 claim by any other session resets the count. After a successful probe the next pass waits the
 smallest CI `waitSeconds`, at least 60 s. The worker never launches, resumes, or messages a Claude
-session and never removes a worktree.
+session and never removes a worktree. Before every pass and every episode the worker checks that
+`recovery.pid` still names it; once another worker has taken the file it stops and writes nothing
+more (decision 2026-11-24-recovery-worker-checks-its-pid-file).
 
 ## Factory controller
 
@@ -458,8 +484,15 @@ Budgets: two sessions in a row that exit without changing the job's stage, round
 artifacts; 60 CI reads; five unreadable answers from GitHub. A ticket that ends blocked, refused,
 or waiting for a person ends only `orch do`: in queue mode the controller releases its job,
 passes the ticket over for the rest of the session (`orch resume` included), takes the next ready
-ticket, and lists it with the reason and its next step in the end-of-session summary. Only an
-outcome that would hit every ticket ends the whole session there: `claude-failed`,
+ticket, and lists it with the reason and its next step in the end-of-session summary. One
+passed-over ticket is taken again in the same session (`orch resume` included): an escalation
+(code `needs-human`) whose job a person has since moved on, out of `needs-human`, not cancelled,
+and with no live lease. It is checked before each stranded or ready ticket and once more before the
+session ends; Accept delivery leaves the job completed, so the retake merges it. A completed job
+whose merge only a person can make is not taken again: Merge on the dashboard completes the ticket
+by itself (decision 2026-11-24-default-needs-human-choices). Only an
+outcome that would hit every ticket ends the whole session there: `claude-failed`, `usage-limit`
+(left unfinished, so `orch resume` continues the same ticket),
 `github-unreadable`, `merge-no-answer`, or `github-refused` (`RUN_ENDING_CODES` in
 `src/core/workflow.ts`; any other code continues, decision
 2026-11-23-queue-ends-only-on-run-wide-outcomes). For `ticket-open` (merged and verified, a box
@@ -482,7 +515,7 @@ Events tab, and, for a stop, the status mail (decision 2026-11-21-runner-evidenc
 `exited` with `exitCode` 0 says only that the process ended; `moved` says whether the job's
 stage, round, CI repairs, or artifacts changed during it. `runner.stopped` describes the
 controller, not the job: the job keeps the stage and status it had, and `code` says what stopped
-the ticket: `no-progress`, `claude-failed`, `ci-pending`, `github-unreadable`, `needs-human`,
+the ticket: `no-progress`, `claude-failed`, `usage-limit`, `ci-pending`, `github-unreadable`, `needs-human`,
 `unverified-merge`, `ticket-open`, `reland-refused`, `merge-no-answer`, `ownership` (another
 session held the job), `error` (any other `orch` refusal), any `mergeJob` block code
 (`MERGE_BLOCKS` in `src/core/workflow.ts`, listed under [Merging](#merging)), or `merge-blocked`
@@ -674,7 +707,9 @@ neither parent, from `git diff-tree --cc`). Outcomes: `up-to-date` (no commit), 
 material edits, moves the job back to `build` (`rework`): the builder merges and resolves, and the
 result is verified, reviewed, and approved again. A clean merge only needs a fresh `orch verify` on
 the new commit, except in `ci`, where it reworks too: only the `pr` stage pushes, so the new head
-comes back through verification, approval, and `pr` to the same PR. A base-integration rework never
+comes back through verification, approval, and `pr` to the same PR. Under `ci` authority a clean
+merge in the pre-review `pr` pass keeps `simplify.md` valid: review judges the merged head, which
+follows the simplified one by that clean merge only. A base-integration rework never
 spends a CI repair (a base conflict is not a CI failure), so a job whose repairs are exhausted still
 goes to `build`. A completed job cannot rework; the dashboard's Fix merge conflicts re-lands it as a
 new job instead (`docs/dashboard.md`).

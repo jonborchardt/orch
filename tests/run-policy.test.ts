@@ -105,6 +105,31 @@ describe('accept-policy on a job waiting in needs-human', () => {
     expect(r.message).toContain(`orch factory resume ${c.id}`);
   });
 
+  it('offers Accept policy for a reason naming the verification policy, and answering it accepts (ticket 0132)', () => {
+    const c = start(store, clone);
+    passSpec(store, c);
+    go(store, c, 'start');
+    commitFile(c.wt, 'factory.json', STRONGER);
+    go(store, c, 'escalate', 'verification policy needs human acceptance');
+    const recorded = eventsOf(c.id, 'job.blocked')[0]?.payload['choices'];
+    expect(recorded).toEqual([
+      { kind: 'resume', to: 'build', label: 'Send back to build' },
+      { kind: 'accept-policy', label: 'Accept policy' },
+      { kind: 'cancel', label: 'Cancel' },
+    ]);
+
+    const r = dashboardAction(store, c.id, { action: 'answer', choice: 1 });
+
+    expect(getJob(store.db, c.id)).toMatchObject({
+      stage: 'build',
+      status: 'pending',
+      ownerSession: null,
+      policyHead: head(c.wt),
+    });
+    expect(eventsOf(c.id, 'policy.authorized')).toHaveLength(1);
+    expect(r.message).toContain('Answered "Accept policy"');
+  });
+
   it('leaves a spec escalation in needs-human with its policy authorized', () => {
     const c = start(store, clone);
     go(store, c, 'start');

@@ -37,8 +37,9 @@ orch ticket blocked                # what cannot, each with its reasons
 
 Readiness is more than priority. A ticket is ready when it is `open`, is not a `question`, every
 dependency is `done`, no unfinished job is linked to it, and its repository checkout exists. The
-order is dependencies first, then priority, effort (smallest first), area, and id. The controller
-takes the first ready ticket, so changing a priority or adding a dependency changes what runs
+order is dependencies first, then ranked tickets by rank, then priority, effort (smallest first),
+area, and id. The controller takes the first ready ticket, so moving a ticket
+(`orch ticket move <id> --top`), changing a priority, or adding a dependency changes what runs
 next. Rules: [tickets.md](tickets.md#order-and-readiness).
 
 ### 3. Configure the repository
@@ -69,8 +70,15 @@ orch start
 The controller takes the controller lock (one per installation; a second `orch start` is refused
 while it is alive), writes its intent to `<data>/runner.json`, and loops:
 
-1. Read the ready queue (`orch ticket ready` across every repository). Pass over and record as
-   skipped any ticket whose repository lacks the merge opt-in.
+1. First take again a ticket passed over in this session for a person whose job a person has
+   since moved on (decision 2026-11-24-default-needs-human-choices). Else look for a stranded
+   in-progress ticket: its active job is `pending` or `running`, not in
+   `needs-human` or `completed`, and unowned or with an expired lease (for example one sent back
+   with `orch factory resume <job> --to build --release`), and the ticket was not passed over in
+   this session. Take the first in queue order and continue its job the way `orch do` does. Only
+   when there is none, read the ready queue (`orch ticket ready` across every repository). Either
+   way, pass over and record as skipped any ticket whose repository lacks the merge opt-in
+   (decision 2026-11-24-queue-resumes-stranded-tickets).
 2. For the first remaining ticket, find its job: continue the unfinished one, create one
    (`orch factory dispatch --ticket`, which claims the ticket in the job's insert transaction), or,
    for an in-progress ticket whose last job completed, go straight to the merge.
@@ -87,8 +95,10 @@ while it is alive), writes its intent to `<data>/runner.json`, and loops:
    A conflict creates one re-land job, which runs the same way.
 6. A ticket whose merge was verified and whose lifecycle says `done` is finished; take the next.
 
-A ticket whose job waits for a person is released and passed over for the rest of the session;
-the queue takes the next ready ticket, and the end-of-session summary lists the passed-over ticket
+A ticket whose job waits for a person is released and passed over for the rest of the session,
+until a person decides it on the dashboard: the running queue then takes it again before the next
+ready ticket (decision 2026-11-24-default-needs-human-choices). The queue takes the next ready
+ticket, and the end-of-session summary lists the passed-over ticket
 with its next step. So is a completed job whose merge only a person can unblock (`personMergeStep`
 in `src/core/workflow.ts`): `workflow-changed` (next step: Merge on the dashboard),
 `not-authorized`, `head-changed`, `pr-closed`, `pr-draft`, and `second-conflict` (decision
@@ -97,8 +107,12 @@ or `refused` for a reason of its own, such as a merge that left a checklist box 
 (`ticket-open`; next step: tick or move the remaining boxes, then `orch ticket done <id>`), an
 unverified merge, or a job that made no progress. The run ends when no ready ticket is left,
 when `orch stop next` was requested, or at the first ticket whose outcome would hit every ticket:
-claude cannot start (`claude-failed`), GitHub cannot be read or gives no answer
-(`github-unreadable`, `merge-no-answer`), or GitHub refuses the merge call (`github-refused`).
+claude cannot start (`claude-failed`), Claude's usage or rate limit is reached (`usage-limit`),
+GitHub cannot be read or gives no answer (`github-unreadable`, `merge-no-answer`), or GitHub
+refuses the merge call (`github-refused`). A `usage-limit` stop leaves the session unfinished
+with its ticket in flight: the summary names the limit and its reset time when Claude printed
+one, and `orch resume` continues the same ticket and job once the limit has reset (decision
+2026-11-24-usage-limit-ends-run-resumably).
 Those codes are `RUN_ENDING_CODES` in `src/core/workflow.ts`; a code not named there continues
 the queue (decision 2026-11-23-queue-ends-only-on-run-wide-outcomes). It exits 0 unless a ticket
 ended blocked, refused, or waiting for a person.
@@ -322,8 +336,8 @@ Each ticket the controller attempts ends with one outcome (`TICKET_OUTCOMES` in
 | `stopped`     | `orch stop` interrupted it                                                     | end the run, resumable             |
 
 The one exception is a result whose code would hit every ticket (`RUN_ENDING_CODES` in
-`src/core/workflow.ts`: `claude-failed`, `github-unreadable`, `merge-no-answer`,
-`github-refused`): it ends the run with the reason. A ticket of a repository without the merge
+`src/core/workflow.ts`: `claude-failed`, `usage-limit`, `github-unreadable`, `merge-no-answer`,
+`github-refused`): it ends the run with the reason; after `usage-limit` the run stays resumable. A ticket of a repository without the merge
 opt-in is not an outcome: the queue records it as skipped and moves on. `orch do` reports its one
 ticket's outcome and exits either way.
 
@@ -335,39 +349,42 @@ types:
 
 `runner.session`, each time a Claude process the controller started has ended:
 
-| field        | meaning                                                                                      |
-| ------------ | -------------------------------------------------------------------------------------------- |
-| `outcome`    | `exited` (ended on its own), `stopped` (by `orch stop`), `failed` (did not start)            |
-| `exitCode`   | the process exit code, or null                                                               |
-| `signal`     | the signal that ended it, or null                                                            |
-| `error`      | why it could not be started, or null                                                         |
-| `pid`        | the child's PID; null when it never started                                                  |
-| `seconds`    | wall-clock duration                                                                          |
-| `moved`      | whether the job's stage, round, CI repairs, or artifact count changed meanwhile              |
-| `stage`      | the job's stage afterwards                                                                   |
-| `status`     | the job's status afterwards                                                                  |
-| `sessionId`  | the `--session-id` it ran under, also attached to the job before it started                  |
-| `stderrTail` | the last 4000 characters it wrote to stderr, or null                                         |
-| `result`     | its final stream-json `result` (`subtype`, `isError`, `result` clipped, `numTurns`), or null |
+| field        | meaning                                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------------------------- |
+| `outcome`    | `exited` (ended on its own), `stopped` (by `orch stop`), `failed` (did not start)                               |
+| `exitCode`   | the process exit code, or null                                                                                  |
+| `signal`     | the signal that ended it, or null                                                                               |
+| `error`      | why it could not be started, or null                                                                            |
+| `pid`        | the child's PID; null when it never started                                                                     |
+| `seconds`    | wall-clock duration                                                                                             |
+| `moved`      | whether the job's stage, round, CI repairs, or artifact count changed meanwhile                                 |
+| `stage`      | the job's stage afterwards                                                                                      |
+| `status`     | the job's status afterwards                                                                                     |
+| `sessionId`  | the `--session-id` it ran under, also attached to the job before it started                                     |
+| `stderrTail` | the last 4000 characters it wrote to stderr, or null                                                            |
+| `result`     | its final stream-json `result` (`subtype`, `isError`, `result` clipped, `numTurns`), or null                    |
+| `pick`       | how the queue took the ticket: `resume` (stranded in-progress, or taken again) or `ready`; absent for `orch do` |
 
 **Exit code 0 is not success.** `exited` with `exitCode` 0 says only that the process ended;
 `moved` says whether the job got anywhere, and the job row says where.
 
 `runner.stopped`, when a ticket ends `blocked` or `needs-human` and its job is not cancelled:
 
-| field     | meaning                                                |
-| --------- | ------------------------------------------------------ |
-| `outcome` | `blocked` or `needs-human`                             |
-| `code`    | the structured stop code (below)                       |
-| `reason`  | the human-readable reason                              |
-| `stage`   | the job's stage when the controller gave the ticket up |
-| `status`  | the job's status then                                  |
-| `next`    | the command or decision that continues it              |
+| field     | meaning                                                           |
+| --------- | ----------------------------------------------------------------- |
+| `outcome` | `blocked` or `needs-human`                                        |
+| `code`    | the structured stop code (below)                                  |
+| `reason`  | the human-readable reason                                         |
+| `stage`   | the job's stage when the controller gave the ticket up            |
+| `status`  | the job's status then                                             |
+| `next`    | the command or decision that continues it                         |
+| `pick`    | `resume` or `ready`, as on `runner.session`; absent for `orch do` |
 
 Stop codes `src/ops/run.ts` can write:
 
 - the controller's own: `no-progress` (two Claude sessions in a row without moving the job),
-  `claude-failed` (Claude could not be started), `ci-pending` (60 CI reads without a verdict),
+  `claude-failed` (Claude could not be started), `usage-limit` (the session ended on a Claude
+  usage or rate limit; next step `orch resume`), `ci-pending` (60 CI reads without a verdict),
   `github-unreadable` (five unreadable GitHub answers in a row during CI), `unverified-merge` (the
   PR merged at a head other than the verified one), `ticket-open` (merged and verified, but the
   ticket stays open, for example an unchecked checklist item), `reland-refused` (a conflict, and no
@@ -478,8 +495,8 @@ replaces: `orch ticket reopen <id>` queues it for a new job, or `orch ticket dro
 
 Every automatic recovery is bounded. A spent budget is not a success: it stops the ticket with
 its reason. The queue passes a `blocked` ticket over and goes on, except for the run-wide codes
-`claude-failed`, `github-unreadable`, and `merge-no-answer` (and `github-refused` at merge),
-which end the run there.
+`claude-failed`, `usage-limit`, `github-unreadable`, and `merge-no-answer` (and `github-refused`
+at merge), which end the run there.
 
 ```mermaid
 flowchart TD
@@ -513,6 +530,7 @@ flowchart TD
 | PR conflicts at merge              | one re-land job; a second conflict blocks with `second-conflict`                                                                                                                                                                    | job rows (`supersededBy`)                   | yes, durable                              |
 | Claude exits without progress      | `MAX_IDLE_LAUNCHES` = 2 consecutive exits that change none of stage, round, CI repairs, artifact count (`no-progress`)                                                                                                              | the running controller                      | no: reset by `orch do`, `resume`, `start` |
 | Claude cannot be started           | none: stops at once (`claude-failed`)                                                                                                                                                                                               | –                                           | –                                         |
+| Claude usage or rate limit         | none: ends the run at once, unfinished, for `orch resume` (`usage-limit`)                                                                                                                                                           | the session file                            | yes, until `orch resume` or `orch stop`   |
 | CI pending                         | `CI_MAX_POLLS` = 60 controller reads (`ci-pending`)                                                                                                                                                                                 | the running controller                      | no: reset                                 |
 | GitHub unreadable during CI        | `TRANSIENT_ATTEMPTS` = 5 consecutive failed reads (`github-unreadable`)                                                                                                                                                             | the running controller                      | no: reset                                 |
 | merge `waiting` or `error`         | 5 attempts in total, `RETRY_SECONDS` = 30 s apart (`merge-no-answer`)                                                                                                                                                               | the running controller                      | no: reset                                 |

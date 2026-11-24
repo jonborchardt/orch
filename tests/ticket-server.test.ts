@@ -245,4 +245,42 @@ describe('ticket API', () => {
     expect((await get('/api/runner/stop')).status).toBe(404);
     expect((await body<RunnerStatus>(get('/api/runner'))).stop).toEqual({ next: true, now: false });
   });
+
+  it('moves a ticket in the order through the move action, behind the same guards', async () => {
+    for (const title of ['Four', 'Five']) {
+      await body<TicketView>(post('/api/tickets', { title, repo: alpha }), 201);
+    }
+    const order = async () =>
+      (await body<TicketList>(get('/api/tickets?view=order'))).tickets.map((t) => t.id);
+    expect(await order()).toEqual([4, 5, 2]);
+    expect((await body<TicketView>(act(2, 'move', { top: true }))).rank).toBe(1);
+    expect(await order()).toEqual([2, 4, 5]);
+    const history = await body<{ type: string }[]>(get('/api/tickets/2/history'));
+    expect(history.at(-1)).toMatchObject({ type: 'ticket.rank-changed', payload: { to: 1 } });
+    const five = (await body<TicketDetail>(get('/api/tickets/5'))).ticket;
+    await body<TicketView>(act(5, 'move', { up: true, revision: five.revision }));
+    expect(await order()).toEqual([2, 5, 4]);
+    await body<TicketView>(act(4, 'move', { before: '0002' }));
+    expect(await order()).toEqual([4, 2, 5]);
+    expect(
+      (await body<TicketList>(get('/api/tickets?view=ready'))).tickets.map((t) => t.id),
+    ).toEqual([4, 2, 5]);
+
+    const cases: [Promise<Response>, number][] = [
+      [act(5, 'move', { down: true }), 422], // already last
+      [act(4, 'move', { up: true }), 422], // already first
+      [act(3, 'move', { top: true }), 422], // a duplicate is not open
+      [act(4, 'move', {}), 422],
+      [act(4, 'move', { up: true, down: true }), 422],
+      [act(4, 'move', { top: true, revision: 1 }), 409],
+      [act(999, 'move', { top: true }), 404],
+      [post('/api/tickets/5/actions', { action: 'move', top: true }, { 'X-Orch-Csrf': '' }), 403],
+      [
+        post('/api/tickets/5/actions', { action: 'move', top: true }, { Origin: 'http://evil' }),
+        403,
+      ],
+    ];
+    for (const [request, status] of cases) expect((await request).status).toBe(status);
+    expect(await order()).toEqual([4, 2, 5]);
+  });
 });

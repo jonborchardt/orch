@@ -131,7 +131,14 @@ describe('the fast route', () => {
   it('escalate from build goes to needs-human with the reason', () => {
     const r = transition(job('build', 'running'), 'escalate', ctx([], { reason: 'too broad' }));
     expect(r.patch).toEqual({ stage: 'needs-human', status: 'blocked', returnStage: 'build' });
-    expect(r.events[0]?.payload).toEqual({ from: 'build', reason: 'too broad' });
+    expect(r.events[0]?.payload).toEqual({
+      from: 'build',
+      reason: 'too broad',
+      choices: [
+        { kind: 'resume', to: 'build', label: 'Send back to build' },
+        { kind: 'cancel', label: 'Cancel' },
+      ],
+    });
   });
 });
 

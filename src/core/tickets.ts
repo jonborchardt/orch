@@ -230,17 +230,68 @@ export interface Schedulable {
   priority: Priority;
   effort: number;
   dependsOn: readonly number[];
+  /** A person's explicit place in the queue, lowest first; null (or absent) is unranked. */
+  rank?: number | null;
+}
+
+/** Ascending, with null after every number. */
+const byRank = (a: number | null, b: number | null) =>
+  a === null ? (b === null ? 0 : 1) : b === null ? -1 : a - b;
+
+/** Open tickets that (transitively, through open tickets) depend on `id`. */
+function openDependents(open: readonly Schedulable[], id: number): Set<number> {
+  const out = new Set<number>();
+  const walk = (target: number) => {
+    for (const t of open) {
+      if (!out.has(t.id) && t.dependsOn.includes(target)) {
+        out.add(t.id);
+        walk(t.id);
+      }
+    }
+  };
+  walk(id);
+  return out;
+}
+
+/** Open tickets `id` (transitively, through open tickets) depends on. */
+function openDependencies(open: readonly Schedulable[], id: number): Set<number> {
+  const byId = new Map(open.map((t) => [t.id, t]));
+  const out = new Set<number>();
+  const walk = (from: number) => {
+    for (const d of byId.get(from)?.dependsOn ?? []) {
+      if (byId.has(d) && !out.has(d)) {
+        out.add(d);
+        walk(d);
+      }
+    }
+  };
+  walk(id);
+  return out;
 }
 
 /**
- * Proposed order of the open tickets: dependencies before dependents, then priority, effort,
- * area, id. An in-progress dependency is already under way, so its dependents are not held back
- * here (readiness is stricter). Kahn's algorithm, always taking the best-ranked free ticket.
+ * Proposed order of the open tickets: dependencies before dependents; then ranked tickets by
+ * rank, a dependency taking the lowest rank of its open dependents (its effective rank); then
+ * priority, effort, area, id. An in-progress dependency is already under way, so its dependents
+ * are not held back here (readiness is stricter). Kahn's algorithm, always taking the
+ * best-placed free ticket.
  */
 export function orderTickets<T extends Schedulable>(all: readonly T[]): T[] {
   const open = all.filter((t) => t.status === 'open');
   const openIds = new Set(open.map((t) => t.id));
+  const own = (t: Schedulable | undefined) => t?.rank ?? null;
+  const byId = new Map(open.map((t) => [t.id, t]));
+  // ponytail: O(n^2) walk of each ticket's dependents; fine for a personal queue.
+  const effective = new Map(
+    open.map((t) => {
+      const below = [...openDependents(open, t.id)].map((d) => own(byId.get(d)));
+      const ranks = [own(t), ...below].filter((r): r is number => r !== null);
+      return [t.id, ranks.length ? Math.min(...ranks) : null];
+    }),
+  );
   const cmp = (a: T, b: T) =>
+    byRank(effective.get(a.id) ?? null, effective.get(b.id) ?? null) ||
+    byRank(own(a), own(b)) ||
     PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority) ||
     a.effort - b.effort ||
     (a.area < b.area ? -1 : a.area > b.area ? 1 : 0) ||
@@ -259,6 +310,124 @@ export function orderTickets<T extends Schedulable>(all: readonly T[]): T[] {
     out.push(next);
     placed.add(next.id);
   }
+}
+
+/** Where `orch ticket move` puts a ticket in the global order. */
+export type MoveTo = 'up' | 'down' | 'top' | { before: number };
+export interface RankWrite {
+  id: number;
+  rank: number;
+}
+
+/**
+ * The rank writes that put open ticket `id` where `to` says in `orderTickets(all)` and change no
+ * other ticket's relative order, or a ValidationError naming why not: the ticket or `before` is
+ * not open, `up` on the first, `down` on the last, or the move would pass one of its open
+ * dependencies (or let a dependent pass it). `top` lands right after its own open dependencies.
+ * Every ticket from the top down to the moved one ends up ranked; tickets further down are ranked
+ * only when that is what keeps their order.
+ */
+export function planMove(all: readonly Schedulable[], id: number, to: MoveTo): RankWrite[] {
+  const order = orderTickets(all);
+  const key = ticketKey(id);
+  const at = order.findIndex((t) => t.id === id);
+  const moved = order[at];
+  if (!moved) throw new ValidationError(`Ticket ${key} is not open; only an open ticket moves.`);
+  const open = all.filter((t) => t.status === 'open');
+  const deps = openDependencies(open, id);
+  const dependents = openDependents(open, id);
+  const rest = order.filter((t) => t.id !== id);
+  let target: Schedulable[];
+  if (to === 'top') {
+    target = [...rest.filter((t) => deps.has(t.id)), moved, ...rest.filter((t) => !deps.has(t.id))];
+  } else {
+    let pos: number;
+    let passed: Schedulable[];
+    if (to === 'up') {
+      if (at === 0) throw new ValidationError(`Ticket ${key} is already first.`);
+      pos = at - 1;
+      passed = order.slice(at - 1, at);
+    } else if (to === 'down') {
+      if (at === order.length - 1) throw new ValidationError(`Ticket ${key} is already last.`);
+      pos = at + 1;
+      passed = order.slice(at + 1, at + 2);
+    } else {
+      if (to.before === id) throw new ValidationError(`Ticket ${key} cannot move before itself.`);
+      const j = order.findIndex((t) => t.id === to.before);
+      if (j < 0) {
+        throw new ValidationError(
+          `Ticket ${ticketKey(to.before)} is not open; move before an open ticket.`,
+        );
+      }
+      pos = j < at ? j : j - 1;
+      passed = j < at ? order.slice(j, at) : order.slice(at + 1, j);
+    }
+    for (const p of passed) {
+      if (deps.has(p.id)) {
+        throw new ValidationError(
+          `Ticket ${key} cannot move before ${ticketKey(p.id)}: it depends on ${ticketKey(p.id)}.`,
+        );
+      }
+      if (dependents.has(p.id)) {
+        throw new ValidationError(
+          `Ticket ${key} cannot move after ${ticketKey(p.id)}: ${ticketKey(p.id)} depends on it.`,
+        );
+      }
+    }
+    target = [...rest.slice(0, pos), moved, ...rest.slice(pos)];
+  }
+  const want = target.map((t) => t.id).join(',');
+  // Rank the shortest prefix that reproduces the target: ranks strictly rising down the prefix
+  // and below every rank after it make the prefix come first, in that order.
+  for (let end = target.indexOf(moved) + 1; end <= target.length; end++) {
+    const writes = rankPrefix(target.slice(0, end), target.slice(end), id);
+    const ranks = new Map(writes.map((w) => [w.id, w.rank]));
+    const after = orderTickets(all.map((t) => ({ ...t, rank: ranks.get(t.id) ?? t.rank ?? null })));
+    if (after.map((t) => t.id).join(',') === want) return writes;
+  }
+  // ponytail: a fractional rank halves its gap on every insert at the same spot; after about 50
+  // doubles cannot split it. Renumbering the ranked tickets is the upgrade path.
+  throw new ValidationError(`Ranks around ${key} ran out of precision; renumber them by hand.`);
+}
+
+/** Ranks for `prefix` that rise strictly and stay below every rank in `after`; existing ranks kept where they fit, `moved` always rewritten. */
+function rankPrefix(
+  prefix: readonly Schedulable[],
+  after: readonly Schedulable[],
+  moved: number,
+): RankWrite[] {
+  const below = Math.min(...after.flatMap((t) => t.rank ?? []));
+  const ranks: (number | null)[] = [];
+  let prev = -Infinity;
+  for (const t of prefix) {
+    const r = t.rank ?? null;
+    const keep = t.id !== moved && r !== null && r > prev && r < below;
+    ranks.push(keep ? r : null);
+    if (keep) prev = r;
+  }
+  for (let i = 0; i < ranks.length; i++) {
+    if (ranks[i] !== null) continue;
+    let k = i;
+    while (k < ranks.length && ranks[k] === null) k++;
+    const lo = i > 0 ? (ranks[i - 1] ?? null) : null;
+    const hi = k < ranks.length ? (ranks[k] ?? null) : Number.isFinite(below) ? below : null;
+    const m = k - i;
+    for (let j = 0; j < m; j++) {
+      ranks[i + j] =
+        lo === null
+          ? hi === null
+            ? j + 1
+            : hi - (m - j)
+          : hi === null
+            ? lo + j + 1
+            : lo + ((hi - lo) * (j + 1)) / (m + 1);
+    }
+    i = k;
+  }
+  return prefix.flatMap((t, i) => {
+    const r = ranks[i] ?? null;
+    return r === null || r === (t.rank ?? null) ? [] : [{ id: t.id, rank: r }];
+  });
 }
 
 export const BLOCK_KINDS = ['dependency', 'question', 'active-job', 'repository'] as const;

@@ -17,7 +17,12 @@ import {
   type SeededJobs,
 } from '../tests/fixtures/dashboard.ts';
 import { assistant, user, writeAgent, writeSession } from '../tests/transcript-fixture.ts';
+import { eq } from 'drizzle-orm';
+
 import { openStore } from '../src/storage/client.ts';
+import { appendEvent } from '../src/storage/events.ts';
+import { createJob } from '../src/storage/jobs.ts';
+import { jobs } from '../src/storage/schema.ts';
 import { createTicket } from '../src/storage/tickets.ts';
 
 /** Environment variable naming this run's state file; set here, read by the spec and teardown. */
@@ -127,4 +132,38 @@ function started(child: ChildProcess, port: number, stderr: () => string): Promi
       );
     });
   });
+}
+
+/**
+ * Add a job waiting in needs-human whose `job.blocked` recorded no choices, as one escalated
+ * before default choices existed (ticket 0132). The spec calls it last, at test time, so the
+ * board counts of the other checks keep the seeded ten jobs. Returns its id.
+ */
+export function seedOlderEscalation(home: string): string {
+  const store = openStore(homePaths(home));
+  try {
+    const job = createJob(store, {
+      title: 'Older escalation without choices',
+      description: 'Request: older escalation',
+      repo: 'gamma',
+      repoPath: join(home, 'repos', 'gamma'),
+      baseBranch: 'main',
+    });
+    store.db
+      .update(jobs)
+      .set({ stage: 'needs-human', status: 'blocked', returnStage: 'approve', round: 1 })
+      .where(eq(jobs.id, job.id))
+      .run();
+    appendEvent(
+      store.db,
+      job.id,
+      'job.blocked',
+      { from: 'approve', reason: 'Resume to build to re-run build/simplify' },
+      null,
+      new Date().toISOString(),
+    );
+    return job.id;
+  } finally {
+    store.close();
+  }
 }

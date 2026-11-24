@@ -38,6 +38,7 @@ function ticket(over: Partial<TicketView> & { id: number }): TicketView {
     area: 'web',
     priority: 'P3',
     effort: 1,
+    rank: null,
     duplicateOf: null,
     classified: 'auto',
     body: '',
@@ -417,8 +418,8 @@ describe('ticket list', () => {
       'blocked',
     ]);
     const cells = (n: number) => within(rowOf(n)).getAllByRole('cell');
-    expect(cells(9)[0]).toHaveTextContent(/^1$/);
-    expect(cells(2)[0]).toHaveTextContent(/^3$/);
+    expect(cells(9)[0]).toHaveTextContent(/^1UpDownTop$/);
+    expect(cells(2)[0]).toHaveTextContent(/^3UpDownTop$/);
     expect(cells(3)[0]).toHaveTextContent(/^$/);
     expect(cells(1)[1]).toHaveTextContent('0001');
     expect(within(rowOf(1)).getByRole('link', { name: 'Fix the race' })).toHaveAttribute(
@@ -550,6 +551,38 @@ describe('ticket list', () => {
     expect(screen.getByLabelText('Priority of 0001')).toHaveValue('P4');
   });
 
+  it('moves an open ticket with Up, Down, and Top, then shows the order the server gives', async () => {
+    mount('#/tickets');
+    await table();
+    // Only open rows can move.
+    expect(within(rowOf(3)).queryByRole('button', { name: /^Move/ })).toBeNull();
+    db.order = [1, 9, 2];
+    fireEvent.click(screen.getByRole('button', { name: 'Move 0001 up' }));
+    await waitFor(() => {
+      expect(ids().slice(-3)).toEqual(['1', '9', '2']);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Move 0009 down' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move 0002 to the top' }));
+    await waitFor(() => {
+      expect(db.posts).toHaveLength(3);
+    });
+    expect(db.posts).toEqual([
+      { url: '/api/tickets/1/actions', body: { action: 'move', up: true, revision: 1 } },
+      { url: '/api/tickets/9/actions', body: { action: 'move', down: true, revision: 1 } },
+      { url: '/api/tickets/2/actions', body: { action: 'move', top: true, revision: 1 } },
+    ]);
+
+    db.refuse = {
+      status: 422,
+      type: 'ValidationError',
+      message: 'Ticket 0001 is already first.',
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'Move 0001 up' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Ticket 0001: Ticket 0001 is already first.',
+    );
+  });
+
   it('files a ticket for a known checkout and opens it', async () => {
     mount('#/tickets');
     await table();
@@ -633,6 +666,7 @@ describe('factory status', () => {
       stop: { next: true, now: false },
       current: {
         ticket: '0003',
+        pick: 'ready',
         job: 'job-00000003',
         repo: ALPHA,
         stage: 'build',
@@ -662,6 +696,7 @@ describe('factory status', () => {
       stop: { next: false, now: true },
       current: {
         ticket: '0005',
+        pick: null,
         job: 'job-00000005',
         repo: ALPHA,
         stage: 'needs-human',

@@ -92,7 +92,7 @@ export function formatStatus(s: RunnerStatus): string {
   }
   if (s.current !== null) {
     const c = s.current;
-    lines.push(`ticket      ${c.ticket}`);
+    lines.push(`ticket      ${c.ticket}${c.pick === null ? '' : ` (pick ${c.pick})`}`);
     if (c.job !== null) {
       lines.push(`job         ${c.job} ${c.stage ?? '?'}/${c.status ?? '?'} (${c.repo ?? '?'})`);
     }

@@ -244,11 +244,17 @@ export interface JobDetailView {
   /** Dashboard actions the workflow allows in this state (the server re-checks on POST). */
   actions: DashboardAction[];
   /**
-   * The answers the escalating session offered (`currentChoices`): the newest `job.blocked`
-   * event's choices while the job waits in needs-human, in order; null otherwise. Answered with
-   * the `answer` action by index; `action` is what that runs, `available` whether it is in `actions`.
+   * The answers a job waiting in needs-human offers (`currentChoices`): the newest `job.blocked`
+   * event's choices, with the default primary first when none of them continues the job; null
+   * otherwise. Answered with the `answer` action by index; `action` is what that runs,
+   * `available` whether it is in `actions`.
    */
   choices: ChoiceView[] | null;
+  /**
+   * While choices are offered: what happens after an answer (`afterAction`), "the controller
+   * continues it" or the command a person runs; null otherwise.
+   */
+  afterAction: string | null;
   /**
    * What reports merge conflicts with the base (approve, pr, ci, or a completed job with an open
    * PR not yet superseded): files from the local base ref probe and/or GitHub's last recorded

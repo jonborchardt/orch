@@ -14,8 +14,10 @@ import {
   blockReasons,
   DEFAULT_AREAS,
   dependencyPath,
+  type MoveTo,
   orderTickets,
   parseTicketId,
+  planMove,
   type Schedulable,
   ticketKey,
   ticketTransition,
@@ -80,6 +82,73 @@ describe('pure rules', () => {
     expect(orderTickets([t(5, { area: 'b' }), t(6, { area: 'a' })]).map((x) => x.id)).toEqual([
       6, 5,
     ]);
+  });
+
+  it('puts ranked tickets first, lowest rank first, dependencies still before them', () => {
+    const order = (all: Schedulable[]) => orderTickets(all).map((x) => x.id);
+    // (a) a ranked P4 beats an unranked P1; lower rank first.
+    expect(
+      order([t(1, { priority: 'P1' }), t(2, { priority: 'P4', rank: 2 }), t(3, { rank: 1 })]),
+    ).toEqual([3, 2, 1]);
+    // (b) a ranked ticket never passes its open unranked dependency.
+    expect(order([t(1, { rank: 1, dependsOn: [2] }), t(2, { priority: 'P4' })])).toEqual([2, 1]);
+    // (c) after the ranked ones, the unranked keep priority, effort, area, id.
+    expect(
+      order([
+        t(1, { priority: 'P2' }),
+        t(2, { rank: 7 }),
+        t(3, { priority: 'P1', effort: 2 }),
+        t(4, { priority: 'P1', effort: 0.5 }),
+        t(5, { priority: 'P2', area: 'admin' }),
+      ]),
+    ).toEqual([2, 4, 3, 5, 1]);
+    // (d) the dependency inherits its dependent's place: Y, X before every other ticket.
+    expect(
+      order([
+        t(1, { priority: 'P1' }),
+        t(2, { rank: 2 }),
+        t(3, { rank: 1, dependsOn: [4] }),
+        t(4, { priority: 'P4' }),
+        t(5, { rank: 3 }),
+        t(6, { priority: 'P1' }),
+      ]),
+    ).toEqual([4, 3, 2, 5, 1, 6]);
+  });
+
+  it('plans moves as rank writes and refuses the ones that break the order', () => {
+    const all = [
+      t(1, { priority: 'P1' }),
+      t(2, { priority: 'P2' }),
+      t(3, { priority: 'P3', dependsOn: [2] }),
+      t(4, { priority: 'P4' }),
+      t(5, { status: 'done' }),
+    ];
+    const after = (id: number, to: MoveTo) => {
+      const ranks = new Map(planMove(all, id, to).map((w) => [w.id, w.rank]));
+      return orderTickets(all.map((x) => ({ ...x, rank: ranks.get(x.id) ?? null }))).map(
+        (x) => x.id,
+      );
+    };
+    expect(orderTickets(all).map((x) => x.id)).toEqual([1, 2, 3, 4]);
+    expect(after(4, 'top')).toEqual([4, 1, 2, 3]);
+    expect(after(3, 'top')).toEqual([2, 3, 1, 4]);
+    expect(after(2, 'up')).toEqual([2, 1, 3, 4]);
+    expect(after(1, 'down')).toEqual([2, 1, 3, 4]);
+    expect(after(4, { before: 2 })).toEqual([1, 4, 2, 3]);
+    expect(after(1, { before: 4 })).toEqual([2, 3, 1, 4]);
+    // Every ticket above the moved one is ranked.
+    expect(planMove(all, 4, { before: 3 }).map((w) => w.id)).toEqual([1, 2, 4]);
+    // (e) refusals.
+    const refused = (id: number, to: MoveTo) => () => planMove(all, id, to);
+    expect(refused(1, 'up')).toThrow(/already first/);
+    expect(refused(4, 'down')).toThrow(/already last/);
+    expect(refused(3, 'up')).toThrow(/depends on 0002/);
+    expect(refused(3, { before: 1 })).toThrow(/depends on 0002/);
+    expect(refused(2, 'down')).toThrow(/0003 depends on it/);
+    expect(refused(5, 'top')).toThrow(/not open/);
+    expect(refused(1, { before: 5 })).toThrow(/not open/);
+    expect(refused(1, { before: 1 })).toThrow(/itself/);
+    expect(refused(1, 'up')).toThrow(ValidationError);
   });
 
   it('finds the path that would close a dependency cycle', () => {

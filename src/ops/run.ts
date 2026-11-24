@@ -16,8 +16,10 @@ import {
   ToolError,
   ValidationError,
 } from '../core/errors.ts';
+import { claudeLimit } from '../core/claude-limit.ts';
 import { jobArtifactDir } from '../core/paths.ts';
-import { ticketKey } from '../core/tickets.ts';
+import { leaseExpired } from '../core/ownership.ts';
+import { orderTickets, ticketKey } from '../core/tickets.ts';
 import { endsRun, now, personMergeStep, TERMINAL_STATUSES } from '../core/workflow.ts';
 import {
   type ChildExit,
@@ -39,6 +41,7 @@ import { mailWatermark, reportJobMail } from './mail.ts';
 import { mergeAuthorized, mergeJob } from './merge.ts';
 import {
   acquireRunnerLock,
+  awaitsPerson,
   childIdentity,
   childMayBeAlive,
   clearStop,
@@ -67,6 +70,8 @@ export const TRANSIENT_ATTEMPTS = 5;
 export const RETRY_SECONDS = 30;
 const POLL_MS = 2000;
 const BEAT_MS = 30_000;
+/** The stop code of a child that hit a Claude usage or rate limit; the run stays resumable. */
+const USAGE_LIMIT = 'usage-limit';
 
 export interface RunOptions {
   /** Starts the Claude child; tests replace it. */
@@ -161,6 +166,9 @@ function leave(store: Store, jobId: string, note?: (job: Job) => Note | null): s
     return (err as Error).message;
   }
 }
+
+/** How the queue took the ticket, for a `runner.*` payload; absent for `orch do`. */
+const pickOf = (session: RunnerSession) => (session.pick ? { pick: session.pick } : {});
 
 function leaveJob(run: Run, jobId: string, note?: (job: Job) => Note | null): void {
   run.assertOwned();
@@ -383,9 +391,21 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
         sessionId,
         stderrTail: exit.stderrTail ?? null,
         result: exit.result ?? null,
+        ...pickOf(run.session),
       },
     }));
     if (stopped) return { kind: 'stopped' };
+    // A spent account would fail every ticket the same way: end the run, resumably, before the
+    // exit counts as idle (decision 2026-11-24-usage-limit-ends-run-resumably).
+    const limit = claudeLimit(exit.stderrTail, exit.result);
+    if (limit !== null) {
+      const resets = limit.resetsAt === null ? '' : ` (resets ${limit.resetsAt})`;
+      return {
+        kind: 'blocked',
+        code: USAGE_LIMIT,
+        reason: `Claude ${limit.limit} reached${resets}; orch resume continues the session`,
+      };
+    }
     run.log(
       `  claude: exited (${exit.error ?? `code ${String(exit.code ?? exit.signal)}`}); ` +
         `job is ${after.stage}/${after.status}`,
@@ -494,7 +514,15 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
           ? null
           : {
               type: 'runner.stopped',
-              payload: { outcome, code, reason, stage: job.stage, status: job.status, next },
+              payload: {
+                outcome,
+                code,
+                reason,
+                stage: job.stage,
+                status: job.status,
+                next,
+                ...pickOf(session),
+              },
             },
       );
     }
@@ -570,7 +598,10 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       if (r.kind === 'stopped') {
         return out('stopped', 'stopped on request; the job is kept as it is', jobId, 'orch resume');
       }
-      if (r.kind === 'blocked') return out('blocked', r.reason, jobId, retry, r.code);
+      if (r.kind === 'blocked') {
+        const next = r.code === USAGE_LIMIT ? 'orch resume' : retry;
+        return out('blocked', r.reason, jobId, next, r.code);
+      }
       const after = getJob(store.db, jobId);
       if (after.status === 'cancelled') {
         return out('blocked', `job ${jobId} was cancelled`, jobId, `orch ticket reopen ${key}`);
@@ -582,7 +613,9 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
           jobId,
           after.returnStage === 'spec'
             ? specResumeSteps(jobId, jobArtifactDir(jobId, store.paths), ticketId)
-            : `decide it on the dashboard (orch ui), then orch do ${key}`,
+            : session.mode === 'queue'
+              ? `decide it on the dashboard (orch ui): this orch start session takes it again; once it has ended, orch do ${key}`
+              : `decide it on the dashboard (orch ui), then orch do ${key}`,
         );
       }
       const m = await merge(run, jobId);
@@ -622,17 +655,54 @@ const passesOver = (r: TicketResult): boolean =>
   r.outcome !== 'done' && r.outcome !== 'stopped' && !endsRun(r.code);
 
 /**
- * Ready tickets, best first, one at a time, until none is left, a stop was requested, or one
- * ended with a run-wide outcome. Any other ticket that could not be finished is passed over for
- * the rest of the session (`passesOver`); its dependents are not ready until it is done.
- * Returns why it ended, or null when `orch stop` interrupted it.
+ * Whether the queue continues this in-progress ticket's job (decision
+ * 2026-11-24-queue-resumes-stranded-tickets): active, pending or running, not waiting for a
+ * person, and nobody holds a live lease on it. Read from the job row, never from events.
+ */
+function stranded(store: Store, jobId: string | null): boolean {
+  if (jobId === null) return false;
+  const job = getJob(store.db, jobId);
+  return (
+    (job.status === 'pending' || job.status === 'running') &&
+    job.stage !== 'needs-human' &&
+    job.stage !== 'completed' &&
+    (job.ownerSession === null || leaseExpired(job, now()))
+  );
+}
+
+/**
+ * Whether a person moved the job on from needs-human: it left that stage, was not cancelled, and
+ * no live lease holds it.
+ */
+function movedOn(store: Store, jobId: string | null): boolean {
+  if (jobId === null) return false;
+  try {
+    const job = getJob(store.db, jobId);
+    return (
+      job.stage !== 'needs-human' &&
+      job.status !== 'cancelled' &&
+      (job.ownerSession === null || leaseExpired(job, now()))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One ticket at a time, until none is left, a stop was requested, or one ended with a run-wide
+ * outcome. First an escalation a person has since decided (`awaitsPerson`, `movedOn`), taken
+ * again; else a stranded in-progress ticket (`stranded`); else the best ready one. Any other
+ * ticket that could not be finished is passed over for the rest of the session (`passesOver`);
+ * its dependents are not ready until it is done. Returns why it ended, or null when `orch stop`
+ * interrupted it.
  */
 async function runQueue(
   run: Run,
-  attempt: (ticketId: number) => Promise<TicketResult>,
+  attempt: (ticketId: number, pick: RunnerSession['pick']) => Promise<TicketResult>,
 ): Promise<string | null> {
   const { store, session } = run;
-  // Passed-over tickets stay passed over for the session, across `orch resume` too.
+  // Passed-over tickets stay passed over for the session, across `orch resume` too (only a
+  // decided escalation is taken again, from `session.results`).
   const isHuman = (r: TicketResult): boolean => r.outcome === 'needs-human';
   const passed = new Set([
     ...session.skipped.map((s) => s.ticketId),
@@ -641,11 +711,30 @@ async function runQueue(
   for (;;) {
     if (run.stopNow()) return null;
     if (stopRequests(store.paths).next) return 'stopped after the current ticket (orch stop next)';
-    const ready = listTickets(store, {
-      view: 'ready',
-      ...(session.repo === null ? {} : { repo: session.repo }),
-    }).tickets;
-    const next = ready.find((t) => !passed.has(t.id));
+    // A ticket passed over for a person whose job a person has since moved on is taken again
+    // before anything else (decision 2026-11-24-default-needs-human-choices).
+    const again = session.results.find((r) => awaitsPerson(r) && movedOn(store, r.jobId));
+    if (again !== undefined) {
+      run.log(
+        `ticket ${ticketKey(again.ticketId)} taken again: a person moved job ${again.jobId ?? ''} on`,
+      );
+      passed.delete(again.ticketId);
+      const r = await attempt(again.ticketId, 'resume');
+      if (r.outcome === 'stopped') return null;
+      if (r.outcome === 'done') continue;
+      if (!passesOver(r)) return `ticket ${ticketKey(again.ticketId)} is ${r.outcome}: ${r.reason}`;
+      passed.add(again.ticketId);
+      continue;
+    }
+    const scope = session.repo === null ? {} : { repo: session.repo };
+    // `orderTickets` ranks open tickets only, so the in-progress ones are ranked as if open.
+    const inProgress = listTickets(store, { view: 'all', status: 'in-progress', ...scope }).tickets;
+    const resume = orderTickets(inProgress.map((t) => ({ ...t, status: 'open' as const }))).find(
+      (t) => !passed.has(t.id) && stranded(store, t.activeJob),
+    );
+    const next =
+      resume ??
+      listTickets(store, { view: 'ready', ...scope }).tickets.find((t) => !passed.has(t.id));
     if (next === undefined) {
       const human = session.results.filter(isHuman).length;
       const over = passed.size - human;
@@ -664,7 +753,12 @@ async function runQueue(
       run.save();
       continue;
     }
-    const r = await attempt(next.id);
+    run.log(
+      resume === undefined
+        ? `ticket ${next.key}: new from ready`
+        : `ticket ${next.key}: resuming in-progress job ${resume.activeJob ?? '?'}`,
+    );
+    const r = await attempt(next.id, resume === undefined ? 'ready' : 'resume');
     if (r.outcome === 'stopped') return null;
     if (r.outcome === 'done') continue;
     if (!passesOver(r)) return `ticket ${next.key} is ${r.outcome}: ${r.reason}`;
@@ -742,8 +836,9 @@ async function drive(
   }, BEAT_MS);
   beat.unref();
 
-  const attempt = async (ticketId: number): Promise<TicketResult> => {
+  const attempt = async (ticketId: number, pick: RunnerSession['pick']): Promise<TicketResult> => {
     session.ticketId = ticketId;
+    session.pick = pick ?? null;
     session.jobId = null;
     run.save();
     const mark = mailWatermark(store);
@@ -751,9 +846,10 @@ async function drive(
     run.assertOwned();
     await reportJobMail(store, mark);
     session.results = [...session.results.filter((r) => r.ticketId !== ticketId), result];
-    // A stopped ticket stays the one in flight, for `orch resume`.
-    if (result.outcome !== 'stopped') {
+    // A stopped or limit-hit ticket stays the one in flight, for `orch resume`.
+    if (result.outcome !== 'stopped' && result.code !== USAGE_LIMIT) {
       session.ticketId = null;
+      session.pick = null;
       session.jobId = null;
     }
     run.save();
@@ -765,7 +861,8 @@ async function drive(
     let stopped = false;
     const first = session.mode === 'ticket' ? session.ticket : resuming ? session.ticketId : null;
     if (first !== null) {
-      const r = await attempt(first);
+      // `orch resume` keeps how the ticket in flight was taken.
+      const r = await attempt(first, session.mode === 'ticket' ? null : session.pick);
       if (r.outcome === 'stopped') stopped = true;
       else if (session.mode === 'ticket' || (r.outcome !== 'done' && !passesOver(r))) {
         reason = `ticket ${ticketKey(first)} is ${r.outcome}: ${r.reason}`;
@@ -780,8 +877,18 @@ async function drive(
       clearStop(paths, 'now');
       return summarize(session, 'stopped on request; orch resume continues the session', true);
     }
+    // Only a limit-hit ticket is still in flight here (`attempt`): the run ended on it, and the
+    // session stays unfinished with it, so `orch resume` continues it.
+    const limited = session.results.find(
+      (r) => r.ticketId === session.ticketId && r.code === USAGE_LIMIT,
+    );
+    if (limited !== undefined) {
+      run.save();
+      return summarize(session, limited.reason, false);
+    }
     session.finished = { at: now(), reason };
     session.ticketId = null;
+    session.pick = null;
     session.jobId = null;
     run.save();
     clearStop(paths, 'next');
@@ -990,6 +1097,8 @@ export interface RunnerStatus {
   stop: StopRequests;
   current: {
     ticket: string;
+    /** How the queue took it (`RunnerSession.pick`); null for `orch do` and older records. */
+    pick: 'resume' | 'ready' | null;
     job: string | null;
     repo: string | null;
     stage: Job['stage'] | null;
@@ -1023,6 +1132,7 @@ export function runnerStatus(store: Store): RunnerStatus {
     }
     current = {
       ticket: ticketKey(session.ticketId),
+      pick: session.pick ?? null,
       job: session.jobId,
       repo: job?.repo ?? null,
       stage: job?.stage ?? null,
@@ -1044,15 +1154,17 @@ export function runnerStatus(store: Store): RunnerStatus {
   const after =
     stop.next || session?.mode === 'ticket' ? 'then exit' : 'then take the next ready ticket';
   let next: string;
-  if (state === 'idle') next = 'Nothing is running. orch start takes the next ready ticket.';
-  else if (state === 'interrupted') {
+  if (state === 'idle') {
+    next =
+      'Nothing is running. orch start resumes a stranded in-progress ticket first, then takes the next ready one.';
+  } else if (state === 'interrupted') {
     next = current?.childAlive
       ? `The controller is gone but its Claude process (PID ${String(current.childPid)}) may still be running; ` +
         'orch resume checks whether that PID is still the same process, and continues once it is not.'
       : 'The controller is gone. orch resume continues the session; orch stop discards it.';
   } else if (stop.now) next = 'Stopping now: the current job is kept as it is.';
   else if (current === null)
-    next = `Select the next ready ticket${stop.next ? ', unless stopped' : ''}.`;
+    next = `Resume a stranded in-progress ticket, else select the next ready one${stop.next ? ', unless stopped' : ''}.`;
   else {
     const doing = {
       agent: 'Run the job through the factory',
