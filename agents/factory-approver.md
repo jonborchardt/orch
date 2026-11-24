@@ -57,8 +57,13 @@ ticket; `orch` refuses to complete approval while an unchecked box has neither a
 `- [ ]` line here, and that line is the enforced record of the reason. When a box is handed to a
 follow-up ticket that already exists, write `- [ ] <item> — deferred to <key>: <why>` (exactly
 `deferred to`, then the follow-up's id such as `0116`); the coordinator removes the box from the
-ticket and notes the hand-off, so the ticket closes on its merge. Any other wording keeps the box
-and the ticket stays open. Write `none` when there is no ticket or no box.
+ticket and notes the hand-off, so the ticket closes on its merge. When the diff or the evidence
+shows a box's condition is false or its branch was not taken (one side of an either/or), write
+`- [ ] <item> — does not apply: <why>` (exactly `does not apply:`, then a non-empty why); the
+coordinator removes the box from the ticket and runs
+`orch ticket note <key> "<item>: does not apply: <why>"`, so the ticket closes on its merge. Never use it for work left undone: that is a
+plain `- [ ] <item> — <reason>` or a deferral. Any other wording keeps the box and the ticket
+stays open. Write `none` when there is no ticket or no box.
 
 Write `decision.md` with headings `Examined`, `Acceptance criteria`, `Outstanding findings`,
 `Scope changes`, `Ticket checklist`, `Rationale`, and exactly one final line `DECISION: APPROVE`,

@@ -249,6 +249,7 @@ dropped, whichever reviewer raised it.
 - [x] <item, copied verbatim from the ticket> — <acceptance evidence>
 - [ ] <item, copied verbatim from the ticket> — <reason it is not delivered by this PR>
 - [ ] <item, copied verbatim from the ticket> — deferred to <follow-up key>: <why>
+- [ ] <item, copied verbatim from the ticket> — does not apply: <why the PR shows it false>
 
 ## Rationale
 
@@ -275,7 +276,11 @@ A box handed to a follow-up ticket is `- [ ] <item> — deferred to <key>[: <why
 starts with exactly `deferred to` and a ticket id such as `0116` or `#116`). The coordinator then
 removes the box from the ticket body (or rewrites it as plain text) and notes
 `<item>: deferred to <key>` on the ticket; `complete` is refused until both are done and the
-follow-up is another open or in-progress ticket, so the original closes on its merge. A reason
+follow-up is another open or in-progress ticket, so the original closes on its merge. A box the
+PR shows does not apply (its condition is false, its branch was not taken; never work left undone)
+is `- [ ] <item> — does not apply: <why>` with a non-empty why. The coordinator removes the box
+from the body the same way and runs `orch ticket note <key> "<item>: does not apply: <why>"`;
+`complete` is refused until both are done, so the ticket closes on its merge. A reason
 worded any other way keeps the box, and the ticket stays open after the merge.
 
 ## pr.md (also used as the PR body)

@@ -37,7 +37,9 @@ area, a dependency cycle, a closed ticket); exit 3 is no such id.
 1. `orch ticket list --repo . --json` and `orch ticket area list --json`: every ticket of this
    repository (id, title, area, status; no bodies) and the areas. Never fetch every body.
 2. Split the text into distinct todos only when it plainly holds more than one. Items that must land together are one
-   todo with a checklist in What. **Question 1** (only if the split is ambiguous): "One todo or two: X and Y?"
+   todo with a checklist in What. An either/or or conditional item is one box for the decision
+   ("decide whether X is intended, then fix or document it"), never one box per branch: a branch
+   not taken would keep the ticket open after its merge. **Question 1** (only if the split is ambiguous): "One todo or two: X and Y?"
 3. Dedupe against the list. Same subject as an **open** or in-progress ticket: **question 2**, "Merge into NNNN
    (title)?" Yes: `orch ticket show NNNN --json`, append the text to its What as a checklist item, write the body back
    with `orch ticket edit NNNN --body-file -`, add `orch ticket note NNNN "<what was merged>"`, file nothing; its

@@ -7,7 +7,12 @@ import { rmSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from 'vitest';
 
 import { ValidationError } from '../src/core/errors.ts';
-import { deferredItems, ticketKey, unaccountedItems } from '../src/core/tickets.ts';
+import {
+  deferredItems,
+  inapplicableItems,
+  ticketKey,
+  unaccountedItems,
+} from '../src/core/tickets.ts';
 import { planJob, startJob } from '../src/ops/factory.ts';
 import { addTicket, ticketAction } from '../src/ops/tickets.ts';
 import { getJob } from '../src/storage/jobs.ts';
@@ -81,6 +86,22 @@ describe('deferredItems', () => {
       'Deferred to 0116',
     ]) {
       expect(deferredItems(section(`- [ ] a — ${reason}`))).toEqual([]);
+    }
+  });
+});
+
+describe('inapplicableItems', () => {
+  it('reads the item and why of a does-not-apply line, which still accounts for the item', () => {
+    const d = section('- [ ] a — does not apply: branch not taken');
+    expect(inapplicableItems(d)).toEqual([{ item: 'a', why: 'branch not taken' }]);
+    expect(unaccountedItems('- [ ] a', d)).toEqual([]);
+  });
+
+  it('ignores a missing why, a later phrase, ticked lines, and lines outside the section', () => {
+    expect(inapplicableItems('# Decision\n\n- [ ] a — does not apply: x\n')).toEqual([]);
+    expect(inapplicableItems(section('- [x] a — does not apply: x'))).toEqual([]);
+    for (const reason of ['does not apply', 'does not apply: ', 'it does not apply: x']) {
+      expect(inapplicableItems(section(`- [ ] a — ${reason}`))).toEqual([]);
     }
   });
 });
@@ -198,6 +219,26 @@ describe('completing approve for a ticket job', () => {
     expect(go(store, c, 'complete').stage).toBe('pr');
   });
 
+  it('a box that does not apply must leave the body and be noted before approve completes', () => {
+    const c = toApprove(BODY, section('- [x] a — A\n- [ ] b — does not apply: branch not taken'));
+    tick(c.ticket, '## What\n\n- [x] a\n- [ ] b\n');
+    const still = refusal(c);
+    expect(still).toContain('"b" does not apply but is still an unchecked box');
+    expect(still).toContain('orch ticket edit 0001 --body-file -');
+
+    tick(c.ticket, '## What\n\n- [x] a\n\nb (does not apply)\n');
+    note(c.ticket, 'unrelated');
+    expect(refusal(c)).toContain('orch ticket note 0001 "b: does not apply');
+
+    note(c.ticket, 'b: does not apply: branch not taken');
+    expect(go(store, c, 'complete').stage).toBe('pr');
+  });
+
+  it('a box that does not apply is refused without a note even when no box remains', () => {
+    const c = toApprove('- [x] a\n', section('- [ ] a — does not apply: condition false'));
+    expect(refusal(c)).toContain('orch ticket note 0001 "a: does not apply: condition false"');
+  });
+
   it('a deferral to a missing, own, or finished ticket is refused with no box left', () => {
     const c = toApprove('- [x] a\n', section('- [ ] a — deferred to 0099'));
     note(c.ticket, 'a: deferred to 0099, 0001, 0002, 0003, 0004');
@@ -227,6 +268,7 @@ describe('completing approve for a ticket job', () => {
     const plan = planJob(store, c.id);
     expect(plan.reason).toContain('Ticket 0001 has unchecked checklist item(s): "a", "b"');
     expect(plan.reason).toContain('deferred to <key>');
+    expect(plan.reason).toContain('does not apply: <why>');
     const at = (s: string) => plan.commands.findIndex((x) => x.includes(s));
     expect(at('orch ticket edit 0001 --body-file -')).toBeGreaterThan(at('decision.md'));
     expect(at('orch ticket note 0001')).toBeGreaterThan(at('orch ticket edit'));
