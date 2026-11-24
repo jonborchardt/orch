@@ -56,7 +56,12 @@ export async function runRecover(
       process.on('SIGINT', abort);
       process.on('SIGTERM', abort);
       try {
-        return await runWorker(store, { once: o.once, signal: stop.signal, beat: hold?.beat });
+        return await runWorker(store, {
+          once: o.once,
+          signal: stop.signal,
+          beat: hold?.beat,
+          owned: hold?.owned,
+        });
       } finally {
         process.off('SIGINT', abort);
         process.off('SIGTERM', abort);
