@@ -113,6 +113,7 @@ export const BLOCKER_LABEL: Record<BlockerKind, string> = {
   escalated: 'Escalated',
   ci: 'CI stopped',
   waiting: 'Waiting for a session',
+  stopped: 'Stopped by the controller',
   cancelled: 'Cancelled',
 };
 

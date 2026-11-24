@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { prPhase } from '../src/core/workflow.ts';
-import { ciSummary, outcomeOf, progressOf, timelineOf } from '../src/server/status.ts';
+import {
+  BLOCKER_EVENTS,
+  blockerOf,
+  ciSummary,
+  outcomeOf,
+  progressOf,
+  timelineOf,
+} from '../src/server/status.ts';
 import type { CiView, Progress } from '../src/server/types.ts';
 import type { Event, Job } from '../src/storage/schema.ts';
 
@@ -219,6 +226,84 @@ describe('progressOf and timelineOf', () => {
     }
     // A cancelled job never shows Done as reached.
     expect(progressOf(row('ci', 'cancelled'), new Map()).steps[7]?.state).toBe('not-started');
+  });
+});
+
+describe('blockerOf and runner.stopped', () => {
+  type BJob = Parameters<typeof blockerOf>[0];
+  const idle = (over: Partial<BJob> = {}): BJob => ({
+    stage: 'build',
+    status: 'pending',
+    leaseExpiresAt: null,
+    ownerSession: null,
+    round: 0,
+    ciRepairs: 0,
+    maxCiRepairs: 2,
+    prState: null,
+    ...over,
+  });
+  const reason = 'Two Claude sessions in a row changed nothing.';
+  const stop = (over: Record<string, unknown> = {}) =>
+    ev('runner.stopped', {
+      outcome: 'blocked',
+      code: 'no-progress',
+      reason,
+      stage: 'build',
+      status: 'pending',
+      next: 'orch do 0088',
+      ...over,
+    });
+  const evidence = (...events: Event[]) => ({
+    events: newest(...events),
+    artifacts: [],
+    latestRun: null,
+  });
+  const waiting = { kind: 'waiting', summary: 'No session owns this job', detail: null };
+
+  it('AC1/AC5: an idle unowned job whose last news is the stop shows the stop', () => {
+    expect(BLOCKER_EVENTS).toContain('runner.stopped');
+    const b = blockerOf(idle(), 'idle', evidence(ev('ci.observed', {}), stop()));
+    expect(b).toEqual({
+      kind: 'stopped',
+      summary: expect.stringContaining('no-progress') as string,
+      detail: reason,
+      next: 'orch do 0088',
+    });
+  });
+
+  it('AC2: a newer loaded event, or a different stage or status, supersedes the stop', () => {
+    expect(blockerOf(idle(), 'idle', evidence(stop(), ev('ci.observed', {})))).toEqual(waiting);
+    expect(blockerOf(idle({ stage: 'review' }), 'idle', evidence(stop()))).toEqual(waiting);
+    expect(blockerOf(idle(), 'idle', evidence(stop({ status: 'running' })))).toEqual(waiting);
+  });
+
+  it('AC3: a completed unmerged job shows a matching stop; a merged one shows nothing', () => {
+    const done = idle({ stage: 'completed', status: 'completed', prState: 'ready' });
+    const ended = evidence(
+      ev('job.completed', {}),
+      stop({ code: 'workflow-changed', stage: 'completed', status: 'completed', next: null }),
+    );
+    expect(blockerOf(done, 'completed', ended)).toMatchObject({
+      kind: 'stopped',
+      summary: expect.stringContaining('workflow-changed') as string,
+      next: null,
+    });
+    expect(blockerOf({ ...done, prState: 'merged' }, 'completed', ended)).toBeNull();
+  });
+
+  it('AC4: blocked, failed, interrupted, cancelled and running blockers ignore the stop', () => {
+    const cases = [
+      ['needs-human', 'blocked', 'blocked'],
+      ['build', 'failed', 'failed'],
+      ['build', 'interrupted', 'interrupted'],
+      ['build', 'cancelled', 'cancelled'],
+      ['build', 'running', 'running'],
+    ] as const;
+    for (const [stage, status, state] of cases) {
+      const job = idle({ stage, status, ownerSession: state === 'running' ? 's' : null });
+      const without = blockerOf(job, state, evidence());
+      expect(blockerOf(job, state, evidence(stop({ stage, status })))).toEqual(without);
+    }
   });
 });
 
