@@ -148,10 +148,41 @@ describe('orch job transition escalate --choice', () => {
     expect(getJob(store.db, id)).toMatchObject({ stage: before.stage, status: before.status });
   });
 
-  it('records no choices key without --choice (AC3)', () => {
+  it('records the default choices without --choice (ticket 0132)', () => {
     const { id, token } = running('approve');
     transitionJob(store, id, 'escalate', { token, reason: 'r' });
-    expect(blocked(id)[0]?.payload).toEqual({ from: 'approve', reason: 'r' });
+    expect(blocked(id)[0]?.payload).toEqual({
+      from: 'approve',
+      reason: 'r',
+      choices: [
+        { kind: 'resume', to: 'approve', label: 'Retry approve' },
+        { kind: 'cancel', label: 'Cancel' },
+      ],
+    });
+  });
+
+  it('accepts an accept-policy choice, and answering it runs Accept policy (ticket 0132 AC4)', () => {
+    const { id, token } = running('build');
+    const r = cli(
+      'job',
+      'transition',
+      id,
+      'escalate',
+      '--reason',
+      'r',
+      '--choice',
+      'accept-policy=Accept the checks',
+      '--token',
+      token,
+    );
+    expect(r.code, r.err).toBe(0);
+    expect(blocked(id)[0]?.payload['choices']).toEqual([
+      { kind: 'accept-policy', label: 'Accept the checks' },
+    ]);
+    // Accept policy reads the job's worktree; this one has none, so the action's own refusal shows.
+    expect(() => dashboardAction(store, id, { action: 'answer', choice: 0 })).toThrow(
+      'The job has no worktree to read factory.json from.',
+    );
   });
 });
 
@@ -184,7 +215,9 @@ describe('dashboard answer', () => {
     (_name, kind, action) => {
       const answered = escalated('approve', [{ kind, label: `Do ${kind}` }], { round: 1 });
       const direct = escalated('approve', undefined, { round: 1 });
-      dashboardAction(store, answered, { action: 'answer', choice: 0 });
+      // A lone cancel gets the default primary in front of it (ticket 0132).
+      const choice = kind === 'cancel' ? 1 : 0;
+      dashboardAction(store, answered, { action: 'answer', choice });
       dashboardAction(store, direct, { action, reason: 'x' });
       expect(shape(answered)).toEqual(shape(direct));
       expect(types(answered)).toEqual(types(direct));
@@ -203,7 +236,8 @@ describe('dashboard answer', () => {
   it('refuses an out-of-range index, a job not in needs-human, and an action the workflow refuses (AC7)', () => {
     const id = escalated('approve', [{ kind: 'cancel', label: 'Drop it' }]);
     const before = getJob(store.db, id);
-    for (const choice of [1, -1, undefined]) {
+    // [the default primary, Drop it]
+    for (const choice of [2, -1, undefined]) {
       expect(() => dashboardAction(store, id, { action: 'answer', choice })).toThrow(
         ValidationError,
       );
@@ -215,7 +249,7 @@ describe('dashboard answer', () => {
     dashboardAction(store, resumed, { action: 'approve', reason: 'go' });
     const moved = getJob(store.db, resumed);
     expect(() => dashboardAction(store, resumed, { action: 'answer', choice: 0 })).toThrow(
-      /needs-human with recorded choices/,
+      /Only a job waiting in needs-human can be answered/,
     );
     expect(getJob(store.db, resumed)).toEqual(moved);
 
@@ -227,7 +261,8 @@ describe('dashboard answer', () => {
       prState: 'draft',
     });
     const held = getJob(store.db, failing);
-    expect(() => dashboardAction(store, failing, { action: 'answer', choice: 0 })).toThrow(
+    // [the default primary, Close it out]: accept-delivery does not continue the job.
+    expect(() => dashboardAction(store, failing, { action: 'answer', choice: 1 })).toThrow(
       /Cannot accept delivery: required checks are failing/,
     );
     expect(getJob(store.db, failing)).toEqual(held);

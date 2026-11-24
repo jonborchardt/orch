@@ -95,7 +95,14 @@ export type Action = (typeof ACTIONS)[number];
  * What a session escalating with `--choice` may offer the human: each kind is one existing
  * dashboard decision (decision 2026-11-23-needs-human-choices). `resume` names its stage.
  */
-export const CHOICE_KINDS = ['resume', 'rework', 'review', 'accept-delivery', 'cancel'] as const;
+export const CHOICE_KINDS = [
+  'resume',
+  'rework',
+  'review',
+  'accept-delivery',
+  'accept-policy',
+  'cancel',
+] as const;
 export type ChoiceKind = (typeof CHOICE_KINDS)[number];
 export interface Choice {
   kind: ChoiceKind;
@@ -151,6 +158,67 @@ export function parseChoices(values: readonly string[] | undefined): Choice[] | 
     );
   }
   return out;
+}
+
+/** Kinds that send the job on through the workflow (cancel and a close-out do not). */
+const CONTINUING_KINDS: readonly ChoiceKind[] = ['resume', 'rework', 'review', 'accept-policy'];
+/** `resume --to <stage>`, `resume to <stage>`, `resumes --to <stage>`, any case. */
+const NAMED_STAGE = /\bresumes?\s+(?:--to|to)\s+([a-z-]+)/i;
+
+function resumeChoice(to: Stage): Choice {
+  const verb = to === 'spec' || to === 'build' || to === 'simplify' ? 'Send back to' : 'Retry';
+  return { kind: 'resume', to, label: `${verb} ${to}` };
+}
+
+/**
+ * The answers every needs-human job offers when its escalation recorded none that continue it
+ * (decision 2026-11-24-default-needs-human-choices): the stage the reason names (`completed`:
+ * Accept delivery) first, then `returnStage`; then the buttons a known reason implies; Cancel
+ * last. A fast job never gets a stage outside its resume targets. Pure: a heuristic over the
+ * reason text, mapped only onto existing actions with their own refusals.
+ */
+export function defaultChoices(
+  job: { mode?: JobMode | undefined; returnStage: Stage | null },
+  reason: string | null | undefined,
+): Choice[] {
+  const text = reason ?? '';
+  const reachable = (s: Stage) =>
+    s !== 'needs-human' && (job.mode !== 'fast' || FAST_RESUME_TARGETS.includes(s));
+  const named = NAMED_STAGE.exec(text)?.[1]?.toLowerCase() as Stage | undefined;
+  const back =
+    job.returnStage !== null && job.returnStage !== 'completed' && reachable(job.returnStage)
+      ? job.returnStage
+      : 'build';
+  const out: Choice[] = [];
+  if (named === 'completed' && reachable('completed')) {
+    out.push({ kind: 'accept-delivery', label: 'Accept delivery' });
+  } else if (named !== undefined && STAGES.includes(named) && reachable(named)) {
+    out.push(resumeChoice(named));
+  }
+  out.push(resumeChoice(back));
+  if (text === MAX_ROUNDS_REASON) out.push(resumeChoice('build'), resumeChoice('review'));
+  if (/verification policy/i.test(text))
+    out.push({ kind: 'accept-policy', label: 'Accept policy' });
+  out.push({ kind: 'cancel', label: 'Cancel' });
+  return out.filter(
+    (c, i) =>
+      (c.to === undefined || reachable(c.to)) && out.findIndex((o) => o.label === c.label) === i,
+  );
+}
+
+/**
+ * The choices a needs-human job offers: `recorded` as given when one of them continues the job,
+ * else the default primary in front of them.
+ */
+export function withDefaultChoice(
+  recorded: readonly Choice[] | undefined,
+  defaults: readonly Choice[],
+): Choice[] {
+  if (recorded === undefined || recorded.length === 0) return [...defaults];
+  if (recorded.some((c) => CONTINUING_KINDS.includes(c.kind))) return [...recorded];
+  const primary = defaults.find((c) => CONTINUING_KINDS.includes(c.kind)) ?? defaults[0];
+  if (primary === undefined) return [...recorded];
+  return [primary, ...recorded.filter((c) => c.label !== primary.label)];
 }
 
 export const TERMINAL_STATUSES: readonly Status[] = ['completed', 'cancelled'];
@@ -571,15 +639,14 @@ export function transition(
             `resumes only to ${FAST_RESUME_TARGETS.join(', ')}`,
         );
       }
-      const payload = { from: stage, reason: ctx.reason ?? null };
+      const reason = ctx.reason ?? null;
+      const choices = withDefaultChoice(
+        ctx.choices,
+        defaultChoices({ mode: job.mode, returnStage: stage }, reason),
+      );
       return {
         patch: { stage: 'needs-human', status: 'blocked', returnStage: stage },
-        events: [
-          {
-            type: 'job.blocked',
-            payload: ctx.choices ? { ...payload, choices: ctx.choices } : payload,
-          },
-        ],
+        events: [{ type: 'job.blocked', payload: { from: stage, reason, choices } }],
       };
     }
 
@@ -663,7 +730,12 @@ export function transition(
             events: [
               {
                 type: 'job.blocked',
-                payload: { from: stage, reason: SCOPE_GAP_REASON, detail: ctx.reason ?? null },
+                payload: {
+                  from: stage,
+                  reason: SCOPE_GAP_REASON,
+                  detail: ctx.reason ?? null,
+                  choices: defaultChoices({ mode: job.mode, returnStage: to }, SCOPE_GAP_REASON),
+                },
               },
             ],
           };
@@ -681,7 +753,15 @@ export function transition(
           events: [
             {
               type: 'job.blocked',
-              payload: { from: stage, reason: MAX_CI_REPAIRS_REASON, detail: ctx.reason ?? null },
+              payload: {
+                from: stage,
+                reason: MAX_CI_REPAIRS_REASON,
+                detail: ctx.reason ?? null,
+                choices: defaultChoices(
+                  { mode: job.mode, returnStage: 'build' },
+                  MAX_CI_REPAIRS_REASON,
+                ),
+              },
             },
           ],
         };
@@ -1118,7 +1198,14 @@ function completeReview(
       patch: { stage: 'needs-human', status: 'blocked', returnStage: 'build' },
       events: [
         { ...completed, payload },
-        { type: 'job.blocked', payload: { from: 'review', reason: MAX_ROUNDS_REASON } },
+        {
+          type: 'job.blocked',
+          payload: {
+            from: 'review',
+            reason: MAX_ROUNDS_REASON,
+            choices: defaultChoices({ mode: job.mode, returnStage: 'build' }, MAX_ROUNDS_REASON),
+          },
+        },
       ],
     };
   }
