@@ -84,6 +84,22 @@ describe('pure rules', () => {
     ]);
   });
 
+  it('places unranked P0 before P1 and P5 after P4, other keys equal', () => {
+    const ids = (all: Schedulable[]) => orderTickets(all).map((x) => x.id);
+    const all = [
+      t(1, { priority: 'P5' }),
+      t(2, { priority: 'P4' }),
+      t(3, { priority: 'P1' }),
+      t(4, { priority: 'P0' }),
+    ];
+    expect(ids(all)).toEqual([4, 3, 2, 1]);
+    // A rank and a dependency still come first.
+    expect(ids([...all, t(5, { priority: 'P5', rank: 1 })])).toEqual([5, 4, 3, 2, 1]);
+    expect(ids([t(1, { priority: 'P5' }), t(2, { priority: 'P0', dependsOn: [1] })])).toEqual([
+      1, 2,
+    ]);
+  });
+
   it('puts ranked tickets first, lowest rank first, dependencies still before them', () => {
     const order = (all: Schedulable[]) => orderTickets(all).map((x) => x.id);
     // (a) a ranked P4 beats an unranked P1; lower rank first.
@@ -272,7 +288,8 @@ describe('create, read, edit', () => {
 
   it('rejects bad values and unknown references, creating nothing', () => {
     for (const bad of [
-      { priority: 'P5' },
+      { priority: 'P6' },
+      { priority: 'P-1' },
       { effort: 4 },
       { effort: 0.025 },
       { type: 'epic' },

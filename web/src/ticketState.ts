@@ -14,7 +14,7 @@ import { type ChipColor, STATE } from './format.ts';
 
 const keys = <K extends string>(o: Record<K, 0>) => Object.keys(o) as K[];
 // Typed by the server's unions: a value added or removed there fails the typecheck here.
-export const PRIORITIES = keys<Priority>({ P1: 0, P2: 0, P3: 0, P4: 0 });
+export const PRIORITIES = keys<Priority>({ P0: 0, P1: 0, P2: 0, P3: 0, P4: 0, P5: 0 });
 export const TYPES = keys<TicketType>({ bug: 0, feature: 0, chore: 0, question: 0 });
 export const STATUSES = keys<TicketStatus>({
   open: 0,
