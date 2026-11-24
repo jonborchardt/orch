@@ -294,4 +294,20 @@ describe('ticket API', () => {
     for (const [request, status] of cases) expect((await request).status).toBe(status);
     expect(await order()).toEqual([4, 2, 5]);
   });
+
+  it('accepts P0 and P5 in a create, an edit, and the priority filter', async () => {
+    const top = await body<TicketView>(
+      post('/api/tickets', { title: 'Top', repo: alpha, priority: 'P0' }),
+      201,
+    );
+    expect(top.priority).toBe('P0');
+    const low = await body<TicketView>(post('/api/tickets', { title: 'Low', repo: alpha }), 201);
+    expect((await body<TicketView>(act(low.id, 'edit', { priority: 'P5' }))).priority).toBe('P5');
+    const only = async (p: string) =>
+      (await body<TicketList>(get(`/api/tickets?priority=${p}`))).tickets.map((t) => t.id);
+    expect(await only('P5')).toEqual([low.id]);
+    expect(await only('P0')).toEqual([top.id]);
+    expect((await get('/api/tickets?priority=P6')).status).toBe(422);
+    expect((await act(low.id, 'edit', { priority: 'P6' })).status).toBe(422);
+  });
 });

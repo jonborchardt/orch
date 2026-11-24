@@ -47,7 +47,7 @@ area, a dependency cycle, a closed ticket); exit 3 is no such id.
    dropped ticket: a new ticket with `--related <that id>`, no question.
 4. Classify each todo: `type` (`bug|feature|chore|question`; a question is a decision to make, not code), `area` (an
    existing area whenever one fits; if none does, `orch ticket area add <name> --description "<d>"` first and say so),
-   `priority` (P1 fix now, P2 next, P3 someday, P4 parked: only when the user says so), `effort` (see **Effort**
+   `priority` (P0 drop everything, P1 fix now, P2 next, P3 someday, P4 parked, P5 below parked; P0, P4 and P5 only when the user says so), `effort` (see **Effort**
    below), `--depends-on` and `--related` by id. Values the text gives (`p1`, `area: api`, `0.25 days`, `3 hours`,
    `depends on 7`, `blocks 9`) are taken as given (hours: divide by 24, round up to the scale); "blocks 9" is
    `orch ticket dep add 9 <new id>` after filing. `--classified user` when the text gave any of area, priority or
@@ -123,6 +123,6 @@ The title is one line. No personal data (names, emails, credentials) in a ticket
   read-only archive of the register that was imported.
 - Picking the id yourself. `orch ticket add` allocates it and prints it.
 - Trying to delete a ticket to undo a mistake. Use `drop` or `dup`; ids are forever.
-- Guessing P4. Parked is the user's call.
+- Guessing P0, P4, or P5. Drop-everything, parked, and below-parked are the user's call.
 - A new area for every item. Choose an existing one unless nothing fits.
 - A fourth question. Guess, mark `auto`, name the shaky guess in the reply.
