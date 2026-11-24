@@ -112,7 +112,7 @@ that command runs.
 A **ticket** is the persistent description of what you want, and nothing about how an attempt is
 going. Its fields (all in `src/core/tickets.ts`): a global id, a title, a Markdown body, the
 repository, a status (`open`, `in-progress`, `done`, `dropped`, `duplicate`; blocked is derived,
-never stored), a type (`bug`, `feature`, `chore`, `question`), an area, a priority (`P1`–`P4`), an
+never stored), a type (`bug`, `feature`, `chore`, `question`), an area, a priority (`P0`–`P5`), an
 effort in 24-hour days of elapsed time (`0.05` to `5`), dependencies, related tickets, `duplicateOf`,
 and an append-only history ([tickets.md](tickets.md#fields)).
 

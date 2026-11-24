@@ -531,14 +531,21 @@ describe('ticket list', () => {
     mount('#/tickets');
     await table();
     db.order = [9, 2, 1];
-    fireEvent.change(screen.getByLabelText('Priority of 0001'), { target: { value: 'P4' } });
+    const values = (label: string) =>
+      within(screen.getByLabelText(label))
+        .getAllByRole('option')
+        .map((o) => (o as HTMLOptionElement).value)
+        .filter(Boolean);
+    expect(values('Priority of 0001')).toEqual(['P0', 'P1', 'P2', 'P3', 'P4', 'P5']);
+    expect(values('Priority')).toEqual(['P0', 'P1', 'P2', 'P3', 'P4', 'P5']);
+    fireEvent.change(screen.getByLabelText('Priority of 0001'), { target: { value: 'P5' } });
     await waitFor(() => {
       expect(ids().slice(-3)).toEqual(['9', '2', '1']);
     });
     expect(db.posts).toEqual([
-      { url: '/api/tickets/1/actions', body: { action: 'edit', priority: 'P4', revision: 1 } },
+      { url: '/api/tickets/1/actions', body: { action: 'edit', priority: 'P5', revision: 1 } },
     ]);
-    expect(screen.getByLabelText('Priority of 0001')).toHaveValue('P4');
+    expect(screen.getByLabelText('Priority of 0001')).toHaveValue('P5');
 
     // A refusal is shown, and the row goes back to what the server holds.
     db.refuse = {
@@ -550,7 +557,7 @@ describe('ticket list', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Ticket 0001: Stale revision: expected 2, ticket 0001 is at 3.',
     );
-    expect(screen.getByLabelText('Priority of 0001')).toHaveValue('P4');
+    expect(screen.getByLabelText('Priority of 0001')).toHaveValue('P5');
   });
 
   it('moves an open ticket with Up, Down, and Top, then shows the order the server gives', async () => {
@@ -861,7 +868,12 @@ describe('ticket detail', () => {
     // The raw Markdown, exactly.
     expect(body).toHaveValue('## What\n\n- [ ] open item\n- [x] finished item\n');
     fireEvent.change(form.getByLabelText('Title'), { target: { value: 'Fix the race for good' } });
-    fireEvent.change(form.getByLabelText('Priority'), { target: { value: 'P2' } });
+    fireEvent.change(form.getByLabelText('Priority'), { target: { value: 'P0' } });
+    expect(
+      within(form.getByLabelText('Priority'))
+        .getAllByRole('option')
+        .map((o) => o.getAttribute('value')),
+    ).toEqual(['P0', 'P1', 'P2', 'P3', 'P4', 'P5']);
     fireEvent.change(form.getByLabelText('Effort (days)'), { target: { value: '2' } });
     fireEvent.change(body, { target: { value: '## What\n\n- [x] open item\n' } });
 
@@ -884,7 +896,7 @@ describe('ticket detail', () => {
         body: {
           action: 'edit',
           title: 'Fix the race for good',
-          priority: 'P2',
+          priority: 'P0',
           effort: 2,
           body: '## What\n\n- [x] open item\n',
           revision: 1,
@@ -892,7 +904,7 @@ describe('ticket detail', () => {
       },
     ]);
     expect(await header()).toHaveTextContent('Fix the race for good');
-    expect(await header()).toHaveTextContent('P2 · bug · core · 2 d');
+    expect(await header()).toHaveTextContent('P0 · bug · core · 2 d');
 
     // Cancel sends nothing, and so does a Save that changed nothing.
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));

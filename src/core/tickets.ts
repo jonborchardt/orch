@@ -10,8 +10,8 @@ export type TicketStatus = (typeof TICKET_STATUSES)[number];
 /** `question` is a decision to make, never executable work. */
 export const TICKET_TYPES = ['bug', 'feature', 'chore', 'question'] as const;
 export type TicketType = (typeof TICKET_TYPES)[number];
-/** P1 fix now, P2 next, P3 someday, P4 parked. */
-export const PRIORITIES = ['P1', 'P2', 'P3', 'P4'] as const;
+/** P0 drop everything, P1 fix now, P2 next, P3 someday, P4 parked, P5 below parked. */
+export const PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5'] as const;
 export type Priority = (typeof PRIORITIES)[number];
 /** Days of elapsed wall-clock time, start to merge; one day is 24 hours (docs/tickets.md). */
 export const EFFORTS: readonly number[] = [0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2, 3, 5];

@@ -10,7 +10,7 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
 
 1. **Creation.** `orch ticket add` (or the dashboard's New ticket) files a ticket in one
    repository with a global id, a type (`bug`, `feature`, `chore`, `question`), an area, a priority
-   (`P1`–`P4`), an effort, and a Markdown body ([tickets.md](tickets.md#fields)).
+   (`P0`–`P5`), an effort, and a Markdown body ([tickets.md](tickets.md#fields)).
 2. **Rank, priority, and dependencies.** `orch ticket move`, `orch ticket edit --priority`, and
    `orch ticket dep add` shape the proposed order: dependencies first, then ranked tickets by rank,
    then priority, effort, area, id

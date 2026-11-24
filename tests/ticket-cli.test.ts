@@ -310,6 +310,29 @@ describe('orch ticket', () => {
     expect(shown.job.ticketId).toBe(7);
   });
 
+  it('accepts P0 to P5, orders them, filters by them, and refuses anything else', () => {
+    const h = tempDir();
+    const t = (...args: string[]) => orch(h, alpha, ['ticket', ...args, '--json']);
+    expect(json<TicketView>(t('add', 'Low', '--priority', 'P5')).priority).toBe('P5');
+    expect(json<TicketView>(t('add', 'Top', '--priority', 'p0')).priority).toBe('P0');
+    expect(json<TicketView>(t('add', 'Mid', '--priority', 'P4')).id).toBe(3);
+    for (const bad of ['P6', 'P-1']) {
+      const r = t('add', 'Bad', '--priority', bad);
+      expect(r.code).toBe(1);
+      expect(r.err).toContain('priority must be one of P0, P1, P2, P3, P4, P5');
+    }
+    expect(json<TicketList>(t('order')).tickets.map((x) => x.id)).toEqual([2, 3, 1]);
+    expect(json<TicketList>(t('list', '--priority', 'P0')).tickets.map((x) => x.id)).toEqual([2]);
+    expect(t('list', '--priority', 'P6').code).toBe(1);
+    expect(json<TicketView>(t('edit', '3', '--priority', 'P0')).priority).toBe('P0');
+    expect(json<TicketView>(t('edit', '2', '--priority', 'P5')).priority).toBe('P5');
+    expect(json<{ type: string; payload: unknown }[]>(t('history', '2')).at(-1)).toMatchObject({
+      type: 'ticket.priority-changed',
+      payload: { from: 'P0', to: 'P5' },
+    });
+    expect(orch(h, outside, ['ticket', '--help']).out).toContain('--priority P0|P1|P2|P3|P4|P5');
+  });
+
   it('imports a register only when asked, with a dry run first', () => {
     const fresh = tempDir();
     const dir = join(alpha, 'todo');

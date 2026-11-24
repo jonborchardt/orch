@@ -41,18 +41,18 @@ unchanged and reported as blocked by its repository.
 
 ## Fields
 
-| field         | values                                                                                    |
-| ------------- | ----------------------------------------------------------------------------------------- |
-| `status`      | `open`, `in-progress`, `done`, `dropped`, `duplicate`. Blocked is derived, not stored.    |
-| `type`        | `bug`, `feature`, `chore`, `question` (a decision to make, never executable)              |
-| `area`        | one of the thirteen built-in areas (`orch ticket area list`) or one added with `area add` |
-| `priority`    | `P1` fix now, `P2` next, `P3` someday, `P4` parked                                        |
-| `effort`      | 24-hour days: `0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2, 3, 5` (see [Effort](#effort))     |
-| `rank`        | a person's explicit place in the order, any number, lowest first; empty is unranked       |
-| `classified`  | `auto` or `user`: whether a person gave the area, priority, or effort                     |
-| `body`        | the whole Markdown description, stored as text: What, Why, checklists, Screenshot         |
-| `duplicateOf` | set exactly while `status` is `duplicate`                                                 |
-| `revision`    | incremented by every change; pass `--revision <n>` to refuse a concurrent one (exit 4)    |
+| field         | values                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------- |
+| `status`      | `open`, `in-progress`, `done`, `dropped`, `duplicate`. Blocked is derived, not stored.      |
+| `type`        | `bug`, `feature`, `chore`, `question` (a decision to make, never executable)                |
+| `area`        | one of the thirteen built-in areas (`orch ticket area list`) or one added with `area add`   |
+| `priority`    | `P0` drop everything, `P1` fix now, `P2` next, `P3` someday, `P4` parked, `P5` below parked |
+| `effort`      | 24-hour days: `0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2, 3, 5` (see [Effort](#effort))       |
+| `rank`        | a person's explicit place in the order, any number, lowest first; empty is unranked         |
+| `classified`  | `auto` or `user`: whether a person gave the area, priority, or effort                       |
+| `body`        | the whole Markdown description, stored as text: What, Why, checklists, Screenshot           |
+| `duplicateOf` | set exactly while `status` is `duplicate`                                                   |
+| `revision`    | incremented by every change; pass `--revision <n>` to refuse a concurrent one (exit 4)      |
 
 Defaults for `add`: `feature`, `other`, `P3`, `1`, `auto`. Areas are one shared list, not per
 repository.
