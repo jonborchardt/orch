@@ -87,7 +87,8 @@ export const JOB_HELP = `Usage: orch job <command> [options]
             --choice (escalate only, 1 to ${String(MAX_CHOICES)}): an answer the human can pick in
             the dashboard's Choices block; <kind> is ${CHOICE_KINDS.join(', ')} (resume
             names its stage, e.g. resume:approve=Approve as is). A fast job refuses a
-            resume to a stage it never visits
+            resume to a stage it never visits. Without a choice that continues the job, the
+            default ones the reason implies go first
   artifact add <id> <relative-path> --token <t> [--replace]
   review record <id> --reviewer <name> [--verdict pass|changes] [--summary <s>] --token <t>
             the verdict is read from round-<n>/review-<name>.md, which must agree

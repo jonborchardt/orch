@@ -17,6 +17,7 @@ import {
   ValidationError,
 } from '../core/errors.ts';
 import { claudeLimit } from '../core/claude-limit.ts';
+import { leaseExpired } from '../core/ownership.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { ticketKey } from '../core/tickets.ts';
 import { endsRun, now, personMergeStep, TERMINAL_STATUSES } from '../core/workflow.ts';
@@ -40,6 +41,7 @@ import { mailWatermark, reportJobMail } from './mail.ts';
 import { mergeAuthorized, mergeJob } from './merge.ts';
 import {
   acquireRunnerLock,
+  awaitsPerson,
   childIdentity,
   childMayBeAlive,
   clearStop,
@@ -596,7 +598,9 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
           jobId,
           after.returnStage === 'spec'
             ? specResumeSteps(jobId, jobArtifactDir(jobId, store.paths), ticketId)
-            : `decide it on the dashboard (orch ui), then orch do ${key}`,
+            : session.mode === 'queue'
+              ? `decide it on the dashboard (orch ui): this orch start session takes it again; once it has ended, orch do ${key}`
+              : `decide it on the dashboard (orch ui), then orch do ${key}`,
         );
       }
       const m = await merge(run, jobId);
@@ -636,17 +640,37 @@ const passesOver = (r: TicketResult): boolean =>
   r.outcome !== 'done' && r.outcome !== 'stopped' && !endsRun(r.code);
 
 /**
+ * Whether a person moved the job on from needs-human: it left that stage, was not cancelled, and
+ * no live lease holds it.
+ */
+function movedOn(store: Store, jobId: string | null): boolean {
+  if (jobId === null) return false;
+  try {
+    const job = getJob(store.db, jobId);
+    return (
+      job.stage !== 'needs-human' &&
+      job.status !== 'cancelled' &&
+      (job.ownerSession === null || leaseExpired(job, now()))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Ready tickets, best first, one at a time, until none is left, a stop was requested, or one
  * ended with a run-wide outcome. Any other ticket that could not be finished is passed over for
- * the rest of the session (`passesOver`); its dependents are not ready until it is done.
- * Returns why it ended, or null when `orch stop` interrupted it.
+ * the rest of the session (`passesOver`); its dependents are not ready until it is done. The one
+ * exception is an escalation a person has since decided (`awaitsPerson`, `movedOn`): it is taken
+ * again first. Returns why it ended, or null when `orch stop` interrupted it.
  */
 async function runQueue(
   run: Run,
   attempt: (ticketId: number) => Promise<TicketResult>,
 ): Promise<string | null> {
   const { store, session } = run;
-  // Passed-over tickets stay passed over for the session, across `orch resume` too.
+  // Passed-over tickets stay passed over for the session, across `orch resume` too (only a
+  // decided escalation is taken again, from `session.results`).
   const isHuman = (r: TicketResult): boolean => r.outcome === 'needs-human';
   const passed = new Set([
     ...session.skipped.map((s) => s.ticketId),
@@ -655,6 +679,21 @@ async function runQueue(
   for (;;) {
     if (run.stopNow()) return null;
     if (stopRequests(store.paths).next) return 'stopped after the current ticket (orch stop next)';
+    // A ticket passed over for a person whose job a person has since moved on is taken again
+    // before the next ready ticket (decision 2026-11-24-default-needs-human-choices).
+    const again = session.results.find((r) => awaitsPerson(r) && movedOn(store, r.jobId));
+    if (again !== undefined) {
+      run.log(
+        `ticket ${ticketKey(again.ticketId)} taken again: a person moved job ${again.jobId ?? ''} on`,
+      );
+      passed.delete(again.ticketId);
+      const r = await attempt(again.ticketId);
+      if (r.outcome === 'stopped') return null;
+      if (r.outcome === 'done') continue;
+      if (!passesOver(r)) return `ticket ${ticketKey(again.ticketId)} is ${r.outcome}: ${r.reason}`;
+      passed.add(again.ticketId);
+      continue;
+    }
     const ready = listTickets(store, {
       view: 'ready',
       ...(session.repo === null ? {} : { repo: session.repo }),

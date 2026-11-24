@@ -25,6 +25,7 @@ import { ValidationError } from '../core/errors.ts';
 import { processStartMs } from '../core/exec.ts';
 import { runnerPaths, type RuntimePaths } from '../core/paths.ts';
 import { freshRecord } from './recover.ts';
+import { inRepositoryAt } from './repo.ts';
 import { alive, sleep } from './verify-lock.ts';
 
 export const TICKET_OUTCOMES = [
@@ -294,4 +295,33 @@ export function childIdentity(
   const child = session.child;
   if (!child || !childMayBeAlive(session, nowMs)) return 'gone';
   return classifyStart(Date.parse(child.startedAt), startTime(child.pid));
+}
+
+/**
+ * A needs-human result the queue takes again in the same session once a person moves its job on
+ * (decision 2026-11-24-default-needs-human-choices): an escalation (code `needs-human`; older
+ * records carry no code), never a merge only a person can make (`personMergeStep` codes).
+ */
+export function awaitsPerson(r: TicketResult): boolean {
+  return r.outcome === 'needs-human' && (r.code ?? 'needs-human') === 'needs-human';
+}
+
+/**
+ * Whether the running queue controller takes the job's ticket again once a person acts on it:
+ * a live controller in queue mode, whose repository filter covers the job, whose session passed
+ * the ticket over as `awaitsPerson`. Read-only; the dashboard's after-action line asks this.
+ */
+export function controllerContinues(
+  paths: RuntimePaths,
+  job: { ticketId: number | null; repo: string; repoPath: string },
+): boolean {
+  if (job.ticketId === null || controllerPid(paths) === null) return false;
+  const s = readSession(paths);
+  if (s?.finished !== null || s.mode === 'ticket') return false;
+  if (!s.results.some((r) => r.ticketId === job.ticketId && awaitsPerson(r))) return false;
+  try {
+    return s.repo === null || inRepositoryAt(s.repo)(job);
+  } catch {
+    return false; // the filtered checkout is gone: nothing can say it covers the job
+  }
 }

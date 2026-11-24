@@ -87,8 +87,10 @@ while it is alive), writes its intent to `<data>/runner.json`, and loops:
    A conflict creates one re-land job, which runs the same way.
 6. A ticket whose merge was verified and whose lifecycle says `done` is finished; take the next.
 
-A ticket whose job waits for a person is released and passed over for the rest of the session;
-the queue takes the next ready ticket, and the end-of-session summary lists the passed-over ticket
+A ticket whose job waits for a person is released and passed over for the rest of the session,
+until a person decides it on the dashboard: the running queue then takes it again before the next
+ready ticket (decision 2026-11-24-default-needs-human-choices). The queue takes the next ready
+ticket, and the end-of-session summary lists the passed-over ticket
 with its next step. So is a completed job whose merge only a person can unblock (`personMergeStep`
 in `src/core/workflow.ts`): `workflow-changed` (next step: Merge on the dashboard),
 `not-authorized`, `head-changed`, `pr-closed`, `pr-draft`, and `second-conflict` (decision

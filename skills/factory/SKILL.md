@@ -201,7 +201,8 @@ Failures:
 
 When an escalation's question has a few concrete answers, offer them: add one
 `--choice "<kind>[:<stage>]=<label>"` per answer (1 to 5) to the escalate command. `<kind>` is
-`resume:<stage>`, `rework`, `review`, `accept-delivery`, or `cancel`, and the label is a short
+`resume:<stage>`, `rework`, `review`, `accept-delivery`, `accept-policy`, or `cancel`, and the
+label is a short
 line for the human, for example
 `--choice "resume:approve=Approve as is" --choice "cancel=Drop the ticket"`. The dashboard shows
 them as a Choices block; the human's pick runs that action, and the answer reaches the next

@@ -106,6 +106,11 @@ describe('scope-gap rework at approval', () => {
       from: 'approve',
       reason: SCOPE_GAP_REASON,
       detail: 'AC3 still missing',
+      // Ticket 0132: the block offers the gap's stage.
+      choices: [
+        { kind: 'resume', to: 'build', label: 'Send back to build' },
+        { kind: 'cancel', label: 'Cancel' },
+      ],
     });
     expect(next(c.id).blockedReason).toBe(SCOPE_GAP_REASON);
   });

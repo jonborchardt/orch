@@ -222,13 +222,13 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             Choices
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            The session that escalated offers these answers; picking one continues the job from it.
+            The job waits for a person; picking an answer continues it from there.
           </Typography>
           <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', mt: 1 }}>
             {detail.choices.map((c, i) => (
               <Button
                 key={c.label}
-                variant="contained"
+                variant={i === 0 ? 'contained' : 'outlined'}
                 disabled={busy || !c.available}
                 onClick={() => {
                   answer(i);
@@ -238,6 +238,16 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
               </Button>
             ))}
           </Stack>
+          {detail.afterAction !== null && (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              data-testid="after-action"
+              sx={{ mt: 1 }}
+            >
+              After an answer, {detail.afterAction}.
+            </Typography>
+          )}
         </Box>
       )}
       <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
