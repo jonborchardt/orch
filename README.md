@@ -228,8 +228,11 @@ ORCH_HOME=C:\tmp\orch-test orch ticket list                                     
 
 A job can also run without the controller. In a Claude Code session in the repository,
 `/factory Add CSV export` starts a job and `/factory job-1a2b3c4d` continues one; from VS Code's
-Agents window, `/factory dispatch ...` starts several jobs in independent sessions; the `/dotodo`
-skill runs one ticket and merges it. How each works, and what happens at every step of a
+Agents window, `/factory dispatch ...` starts several jobs in independent sessions. To run a ticket
+by hand, start its job with `orch factory start ... --ticket <id>` (or take one `orch do` created
+or stopped), continue it with `/factory <job>` in a session you can talk to, and once it is
+`completed` merge with `orch do <ticket>` or `orch job merge <job>`; `orch do` is the autonomous
+way. How each works, and what happens at every step of a
 controller run, is in [docs/operations.md](docs/operations.md). A job that stops records why on
 itself (`runner.stopped`, next to a `runner.session` event per Claude session); decide a job that
 needs a person on the dashboard, then `orch do <ticket>` continues the same job.
