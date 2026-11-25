@@ -30,6 +30,19 @@ live steering (it never messages a running session), a team tracker (the queue i
 single-user), other agents or hosts (Claude Code and GitHub only), a weak test suite (the evidence
 is only as good as the checks), or large, ambiguous work (tickets must be small enough to specify).
 
+| category                   | who decides the steps   | who runs the checks        | what stops a wrong merge                  | what runs unattended            |
+| -------------------------- | ----------------------- | -------------------------- | ----------------------------------------- | ------------------------------- |
+| Cloud, tracker, OSS agents | the agent               | the agent, then CI         | branch protection and human review        | one task, up to a PR            |
+| Claude Code, worktree GUIs | the person and agent    | the agent                  | human review                              | the sessions a person watches   |
+| Spec frameworks            | a written procedure     | the agent                  | human review                              | one feature's steps             |
+| Review bots                | (comment only)          | an LLM reading the diff    | a person acting on comments               | a review per PR                 |
+| Merge queues               | (merge only)            | CI, on the merged result   | the queue's test of the merged result     | merging approved PRs            |
+| Gas Town                   | agents, from procedures | the merging agent          | the merging agent's judgement             | a daemon and supervising agents |
+| AO                         | an orchestrating agent  | GitHub                     | a person asks for each merge              | many sessions, under a daemon   |
+| `orch`                     | code                    | `orch`, pinned to a commit | code: exact-head merge, verified evidence | a backlog, drained to merged    |
+
+Dated, sourced, and per category: [docs/landscape.md](docs/landscape.md).
+
 ## Key capabilities
 
 - **Global ticket management.** One queue across every repository on the machine: priorities,
@@ -353,6 +366,8 @@ Details: [docs/operations.md](docs/operations.md#backup-and-restore).
 - [docs/overview.md](docs/overview.md): the architecture: control and execution planes, sources of
   truth, tickets and jobs, ownership, verification boundaries, recovery, and how `orch` compares
   with Beads, agent-orchestrator, and Gas Town.
+- [docs/landscape.md](docs/landscape.md): where `orch` sits among AI coding tools, by category,
+  each claim dated and marked demonstrated or claimed.
 - [docs/workflow.md](docs/workflow.md): the ticket lifecycle end to end, stages, transitions,
   artifacts, events, worktrees, verification evidence, CI reconciliation, merging, the controller,
   ownership.

@@ -178,3 +178,4 @@ start, dispatch, inspect, what is automated, what needs a human, limits. Interna
 (`workflow.md`, `dashboard.md`, `development.md`). Record non-obvious architectural decisions as
 one file each under `docs/decisions/` (`YYYY-MM-DD-<slug>.md`, see `docs/decisions.md`) with a
 short rationale; never renumber or edit a shared list.
+`docs/decisions/2026-11-24-positioning-and-non-goals.md` is the test for new features.
