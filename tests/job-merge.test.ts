@@ -915,9 +915,23 @@ describe('a PR that changes .github/workflows/ needs a human merge', () => {
     const kinds = shim
       .read()
       .calls.map((c) =>
-        c[0] === 'api' && c[1]?.includes('/files') ? 'files' : `${c[0] ?? ''} ${c[1] ?? ''}`,
+        c[0] === 'api' && c[1]?.includes('/files')
+          ? 'files'
+          : c[0] === 'api' && c[1]?.includes('/compare/')
+            ? 'compare'
+            : `${c[0] ?? ''} ${c[1] ?? ''}`,
       );
-    expect(kinds).toEqual(['files', 'pr view', 'files', 'pr view', 'pr merge', 'pr view']);
+    // Each look also asks GitHub whether the verified head contains the base (ticket 0154).
+    expect(kinds).toEqual([
+      'files',
+      'pr view',
+      'compare',
+      'files',
+      'pr view',
+      'compare',
+      'pr merge',
+      'pr view',
+    ]);
     const moved = jobWith([{ filename: WORKFLOW }], { headRefOid: OTHER });
     expect(merge(moved)).toMatchObject({ outcome: 'blocked', code: 'head-changed' });
   });

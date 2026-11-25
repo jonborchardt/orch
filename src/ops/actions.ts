@@ -324,7 +324,8 @@ function mergeAdvice(r: MergeResult): string {
 /**
  * Merge (a human's click) or re-read the PR. Merge is `mergeJob`, the operation `orch job merge`
  * runs, asked not to re-land (Fix merge conflicts does that here); what it did not merge is
- * returned as the error, with what a human can do. Nothing here changes stage or status.
+ * returned as the error, with what a human can do, except a moved base, which `mergeJob` merges
+ * into the branch and reopens the job for (returned as the message).
  */
 function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
   const merge = input.action === 'merge';
@@ -347,6 +348,10 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
     mode: 'dashboard',
     reland: false,
   });
+  // Not a failure: the moved base is merged into the branch and the job is back in delivery.
+  if (r.outcome === 'base-moved') {
+    return { job: withoutToken(getJob(store.db, before.id)), message: r.reason };
+  }
   if (r.outcome !== 'merged' && r.outcome !== 'already_merged') {
     throw new ValidationError(
       r.code === 'github-refused' || r.outcome === 'error'

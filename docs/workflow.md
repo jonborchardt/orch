@@ -796,7 +796,30 @@ new merge needs all of:
   repository's default branch is never substituted), and comes from `job.branch`, not a fork;
 - the job is `completed` by a passing CI verdict (`ciHead` set, `ciStatus` `passing`; not a human
   close-out, not a merge before CI) and no job superseded it;
-- the PR is open, not a draft, its head is exactly `ciHead`, and GitHub reports it `MERGEABLE`.
+- the PR is open, not a draft, its head is exactly `ciHead`, and GitHub reports it `MERGEABLE`;
+- `ciHead` contains the current tip of the base: GitHub's compare
+  (`repos/<repo>/compare/<base>...<ciHead>`, the base URL-encoded) answers `behind_by` 0. Neither
+  the local clone nor `mergeStateStatus` is consulted. No usable answer (a 404, a failed call, a
+  missing or non-numeric `behind_by`) is `waiting`. A base that moved (`behind_by` above 0) is the
+  `base-moved` step, checked after every refusal above and after a `CONFLICTING` PR, which still
+  re-lands (decision 2026-11-24-merge-requires-current-base).
+
+**A moved base.** Under the lease, in this order: when another unfinished job holds the ticket, the
+result is `blocked` `reopen-refused` and nothing is integrated. Otherwise `integrateBase` merges the
+base into the branch while the job is still completed (a clean merge commit, never a rebase). Only
+once that merge commit exists is the job reopened from `completed` to `pr`/`pending`
+(`job.reopened` with the reason, `fromHead`, `mergeHead`, and `baseSha`; `completedAt` cleared);
+a merge with material edits then reworks to `build` as an integration in `pr` does. The controller
+(`orch do`, `orch start`) then runs `/factory <job>` for `pr` like any delivery, and a later merge
+happens only at the new `ciHead`. A conflict is not reopened: it re-lands (or is `blocked`
+`conflict` where re-landing was not asked for). An `up-to-date` integration (origin and GitHub
+disagree) is `error` and safe to repeat; a missing worktree, a dirty tree, or a Git failure is
+`reopen-refused`. A job is reopened at most twice (`MAX_BASE_REOPENS`); a third moved base is
+`base-moving`, a step only a person takes. The reopen is a storage rule of its own, not an
+`orch job transition` action, and refuses a job not completed by CI, superseded, or without an
+open PR. The base can still move between the compare read and `gh pr merge`
+(`--match-head-commit` pins only the head); without GitHub's "require branches to be up to date"
+rule that window remains, and there is no merge queue.
 
 The merge is `gh pr merge <url> --merge --match-head-commit <ciHead>`: a merge commit GitHub
 refuses if the head moved. There is no `--admin`, `--auto`, squash, rebase, or branch deletion, so
@@ -812,6 +835,7 @@ the first two, and only with `verified: true`: a merge recorded as unverified ex
 | `already_merged` | GitHub had merged it before (an earlier call, the dashboard, a person); the record is complete now |
 | `waiting`        | GitHub reports mergeability `UNKNOWN`; nothing was attempted or held, call again                   |
 | `reland`         | the PR conflicts; `relandJob` was created to replace this job                                      |
+| `base-moved`     | the base moved after CI passed; it was merged into the branch and the job reopened into `pr`       |
 | `blocked`        | refused, with a `code`; calling again changes nothing until that state does                        |
 | `error`          | a tool or GitHub failure left the outcome unknown; calling again is safe                           |
 
@@ -824,7 +848,9 @@ could not answer, or the list is shorter than the PR's `changedFiles`; local Git
 only the dashboard's Merge, a human's click, proceeds; decision
 2026-11-22-workflow-changes-need-a-human-merge),
 `not-authorized`, `conflict` (only where re-landing was not asked for: the dashboard's Merge),
-`second-conflict`, `reland-refused`, `github-refused`. The result also carries `jobId`,
+`second-conflict`, `reland-refused`, `base-moving` (the base moved again after two reopens; a
+person merges), `reopen-refused` (a moved base, but the job could not be reopened: another job holds
+the ticket, or the base could not be integrated), `github-refused`. The result also carries `jobId`,
 `ticketId`, `prUrl`, `base`, `prHead`, `verifiedHead`, `mergeCommit`, `verified`, `ticket`, and
 `relandJob`.
 

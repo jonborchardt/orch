@@ -888,6 +888,8 @@ export const MERGE_BLOCKS = [
   'conflict',
   'second-conflict',
   'reland-refused',
+  'base-moving',
+  'reopen-refused',
   'github-refused',
 ] as const;
 export type MergeBlock = (typeof MERGE_BLOCKS)[number];
@@ -911,6 +913,8 @@ const PERSON_MERGE_STEPS = {
     `mark job ${job}'s PR ready for review on GitHub, then orch do ${key}`,
   'second-conflict': (job: string, key: string) =>
     `resolve job ${job}'s conflict with its base by hand (no third job is started), merge it, then orch ticket done ${key}`,
+  'base-moving': (job: string, key: string) =>
+    `the base kept moving while job ${job} was verified again (no further reopen is made); merge its PR by hand once its CI passes on the current base, then orch ticket done ${key}`,
 } satisfies Partial<Record<MergeBlock, (job: string, key: string) => string>>;
 
 /** The step a person takes for a merge refused with `code`, or null when no person can lift it. */
@@ -963,7 +967,12 @@ export type MergeStep =
   | { step: 'merge'; head: string }
   | { step: 'wait'; reason: string }
   | { step: 'reland'; reason: string }
+  /** `ciHead` does not contain the base's current tip: integrate the base and reopen the job. */
+  | { step: 'base-moved'; reason: string }
   | { step: 'blocked'; code: MergeBlock; reason: string };
+
+/** How many times one job is reopened for a moved base before a person takes over. */
+export const MAX_BASE_REOPENS = 2;
 
 export interface MergeFacts {
   completion: Completion;
@@ -979,6 +988,13 @@ export interface MergeFacts {
   changesWorkflows: boolean;
   /** The merge is a human's dashboard click. */
   byHuman: boolean;
+  /**
+   * GitHub's compare of the base with `ciHead`: true when the head contains the base's current
+   * tip, false when the base moved past it, null when GitHub gave no usable answer.
+   */
+  baseContained: boolean | null;
+  /** How many times this job was reopened for a moved base (its `job.reopened` events). */
+  baseReopens: number;
 }
 
 /**
@@ -1104,7 +1120,60 @@ export function mergeDecision(
       reason: `GitHub reports mergeability ${pr.mergeable ?? 'UNKNOWN'} (still computing); try again shortly`,
     };
   }
+  // Without "require branches to be up to date" GitHub would merge a base and head pair no check
+  // ran on (decision 2026-11-24-merge-requires-current-base).
+  if (facts.baseContained === null) {
+    return {
+      step: 'wait',
+      reason: `GitHub could not say whether ${short(evidence)} contains the current ${job.baseBranch}; try again shortly`,
+    };
+  }
+  if (!facts.baseContained) {
+    const moved = `${job.baseBranch} moved after CI passed on ${short(evidence)}`;
+    return facts.baseReopens < MAX_BASE_REOPENS
+      ? { step: 'base-moved', reason: moved }
+      : blocked(
+          'base-moving',
+          `${moved}, and the job was already reopened ${String(facts.baseReopens)} times for a moved base`,
+        );
+  }
   return { step: 'merge', head: evidence };
+}
+
+/**
+ * Reopen a job completed on a passing CI verdict whose base moved before its PR merged: back to
+ * pr/pending, so the merge commit `integrateBase` made is verified, pushed, and checked like any
+ * delivery. The one way out of `completed`; not an `ACTIONS` entry, so `orch job transition`
+ * cannot reach it (decision 2026-11-24-merge-requires-current-base).
+ */
+export function reopenForBase(
+  job: Pick<Job, 'stage' | 'status' | 'prState' | 'supersededBy' | 'ciHead'>,
+  completion: Completion,
+  ctx: { reason: string; mergeHead: string; baseSha: string },
+): TransitionResult {
+  const reject = (why: string): never => {
+    throw new WorkflowError(`Cannot reopen job for a moved base: ${why}`);
+  };
+  if (job.stage !== 'completed' || job.status !== 'completed') reject('the job is not completed');
+  if (completion !== 'ci') reject('the job was not completed by a passing CI verdict');
+  if (job.supersededBy !== null) reject(`${job.supersededBy} superseded the job`);
+  if (job.prState !== 'draft' && job.prState !== 'ready') {
+    reject(`the PR is ${job.prState ?? 'not recorded'}, not open`);
+  }
+  return {
+    patch: { stage: 'pr', status: 'pending', completedAt: null },
+    events: [
+      {
+        type: 'job.reopened',
+        payload: {
+          reason: ctx.reason,
+          fromHead: job.ciHead,
+          mergeHead: ctx.mergeHead,
+          baseSha: ctx.baseSha,
+        },
+      },
+    ],
+  };
 }
 
 /**

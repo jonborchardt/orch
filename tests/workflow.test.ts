@@ -4,6 +4,7 @@ import { UsageError, WorkflowError } from '../src/core/errors.ts';
 import { RECOVERY_EXHAUSTED_REASON } from '../src/core/recovery.ts';
 import {
   type Action,
+  ACTIONS,
   parseChoices,
   cannotAcceptDelivery,
   challengeSlot,
@@ -13,11 +14,13 @@ import {
   endsRun,
   latestChallenge,
   type LivePr,
+  MAX_BASE_REOPENS,
   MAX_CI_REPAIRS_REASON,
   MAX_ROUNDS_REASON,
   MERGE_BLOCKS,
   mergeDecision,
   personMergeStep,
+  reopenForBase,
   requiredArtifact,
   reviewedHeadRefusal,
   RUN_ENDING_CODES,
@@ -1021,7 +1024,13 @@ describe('mergeDecision: workflow changes need a human', () => {
     ciHead: 'abc',
     supersededBy: null,
   };
-  const facts = { completion: 'ci' as const, authorized: true, isReland: false };
+  const facts = {
+    completion: 'ci' as const,
+    authorized: true,
+    isReland: false,
+    baseContained: true,
+    baseReopens: 0,
+  };
 
   it('blocks changesWorkflows without byHuman, after head-changed and before not-authorized', () => {
     const wf = { ...facts, changesWorkflows: true, byHuman: false };
@@ -1076,6 +1085,138 @@ describe('mergeDecision: workflow changes need a human', () => {
   });
 });
 
+describe('mergeDecision: the verified head must contain the current base', () => {
+  const ok: LivePr = {
+    url: 'https://github.com/acme/alpha/pull/1',
+    state: 'OPEN',
+    isDraft: false,
+    repo: 'github.com/acme/alpha',
+    isCrossRepository: false,
+    baseRefName: 'main',
+    headRefName: 'factory/j',
+    headSha: 'abc',
+    mergeable: 'MERGEABLE',
+  };
+  const done = {
+    stage: 'completed' as const,
+    repo: 'github.com/acme/alpha',
+    baseBranch: 'main',
+    branch: 'factory/j',
+    ciStatus: 'passing' as const,
+    ciHead: 'abc',
+    supersededBy: null,
+  };
+  const facts = {
+    completion: 'ci' as const,
+    authorized: true,
+    isReland: false,
+    changesWorkflows: false,
+    byHuman: false,
+    baseContained: true as boolean | null,
+    baseReopens: 0,
+  };
+  const moved = { ...facts, baseContained: false };
+
+  it('merges a contained base, reopens a moved one, and waits on no answer', () => {
+    expect(mergeDecision(done, ok, facts)).toEqual({ step: 'merge', head: 'abc' });
+    expect(mergeDecision(done, ok, moved)).toMatchObject({ step: 'base-moved' });
+    expect(mergeDecision(done, ok, { ...facts, baseContained: null })).toMatchObject({
+      step: 'wait',
+    });
+  });
+
+  it('lets every earlier refusal, a conflict, and a recorded merge win over a moved base', () => {
+    expect(mergeDecision(done, { ...ok, mergeable: 'CONFLICTING' }, moved)).toMatchObject({
+      step: 'reland',
+    });
+    expect(
+      mergeDecision(done, { ...ok, mergeable: 'CONFLICTING' }, { ...moved, isReland: true }),
+    ).toMatchObject({ code: 'second-conflict' });
+    expect(mergeDecision(done, { ...ok, mergeable: 'UNKNOWN' }, moved)).toMatchObject({
+      step: 'wait',
+    });
+    expect(mergeDecision(done, { ...ok, headSha: 'def' }, moved)).toMatchObject({
+      code: 'head-changed',
+    });
+    expect(mergeDecision(done, ok, { ...moved, changesWorkflows: true })).toMatchObject({
+      code: 'workflow-changed',
+    });
+    expect(mergeDecision(done, ok, { ...moved, authorized: false })).toMatchObject({
+      code: 'not-authorized',
+    });
+    expect(mergeDecision({ ...done, supersededBy: 'job-2' }, ok, moved)).toMatchObject({
+      code: 'superseded',
+    });
+    expect(mergeDecision(done, { ...ok, repo: 'github.com/acme/beta' }, moved)).toMatchObject({
+      code: 'wrong-repository',
+    });
+    expect(mergeDecision(done, { ...ok, baseRefName: 'dev' }, moved)).toMatchObject({
+      code: 'wrong-base',
+    });
+    expect(mergeDecision(done, { ...ok, headRefName: 'x' }, moved)).toMatchObject({
+      code: 'wrong-head-branch',
+    });
+    expect(mergeDecision(done, { ...ok, state: 'MERGED' }, moved)).toMatchObject({
+      step: 'record',
+    });
+  });
+
+  it('blocks base-moving at the reopen bound, a step only a person takes', () => {
+    expect(MAX_BASE_REOPENS).toBe(2);
+    expect(mergeDecision(done, ok, { ...moved, baseReopens: MAX_BASE_REOPENS - 1 })).toMatchObject({
+      step: 'base-moved',
+    });
+    expect(mergeDecision(done, ok, { ...moved, baseReopens: MAX_BASE_REOPENS })).toMatchObject({
+      step: 'blocked',
+      code: 'base-moving',
+    });
+    expect(personMergeStep('base-moving', 'job-1', '0001')).toContain('job-1');
+    expect(personMergeStep('reopen-refused', 'job-1', '0001')).toBeNull();
+  });
+});
+
+describe('reopenForBase: completed back to pr for a moved base', () => {
+  const job = {
+    stage: 'completed' as Stage,
+    status: 'completed' as Status,
+    prState: 'ready' as 'ready' | 'draft' | 'merged' | 'closed' | null,
+    supersededBy: null as string | null,
+    ciHead: 'abc',
+  };
+  const ctx = { reason: 'main moved', mergeHead: 'def', baseSha: '123' };
+
+  it('moves a CI-completed job with an open PR to pr/pending with one job.reopened', () => {
+    const r = reopenForBase(job, 'ci', ctx);
+    expect(r.patch).toEqual({ stage: 'pr', status: 'pending', completedAt: null });
+    expect(r.events).toEqual([
+      {
+        type: 'job.reopened',
+        payload: { reason: 'main moved', fromHead: 'abc', mergeHead: 'def', baseSha: '123' },
+      },
+    ]);
+  });
+
+  it('refuses a job not completed, closed out by a human, superseded, or without an open PR', () => {
+    expect(() => reopenForBase({ ...job, stage: 'ci', status: 'pending' }, null, ctx)).toThrow(
+      WorkflowError,
+    );
+    expect(() => reopenForBase(job, 'human', ctx)).toThrow(WorkflowError);
+    expect(() => reopenForBase({ ...job, supersededBy: 'job-2' }, 'ci', ctx)).toThrow(
+      WorkflowError,
+    );
+    for (const prState of ['merged', 'closed', null] as const) {
+      expect(() => reopenForBase({ ...job, prState }, 'ci', ctx), String(prState)).toThrow(
+        WorkflowError,
+      );
+    }
+  });
+
+  it('is not an action orch job transition can reach', () => {
+    expect(ACTIONS as readonly string[]).not.toContain('reopen');
+    expect(ACTIONS.some((a) => a.includes('reopen'))).toBe(false);
+  });
+});
+
 describe('personMergeStep: merge refusals only a person can lift', () => {
   it('maps exactly the person-liftable codes to a step, each a merge block', () => {
     const person = MERGE_BLOCKS.filter((code) => personMergeStep(code, 'job-1', '0001') !== null);
@@ -1086,6 +1227,7 @@ describe('personMergeStep: merge refusals only a person can lift', () => {
         'pr-closed',
         'pr-draft',
         'second-conflict',
+        'base-moving',
         'workflow-changed',
       ].sort(),
     );
