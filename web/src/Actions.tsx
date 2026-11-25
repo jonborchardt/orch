@@ -14,7 +14,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { Fragment, type ReactElement, useState } from 'react';
+import { type ReactElement, useState } from 'react';
 
 import type { DashboardAction } from '../../src/ops/actions.ts';
 import type { ActionResponse, JobDetailView } from '../../src/server/types.ts';
@@ -167,7 +167,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   // describeChild puts the effect in aria-describedby, so the button keeps its name. A disabled
   // button gets no tooltip (MUI cannot attach one).
   const tip = (a: DashboardAction, button: ReactElement) => (
-    <Tooltip describeChild title={busy ? '' : effect(a, detail, resumeStage)}>
+    <Tooltip key={a} describeChild title={busy ? '' : effect(a, detail, resumeStage)}>
       {button}
     </Tooltip>
   );
@@ -293,21 +293,18 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         )}
         {buttons.map(
           ([a, label, variant, color]) =>
-            allowed.has(a) && (
-              <Fragment key={a}>
-                {tip(
-                  a,
-                  <Button
-                    variant={variant}
-                    color={color}
-                    onClick={() => {
-                      start(a);
-                    }}
-                  >
-                    {label}
-                  </Button>,
-                )}
-              </Fragment>
+            allowed.has(a) &&
+            tip(
+              a,
+              <Button
+                variant={variant}
+                color={color}
+                onClick={() => {
+                  start(a);
+                }}
+              >
+                {label}
+              </Button>,
             ),
         )}
       </Stack>

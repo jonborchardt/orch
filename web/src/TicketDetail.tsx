@@ -83,7 +83,7 @@ export function Pick({
   );
 }
 
-export type TicketField = 'title' | 'priority' | 'type' | 'area' | 'effort' | 'body';
+type TicketField = (typeof FIELDS)[number];
 
 /**
  * The fields of the Create and Edit ticket forms. `lead` (Create's Repository) comes first in the
@@ -214,7 +214,7 @@ const LIFECYCLE_HINT: Record<Lifecycle, string> = {
   reopen: 'Put the ticket back in the open queue.',
 };
 
-const FIELDS: readonly TicketField[] = ['title', 'priority', 'type', 'area', 'effort', 'body'];
+const FIELDS = ['title', 'priority', 'type', 'area', 'effort', 'body'] as const;
 type Draft = Record<TicketField, string> & {
   /** The ticket as it was when editing began: only fields that differ from it are sent. */
   base: TicketView;
