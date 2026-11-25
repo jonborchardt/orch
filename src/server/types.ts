@@ -386,3 +386,39 @@ export interface SessionInfo {
 export interface ApiError {
   error: { type: string; message: string };
 }
+
+/** `GET /api/runs`: aggregates over every job, archived included. Null means not measurable. */
+export interface RunsView {
+  total: number;
+  completed: number;
+  cancelled: number;
+  /** pending, running, blocked, interrupted, or failed. */
+  active: number;
+  /** completed / (completed + cancelled). */
+  completionRate: number | null;
+  /** Completed jobs only, from creation to finish. */
+  durationMs: { average: number | null; median: number | null };
+  /** Completed jobs whose finish or span is unknown. */
+  durationUnknown: number;
+  /** Completed jobs per hour from the earliest creation to the latest completed finish. */
+  completedPerHour: number | null;
+}
+
+/** Where an Agents row comes from: review rows, stage visits, or nothing recorded. */
+export type AgentSource = 'reviews' | 'stage' | 'none';
+
+/** `GET /api/agents`: one row per role; invocations = success + failure + other + open. */
+export interface AgentRow {
+  role: string;
+  source: AgentSource;
+  invocations: number;
+  success: number;
+  failure: number;
+  other: number;
+  open: number;
+  /** Invocations with an end and a duration above zero. */
+  measured: number;
+  unmeasured: number;
+  averageMs: number | null;
+  medianMs: number | null;
+}

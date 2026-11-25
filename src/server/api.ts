@@ -8,9 +8,11 @@ import { join, sep } from 'node:path';
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { claudeHome, jobArtifactDir } from '../core/paths.ts';
+import { ROLES, type RoleKind } from '../core/roles.ts';
 import { SESSION_EVENT, sessionLinks, UUID } from '../core/session.ts';
 import {
   cannotRefreshPr,
+  type JobMode,
   now,
   prPhase,
   STAGES,
@@ -29,11 +31,12 @@ import {
 } from '../ops/actions.ts';
 import { planJob } from '../ops/factory.ts';
 import { mergeView } from '../ops/merge-view.ts';
+import { ENDS, visits } from '../ops/usage.ts';
 import { currentFlakes } from '../ops/verify.ts';
 import { baseConflicts } from '../ops/worktree.ts';
 import { artifactsByJob, listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import { eventsOfTypes, latestEventsByJob, listEvents } from '../storage/events.ts';
+import { eventsByJob, eventsOfTypes, latestEventsByJob, listEvents } from '../storage/events.ts';
 import {
   getJob,
   listJobs,
@@ -59,10 +62,13 @@ import { readSessionLog } from './transcript.ts';
 import type {
   ActionRequest,
   ActionResponse,
+  AgentRow,
+  AgentSource,
   BoardRow,
   ClaudeSession,
   JobDetailView,
   RoundView,
+  RunsView,
   SafeJob,
   SessionLogView,
   SessionView,
@@ -170,6 +176,121 @@ function terminalAt(job: Job, events: Map<string, Event>): string | null {
 function span(from: string, to: string | null): number | null {
   const ms = to === null ? NaN : Date.parse(to) - Date.parse(from);
   return Number.isNaN(ms) || ms < 0 ? null : ms;
+}
+
+/** Median of the values, or null for none. */
+export function median(xs: readonly number[]): number | null {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? (s[mid] ?? null) : ((s[mid - 1] ?? 0) + (s[mid] ?? 0)) / 2;
+}
+
+const average = (xs: readonly number[]) =>
+  xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length;
+
+/** One agent invocation: how it ended and how long it took (null while open). */
+export interface Invocation {
+  outcome: 'success' | 'failure' | 'other' | 'open';
+  ms: number | null;
+}
+
+/** Fold invocations into a row; only intervals above zero are measured. */
+export function agentRow(role: string, source: AgentSource, xs: readonly Invocation[]): AgentRow {
+  const measured = xs.flatMap((x) => (x.ms !== null && x.ms > 0 ? [x.ms] : []));
+  const count = (o: Invocation['outcome']) => xs.filter((x) => x.outcome === o).length;
+  return {
+    role,
+    source,
+    invocations: xs.length,
+    success: count('success'),
+    failure: count('failure'),
+    other: count('other'),
+    open: count('open'),
+    measured: measured.length,
+    unmeasured: xs.length - measured.length,
+    averageMs: average(measured),
+    medianMs: median(measured),
+  };
+}
+
+/** The Runs section: counts and durations over every job, from persisted rows and events. */
+export function runs(store: Store): RunsView {
+  const jobs = listJobs(store.db);
+  const eventsOf = latestEventsByJob(
+    store.db,
+    jobs.map((j) => j.id),
+    ['job.completed', 'job.cancelled'],
+  );
+  const completed = jobs.filter((j) => j.status === 'completed');
+  const cancelled = jobs.filter((j) => j.status === 'cancelled').length;
+  const durations: number[] = [];
+  let lastFinish = -Infinity;
+  for (const j of completed) {
+    const end = terminalAt(j, eventsOf.get(j.id) ?? new Map<string, Event>());
+    const d = span(j.createdAt, end);
+    if (d !== null) durations.push(d);
+    const t = end === null ? NaN : Date.parse(end);
+    if (!Number.isNaN(t)) lastFinish = Math.max(lastFinish, t);
+  }
+  const firstCreated = Math.min(...jobs.map((j) => Date.parse(j.createdAt)));
+  const hours = (lastFinish - firstCreated) / 3_600_000;
+  const finished = completed.length + cancelled;
+  return {
+    total: jobs.length,
+    completed: completed.length,
+    cancelled,
+    active: jobs.length - finished,
+    completionRate: finished === 0 ? null : completed.length / finished,
+    durationMs: { average: average(durations), median: median(durations) },
+    durationUnknown: completed.length - durations.length,
+    completedPerHour:
+      completed.length > 0 && Number.isFinite(hours) && hours > 0 ? completed.length / hours : null,
+  };
+}
+
+/** Roles measured by their stage's visits; the builder pair is split by `jobs.mode`. */
+const STAGE_OF: Partial<Record<RoleKind, { stage: Stage; mode?: JobMode }>> = {
+  spec: { stage: 'spec' },
+  build: { stage: 'build', mode: 'full' },
+  'fast-build': { stage: 'build', mode: 'fast' },
+  simplify: { stage: 'simplify' },
+  approve: { stage: 'approve' },
+};
+
+function stageOutcome(endedBy: string | null): Invocation['outcome'] {
+  if (endedBy === null) return 'open';
+  if (endedBy === 'stage.completed') return 'success';
+  return endedBy === 'stage.failed' ? 'failure' : 'other';
+}
+
+/** The Agents section: one row per role in `ROLES`, in order. */
+export function agents(store: Store): AgentRow[] {
+  const jobs = listJobs(store.db);
+  const ids = jobs.map((j) => j.id);
+  const reviewsOf = reviewsByJob(store.db, ids);
+  const eventsOf = eventsByJob(store.db, ids, ['stage.started', ...ENDS]);
+  const allReviews = [...reviewsOf.values()].flat();
+  const jobVisits = jobs.map((j) => ({ mode: j.mode, visits: visits(eventsOf.get(j.id) ?? []) }));
+  return ROLES.map((role) => {
+    if (role.kind === 'review') {
+      const xs = allReviews
+        .filter((r) => r.reviewer === role.name)
+        .map((r): Invocation => {
+          const outcome =
+            r.verdict === null ? 'open' : r.verdict === 'pass' ? 'success' : 'failure';
+          return { outcome, ms: span(r.createdAt, r.completedAt) };
+        });
+      return agentRow(role.name, 'reviews', xs);
+    }
+    const on = STAGE_OF[role.kind];
+    if (!on) return agentRow(role.name, 'none', []);
+    const xs = jobVisits
+      .filter((j) => on.mode === undefined || j.mode === on.mode)
+      .flatMap((j) => j.visits.filter((v) => v.stage === on.stage))
+      .map((v): Invocation => ({ outcome: stageOutcome(v.endedBy), ms: v.durationMs }));
+    return agentRow(role.name, 'stage', xs);
+  });
 }
 
 export function repos(store: Store): string[] {

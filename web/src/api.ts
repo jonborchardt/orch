@@ -2,11 +2,13 @@
 import type {
   ActionRequest,
   ActionResponse,
+  AgentRow,
   ApiError,
   Area,
   BoardRow,
   JobDetailView,
   RunnerStatus,
+  RunsView,
   SessionInfo,
   SessionLogView,
   TicketDetail,
@@ -49,6 +51,8 @@ export const fetchBoard = (repo?: string) =>
   getJson<BoardRow[]>(`/api/jobs${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`);
 export const fetchRepos = () => getJson<string[]>('/api/repos');
 export const fetchDetail = (id: string) => getJson<JobDetailView>(`/api/jobs/${id}`);
+export const fetchRuns = () => getJson<RunsView>('/api/runs');
+export const fetchAgents = () => getJson<AgentRow[]>('/api/agents');
 export const fetchSessionLog = (id: string) =>
   getJson<SessionLogView>(`/api/jobs/${id}/session-log`);
 

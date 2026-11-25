@@ -92,3 +92,21 @@ export function eventsAfter(
     .orderBy(events.id)
     .all();
 }
+
+/** Every event of the listed types per job, oldest first, in one query with no per-job limit. */
+export function eventsByJob(
+  db: Db,
+  jobIds: readonly string[],
+  types: readonly string[],
+): Map<string, Event[]> {
+  const out = new Map<string, Event[]>(jobIds.map((id) => [id, []]));
+  if (jobIds.length === 0 || types.length === 0) return out;
+  const rows = db
+    .select()
+    .from(events)
+    .where(and(inArray(events.jobId, [...jobIds]), inArray(events.type, [...types])))
+    .orderBy(events.id)
+    .all();
+  for (const e of rows) out.get(e.jobId)?.push(e);
+  return out;
+}
