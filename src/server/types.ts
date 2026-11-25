@@ -404,23 +404,37 @@ export interface RunsView {
   completedPerHour: number | null;
 }
 
-/** Where an Agents row comes from: review rows, stage visits, or nothing recorded. */
-export type AgentSource = 'reviews' | 'stage' | 'none';
-
-/** `GET /api/agents`: one row per role; invocations = success + failure + other + open. */
-export interface AgentRow {
-  role: string;
-  source: AgentSource;
-  invocations: number;
-  success: number;
-  failure: number;
-  other: number;
-  open: number;
-  /** Invocations with an end and a duration above zero. */
-  measured: number;
+/** Durations of an Agents row: over runs with a duration above zero; `unmeasured` are the rest. */
+export interface AgentTiming {
   unmeasured: number;
   averageMs: number | null;
   medianMs: number | null;
+}
+
+/** A reviewer: runs = pass + changes; runs with no verdict yet are not counted. */
+export interface ReviewerRow extends AgentTiming {
+  role: string;
+  runs: number;
+  pass: number;
+  changes: number;
+}
+
+/** A stage role: runs = the sum of the six end columns; visits with no end are not counted. */
+export interface StageRow extends AgentTiming {
+  role: string;
+  runs: number;
+  completed: number;
+  failed: number;
+  escalated: number;
+  sentBack: number;
+  cancelled: number;
+  interrupted: number;
+}
+
+/** `GET /api/agents`: every role in `ROLES` in exactly one list, in `ROLES` order. */
+export interface AgentsView {
+  reviewers: ReviewerRow[];
+  stages: StageRow[];
 }
 
 /** Token counts of the four kinds Claude Code reports per assistant message. */

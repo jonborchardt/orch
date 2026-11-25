@@ -5,6 +5,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { join, sep } from 'node:path';
 
+import { SPEC_REVIEW_PATH } from '../core/artifact-rules.ts';
 import { UsageError, ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { claudeHome, jobArtifactDir } from '../core/paths.ts';
@@ -63,8 +64,8 @@ import { readSessionLog } from './transcript.ts';
 import type {
   ActionRequest,
   ActionResponse,
-  AgentRow,
-  AgentSource,
+  AgentsView,
+  AgentTiming,
   BoardRow,
   ClaudeSession,
   JobDetailView,
@@ -73,6 +74,7 @@ import type {
   SafeJob,
   SessionLogView,
   SessionView,
+  StageRow,
   UsageView,
 } from './types.ts';
 
@@ -191,25 +193,10 @@ export function median(xs: readonly number[]): number | null {
 const average = (xs: readonly number[]) =>
   xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length;
 
-/** One agent invocation: how it ended and how long it took (null while open). */
-export interface Invocation {
-  outcome: 'success' | 'failure' | 'other' | 'open';
-  ms: number | null;
-}
-
-/** Fold invocations into a row; only intervals above zero are measured. */
-export function agentRow(role: string, source: AgentSource, xs: readonly Invocation[]): AgentRow {
-  const measured = xs.flatMap((x) => (x.ms !== null && x.ms > 0 ? [x.ms] : []));
-  const count = (o: Invocation['outcome']) => xs.filter((x) => x.outcome === o).length;
+/** Durations of finished runs; only intervals above zero are measured. */
+export function timing(xs: readonly (number | null)[]): AgentTiming {
+  const measured = xs.flatMap((ms) => (ms !== null && ms > 0 ? [ms] : []));
   return {
-    role,
-    source,
-    invocations: xs.length,
-    success: count('success'),
-    failure: count('failure'),
-    other: count('other'),
-    open: count('open'),
-    measured: measured.length,
     unmeasured: xs.length - measured.length,
     averageMs: average(measured),
     medianMs: median(measured),
@@ -252,7 +239,10 @@ export function runs(store: Store): RunsView {
 }
 
 /** Roles measured by their stage's visits; the builder pair is split by `jobs.mode`. */
-const STAGE_OF: Partial<Record<RoleKind, { stage: Stage; mode?: JobMode }>> = {
+const STAGE_OF: Record<
+  Exclude<RoleKind, 'review' | 'spec-challenge'>,
+  { stage: Stage; mode?: JobMode }
+> = {
   spec: { stage: 'spec' },
   build: { stage: 'build', mode: 'full' },
   'fast-build': { stage: 'build', mode: 'fast' },
@@ -260,39 +250,79 @@ const STAGE_OF: Partial<Record<RoleKind, { stage: Stage; mode?: JobMode }>> = {
   approve: { stage: 'approve' },
 };
 
-function stageOutcome(endedBy: string | null): Invocation['outcome'] {
-  if (endedBy === null) return 'open';
-  if (endedBy === 'stage.completed') return 'success';
-  return endedBy === 'stage.failed' ? 'failure' : 'other';
+/** The Stages column each end event (`ENDS` in ops/usage.ts) counts in. */
+const STAGE_COLUMN: Record<string, keyof Omit<StageRow, 'role' | 'runs' | keyof AgentTiming>> = {
+  'stage.completed': 'completed',
+  'stage.failed': 'failed',
+  'job.blocked': 'escalated',
+  'job.reworked': 'sentBack',
+  'job.cancelled': 'cancelled',
+  'job.interrupted': 'interrupted',
+};
+
+function reviewerRow(role: string, verdicts: { verdict: string; ms: number | null }[]) {
+  const count = (v: string) => verdicts.filter((x) => x.verdict === v).length;
+  return {
+    role,
+    runs: verdicts.length,
+    pass: count('pass'),
+    changes: count('changes'),
+    ...timing(verdicts.map((x) => x.ms)),
+  };
 }
 
-/** The Agents section: one row per role in `ROLES`, in order. */
-export function agents(store: Store): AgentRow[] {
+/** The Agents section: reviewers and stage roles, each in `ROLES` order; unfinished runs skipped. */
+export function agents(store: Store): AgentsView {
   const jobs = listJobs(store.db);
   const ids = jobs.map((j) => j.id);
   const reviewsOf = reviewsByJob(store.db, ids);
   const eventsOf = eventsByJob(store.db, ids, ['stage.started', ...ENDS]);
   const allReviews = [...reviewsOf.values()].flat();
+  // The spec challenger records no review row; its verdicts are the registered spec reviews.
+  const specVerdicts = [...artifactsByJob(store.db, ids).values()]
+    .flat()
+    .flatMap((a) =>
+      SPEC_REVIEW_PATH.test(a.path) && a.marker !== null
+        ? [{ verdict: a.marker.toLowerCase(), ms: null }]
+        : [],
+    );
   const jobVisits = jobs.map((j) => ({ mode: j.mode, visits: visits(eventsOf.get(j.id) ?? []) }));
-  return ROLES.map((role) => {
-    if (role.kind === 'review') {
-      const xs = allReviews
-        .filter((r) => r.reviewer === role.name)
-        .map((r): Invocation => {
-          const outcome =
-            r.verdict === null ? 'open' : r.verdict === 'pass' ? 'success' : 'failure';
-          return { outcome, ms: span(r.createdAt, r.completedAt) };
-        });
-      return agentRow(role.name, 'reviews', xs);
+  const view: AgentsView = { reviewers: [], stages: [] };
+  for (const role of ROLES) {
+    if (role.kind === 'spec-challenge' || role.kind === 'review') {
+      const xs =
+        role.kind === 'spec-challenge'
+          ? specVerdicts
+          : allReviews.flatMap((r) =>
+              r.reviewer === role.name && r.verdict !== null
+                ? [{ verdict: r.verdict, ms: span(r.createdAt, r.completedAt) }]
+                : [],
+            );
+      view.reviewers.push(reviewerRow(role.name, xs));
+      continue;
     }
     const on = STAGE_OF[role.kind];
-    if (!on) return agentRow(role.name, 'none', []);
-    const xs = jobVisits
+    const ended = jobVisits
       .filter((j) => on.mode === undefined || j.mode === on.mode)
-      .flatMap((j) => j.visits.filter((v) => v.stage === on.stage))
-      .map((v): Invocation => ({ outcome: stageOutcome(v.endedBy), ms: v.durationMs }));
-    return agentRow(role.name, 'stage', xs);
-  });
+      .flatMap((j) => j.visits.filter((v) => v.stage === on.stage && v.endedBy !== null));
+    const row: StageRow = {
+      role: role.name,
+      runs: ended.length,
+      completed: 0,
+      failed: 0,
+      escalated: 0,
+      sentBack: 0,
+      cancelled: 0,
+      interrupted: 0,
+      ...timing(ended.map((v) => v.durationMs)),
+    };
+    for (const v of ended) {
+      const column = STAGE_COLUMN[v.endedBy ?? ''];
+      if (column) row[column] += 1;
+    }
+    view.stages.push(row);
+  }
+  return view;
 }
 
 export function repos(store: Store): string[] {

@@ -1,4 +1,5 @@
 import {
+  Box,
   Table,
   TableBody,
   TableCell,
@@ -8,64 +9,107 @@ import {
   Typography,
 } from '@mui/material';
 
+import type { AgentTiming, ReviewerRow, StageRow } from '../../src/server/types.ts';
 import { duration, Polled, usePolled } from './Runs.tsx';
 import { fetchAgents } from './api.ts';
 
-const COUNTS = ['invocations', 'success', 'failure', 'other', 'open', 'measured'] as const;
+type Row = AgentTiming & { role: string; runs: number };
 
-export function AgentsPage({ refreshMs = 4000 }: { refreshMs?: number }) {
-  const { data, error } = usePolled(fetchAgents, refreshMs);
+/** A count with its share of Runs; no share when there are no runs. */
+const share = (n: number, runs: number) =>
+  runs === 0 ? String(n) : `${String(n)} (${String(Math.round((n / runs) * 100))}%)`;
+
+const REVIEWER_COLUMNS: [string, (r: ReviewerRow) => string][] = [
+  ['Pass', (r) => String(r.pass)],
+  ['Changes', (r) => share(r.changes, r.runs)],
+];
+
+const STAGE_COLUMNS: [string, (r: StageRow) => string][] = [
+  ['Completed', (r) => String(r.completed)],
+  ['Failed', (r) => String(r.failed)],
+  ['Escalated', (r) => String(r.escalated)],
+  ['Sent back', (r) => String(r.sentBack)],
+  ['Cancelled', (r) => String(r.cancelled)],
+  ['Interrupted', (r) => String(r.interrupted)],
+];
+
+function AgentTable<R extends Row>({
+  label,
+  rows,
+  columns,
+  note,
+}: {
+  label: string;
+  rows: R[];
+  columns: [string, (r: R) => string][];
+  note?: string;
+}) {
+  const unmeasured = rows.filter((r) => r.unmeasured > 0);
   return (
-    <Polled label="Agents" error={error} loaded={data !== null}>
+    <Box sx={{ mb: 3 }}>
+      <Typography variant="subtitle1" component="h2">
+        {label}
+      </Typography>
       <TableContainer>
-        <Table size="small" aria-label="Agents">
+        <Table size="small" aria-label={label}>
           <TableHead>
             <TableRow>
               <TableCell>Role</TableCell>
-              <TableCell>Source</TableCell>
-              <TableCell align="right">Invocations</TableCell>
-              <TableCell align="right">Success</TableCell>
-              <TableCell align="right">Failure</TableCell>
-              <TableCell align="right">Other</TableCell>
-              <TableCell align="right">Open</TableCell>
-              <TableCell align="right">Measured</TableCell>
+              <TableCell align="right">Runs</TableCell>
+              {columns.map(([name]) => (
+                <TableCell key={name} align="right">
+                  {name}
+                </TableCell>
+              ))}
               <TableCell align="right">Average</TableCell>
               <TableCell align="right">Median</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {(data ?? []).map((r) => (
+            {rows.map((r) => (
               <TableRow key={r.role}>
                 <TableCell component="th" scope="row">
                   {r.role}
                 </TableCell>
-                {r.source === 'none' ? (
-                  <TableCell colSpan={9}>Not recorded</TableCell>
-                ) : (
-                  <>
-                    <TableCell>
-                      {r.source === 'reviews'
-                        ? 'review runs'
-                        : 'stage time (includes coordinator work)'}
-                    </TableCell>
-                    {COUNTS.map((k) => (
-                      <TableCell key={k} align="right">
-                        {String(r[k])}
-                      </TableCell>
-                    ))}
-                    <TableCell align="right">{duration(r.averageMs)}</TableCell>
-                    <TableCell align="right">{duration(r.medianMs)}</TableCell>
-                  </>
-                )}
+                <TableCell align="right">{String(r.runs)}</TableCell>
+                {columns.map(([name, cell]) => (
+                  <TableCell key={name} align="right">
+                    {cell(r)}
+                  </TableCell>
+                ))}
+                <TableCell align="right">{duration(r.averageMs)}</TableCell>
+                <TableCell align="right">{duration(r.medianMs)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </TableContainer>
-      <Typography variant="caption" color="text.secondary">
-        Runtimes count only invocations with an end and a duration above zero; the rest are
-        unmeasured.
-      </Typography>
+      {note && (
+        <Typography variant="caption" color="text.secondary" component="p">
+          {note}
+        </Typography>
+      )}
+      {unmeasured.length > 0 && (
+        <Typography variant="caption" color="text.secondary" component="p">
+          Runs without a duration, left out of Average and Median:{' '}
+          {unmeasured.map((r) => `${r.role} ${String(r.unmeasured)}`).join(', ')}.
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+export function AgentsPage({ refreshMs = 4000 }: { refreshMs?: number }) {
+  const { data, error } = usePolled(fetchAgents, refreshMs);
+  return (
+    <Polled label="Agents" error={error} loaded={data !== null}>
+      <AgentTable label="Reviewers" rows={data?.reviewers ?? []} columns={REVIEWER_COLUMNS} />
+      <AgentTable
+        label="Stages"
+        rows={data?.stages ?? []}
+        columns={STAGE_COLUMNS}
+        note="Stage time includes coordinator work."
+      />
     </Polled>
   );
 }
