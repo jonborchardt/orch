@@ -9,41 +9,54 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { fetchRuns } from './api.ts';
+import { errorText, fetchRuns } from './api.ts';
 import { elapsedCell } from './format.ts';
 
 export const UNAVAILABLE = 'Unavailable';
 
-/** Fetch now and every `refreshMs` while the tab is visible; the last good value stays shown. */
+/**
+ * Fetch now and every `refreshMs` while the tab is visible; the last good value stays shown. A
+ * null fetcher polls nothing. A response from a superseded fetcher is dropped. `error` is the raw
+ * rejection, cleared by the next good response; `reload()` resolves to the fresh value, or null.
+ */
 export function usePolled<T>(
-  fetcher: () => Promise<T>,
+  fetcher: (() => Promise<T>) | null,
   refreshMs: number,
-): { data: T | null; error: string | null } {
+): { data: T | null; error: unknown; loading: boolean; reload: () => Promise<T | null> } {
   const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [inFlight, setInFlight] = useState(0);
+  const current = useRef(fetcher);
+  const reload = useCallback(async () => {
+    if (!fetcher) return null;
+    setInFlight((n) => n + 1);
+    try {
+      const d = await fetcher();
+      if (current.current !== fetcher) return null;
+      setData(d);
+      setError(null);
+      return d;
+    } catch (err) {
+      if (current.current === fetcher) setError(err);
+      return null;
+    } finally {
+      setInFlight((n) => n - 1);
+    }
+  }, [fetcher]);
   useEffect(() => {
-    const load = () => {
-      fetcher().then(
-        (d) => {
-          setData(d);
-          setError(null);
-        },
-        (err: unknown) => {
-          setError(err instanceof Error ? err.message : String(err));
-        },
-      );
-    };
-    load();
+    current.current = fetcher;
+    if (!fetcher) return;
+    void reload();
     const timer = setInterval(() => {
-      if (!document.hidden) load();
+      if (!document.hidden) void reload();
     }, refreshMs);
     return () => {
       clearInterval(timer);
     };
-  }, [fetcher, refreshMs]);
-  return { data, error };
+  }, [fetcher, reload, refreshMs]);
+  return { data, error, loading: inFlight > 0, reload };
 }
 
 /** Loading bar before the first answer, the error above whatever was last shown. */
@@ -54,7 +67,8 @@ export function Polled({
   children,
 }: {
   label: string;
-  error: string | null;
+  /** Raw, as `usePolled` returns it. */
+  error: unknown;
   loaded: boolean;
   children: React.ReactNode;
 }) {
@@ -63,12 +77,12 @@ export function Polled({
       <Typography variant="h6" component="h1" gutterBottom>
         {label}
       </Typography>
-      {error && (
+      {error !== null && (
         <Alert severity="error" role="alert" sx={{ mb: 1 }}>
-          {error}
+          {errorText(error)}
         </Alert>
       )}
-      {loaded ? children : !error && <LinearProgress aria-label={`Loading ${label}`} />}
+      {loaded ? children : error === null && <LinearProgress aria-label={`Loading ${label}`} />}
     </Box>
   );
 }

@@ -21,7 +21,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
@@ -29,6 +29,7 @@ import { CiChip, CiPanel, PrPhaseChip } from './Ci.tsx';
 import { LogRef, PrLink, PrText, commitRef } from './Links.tsx';
 import { Markdown, blockingLines, section } from './Markdown.tsx';
 import { ProgressSection, ProgressStrip, RoundIndicator } from './Progress.tsx';
+import { usePolled } from './Runs.tsx';
 import { SessionLog } from './SessionLog.tsx';
 import {
   BlockerNotes,
@@ -41,7 +42,7 @@ import {
   Supersession,
   nextAction,
 } from './Status.tsx';
-import { ApiFailure, fetchDetail } from './api.ts';
+import { failureText, fetchDetail } from './api.ts';
 import { STATE, ago, verdictColor } from './format.ts';
 import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
 import { ticketHref, ticketKey } from './ticketState.ts';
@@ -58,48 +59,19 @@ export function JobDetail({
   refreshMs?: number;
   onActivity?: (a: DetailActivity) => void;
 }) {
-  const [detail, setDetail] = useState<JobDetailView | null>(null);
-  const [inFlight, setInFlight] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const polled = usePolled(
+    useCallback(() => fetchDetail(id), [id]),
+    refreshMs,
+  );
+  const detail = polled.data;
+  const error = polled.error === null ? null : failureText(polled.error);
   // What the user last picked; the rendered tab is resolveTab() of it, so it can come back.
   const [selected, setSelected] = useState<TabName>('Overview');
-  const [tick, setTick] = useState(0);
   const [openReviews, setOpenReviews] = useState<Record<number, boolean>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () => {
-      setInFlight((n) => n + 1);
-      fetchDetail(id)
-        .then(
-          (d) => {
-            if (alive) {
-              setDetail(d);
-              setError(null);
-            }
-          },
-          (err: unknown) => {
-            if (alive)
-              setError(err instanceof ApiFailure ? `${err.type}: ${err.message}` : String(err));
-          },
-        )
-        .finally(() => {
-          setInFlight((n) => n - 1);
-        });
-    };
-    load();
-    const timer = setInterval(() => {
-      if (!document.hidden) load();
-    }, refreshMs);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [id, refreshMs, tick]);
-
   const loaded = detail !== null;
-  const busy = inFlight > 0;
+  const busy = polled.loading;
   useEffect(() => {
     onActivity?.(!loaded ? 'loading' : busy ? 'refreshing' : 'idle');
   }, [loaded, busy, onActivity]);
@@ -164,7 +136,7 @@ export function JobDetail({
         <Button
           variant="text"
           onClick={() => {
-            setTick((t) => t + 1);
+            void polled.reload();
           }}
         >
           Refresh
@@ -246,7 +218,7 @@ export function JobDetail({
                   {job.branch ? (
                     <>
                       Branch <code>{job.branch}</code> into <code>{job.baseBranch}</code>
-                      {notPushed(detail) && ', not pushed yet'}
+                      {detail.links.branchUnpushed && ', not pushed yet'}
                     </>
                   ) : (
                     <>
@@ -268,7 +240,7 @@ export function JobDetail({
         <Actions
           detail={detail}
           onDone={() => {
-            setTick((t) => t + 1);
+            void polled.reload();
           }}
         />
       </Paper>
@@ -536,19 +508,6 @@ function leaseText(job: JobDetailView['job']): string | null {
 }
 
 /**
- * The server links the branch only with push evidence (`links.branch`); true when it could have
- * derived a link from the repository but has no such evidence yet.
- */
-function notPushed(detail: JobDetailView): boolean {
-  const { job } = detail;
-  return (
-    !job.prUrl &&
-    !detail.events.some((e) => e.type === 'branch.pushed') &&
-    /^github\.com\/[^/]+\/[^/]+$/.test(job.repo)
-  );
-}
-
-/**
  * Two lines: identity and operational status, then delivery. A field without data is omitted;
  * the owner, lease, and base branch are tooltips here and visible lines in Details. Long values
  * break anywhere, so nothing clips.
@@ -558,7 +517,7 @@ function JobHeader({ detail, error }: { detail: JobDetailView; error: string | n
   const lease = leaseText(job);
   const owner = job.ownerSession ? `Owner ${job.ownerSession}${lease ? `; ${lease}` : ''}` : null;
   const into = `into ${job.baseBranch}`;
-  const unpushed = notPushed(detail);
+  const unpushed = links.branchUnpushed;
   const prNumber = job.prUrl ? /\/pull\/(\d+)\/?$/.exec(job.prUrl)?.[1] : undefined;
   const delivery = [
     <span key="repo">{job.repo}</span>,
@@ -951,7 +910,11 @@ function Verification({ detail }: { detail: JobDetailView }) {
                     <TableCell align="right">{c.exitCode ?? c.signal ?? ''}</TableCell>
                     <TableCell align="right">{c.durationMs ?? ''}</TableCell>
                     <TableCell>
-                      {c.outputPath ? <LogRef jobId={detail.job.id} path={c.outputPath} /> : ''}
+                      {c.outputPath ? (
+                        <LogRef path={c.outputPath} href={detail.links.logs[c.outputPath]} />
+                      ) : (
+                        ''
+                      )}
                       {c.truncated ? ' (truncated)' : ''}
                     </TableCell>
                   </TableRow>

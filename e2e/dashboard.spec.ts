@@ -76,18 +76,14 @@ test('job board shows every repository and job with honest liveness', async ({ p
 
 test('filters by repository and status', async ({ page }) => {
   await page.goto('/');
-  await page.getByLabel('Repository').click();
-  await page.getByRole('option', { name: 'github.com/acme/beta' }).click();
+  await page.getByLabel('Repository').selectOption('github.com/acme/beta');
   const table = page.getByRole('table', { name: 'Factory jobs' });
   await expect(table.getByRole('row')).toHaveCount(3);
-  await page.getByLabel('Show').click();
-  await page.getByRole('option', { name: 'needs human' }).click();
+  await page.getByLabel('Show').selectOption('needs human');
   await expect(table.getByRole('row')).toHaveCount(2);
   await expect(table.getByText('Rate limiting for public API')).toBeVisible();
-  await page.getByLabel('Repository').click();
-  await page.getByRole('option', { name: 'All repositories' }).click();
-  await page.getByLabel('Show').click();
-  await page.getByRole('option', { name: 'cancelled' }).click();
+  await page.getByLabel('Repository').selectOption({ label: 'All repositories' });
+  await page.getByLabel('Show').selectOption('cancelled');
   await expect(table.getByRole('row')).toHaveCount(2);
   await expect(table.getByText('Migrate to pnpm')).toBeVisible();
 });
@@ -204,8 +200,7 @@ test('a finished job can be archived, found under Show: archived, and unarchived
   const table = page.getByRole('table', { name: 'Factory jobs' });
   await expect(table.getByRole('row')).toHaveCount(10); // header + 9 unarchived jobs
   await expect(table.getByText(title)).toHaveCount(0);
-  await page.getByLabel('Show').click();
-  await page.getByRole('option', { name: 'archived' }).click();
+  await page.getByLabel('Show').selectOption('archived');
   await expect(table.getByRole('row')).toHaveCount(2);
   await expect(table.getByText(title)).toBeVisible();
   await expect(table.getByText('archived', { exact: true })).toBeVisible();
@@ -241,8 +236,7 @@ async function archiveFromRow(page: Page): Promise<void> {
   await expect(table.getByText(title)).toHaveCount(0);
   await expect(table.getByRole('row')).toHaveCount(10);
 
-  await page.getByRole('combobox', { name: 'Show' }).click();
-  await page.getByRole('option', { name: 'archived' }).click();
+  await page.getByRole('combobox', { name: 'Show' }).selectOption('archived');
   await expect(table.getByRole('row')).toHaveCount(2);
   await rowOf(title)
     .getByRole('button', { name: new RegExp(`^Unarchive ${title} [(]job-[0-9a-f]{8}[)]$`) })
@@ -251,8 +245,7 @@ async function archiveFromRow(page: Page): Promise<void> {
   // Nothing is archived any more: the archived view is empty.
   await expect(table).toHaveCount(0);
   await expect(page.getByText('No jobs match these filters.')).toBeVisible();
-  await page.getByRole('combobox', { name: 'Show' }).click();
-  await page.getByRole('option', { name: /^current/ }).click();
+  await page.getByRole('combobox', { name: 'Show' }).selectOption('current');
   await expect(table.getByRole('row')).toHaveCount(11);
   await expect(table.getByText(title)).toBeVisible();
 }
@@ -464,13 +457,11 @@ test('filters by text and sorts by a header', async ({ page }) => {
   // Combines with Show: no cancelled job matches "csv".
   await filter.fill('csv');
   await expect(table.getByRole('row')).toHaveCount(2);
-  await page.getByRole('combobox', { name: 'Show' }).click();
-  await page.getByRole('option', { name: 'cancelled' }).click();
+  await page.getByRole('combobox', { name: 'Show' }).selectOption('cancelled');
   await expect(table).toHaveCount(0);
   await filter.fill('');
   await expect(table.getByRole('row')).toHaveCount(2);
-  await page.getByRole('combobox', { name: 'Show' }).click();
-  await page.getByRole('option', { name: /^current/ }).click();
+  await page.getByRole('combobox', { name: 'Show' }).selectOption('current');
   await expect(table.getByRole('row')).toHaveCount(11);
 
   const job = table.getByRole('columnheader', { name: 'Job' });

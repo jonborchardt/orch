@@ -30,6 +30,13 @@ export class ApiFailure extends Error {
   }
 }
 
+/** A rejection as one line of text: an Error's message, anything else as a string. */
+export const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** A polled view's error: an `ApiFailure` as `type: message`, anything else as a string. */
+export const failureText = (err: unknown) =>
+  err instanceof ApiFailure ? `${err.type}: ${err.message}` : String(err);
+
 async function parse<T>(res: Response): Promise<T> {
   if (res.ok) return (await res.json()) as T;
   let body: ApiError | undefined;

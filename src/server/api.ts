@@ -361,7 +361,8 @@ export function assertJobId(id: string | undefined): string {
 
 /**
  * The only shapes orch writes logs under: `verification/<runId>/<checkId>.log` (ops/verify.ts) and
- * `ci/<sha7>/<name>.log` (ops/github.ts). Mirrored by `isLogPath` in web/src/format.ts.
+ * `ci/<sha7>/<name>.log` (ops/github.ts). The dashboard links only the hrefs `logLinks` builds
+ * from it, so the client holds no copy of this rule.
  */
 const LOG_PATH = /^(?:verification\/\d+|ci\/[0-9a-f]{7})\/[A-Za-z0-9._-]+\.log$/;
 
@@ -572,6 +573,14 @@ export function detail(store: Store, id: string): JobDetailView {
       pr: httpUrl(job.prUrl),
       repo: githubRepo(job.repo),
       branch: branchLink(job, events),
+      branchUnpushed:
+        !job.prUrl &&
+        !events.some((e) => e.type === 'branch.pushed') &&
+        githubRepo(job.repo) !== null,
+      logs: logLinks(id, [
+        ...(plan?.verification?.run?.checks.map((c) => c.outputPath) ?? []),
+        ...ci.failures.map((f) => f.log),
+      ]),
     },
     session: sessionView(events),
     claudeSessions: claudeSessions(store, id),
@@ -594,6 +603,18 @@ function branchLink(job: Job, events: Event[]): string | null {
     /^(https?:\/\/[^/]+\/[^/]+\/[^/]+)\/pull\/\d+/.exec(job.prUrl ?? '')?.[1] ??
     null;
   return base && `${base}/tree/${job.branch.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/** The artifact route of each log-shaped path, each segment encoded; other paths get none. */
+function logLinks(id: string, paths: unknown[]): Record<string, string> {
+  return Object.fromEntries(
+    paths
+      .filter(isLogPath)
+      .map((p) => [
+        p,
+        `/api/jobs/${id}/artifacts/${p.split('/').map(encodeURIComponent).join('/')}`,
+      ]),
+  );
 }
 
 /** `https://github.com/<owner>/<repo>` for a github.com identity; null for any other remote. */

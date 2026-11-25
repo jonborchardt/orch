@@ -266,7 +266,10 @@ export interface JobDetailView {
    * branch's GitHub tree URL once a recorded PR or `branch.pushed` event shows it is on the remote.
    * `pr` is the recorded PR URL only when it parses with an http(s) scheme; every PR href in the
    * detail view uses it. `repo` is `https://github.com/<owner>/<repo>` for a github.com identity and
-   * null for any other remote; commit links are built from it alone.
+   * null for any other remote; commit links are built from it alone. `branchUnpushed` is true
+   * when a github.com job has no PR and no `branch.pushed` event, so `branch` has no link yet.
+   * `logs` maps each log-shaped verification check `outputPath` and CI failure `log` to its
+   * artifact route; a path missing from it is not served and is shown as text.
    */
   links: {
     vscode: string | null;
@@ -274,6 +277,8 @@ export interface JobDetailView {
     pr: string | null;
     repo: string | null;
     branch: string | null;
+    branchUnpushed: boolean;
+    logs: Record<string, string>;
   };
   /** Current execution session, or null when none was ever attached. */
   session: SessionView | null;
