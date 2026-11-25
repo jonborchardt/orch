@@ -20,7 +20,13 @@ import { claudeLimit } from '../core/claude-limit.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { orderTickets, ticketKey } from '../core/tickets.ts';
-import { endsRun, now, personMergeStep, TERMINAL_STATUSES } from '../core/workflow.ts';
+import {
+  endsRun,
+  now,
+  personMergeStep,
+  TERMINAL_STATUSES,
+  transientGitHubError,
+} from '../core/workflow.ts';
 import {
   type ChildExit,
   type ClaudeChild,
@@ -79,6 +85,12 @@ export const CI_MAX_POLLS = 60;
 /** Attempts at a step that failed for a passing reason (GitHub unreadable, mergeability unknown). */
 export const TRANSIENT_ATTEMPTS = 5;
 export const RETRY_SECONDS = 30;
+/**
+ * Waits before each retry of a GitHub call that failed transiently (`transientGitHubError`):
+ * 1, 2, 4, 8, 16 minutes, so at most six attempts at one step (decision
+ * 2026-11-25-bounded-github-retry).
+ */
+export const GITHUB_BACKOFF_SECONDS: readonly number[] = [60, 120, 240, 480, 960];
 const POLL_MS = 2000;
 const BEAT_MS = 30_000;
 /** The stop code of a child that hit a Claude usage or rate limit; the run stays resumable. */
@@ -98,6 +110,8 @@ export interface RunOptions {
   startTime?: ((pid: number) => number | null) | undefined;
   /** CI observations before giving the ticket up; tests lower it. Defaults to `CI_MAX_POLLS`. */
   ciMaxPolls?: number | undefined;
+  /** Waits before retrying a transient GitHub failure; tests shorten it. Defaults to `GITHUB_BACKOFF_SECONDS`. */
+  githubBackoff?: readonly number[] | undefined;
 }
 
 export interface RunSummary {
@@ -139,6 +153,7 @@ interface Run {
   log: (line: string) => void;
   pollMs: number;
   ciMaxPolls: number;
+  githubBackoff: readonly number[];
   /** Whether this controller still holds the lock it took. */
   owned(): boolean;
   /**
@@ -326,7 +341,9 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
   run.assertOwned();
   const { token } = resumeFactoryJob(store, jobId, { session: RUNNER_SESSION });
   const auth = { token };
+  // Failures in a row: transient ones back off on `githubBackoff`, others retry on `RETRY_SECONDS`.
   let failures = 0;
+  let transient = 0;
   try {
     for (let polls = 0; polls < run.ciMaxPolls; polls++) {
       if (run.stopNow()) return { kind: 'stopped' };
@@ -337,20 +354,24 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
       try {
         const r = reconcileCi(store, jobId, auth);
         failures = 0;
+        transient = 0;
         run.log(`  ci: ${r.action}: ${r.reason}`);
         if (r.action !== 'wait') return null;
         waitSeconds = r.waitSeconds ?? RETRY_SECONDS;
       } catch (err) {
         if (!(err instanceof ToolError)) throw err;
-        failures += 1;
+        const passing = transientGitHubError(err.message);
+        if (passing) transient += 1;
+        else failures += 1;
         run.log(`  ci: could not read GitHub (${err.message})`);
-        if (failures >= TRANSIENT_ATTEMPTS) {
+        if (passing ? transient > run.githubBackoff.length : failures >= TRANSIENT_ATTEMPTS) {
           return {
             kind: 'blocked',
             code: 'github-unreadable',
-            reason: `GitHub could not be read ${String(failures)} times in a row: ${err.message}`,
+            reason: `GitHub could not be read ${String(failures + transient)} times in a row: ${err.message}`,
           };
         }
+        if (passing) waitSeconds = run.githubBackoff[transient - 1] ?? RETRY_SECONDS;
       }
       await run.wait(waitSeconds);
     }
@@ -471,8 +492,14 @@ type MergeRun =
   | { kind: 'stopped' }
   | Blocked;
 
-/** `mergeJob` until it gives an answer that is not "try again", within a small budget. */
+/**
+ * `mergeJob` until it gives an answer that is not "try again", within a small budget: an unknown
+ * mergeability waits `RETRY_SECONDS` up to `TRANSIENT_ATTEMPTS` times; an `error` or a
+ * `github-refused` the rule calls transient backs off on `githubBackoff`.
+ */
 async function merge(run: Run, jobId: string): Promise<MergeRun> {
+  let waits = 0;
+  let retries = 0;
   for (let attempt = 1; ; attempt++) {
     run.assertOwned();
     const m = mergeJob(run.store, jobId, { session: RUNNER_SESSION });
@@ -503,11 +530,21 @@ async function merge(run: Run, jobId: string): Promise<MergeRun> {
         return { kind: 'blocked', code: 'reland-refused', reason: m.reason };
       case 'blocked': {
         const code = m.code ?? 'merge-blocked';
-        return { kind: 'blocked', code, reason: `${code}: ${m.reason}` };
+        if (code !== 'github-refused' || !transientGitHubError(m.reason)) {
+          return { kind: 'blocked', code, reason: `${code}: ${m.reason}` };
+        }
+        if (retries >= run.githubBackoff.length) {
+          return {
+            kind: 'blocked',
+            code,
+            reason: `${code} in ${String(attempt)} attempts: ${m.reason}`,
+          };
+        }
+        break;
       }
       case 'waiting':
-      case 'error':
-        if (attempt >= TRANSIENT_ATTEMPTS) {
+        waits += 1;
+        if (waits >= TRANSIENT_ATTEMPTS) {
           return {
             kind: 'blocked',
             code: 'merge-no-answer',
@@ -516,7 +553,21 @@ async function merge(run: Run, jobId: string): Promise<MergeRun> {
         }
         await run.wait(RETRY_SECONDS);
         if (run.stopNow()) return { kind: 'stopped' };
+        continue;
+      case 'error':
+        if (retries >= run.githubBackoff.length) {
+          return {
+            kind: 'blocked',
+            code: 'merge-no-answer',
+            reason: `merge gave no answer in ${String(attempt)} attempts: ${m.reason}`,
+          };
+        }
+        break;
     }
+    // A transient failure: back off, then ask mergeJob again.
+    await run.wait(run.githubBackoff[retries] ?? 0);
+    retries += 1;
+    if (run.stopNow()) return { kind: 'stopped' };
   }
 }
 
@@ -886,6 +937,7 @@ async function drive(
     log: opts.log ?? (() => undefined),
     pollMs: opts.pollMs ?? POLL_MS,
     ciMaxPolls: opts.ciMaxPolls ?? CI_MAX_POLLS,
+    githubBackoff: opts.githubBackoff ?? GITHUB_BACKOFF_SECONDS,
     owned: () => lock.owned(),
     assertOwned: () => {
       if (!lock.owned()) throw new LostLockError(controllerPid(paths));

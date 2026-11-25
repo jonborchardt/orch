@@ -359,6 +359,9 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * as is), and its `changedFiles`, unless set, is their count (0 without any). `gh run rerun` succeeds and is only logged; `gh pr ready`
  * takes the PR out of draft; `gh pr edit --body-file` stores the PR's `body`; `gh pr merge` sets it MERGED with `mergeOid` as its merge commit.
  * `failAfter` fails a command after it took effect (a timeout that followed a merge).
+ * `failMessage` replaces the stderr of either ("shim: simulated failure" / "shim: timed out"), and
+ * `failTimes`, when set, limits them to that many failing calls: it counts down in the state, so
+ * later calls succeed.
  */
 const GH_SHIM_SOURCE = String.raw`
 const fs = require('node:fs');
@@ -372,6 +375,13 @@ const flag = (f) => args[args.indexOf(f) + 1];
 let code = 0;
 const out = (o) => process.stdout.write(typeof o === 'string' ? o : JSON.stringify(o));
 const notFound = () => { process.stderr.write('gh: Not Found (HTTP 404)'); code = 1; };
+const failing = (prefix) => {
+  if (!prefix || !(a + ' ' + b).startsWith(prefix)) return false;
+  if (typeof state.failTimes !== 'number') return true;
+  if (state.failTimes <= 0) return false;
+  state.failTimes -= 1;
+  return true;
+};
 const withHead = (p) => {
   p = { changedFiles: Array.isArray(p.files) ? p.files.length : 0, ...p };
   if (!state.bare) return p;
@@ -380,7 +390,7 @@ const withHead = (p) => {
     return { ...p, headRefOid: sha };
   } catch { return p; }
 };
-if (state.fail && (a + ' ' + b).startsWith(state.fail)) { process.stderr.write('shim: simulated failure'); code = 1; }
+if (failing(state.fail)) { process.stderr.write(state.failMessage || 'shim: simulated failure'); code = 1; }
 else if (a === 'repo' && b === 'view') out(state.repo);
 else if (a === 'issue' && b === 'view') out(state.issue);
 else if (a === 'pr' && b === 'list') out(state.prs.filter((p) => p.headRefName === flag('--head')).map(withHead));
@@ -438,7 +448,7 @@ else if (a === 'pr' && b === 'view') {
   });
   out(state.repo.url + '/pull/' + n + '\n');
 } else { process.stderr.write('shim: unknown command ' + args.join(' ')); code = 1; }
-if (state.failAfter && (a + ' ' + b).startsWith(state.failAfter)) { process.stderr.write('shim: timed out'); code = 1; }
+if (failing(state.failAfter)) { process.stderr.write(state.failMessage || 'shim: timed out'); code = 1; }
 fs.writeFileSync(file, JSON.stringify(state));
 process.exit(code);
 `;
@@ -460,6 +470,10 @@ export interface ShimState {
   fail?: string | undefined;
   /** Like `fail`, but the command takes effect first. */
   failAfter?: string | undefined;
+  /** stderr of a `fail`/`failAfter` failure instead of the default text. */
+  failMessage?: string | undefined;
+  /** When set, only this many matching calls fail; it counts down, so later calls succeed. */
+  failTimes?: number | undefined;
   /** Merge commit `gh pr merge` gives the PR (default: forty `c`). */
   mergeOid?: string | undefined;
   repo: { nameWithOwner: string; url: string; defaultBranchRef: { name: string } | null };

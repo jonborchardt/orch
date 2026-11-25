@@ -166,7 +166,12 @@ export function hanging(...before: Act[]): Launcher & { killed: number } {
   return l;
 }
 
-export const quick = { sleep: () => Promise.resolve(), pollMs: 1 };
+/** No real waits: a stubbed sleep, a 1 ms poll, and a zero-second GitHub backoff of production length. */
+export const quick = {
+  sleep: () => Promise.resolve(),
+  pollMs: 1,
+  githubBackoff: [0, 0, 0, 0, 0],
+};
 export const queue = (l: Launcher, repo: string | null = null): Promise<RunSummary> =>
   startSession(store, { mode: 'queue', repo }, { launch: l.launch, ...quick });
 export const one = (l: Launcher, id: number): Promise<RunSummary> =>
