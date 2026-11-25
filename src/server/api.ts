@@ -7,6 +7,15 @@ import { join, sep } from 'node:path';
 
 import { SPEC_REVIEW_PATH } from '../core/artifact-rules.ts';
 import { UsageError, ValidationError } from '../core/errors.ts';
+import {
+  type Answer,
+  attributedFindings,
+  creditOf,
+  type Finding,
+  type FindingAnswer,
+  findingOutcome,
+} from '../core/findings.ts';
+import { type RateGroup, rateNotes, tokenNotes } from '../core/model-notes.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { claudeHome, jobArtifactDir } from '../core/paths.ts';
 import { drawnModelsOf, ROLES, type RoleKind } from '../core/roles.ts';
@@ -33,7 +42,7 @@ import {
 import { planJob } from '../ops/factory.ts';
 import { gradedReadiness } from '../ops/init.ts';
 import { mergeView } from '../ops/merge-view.ts';
-import { storedUsage } from '../ops/token-usage.ts';
+import { jobTokens, storedUsage } from '../ops/token-usage.ts';
 import { ENDS, visits } from '../ops/usage.ts';
 import { currentFlakes } from '../ops/verify.ts';
 import { baseConflicts } from '../ops/worktree.ts';
@@ -49,7 +58,8 @@ import {
   sessionOf,
 } from '../storage/jobs.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
-import { latestRun, latestRunsByJob, runDetail } from '../storage/verification.ts';
+import { allTickets } from '../storage/tickets.ts';
+import { latestRun, latestRunsByJob, listRuns, runDetail } from '../storage/verification.ts';
 import {
   BLOCKER_EVENTS,
   blockerOf,
@@ -68,6 +78,12 @@ import type {
   ActionResponse,
   AgentsView,
   AgentTiming,
+  AuthorTotalRow,
+  BuilderModelRow,
+  ChallengerModelRow,
+  ModelKey,
+  ModelNoteView,
+  ReviewerModelRow,
   BoardRow,
   ClaudeSession,
   JobDetailView,
@@ -281,8 +297,9 @@ export function agents(store: Store): AgentsView {
   const reviewsOf = reviewsByJob(store.db, ids);
   const eventsOf = eventsByJob(store.db, ids, ['stage.started', ...ENDS]);
   const allReviews = [...reviewsOf.values()].flat();
+  const artifactsOf = artifactsByJob(store.db, ids);
   // The spec challenger records no review row; its verdicts are the registered spec reviews.
-  const specVerdicts = [...artifactsByJob(store.db, ids).values()]
+  const specVerdicts = [...artifactsOf.values()]
     .flat()
     .flatMap((a) =>
       SPEC_REVIEW_PATH.test(a.path) && a.marker !== null
@@ -290,7 +307,11 @@ export function agents(store: Store): AgentsView {
         : [],
     );
   const jobVisits = jobs.map((j) => ({ mode: j.mode, visits: visits(eventsOf.get(j.id) ?? []) }));
-  const view: AgentsView = { reviewers: [], stages: [] };
+  const view: AgentsView = {
+    reviewers: [],
+    stages: [],
+    ...modelMetrics(store, jobs, reviewsOf, artifactsOf),
+  };
   for (const role of ROLES) {
     if (role.kind === 'spec-challenge' || role.kind === 'review') {
       const xs =
@@ -326,6 +347,353 @@ export function agents(store: Store): AgentsView {
     view.stages.push(row);
   }
   return view;
+}
+
+/** Events the per-model metrics read (decision 2026-11-25-attributed-findings). */
+const MODEL_EVENTS = [
+  'models.drawn',
+  'job.reworked',
+  'job.blocked',
+  'artifact.registered',
+  'artifact.replaced',
+];
+
+type EscapeCause = 'ciRepair' | 'bug' | 'revert';
+
+interface BuilderAcc extends ModelKey {
+  jobs: number;
+  verified: number;
+  firstPass: number;
+  rounds: number;
+  ciRepairs: number;
+  blocked: number;
+  tokenJobs: number;
+  tokens: number;
+}
+
+const keyOf = (k: ModelKey) => JSON.stringify([k.role, k.model, k.sameAsAuthor]);
+const rateOf = (x: number, n: number) => (n === 0 ? null : x / n);
+const roleIndex = (role: string) => ROLES.findIndex((r) => r.name === role);
+function ordered<T extends ModelKey>(rows: Iterable<T>): T[] {
+  return [...rows].sort(
+    (a, b) =>
+      roleIndex(a.role) - roleIndex(b.role) ||
+      String(a.model).localeCompare(String(b.model)) ||
+      String(a.sameAsAuthor).localeCompare(String(b.sameAsAuthor)),
+  );
+}
+
+function getOr<T>(map: Map<string, T>, key: string, make: () => T): T {
+  let v = map.get(key);
+  if (v === undefined) {
+    v = make();
+    map.set(key, v);
+  }
+  return v;
+}
+
+/** A ticket names a job by its id or its PR URL, in its title or body. */
+function namesJob(t: { title: string; body: string }, job: Job): boolean {
+  const text = `${t.title}\n${t.body}`;
+  return text.includes(job.id) || (job.prUrl !== null && text.includes(job.prUrl));
+}
+
+/** The round's attributed findings; null when unreadable or legacy (not attributed). */
+function findingsOf(store: Store, job: Job, rel: string, round: number): Finding[] | null {
+  try {
+    return attributedFindings(round, artifactContent(store, job.id, rel));
+  } catch {
+    return null;
+  }
+}
+
+/** The builder's latest answer per finding id, from build.md's registration events. */
+function answersOf(events: readonly Event[]): Map<string, { answer: Answer; at: string }> {
+  const out = new Map<string, { answer: Answer; at: string }>();
+  for (const e of events) {
+    if (e.type !== 'artifact.registered' && e.type !== 'artifact.replaced') continue;
+    const answers = e.payload['answers'];
+    if (e.payload['path'] !== 'build.md' || !Array.isArray(answers)) continue;
+    for (const a of answers as FindingAnswer[])
+      out.set(a.id, { answer: a.answer, at: e.createdAt });
+  }
+  return out;
+}
+
+/**
+ * The Agents section's per-model rows and notes: reviews and findings by each review row's
+ * recorded model, spec challenges and job outcomes by the job's draw. Artifacts are parsed here, at
+ * read time; nothing is stored.
+ */
+function modelMetrics(
+  store: Store,
+  jobs: readonly Job[],
+  reviewsOf: Map<string, Review[]>,
+  artifactsOf: Map<string, Artifact[]>,
+): Pick<AgentsView, 'byModel' | 'notes'> {
+  const eventsOf = eventsByJob(
+    store.db,
+    jobs.map((j) => j.id),
+    MODEL_EVENTS,
+  );
+  const tickets = allTickets(store.db);
+  const challengers = new Map<string, ChallengerModelRow>();
+  const reviewers = new Map<string, ReviewerModelRow & { ms: (number | null)[] }>();
+  const builders = new Map<string, BuilderAcc>();
+  const reviewerRow = (k: ModelKey) =>
+    getOr(reviewers, keyOf(k), () => ({
+      ...k,
+      reviews: 0,
+      objections: 0,
+      objectionRate: null,
+      onlyObjector: 0,
+      realCatches: 0,
+      fixed: 0,
+      unresolved: 0,
+      falseAlarms: { total: 0, declined: 0, overruled: 0, vanished: 0 },
+      escapes: { total: 0, ciRepair: 0, bug: 0, revert: 0 },
+      medianMs: null,
+      ms: [],
+    }));
+  const keyIn = (r: Review): ModelKey => ({
+    role: r.reviewer,
+    model: r.model,
+    sameAsAuthor: r.sameAsAuthor,
+  });
+
+  for (const job of jobs) {
+    const events = eventsOf.get(job.id) ?? [];
+    const drawn = drawnModelsOf(events);
+    const artifacts = artifactsOf.get(job.id) ?? [];
+    const reviews = reviewsOf.get(job.id) ?? [];
+    const judged = reviews.filter((r) => r.verdict !== null);
+    const rounds = [...new Set(judged.map((r) => r.round))].sort((a, b) => a - b);
+    const inRound = (round: number) => judged.filter((r) => r.round === round);
+
+    for (const r of judged) {
+      const row = reviewerRow(keyIn(r));
+      row.reviews += 1;
+      row.ms.push(span(r.createdAt, r.completedAt));
+      if (r.verdict !== 'changes') continue;
+      row.objections += 1;
+      if (inRound(r.round).filter((x) => x.verdict === 'changes').length === 1)
+        row.onlyObjector += 1;
+    }
+
+    // Blocking findings: each raising reviewer is credited by the finding's outcome.
+    const answers = answersOf(events);
+    const decision = artifacts.find((a) => a.path === 'decision.md');
+    const facts = {
+      finished: TERMINAL_STATUSES.includes(job.status),
+      approvedAt: decision?.marker === 'approve' ? decision.createdAt : null,
+    };
+    for (const a of artifacts) {
+      const m = /^round-(\d+)\/consolidated\.md$/.exec(a.path);
+      if (!m) continue;
+      const round = Number(m[1]);
+      const findings = findingsOf(store, job, a.path, round);
+      if (!findings) continue;
+      const next = rounds.find((r) => r > round);
+      for (const f of findings) {
+        const outcome = findingOutcome(answers.get(f.id), facts);
+        for (const name of f.reviewers) {
+          const raised = reviews.find((r) => r.round === round && r.reviewer === name);
+          const nextVerdict =
+            next === undefined
+              ? null
+              : (inRound(next).find((r) => r.reviewer === name)?.verdict ?? null);
+          const credit = creditOf(outcome, nextVerdict);
+          if (!credit) continue;
+          const row = reviewerRow(
+            raised ? keyIn(raised) : { role: name, model: null, sameAsAuthor: null },
+          );
+          if (credit === 'real-catch') row.realCatches += 1;
+          else if (credit === 'fixed' || credit === 'unresolved') row[credit] += 1;
+          else {
+            row.falseAlarms.total += 1;
+            row.falseAlarms[credit] += 1;
+          }
+        }
+      }
+    }
+
+    // Escapes: a PASS followed by a CI repair, a bug ticket, or a revert ticket naming the job.
+    const escaped = new Map<string, { review: Review; causes: Set<EscapeCause> }>();
+    const mark = (round: number | undefined, cause: EscapeCause) => {
+      if (round === undefined) return;
+      for (const r of inRound(round).filter((x) => x.verdict === 'pass')) {
+        getOr(escaped, r.reviewer, () => ({ review: r, causes: new Set() })).causes.add(cause);
+      }
+    };
+    for (const e of events) {
+      if (e.type !== 'job.reworked' || e.payload['from'] !== 'ci' || e.payload['integration'])
+        continue;
+      // The last review round finished before the repair: the one that passed the failing code.
+      mark(
+        rounds
+          .filter((n) => inRound(n).every((r) => (r.completedAt ?? r.createdAt) <= e.createdAt))
+          .at(-1),
+        'ciRepair',
+      );
+    }
+    const naming = tickets.filter((t) => namesJob(t, job));
+    if (naming.some((t) => t.type === 'bug')) mark(rounds.at(-1), 'bug');
+    if (naming.some((t) => /revert/i.test(t.title))) mark(rounds.at(-1), 'revert');
+    for (const { review, causes } of escaped.values()) {
+      const row = reviewerRow(keyIn(review));
+      row.escapes.total += 1;
+      for (const c of causes) row.escapes[c] += 1;
+    }
+
+    // The spec challenger records no review row: its verdicts are the spec reviews.
+    const ch = drawn?.['spec-challenger'];
+    for (const a of artifacts) {
+      if (!SPEC_REVIEW_PATH.test(a.path) || a.marker === null) continue;
+      const k = {
+        role: 'spec-challenger',
+        model: ch?.model ?? null,
+        sameAsAuthor: ch?.sameAsAuthor ?? null,
+      };
+      const row = getOr(challengers, keyOf(k), () => ({
+        ...k,
+        reviews: 0,
+        objections: 0,
+        objectionRate: null,
+      }));
+      row.reviews += 1;
+      if (a.marker === 'changes') row.objections += 1;
+    }
+
+    // Job outcomes by the building roles' drawn models; tokens are whole-job.
+    const roles = [
+      job.mode === 'fast' ? 'fast-builder' : 'builder',
+      ...(artifacts.some((a) => a.path === 'spec.md') ? ['spec-writer'] : []),
+    ];
+    const first = listRuns(store.db, job.id)
+      .filter((r) => r.status !== 'running')
+      .at(-1);
+    const t = jobTokens(store, job.id);
+    for (const role of roles) {
+      const k = { role, model: drawn?.[role]?.model ?? null, sameAsAuthor: null };
+      const acc = getOr(builders, keyOf(k), () => ({
+        ...k,
+        jobs: 0,
+        verified: 0,
+        firstPass: 0,
+        rounds: 0,
+        ciRepairs: 0,
+        blocked: 0,
+        tokenJobs: 0,
+        tokens: 0,
+      }));
+      acc.jobs += 1;
+      if (first) acc.verified += 1;
+      if (first?.status === 'passed') acc.firstPass += 1;
+      acc.rounds += new Set(reviews.map((r) => r.round)).size;
+      acc.ciRepairs += job.ciRepairs;
+      acc.blocked += events.filter((e) => e.type === 'job.blocked').length;
+      if (t) {
+        acc.tokenJobs += 1;
+        acc.tokens += t.input + t.output + t.cacheRead + t.cacheCreation;
+      }
+    }
+  }
+
+  const challengerRows = ordered(challengers.values()).map((r) => ({
+    ...r,
+    objectionRate: rateOf(r.objections, r.reviews),
+  }));
+  const reviewerRows = ordered(reviewers.values()).map(({ ms, ...r }) => ({
+    ...r,
+    objectionRate: rateOf(r.objections, r.reviews),
+    medianMs: timing(ms).medianMs,
+  }));
+  const builderRows: BuilderModelRow[] = ordered(builders.values()).map((a) => ({
+    role: a.role,
+    model: a.model,
+    sameAsAuthor: null,
+    jobs: a.jobs,
+    firstPassRate: rateOf(a.firstPass, a.verified),
+    meanRounds: rateOf(a.rounds, a.jobs),
+    meanCiRepairs: rateOf(a.ciRepairs, a.jobs),
+    escalationsPerJob: rateOf(a.blocked, a.jobs),
+    tokenJobs: a.tokenJobs,
+    meanTokens: rateOf(a.tokens, a.tokenJobs),
+  }));
+
+  const judging = [...challengerRows, ...reviewerRows];
+  const authorTotals = new Map<string, AuthorTotalRow>();
+  for (const r of judging) {
+    const row = getOr(authorTotals, JSON.stringify([r.role, r.sameAsAuthor]), () => ({
+      role: r.role,
+      sameAsAuthor: r.sameAsAuthor,
+      reviews: 0,
+      objections: 0,
+      objectionRate: null,
+    }));
+    row.reviews += r.reviews;
+    row.objections += r.objections;
+  }
+  const totals = [...authorTotals.values()]
+    .map((r) => ({ ...r, objectionRate: rateOf(r.objections, r.reviews) }))
+    .sort(
+      (a, b) =>
+        roleIndex(a.role) - roleIndex(b.role) ||
+        String(a.sameAsAuthor).localeCompare(String(b.sameAsAuthor)),
+    );
+
+  // Notes: models compared within each role (legacy "not recorded" rows are left out).
+  const notes: ModelNoteView[] = [];
+  for (const role of ROLES) {
+    const mine = judging.filter((r) => r.role === role.name && r.model !== null);
+    if (mine.length > 0) {
+      const byModel = new Map<string, RateGroup>();
+      for (const r of mine) {
+        const g = getOr(byModel, r.model ?? '', () => ({
+          label: r.model ?? '',
+          objections: 0,
+          reviews: 0,
+        }));
+        g.objections += r.objections;
+        g.reviews += r.reviews;
+      }
+      notes.push(...rateNotes(role.name, [...byModel.values()]));
+      const same = totals.find((r) => r.role === role.name && r.sameAsAuthor === true);
+      const other = totals.find((r) => r.role === role.name && r.sameAsAuthor === false);
+      if (same && other) {
+        notes.push(
+          ...rateNotes(role.name, [
+            { label: "the author's model", ...same },
+            { label: 'a different model', ...other },
+          ]),
+        );
+      }
+    }
+    const built = builderRows.filter((r) => r.role === role.name && r.model !== null);
+    if (built.length > 0) {
+      notes.push(
+        ...tokenNotes(
+          role.name,
+          built.map((r) => ({
+            label: r.model ?? '',
+            jobs: r.jobs,
+            withTokens: r.tokenJobs,
+            mean: r.meanTokens,
+          })),
+        ),
+      );
+    }
+  }
+
+  return {
+    byModel: {
+      challengers: challengerRows,
+      reviewers: reviewerRows,
+      builders: builderRows,
+      authorTotals: totals,
+    },
+    notes,
+  };
 }
 
 export function repos(store: Store): string[] {

@@ -97,13 +97,27 @@ export function fixture(rel: string, marker?: string): string {
     return `# Review\n\n## Findings\nnone\n\nVERDICT: ${marker ?? 'PASS'}\n`;
   }
   if (/^round-\d+\/consolidated\.md$/.test(p)) {
-    return `# Consolidated\n\n## Findings\nnone\n\nBLOCKING: ${marker ?? '0'}\n`;
+    // One tagged [BLOCKING] line per counted finding, raised by security (every round records it).
+    const n = Number(marker ?? '0');
+    const findings =
+      Number.isInteger(n) && n > 0
+        ? Array.from(
+            { length: n },
+            (_, i) => `${String(i + 1)}. [BLOCKING] f — p → q (reviewers: security)`,
+          ).join('\n')
+        : 'none';
+    return `# Consolidated\n\n## Findings\n${findings}\n\nBLOCKING: ${marker ?? '0'}\n`;
   }
   if (p === 'decision.md') {
     return `# Decision\n\n## Rationale\nok\n\nDECISION: ${marker ?? 'APPROVE'}\n`;
   }
   if (p === 'pr.md') return '# PR\n\n## Validation\nok\n\n## Known limitations\nnone\n';
   return '# ok\n';
+}
+
+/** build.md answering each blocking finding id (e.g. `1.1`) as fixed. */
+export function answeredBuild(...ids: string[]): string {
+  return `${fixture('build.md')}\n## Findings addressed\n\n${ids.map((id) => `- ${id}: fixed`).join('\n')}\n`;
 }
 
 /** Write a rule-compliant Markdown artifact file relative to `dir` (or the given body). */

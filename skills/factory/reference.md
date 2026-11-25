@@ -96,7 +96,8 @@ result or as not run with why (never a check you did not run written as passed):
 
 ## Findings addressed (rounds > 1 only)
 
-- <finding id or text> → <what changed>
+- 1.1: fixed
+- 1.2: declined — <reason>
 
 ## Known gaps
 
@@ -198,9 +199,10 @@ reviewer's ownership and inside the spec's scope; unrelated improvements go unde
 
 ## Findings
 
-Deduplicated, actionable, in priority order. Each names the reviewers who raised it.
+Deduplicated, actionable, in priority order. Each `[BLOCKING]` line ends with the reviewers who
+raised it, as `(reviewers: <name>[, <name>...])`.
 
-1. [BLOCKING] <file:line> — <problem> → <fix> (correctness, security)
+1. [BLOCKING] <file:line> — <problem> → <fix> (reviewers: correctness, security)
 2. [MAJOR] ...
 3. [MINOR] ...
 
@@ -217,7 +219,13 @@ changed, and whether human authorization is still needed. "None" when there are 
 BLOCKING: 1
 ```
 
-`BLOCKING` counts BLOCKING findings only. Zero is written as `BLOCKING: 0`. A scope gap
+`BLOCKING` counts BLOCKING findings only. Zero is written as `BLOCKING: 0`. orch refuses the file
+when a `[BLOCKING]` line has no `(reviewers: ...)` tag, when the tag names a reviewer that recorded
+no review this round, or when the count of `[BLOCKING]` lines under Findings differs from
+`BLOCKING`. Blocking findings are numbered `<round>.<k>`: the k-th `[BLOCKING]` line of the round,
+in file order (MAJOR and MINOR lines are not counted, the list's own numbers are ignored). The next
+`build.md` answers each one once under `## Findings addressed`, as `- <round>.<k>: fixed` or
+`- <round>.<k>: declined — <reason>`; orch refuses it while an id is unanswered or unknown. A scope gap
 (something the spec puts in scope that the diff does not implement) is always BLOCKING and is never
 dropped, whichever reviewer raised it.
 

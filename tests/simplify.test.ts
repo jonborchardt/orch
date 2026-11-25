@@ -27,7 +27,7 @@ import {
   verdict,
   verify,
 } from './drive.ts';
-import { commitFile, fixture, gitIn, type TempStore, tempStore } from './helpers.ts';
+import { answeredBuild, commitFile, fixture, gitIn, type TempStore, tempStore } from './helpers.ts';
 
 let store: TempStore;
 let clone: string;
@@ -164,7 +164,7 @@ describe('rounds without a simplify record fall back to build.md', () => {
     go(store, c, 'start');
     commitFile(c.wt, 'src/r2.ts', '// r2\n', 'r2');
     verify(store, c);
-    add(store, c, 'build.md', fixture('build.md'), true);
+    add(store, c, 'build.md', answeredBuild('1.1'), true);
     go(store, c, 'complete');
     expect(getJob(store.db, c.id)).toMatchObject({ stage: 'simplify', round: 2 });
     // A human skips this round's simplify; round-1/simplify.md describes an older commit.

@@ -25,6 +25,7 @@ import {
   newToken,
 } from '../core/ownership.ts';
 import { stripControl } from '../core/flake.ts';
+import type { FindingAnswer } from '../core/findings.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { DEFAULT_CONFIG, drawModels, drawnModelsOf, type FactoryConfig } from '../core/roles.ts';
 import { SESSION_EVENT, type SessionRef } from '../core/session.ts';
@@ -507,6 +508,8 @@ export interface RegisterOptions extends Auth {
   replace?: boolean | undefined;
   /** Worktree HEAD the artifact describes (ops/gates.ts supplies it). */
   head?: string | null | undefined;
+  /** build.md's checked answers to blocking findings, kept on its event (ops/gates.ts). */
+  answers?: readonly FindingAnswer[] | undefined;
 }
 
 /**
@@ -569,6 +572,8 @@ export function registerArtifact(
       sha256: checked.sha256,
       head,
       ...(specSha256 ? { specSha256 } : {}),
+      // build.md is replaced each round; its event keeps that round's answers for the Agents tab.
+      ...(opts.answers ? { answers: opts.answers } : {}),
     };
     return {
       patch: {},
