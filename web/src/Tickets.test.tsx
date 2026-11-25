@@ -85,6 +85,7 @@ const idle = (over: Partial<RunnerStatus> = {}): RunnerStatus => ({
   current: null,
   next: 'Nothing is running. orch start takes the next ready ticket.',
   last: null,
+  build: null,
   ...over,
 });
 
@@ -352,8 +353,10 @@ describe('sections', () => {
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('No jobs yet');
     });
-    // Nothing about tickets is asked for until the section is opened.
-    expect(db.gets.some((u) => u.includes('ticket') || u.includes('runner'))).toBe(false);
+    // Nothing about tickets is asked for until the section is opened. The app-wide installed-build
+    // warning reads the runner once per section change; the queue's runner poll waits for Tickets.
+    expect(db.gets.some((u) => u.includes('ticket'))).toBe(false);
+    expect(db.gets.filter((u) => u.includes('runner')).length).toBeLessThanOrEqual(1);
 
     go('#/tickets');
     await table();

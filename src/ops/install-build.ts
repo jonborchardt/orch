@@ -1,0 +1,61 @@
+/**
+ * Is the installed build older than its checkout? `npm run build` stamps `dist/build-info.json`
+ * with the commit it built; this compares it with the install root's `HEAD` and upstream using
+ * local refs only. Read-only: it never fetches, pulls, or rebuilds, so the upstream is only as
+ * fresh as the last fetch.
+ */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { installRoot } from '../core/paths.ts';
+import { tryGit } from '../git/run.ts';
+
+export interface InstallBuild {
+  builtFrom: string;
+  head: string;
+  upstream: string | null;
+  stale: boolean;
+  message: string;
+}
+
+export const BUILD_INFO = join('dist', 'build-info.json');
+
+/** Null when there is no stamp or `root` is not a Git checkout; never throws. */
+export function installBuild(root: string = installRoot()): InstallBuild | null {
+  let builtFrom: unknown;
+  try {
+    builtFrom = (JSON.parse(readFileSync(join(root, BUILD_INFO), 'utf8')) as { commit?: unknown })
+      .commit;
+  } catch {
+    return null;
+  }
+  // A full object name only, so the stamp can never be read as a Git option.
+  if (typeof builtFrom !== 'string' || !/^[0-9a-f]{40,64}$/.test(builtFrom)) return null;
+  const [head, branch] =
+    tryGit(root, 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD')?.split('\n') ?? [];
+  if (!head || !branch) return null;
+  const [upstream, upName] =
+    tryGit(root, 'rev-parse', '@{u}', '--abbrev-ref', '@{u}')?.split('\n') ?? [];
+  // Behind `ref`, or a commit this checkout does not know (rev-list fails).
+  const behind = (ref: string) =>
+    ref !== builtFrom &&
+    Number(tryGit(root, 'rev-list', '--count', `${builtFrom}..${ref}`) ?? 1) > 0;
+  const ahead =
+    upstream && upName && behind(upstream)
+      ? { name: upName, sha: upstream }
+      : behind(head)
+        ? { name: branch, sha: head }
+        : null;
+  const short = (sha: string) => sha.slice(0, 7);
+  return {
+    builtFrom,
+    head,
+    upstream: upstream ?? null,
+    stale: ahead !== null,
+    message:
+      ahead === null
+        ? `built from ${short(builtFrom)}, current with ${branch}`
+        : `built from ${short(builtFrom)}, ${ahead.name} is at ${short(ahead.sha)}: ` +
+          'pull, `npm run build`, `orch install`',
+  };
+}

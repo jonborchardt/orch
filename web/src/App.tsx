@@ -16,14 +16,14 @@ import {
 } from '@mui/material';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import type { BoardRow } from '../../src/server/types.ts';
+import type { BoardRow, RunnerStatus } from '../../src/server/types.ts';
 import { AgentsPage } from './Agents.tsx';
 import { JobBoard } from './JobBoard.tsx';
 import { type DetailActivity, JobDetail } from './JobDetail.tsx';
 import { RunsPage } from './Runs.tsx';
 import { NO_FILTERS, type TicketFilters, TicketsPage } from './Tickets.tsx';
 import { UsagePage } from './Usage.tsx';
-import { ApiFailure, fetchBoard, fetchRepos } from './api.ts';
+import { ApiFailure, fetchBoard, fetchRepos, fetchRunner } from './api.ts';
 
 function useHashRoute(): string {
   const [hash, setHash] = useState(() => window.location.hash);
@@ -116,6 +116,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const [inFlight, setInFlight] = useState(0);
   const [detailActivity, setDetailActivity] = useState<DetailActivity>('loading');
   const [ticketFilters, setTicketFilters] = useState<TicketFilters>(NO_FILTERS);
+  const [build, setBuild] = useState<RunnerStatus['build']>(null);
   const ticketMatch = /^#\/tickets(?:\/(\d{1,9}))?\/?$/.exec(hash);
   const runsMatch = /^#\/runs\/?$/.test(hash);
   const agentsMatch = /^#\/agents\/?$/.test(hash);
@@ -163,6 +164,17 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
       clearInterval(timer);
     };
   }, [load, refreshMs, section]);
+
+  // Whether the installed build lags its checkout; checked on load and on every section change.
+  // A failed request shows nothing: this is advice, never an error.
+  useEffect(() => {
+    fetchRunner().then(
+      (r) => {
+        setBuild(r.build);
+      },
+      () => undefined,
+    );
+  }, [section]);
 
   const jobMatch = /^#\/jobs\/(job-[0-9a-f]{8})$/.exec(hash);
   const visible = useMemo(
@@ -307,6 +319,11 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           {refreshing && <LinearProgress aria-label="Refreshing" sx={{ height: 4 }} />}
         </Box>
       </AppBar>
+      {build?.stale && (
+        <Alert severity="warning" sx={{ m: 1 }}>
+          {build.message}
+        </Alert>
+      )}
       {error && !other && (
         <Alert severity="error" sx={{ m: 1 }} role="alert">
           {error}

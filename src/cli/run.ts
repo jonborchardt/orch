@@ -110,6 +110,7 @@ export function formatStatus(s: RunnerStatus): string {
     );
   }
   lines.push(`next        ${s.next}`);
+  if (s.build?.stale) lines.push(`build       ${s.build.message}`);
   return lines.join('\n');
 }
 

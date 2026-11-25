@@ -204,12 +204,15 @@ describe('ticket API', () => {
   });
 
   it('serves the controller status read-only, and names the ticket of each job on the board', async () => {
-    expect(await body<RunnerStatus>(get('/api/runner'))).toMatchObject({
+    const runner = await body<RunnerStatus>(get('/api/runner'));
+    expect(runner).toMatchObject({
       state: 'idle',
       current: null,
       stop: { next: false, now: false },
       last: null,
     });
+    // The install-build check rides along; null when this checkout has no build stamp.
+    expect(runner).toHaveProperty('build');
     const [job] = await body<{ id: string }[]>(get('/api/tickets/1/jobs'));
     // One request ties every job to its ticket: the Tickets view never asks per row.
     const rows = await body<BoardRow[]>(get('/api/jobs'));
