@@ -15,19 +15,25 @@ import { ago } from './format.ts';
 const PREVIEW = 200;
 /**
  * A subagent whose meta file says `finished: false` counts as running only while its transcript
- * changed this recently; after that its state is unknown (it may have died or stopped writing).
+ * changed this recently; after that it reads `not finished` (it may be inside one long tool call,
+ * or it may have died).
  */
 export const RUNNING_WINDOW_MS = 5 * 60_000;
 
 const agentLabel = (a: SessionAgent | null) =>
   a ? `${a.type ?? 'agent'}: ${a.description ?? a.id}` : 'main';
 
-/** `finished`, `running`, or `status unknown`: only a recent `finished: false` reads as running. */
+/**
+ * `finished`, `running` (a recent `finished: false`), `not finished` (a quiet `finished: false`),
+ * or `status unknown`, only when `finished` is `null` (no meta file or no readable field).
+ */
 export function subagentState(s: SubagentSummary, now = Date.now()): string {
-  if (s.finished === true) return 'finished';
-  const recent = now - Date.parse(s.modifiedAt) < RUNNING_WINDOW_MS;
-  return s.finished === false && recent ? 'running' : 'status unknown';
+  if (s.finished === null) return 'status unknown';
+  if (s.finished) return 'finished';
+  return now - Date.parse(s.modifiedAt) < RUNNING_WINDOW_MS ? 'running' : 'not finished';
 }
+
+const UNKNOWN_WHY = ' (its meta file has no readable finished field)';
 
 function When({ iso }: { iso: string }) {
   return (
@@ -189,11 +195,16 @@ export function SessionLog({ detail }: { detail: JobDetailView }) {
             aria-labelledby="session-subagents-title"
             sx={{ listStyle: 'none', p: 0, m: 0 }}
           >
-            {log.subagents.map((s) => (
-              <Typography component="li" key={s.id} variant="body2" data-agent-id={s.id}>
-                {agentLabel(s)} — {subagentState(s)}, last active <When iso={s.modifiedAt} />
-              </Typography>
-            ))}
+            {log.subagents.map((s) => {
+              const state = subagentState(s);
+              return (
+                <Typography component="li" key={s.id} variant="body2" data-agent-id={s.id}>
+                  {agentLabel(s)} — {state}
+                  {state === 'status unknown' && UNKNOWN_WHY}, last active{' '}
+                  <When iso={s.modifiedAt} />
+                </Typography>
+              );
+            })}
           </Box>
         )}
         {log.subagentsNotRead > 0 && (

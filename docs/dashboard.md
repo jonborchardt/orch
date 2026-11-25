@@ -271,9 +271,11 @@ its key input), `result`, and `error` entries; thinking blocks, attachments, que
 snapshots, malformed lines, and sidechain records in the main file are skipped. The panel shows
 the transcript's modified time and size; a Subagents list where each subagent is `finished` when
 its meta file says so, `running` only when the meta file says `finished: false` and its transcript
-changed in the last five minutes, and `status unknown` otherwise (also for a subagent inside one
-long tool call, such as a verification run, which writes nothing until it returns), each with when it was last
-active; the merged timeline newest first (relative time with the exact time in a tooltip, and a
+changed in the last five minutes, `not finished` when the meta file says `finished: false` and the
+transcript is older than that (for example a subagent inside one long tool call, such as a
+verification run, which writes nothing until it returns), and `status unknown`, with a short
+explanation, only when there is no meta file or it has no readable boolean `finished` field, each
+with when it was last active; the merged timeline newest first (relative time with the exact time in a tooltip, and a
 `main` or `<agent type>: <description>` label); "Earlier activity not shown" with the number of
 entries shown when a file was cut or a cap was hit; and earlier claude-code sessions with their
 `claude --resume <ref>` (not read). Long text collapses with Show more / Show less, a button with
