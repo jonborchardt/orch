@@ -197,11 +197,13 @@ describe('controller commands through the CLI', () => {
   });
 
   it('status, stop, and start with nothing to do', () => {
-    expect(json(orch(home, outside, ['status', '--json']))).toMatchObject({
+    const status = json(orch(home, outside, ['status', '--json']));
+    expect(status).toMatchObject({
       state: 'idle',
       current: null,
       stop: { next: false, now: false },
     });
+    expect(status).toHaveProperty('build');
     expect(orch(home, outside, ['status']).out).toContain('controller  idle');
     const stop = orch(home, outside, ['stop', 'next']);
     expect(stop.code).toBe(1);

@@ -148,6 +148,9 @@ orch doctor                                # Node, Git, Claude Code, gh, paths, 
 
 Restart Claude Code afterwards (skills are read at session start). After pulling a new version,
 run `npm run build` and `orch install` again; `orch doctor` reports stale agent copies.
+`npm run build` records its commit in `dist/build-info.json`, and `orch status` and the dashboard
+warn when the install checkout or its upstream has moved past it. The check reads local refs only:
+it never fetches, pulls, or rebuilds, so it sees upstream commits only after a `git fetch`.
 
 ## Configure a repository
 
