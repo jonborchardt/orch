@@ -108,6 +108,18 @@ describe('artifact rules', () => {
       expect(owns('build', 2)).toThrow(ValidationError);
     }
   });
+
+  it('lets a spec escalation re-register spec.md and nothing else', () => {
+    expect(() => {
+      assertStageOwns('spec.md', 'needs-human', 0, 'spec');
+    }).not.toThrow();
+    expect(() => {
+      assertStageOwns('spec.md', 'needs-human', 0, 'build');
+    }).toThrow(ValidationError);
+    expect(() => {
+      assertStageOwns('spec-review-1.md', 'needs-human', 0, 'spec');
+    }).toThrow(ValidationError);
+  });
 });
 
 describe('worktree paths', () => {

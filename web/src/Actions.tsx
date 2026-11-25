@@ -36,6 +36,7 @@ const LABEL: Record<DashboardAction, string> = {
   'remove-worktree': 'Remove the worktree (the branch is kept)',
   'fix-conflicts': 'Fix merge conflicts with the base',
   answer: 'Answer the question',
+  'edit-spec': 'Edit spec.md',
 };
 
 const STAGES = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci'] as const;
@@ -94,6 +95,8 @@ function effect(a: DashboardAction, d: JobDetailView, to: string): string {
           : '';
       return `${why}. Merges ${base} into the branch: a conflicting merge is aborted and recorded, and the job returns to build as pending for the builder to resolve it.${ci} No session is started; resume the job from a Claude Code session.`;
     }
+    case 'edit-spec':
+      return 'Validates the text and replaces the registered spec.md, as orch job artifact add --replace does. The job stays in needs-human; pick the resume-to-spec choice afterwards so the spec challenger reviews the edit.';
     // An answer is described by the action its choice maps to.
     case 'refresh-pr':
     case 'answer':
@@ -118,6 +121,12 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   const [error, setError] = useState<string | null>(null);
   // The choice the open `answer` dialog is for; the dialog then reads as the action it maps to.
   const [choice, setChoice] = useState<number | null>(null);
+  // The spec.md text the open `edit-spec` dialog edits.
+  const [content, setContent] = useState('');
+  const editing = open === 'edit-spec';
+  // Only offered with the registered text to prefill; a spec above the detail's inline cap is
+  // edited on disk instead (it would exceed the request body limit anyway).
+  const specText = detail.contents['spec.md'];
   const picked = open === 'answer' && choice !== null ? detail.choices?.[choice] : undefined;
   const shown = picked ? picked.action : open;
 
@@ -153,6 +162,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
       approvalGate ? 'contained' : 'outlined',
       approvalGate ? 'success' : 'inherit',
     ],
+    ['edit-spec', 'Edit spec', 'outlined', undefined],
     ['fix-conflicts', 'Fix merge conflicts', 'outlined', 'warning'],
     ['request-rework', 'Request rework', reworkPrimary ? 'contained' : 'outlined', undefined],
     ['request-review', 'Request review round', 'outlined', undefined],
@@ -176,6 +186,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     setReason('');
     setForce(false);
     setTo(resumeStage);
+    setContent(specText ?? '');
     setError(null);
     setOpen(a);
   };
@@ -217,6 +228,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     if (plain || force) body.force = true;
     if (open === 'approve') body.to = to;
     if (open === 'answer' && choice !== null) body.choice = choice;
+    if (editing) body.content = content;
     await send(body);
   };
 
@@ -294,6 +306,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         {buttons.map(
           ([a, label, variant, color]) =>
             allowed.has(a) &&
+            (a !== 'edit-spec' || specText !== undefined) &&
             tip(
               a,
               <Button
@@ -364,7 +377,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
         }}
         aria-labelledby="action-title"
         fullWidth
-        maxWidth="sm"
+        maxWidth={editing ? 'md' : 'sm'}
       >
         <DialogTitle id="action-title">
           {open === 'merge'
@@ -422,7 +435,22 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                     ))}
                   </TextField>
                 )}
-                {open === 'fix-conflicts' ? (
+                {editing ? (
+                  <TextField
+                    label="spec.md"
+                    value={content}
+                    onChange={(e) => {
+                      setContent(e.target.value);
+                    }}
+                    multiline
+                    minRows={12}
+                    maxRows={30}
+                    slotProps={{
+                      htmlInput: { spellCheck: false, style: { fontFamily: 'monospace' } },
+                    }}
+                    autoFocus
+                  />
+                ) : open === 'fix-conflicts' ? (
                   (detail.conflicts?.files.length ?? 0) > 0 && (
                     <div>
                       <Typography id="fix-conflicts-label">Conflicting files:</Typography>
@@ -478,6 +506,11 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                     This completes the job without a passing CI verdict and records your reason as
                     the human close-out. It does not merge or mark the PR ready.
                   </Alert>
+                ) : editing ? (
+                  <Alert severity="info" variant="outlined">
+                    Saving does not move the job or start any Claude session; answer the
+                    resume-to-spec choice afterwards.
+                  </Alert>
                 ) : shown === 'cancel' ? (
                   <Alert severity="warning" variant="outlined">
                     This cannot be undone: a cancelled job is never resumed.
@@ -505,7 +538,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             }}
             disabled={busy}
           >
-            {plain ? 'Cancel' : 'Close'}
+            {plain || editing ? 'Cancel' : 'Close'}
           </Button>
           <Button
             variant="contained"
@@ -516,7 +549,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             disabled={busy || (open === 'accept-delivery' && reason.trim() === '')}
             autoFocus={plain}
           >
-            {plain ? verb : open === 'cancel' ? 'Cancel job' : 'Confirm'}
+            {plain ? verb : open === 'cancel' ? 'Cancel job' : editing ? 'Save' : 'Confirm'}
           </Button>
         </DialogActions>
       </Dialog>

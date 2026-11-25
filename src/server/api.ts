@@ -643,7 +643,7 @@ export function parseAction(body: unknown): ActionRequest & { to?: Stage } {
     throw new ValidationError('Body must be a JSON object.');
   }
   const b = body as Record<string, unknown>;
-  const allowed = new Set(['action', 'reason', 'force', 'to', 'choice']);
+  const allowed = new Set(['action', 'reason', 'force', 'to', 'choice', 'content']);
   for (const k of Object.keys(b)) {
     if (!allowed.has(k)) throw new ValidationError(`Unknown field: ${k}`);
   }
@@ -678,6 +678,14 @@ export function parseAction(body: unknown): ActionRequest & { to?: Stage } {
     }
     out.choice = choice;
   }
+  const content = b['content'];
+  if ((content !== undefined) !== (action === 'edit-spec')) {
+    throw new ValidationError('content is required with action edit-spec, and only with it');
+  }
+  if (content !== undefined) {
+    if (typeof content !== 'string') throw new ValidationError('content must be a string');
+    out.content = content;
+  }
   return out;
 }
 
@@ -689,6 +697,7 @@ export function act(store: Store, id: string, body: unknown): ActionResponse {
     force: req.force,
     to: req.to,
     choice: req.choice,
+    content: req.content,
   });
   return r.resumeCommand
     ? { job: r.job, message: r.message, resumeCommand: r.resumeCommand }

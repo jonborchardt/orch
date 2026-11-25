@@ -4,7 +4,12 @@
  * Nothing here wakes a Claude session; the result always says the job must be resumed.
  * `cancelJob` is shared with `orch factory cancel`, where the caller is a session of its own.
  */
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { checkArtifact } from '../core/artifact-rules.ts';
 import { ValidationError } from '../core/errors.ts';
+import { jobArtifactDir } from '../core/paths.ts';
 import {
   cannotAcceptDelivery,
   cannotMerge,
@@ -19,6 +24,7 @@ import {
 } from '../core/workflow.ts';
 import { viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
+import { findArtifact } from '../storage/artifacts.ts';
 import { eventsOfTypes } from '../storage/events.ts';
 import { policyFingerprint } from '../core/verification.ts';
 import { ticketKey } from '../core/tickets.ts';
@@ -33,6 +39,7 @@ import type { Job } from '../storage/schema.ts';
 import { authorizePolicy } from '../storage/verification.ts';
 import { ghCwd, observePr } from './github.ts';
 import { type LeaseMode, withLease } from './lease.ts';
+import { addArtifact } from './gates.ts';
 import { completionFor, mergeJob, type MergeResult, relandJob, ticketText } from './merge.ts';
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
@@ -60,6 +67,7 @@ export const DASHBOARD_ACTIONS = [
   'remove-worktree',
   'fix-conflicts',
   'answer',
+  'edit-spec',
 ] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 export const DASHBOARD_SESSION = 'dashboard';
@@ -97,6 +105,8 @@ export interface ActionInput {
   to?: Stage | undefined;
   /** For `answer`: the index of the picked choice in `currentChoices`. */
   choice?: number | undefined;
+  /** For `edit-spec`: the new spec.md text. */
+  content?: string | undefined;
 }
 
 /** Job row minus the credential; the only shape that leaves the process. */
@@ -150,6 +160,7 @@ export function allowedActions(
   const out: DashboardAction[] = [...pr];
   if (job.stage === 'needs-human') out.push('approve');
   if (job.stage === 'needs-human' && choices) out.push('answer');
+  if (cannotEditSpec(job) === null) out.push('edit-spec');
   if (fix) out.push('fix-conflicts');
   if (job.round > 0) out.push('request-review');
   out.push('request-rework');
@@ -158,6 +169,65 @@ export function allowedActions(
   if (cannotAcceptDelivery(job) === null) out.push('accept-delivery');
   out.push('cancel');
   return out;
+}
+
+/**
+ * Why spec.md may not be edited from the dashboard, or null: only while a spec escalation waits
+ * in needs-human (`returnStage` spec), the one state `assertStageOwns` lets it be re-registered.
+ */
+export function cannotEditSpec(job: Pick<Job, 'status' | 'stage' | 'returnStage'>): string | null {
+  if (TERMINAL_STATUSES.includes(job.status)) return `the job is ${job.status}`;
+  if (job.stage !== 'needs-human' || job.returnStage !== 'spec') {
+    return 'only a job waiting in needs-human after a spec escalation qualifies';
+  }
+  return null;
+}
+
+/**
+ * Edit spec.md: validate the text, write it, and register it with `replace` through
+ * `addArtifact`, the path `orch job artifact add --replace` takes. The job stays in needs-human;
+ * the challenger reviews the edit once a human answers the resume-to-spec choice.
+ */
+function editSpec(store: Store, before: Job, input: ActionInput): ActionResult {
+  const refuse = (job: Job) => {
+    const why = cannotEditSpec(job);
+    if (why) throw new ValidationError(`Cannot edit spec.md: ${why}.`);
+  };
+  refuse(before);
+  const content = input.content ?? '';
+  // Before touching disk, so an invalid edit never overwrites the last valid spec.
+  checkArtifact('spec.md', content);
+  const file = join(jobArtifactDir(before.id, store.paths), 'spec.md');
+  const previous = findArtifact(store.db, before.id, 'spec.md')?.sha256 ?? null;
+  if (createHash('sha256').update(content).digest('hex') === previous) {
+    return {
+      job: withoutToken(before),
+      message: 'spec.md is unchanged; nothing was replaced.',
+    };
+  }
+  const artifact = withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
+    refuse(getJob(store.db, before.id));
+    let old: string | null = null;
+    try {
+      old = readFileSync(file, 'utf8');
+    } catch {
+      /* no spec.md on disk: nothing to restore */
+    }
+    writeFileSync(file, content, 'utf8');
+    try {
+      return addArtifact(store, before.id, 'spec.md', { token, replace: true });
+    } catch (err) {
+      if (old !== null) writeFileSync(file, old, 'utf8');
+      throw err;
+    }
+  });
+  const job = getJob(store.db, before.id);
+  return {
+    job: withoutToken(job),
+    message:
+      `spec.md replaced (${(artifact.sha256 ?? '').slice(0, 7)}). The job still waits in ` +
+      'needs-human: pick the resume-to-spec choice so the spec challenger reviews the edit.',
+  };
 }
 
 /**
@@ -534,6 +604,7 @@ function runAction(
     return prAction(store, before, input);
   }
   if (input.action === 'fix-conflicts') return fixConflicts(store, before, input.force);
+  if (input.action === 'edit-spec') return editSpec(store, before, input);
   if (input.action === 'remove-worktree') {
     return removeMergedWorktree(store, id, {
       session: DASHBOARD_SESSION,
