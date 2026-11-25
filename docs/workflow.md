@@ -54,7 +54,8 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
     passing required checks and marks the PR ready, re-runs a failure once per head, then repairs
     through build within `maxCiRepairs`, or escalates ([CI reconciliation](#ci-reconciliation)).
 16. **Merge.** `mergeJob` merges the PR at the CI-verified head as a merge commit and confirms it
-    with a second read; a conflict becomes one re-land job ([Merging](#merging)).
+    with a second read; a conflict becomes one re-land job ([Merging](#merging)). A verified
+    merge removes the job's clean worktree and keeps its branch.
 17. **Settlement.** In the transaction that records the merge, the ticket becomes `done` only if
     the merged head is the verified one and nothing is left on the ticket
     ([Verified integration and reconciliation](#verified-integration-and-reconciliation)).
@@ -345,7 +346,7 @@ dashboard links both directions.
 Every accepted change appends events (`job.created`, `job.claimed`, `job.released`,
 `stage.started`, `stage.completed`, `stage.failed`, `artifact.registered`, `artifact.replaced`,
 `review.recorded`, `job.blocked`, `job.resumed`, `job.interrupted`, `job.cancelled`,
-`job.completed`, `job.superseded`, `worktree.created`, `worktree.adopted`, `worktree.removed`,
+`job.completed`, `job.superseded`, `worktree.created`, `worktree.adopted`, `worktree.removed`, `worktree.kept`,
 `integration.started`, `integration.completed`, `verification.started`,
 `verification.completed`, `verification.flaky`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
 `ci.observed`, `pr.ready`) in the same transaction. A `ci.observed` event from `orch gh ci` carries the head,
@@ -836,6 +837,13 @@ and the write, or a merge made elsewhere records it and merges nothing; a repeat
 writes nothing at all. A PR merged at a head other than `ciHead` is recorded as observed with
 `verified: false`. Nothing is run on the merged result: verified means GitHub merged the commit CI
 passed on.
+
+**The worktree.** Once a call records a verified merge, it removes the job's worktree the way
+`orch worktree remove` does, in the same episode: the branch is kept and `worktree.removed` is
+recorded. A dirty worktree, or one Git cannot remove, is left in place with a `worktree.kept` event
+naming the path and the reason; the merge result is the same either way, and its `reason` ends with
+"Removed the worktree <path>." or "Kept the worktree <path>: <why>.". An unverified merge, or a
+repeat call that records nothing, leaves the worktree alone.
 
 **The ticket.** In the transaction that records the merge, the job's ticket is closed when the
 merge is verified, the job is not superseded, no other job is working on the ticket, and its body

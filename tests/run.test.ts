@@ -33,6 +33,7 @@ import {
   writeSession,
 } from '../src/ops/runner-state.ts';
 import { addTicket, ticketAction } from '../src/ops/tickets.ts';
+import { listEvents } from '../src/storage/events.ts';
 import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
 import type { Job } from '../src/storage/schema.ts';
 import {
@@ -96,7 +97,12 @@ describe('orch start: the queue', () => {
     expect(merges()).toHaveLength(2);
     // The child ran in the job's own worktree under the controller's session, without a token.
     const first = l.calls[0];
-    expect(first?.cwd).toBe(getJob(store.db, first?.jobId ?? '').worktreePath);
+    // The verified merge then removed that worktree (ticket 0142).
+    const removed = listEvents(store.db, first?.jobId ?? '', 1000).find(
+      (e) => e.type === 'worktree.removed',
+    );
+    expect(first?.cwd).toBe(removed?.payload['path']);
+    expect(getJob(store.db, first?.jobId ?? '').worktreePath).toBeNull();
     expect(first?.cwd).not.toBe(clone);
     expect(first?.env['ORCH_SESSION']).toBe(RUNNER_SESSION);
     expect(first?.env['ORCH_TOKEN']).toBeUndefined();

@@ -316,6 +316,10 @@ describe('merging', () => {
       },
     ]);
     expect(events(job, 'pr.merged')[0]?.actor).toBe('merger');
+    // Without a worktree there is nothing to remove, and nothing is said about one.
+    expect(job.worktreePath).toBeNull();
+    expect(r.reason).not.toMatch(/worktree/);
+    expect([...events(job, 'worktree.removed'), ...events(job, 'worktree.kept')]).toEqual([]);
     // Only the PR state moved; the episode gave the job back.
     expect(getJob(store.db, job.id)).toMatchObject({
       prState: 'merged',
