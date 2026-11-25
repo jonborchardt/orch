@@ -238,12 +238,16 @@ export function heldPath(fd: number, p: string): string {
  * handle-to-path call (no `GetFinalPathNameByHandle`, no `F_GETPATH`) and the path is resolved
  * by name. Winning it needs write access to the user's own Claude projects directory, whose owner
  * can already read every transcript.
+ *
+ * `resolve` is for tests only: it stands in for `heldPath` so a test can make the path resolved
+ * after the open name a different file. Production callers never pass it.
  */
 export function readConfined(
   p: string,
   root: string,
   length: number,
   fromEnd = false,
+  resolve: (fd: number, p: string) => string = heldPath,
 ): { buf: Buffer; size: number } | null {
   let fd: number;
   try {
@@ -254,7 +258,7 @@ export function readConfined(
   try {
     const held = fstatSync(fd, { bigint: true });
     if (!held.isFile()) return null;
-    const real = heldPath(fd, p);
+    const real = resolve(fd, p);
     if (!real.startsWith(root + sep)) return null;
     const there = statSync(real, { bigint: true });
     if (there.dev !== held.dev || there.ino !== held.ino) return null;

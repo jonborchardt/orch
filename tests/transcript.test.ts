@@ -1,4 +1,5 @@
 /** The Session tab reader: parsing, subagents, read bounds, and real-path confinement (todo 0074). */
+import { execFileSync } from 'node:child_process';
 import {
   closeSync,
   mkdirSync,
@@ -321,7 +322,8 @@ describe('readSessionLog', () => {
     renameSync(join(root, 'd'), join(root, 'd-old'));
     symlinkSync(outside, join(root, 'd'), 'junction');
     expect(readConfined(checked.path, root, 64)).toBeNull();
-    // A directory is never read as a transcript.
+    // A directory is never read as a transcript (on Linux the read throws anyway; the FIFO case
+    // below proves the regular-file check there).
     expect(readConfined(join(root, 'd-old'), root, 64)).toBeNull();
   });
 
@@ -353,6 +355,27 @@ describe('readSessionLog', () => {
       );
     },
   );
+
+  it('refuses a handle whose resolved path inside root names a different file (ticket 0087)', () => {
+    // Stands in for a won swap race: the path resolved after the open lies inside root and is a
+    // regular file, but not the one held open. Only the identity comparison refuses it.
+    const root = tempDir('claude-');
+    writeFileSync(join(root, 'agent-a.jsonl'), 'held');
+    writeFileSync(join(root, 'agent-b.jsonl'), 'other');
+    const a = realpathSync(join(root, 'agent-a.jsonl'));
+    const b = realpathSync(join(root, 'agent-b.jsonl'));
+    expect(readConfined(a, root, 64, false, () => a)?.buf.toString()).toBe('held');
+    expect(readConfined(a, root, 64, false, () => b)).toBeNull();
+  });
+
+  it.runIf(process.platform === 'linux')('never reads a FIFO as a transcript (ticket 0087)', () => {
+    // A FIFO opens without blocking, passes the path and identity checks, and reads 0 bytes:
+    // only the regular-file check refuses it. No writer is ever opened.
+    const root = tempDir('claude-');
+    const fifo = join(root, 'agent-a.jsonl');
+    execFileSync('mkfifo', [fifo]);
+    expect(readConfined(fifo, root, 64)).toBeNull();
+  });
 
   it('proves the file at read time, so inode reuse cannot pass a stale identity (CI round 3)', () => {
     // Round 2 compared a stat taken at listing with an fstat taken after the open. On Linux a
