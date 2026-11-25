@@ -9,7 +9,7 @@ import { SPEC_REVIEW_PATH } from '../core/artifact-rules.ts';
 import { UsageError, ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { claudeHome, jobArtifactDir } from '../core/paths.ts';
-import { ROLES, type RoleKind } from '../core/roles.ts';
+import { drawnModelsOf, ROLES, type RoleKind } from '../core/roles.ts';
 import { SESSION_EVENT, sessionLinks, UUID } from '../core/session.ts';
 import {
   cannotRefreshPr,
@@ -553,6 +553,7 @@ export function detail(store: Store, id: string): JobDetailView {
   );
   return {
     job: safeJob(job),
+    models: drawnModelsOf(eventsOfTypes(store.db, id, ['models.drawn'])),
     liveness: state,
     outcome: outcomeOf(state, job, ci.completion),
     artifacts,

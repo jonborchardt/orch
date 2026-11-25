@@ -218,6 +218,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       mailSubject: null,
       mailLastId: null,
     },
+    models: null,
     liveness: 'blocked',
     outcome: null,
     artifacts: [],
@@ -2449,10 +2450,13 @@ describe('Job detail: reviews', () => {
       round: 1,
       artifactId: 1,
       head: 'abc',
+      model: null,
+      sameAsAuthor: null,
       createdAt: '2026-11-13T08:10:00.000Z',
       completedAt: '2026-11-13T08:20:00.000Z',
     };
     data.detail = detail({
+      models: { builder: { model: 'opus' }, security: { model: 'fable', sameAsAuthor: false } },
       contents: {
         'round-1/security.md': '# Security\n\nSecurity body text\n\nVERDICT: PASS\n',
         'round-1/correctness.md': '# Correctness\n\nCorrectness body text\n\nVERDICT: CHANGES\n',
@@ -2468,6 +2472,8 @@ describe('Job detail: reviews', () => {
               verdict: 'pass',
               summary: 'No issues',
               path: 'round-1/security.md',
+              model: 'opus',
+              sameAsAuthor: true,
             },
             {
               ...review,
@@ -2487,8 +2493,16 @@ describe('Job detail: reviews', () => {
     window.location.hash = '#/jobs/job-00000003';
     mount();
     await screen.findByRole('heading', { name: 'Gamma blocked' });
+    // Ticket 0168: the job's drawn models, and each review's model and flag.
+    expect(screen.getByTestId('drawn-models')).toHaveTextContent(
+      'Models drawn: builder opus, security fable (same as author: no)',
+    );
     fireEvent.click(screen.getByRole('tab', { name: 'Reviews (1 round)' }));
     expect(screen.getByText('blocking 1')).toBeInTheDocument();
+    expect(screen.getByText('opus (same as author: yes)')).toBeInTheDocument();
+    expect(
+      screen.getByText('model not recorded (same as author: not recorded)'),
+    ).toBeInTheDocument();
     const header = screen.getByRole('button', { name: /security.*pass.*No issues/ });
     const other = screen.getByRole('button', { name: /correctness.*changes.*One bug/ });
     expect(header).toHaveAttribute('aria-expanded', 'false');
@@ -2517,6 +2531,8 @@ describe('Job detail: reviews', () => {
       jobId: 'job-00000003',
       artifactId: 1,
       head: 'abc',
+      model: null,
+      sameAsAuthor: null,
       summary: null,
       createdAt: '2026-11-13T08:10:00.000Z',
       completedAt: '2026-11-13T08:20:00.000Z',

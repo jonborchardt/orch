@@ -56,6 +56,7 @@ describe('supersedeJob (storage)', () => {
     const events = listEvents(store.db, old.id, 100).map((e) => e.type);
     expect(events).toEqual([
       'job.created',
+      'models.drawn',
       'job.claimed',
       'job.cancelled',
       'job.claimed',
@@ -106,7 +107,13 @@ describe('supersede (ops episode) and the CLI', () => {
     expect(r.supersededBy).toBe(next.id);
     expect([r.ownerSession, r.ownerToken]).toEqual([null, null]);
     const types = listEvents(store.db, old.id, 100).map((e) => e.type);
-    expect(types).toEqual(['job.created', 'job.claimed', 'job.superseded', 'job.released']);
+    expect(types).toEqual([
+      'job.created',
+      'models.drawn',
+      'job.claimed',
+      'job.superseded',
+      'job.released',
+    ]);
 
     // A job another session is working on is not taken over silently.
     const busy = mk('Busy');

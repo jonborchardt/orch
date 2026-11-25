@@ -114,7 +114,27 @@ Every failure path ends in a bounded loop or with a person. Stages, who works in
 
 Default models per role: spec writer, builder, security reviewer, and approver Opus; spec
 challenger, simplifier, and the other reviewers Sonnet. They are configurable in
-`<config>/factory.json` (`models`).
+`<config>/factory.json` (`models`): each role takes one model (`opus`, `sonnet`, `haiku`,
+`fable`, `inherit`) or a pool, a non-empty array of distinct models.
+
+The draw is orch's, never an agent's. `createJob` draws one model per role for every role in
+`ROLES`, whatever the job's mode: uniform over the pool, from a sha256 of the job id and role, so
+it is the same for the whole job (rework rounds, resumed or new sessions). Roles are drawn
+independently; nothing makes a reviewer differ from the builder. The draw is the job's
+`models.drawn` event, written in the job's insert transaction; the plan (`orch factory next`),
+review rows, receipt, usage report, and dashboard read that event, so editing a pool never changes
+a running job. A string is a one-element pool, so a string-only config behaves as before.
+
+The event also says, per judging role, whether its model equals its author's (`sameAsAuthor`):
+the spec challenger against the spec writer; the simplifier, every reviewer, and the approver
+against the builder. The spec writer, builder, and fast builder have no author and no flag. It is
+plain string equality, so `inherit` against `inherit` counts as the same. Each review row also
+stores the reviewer's `model` and `sameAsAuthor`.
+
+A job created before pools has no `models.drawn` event: its plan draws from the current config, as
+before, its review rows store `model` and `sameAsAuthor` as null, and the receipt and dashboard
+say "not recorded". Nothing is backfilled. The model orch records is the one it asked for; which
+model actually ran is not observable.
 
 ## Workflow
 

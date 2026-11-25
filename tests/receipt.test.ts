@@ -2,9 +2,10 @@
  * The merge receipt (ticket 0155): one summary of recorded evidence, written into the PR body when
  * the ci stage completes and shown on the ticket's detail. Read-only; it decides nothing.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { resumeFactoryJob } from '../src/ops/factory.ts';
@@ -12,8 +13,9 @@ import { buildReceipt, receiptMarkdown } from '../src/ops/receipt.ts';
 import { addTicket, showTicket } from '../src/ops/tickets.ts';
 import { appendEvent } from '../src/storage/events.ts';
 import { claimJob, getJob, recordMerge } from '../src/storage/jobs.ts';
+import { events } from '../src/storage/schema.ts';
 import { checks, clone, job, reconcile, run, shim, store } from './ci-fixture.ts';
-import { type Ctx, head, SESSION, start, toCi } from './drive.ts';
+import { type Ctx, go, head, SESSION, start, toCi, toReview, verdict } from './drive.ts';
 import { gitIn } from './helpers.ts';
 
 const markdown = (id: string) => receiptMarkdown(buildReceipt(store, getJob(store.db, id)));
@@ -113,5 +115,45 @@ describe('merge receipt', () => {
     expect(md).toContain('Verified commit: unknown');
     expect(md).toContain('No verification run recorded for this commit.');
     expect(md).toContain('Not merged.');
+  });
+
+  it('shows the drawn model of every role and each review, or "not recorded" (ticket 0168 AC8)', () => {
+    writeFileSync(
+      join(store.paths.config, 'factory.json'),
+      JSON.stringify({ models: { builder: 'opus', security: 'opus', correctness: 'sonnet' } }),
+    );
+    const c = start(store, clone);
+    toReview(store, c);
+    go(store, c, 'start');
+    verdict(store, c, 'security');
+    verdict(store, c, 'correctness');
+    const r = buildReceipt(store, getJob(store.db, c.id));
+    expect(r.models?.['builder']).toEqual({ model: 'opus' });
+    expect(r.models?.['correctness']).toEqual({ model: 'sonnet', sameAsAuthor: false });
+    expect(r.reviews).toContainEqual(
+      expect.objectContaining({ reviewer: 'security', model: 'opus', sameAsAuthor: true }),
+    );
+    const md = receiptMarkdown(r);
+    expect(md).toContain('### Models');
+    expect(md).toContain('- builder: opus\n');
+    expect(md).toContain('- spec-challenger: sonnet, same as author: no');
+    expect(md).toContain('security pass (opus, same as author: yes)');
+    expect(md).toContain('correctness pass (sonnet, same as author: no)');
+
+    // A job from before pools: no event, null review columns.
+    const legacy = start(store, clone, 'Legacy job');
+    store.db
+      .delete(events)
+      .where(and(eq(events.jobId, legacy.id), eq(events.type, 'models.drawn')))
+      .run();
+    toReview(store, legacy);
+    go(store, legacy, 'start');
+    verdict(store, legacy, 'security');
+    const old = buildReceipt(store, getJob(store.db, legacy.id));
+    expect(old.models).toBeNull();
+    expect(old.reviews[0]).toMatchObject({ model: null, sameAsAuthor: null });
+    const oldMd = receiptMarkdown(old);
+    expect(oldMd).toContain('### Models\n\nNot recorded.');
+    expect(oldMd).toContain('security pass (model not recorded, same as author: not recorded)');
   });
 });

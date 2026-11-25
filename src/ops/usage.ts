@@ -5,7 +5,7 @@
  * measured here, and the report says so instead of estimating; the dashboard Usage section sums
  * tokens from transcripts.
  */
-import { resolveRoles } from '../core/roles.ts';
+import { drawnModelsOf, resolveRoles } from '../core/roles.ts';
 import type { JobMode, Stage } from '../core/workflow.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
@@ -29,7 +29,10 @@ export interface StageVisit {
 export interface ReviewerRun {
   round: number;
   reviewer: string;
-  /** Model the configuration assigns to the role; the model that actually ran is not recorded. */
+  /**
+   * The role's drawn model (the job's `models.drawn` event; legacy jobs: the current config). The
+   * model that actually ran is not recorded.
+   */
   configuredModel: string | null;
   verdict: string | null;
   startedAt: string;
@@ -52,7 +55,7 @@ export interface UsageReport {
   ci: { repairs: number; reruns: number; observations: number };
   /** What is not measured, stated rather than estimated. */
   tokens: { measured: false; reason: string };
-  /** Role to configured model, for reading the durations as cost drivers. */
+  /** Role to drawn model, for reading the durations as cost drivers. */
   models: Record<string, string>;
 }
 
@@ -93,7 +96,7 @@ export function visits(events: Event[]): StageVisit[] {
 export function jobUsage(store: Store, id: string): UsageReport {
   const job = getJob(store.db, id);
   const events = listEvents(store.db, id, 10_000);
-  const roles = resolveRoles(loadConfig(store));
+  const roles = resolveRoles(loadConfig(store), id, drawnModelsOf(events));
   const models = Object.fromEntries(roles.map((r) => [r.name, r.model]));
   const stages = visits(events);
   const stageMs: Partial<Record<Stage, number>> = {};
