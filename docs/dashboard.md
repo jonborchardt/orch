@@ -40,17 +40,20 @@ the newest `job.completed` or `job.cancelled` event); completed jobs with no kno
 counted in `durationUnknown`. `completedPerHour` is completed jobs divided by the hours from the
 earliest `createdAt` of any job to the latest finish of a completed job, over the whole history.
 
-**Agents** (`GET /api/agents`, `agents` in `src/server/api.ts`) has one row per role in `ROLES`
-(`src/core/roles.ts`), in order. Every row satisfies invocations = success + failure + other +
-open; runtimes average and take the median of measured intervals only (an end and a duration above
-zero), and the rest are unmeasured. Reviewers (source `reviews`) count one invocation per `reviews`
-row: `pass` is success, `changes` is failure, no verdict is open, and the runtime is
-`completedAt - createdAt`. `spec-writer`, `builder` (full jobs), `fast-builder` (fast jobs),
-`simplifier`, and `approver` (source `stage`) count one invocation per `stage.started` of their
-stage, paired with its end by the same rule as `orch job usage`: `stage.completed` is success,
-`stage.failed` is failure, `job.blocked`, `job.reworked`, `job.cancelled`, or `job.interrupted` is
-other, and no end is open. Their runtime is labelled "stage time (includes coordinator work)".
-`spec-challenger` has no record of its own (source `none`) and reads "Not recorded".
+**Agents** (`GET /api/agents`, `agents` in `src/server/api.ts`) shows two tables, Reviewers and
+Stages; every role in `ROLES` (`src/core/roles.ts`) is in exactly one, in `ROLES` order. Only
+finished runs count, so in every row Runs is the sum of its outcome columns. Average and Median
+take measured runs only (a duration above zero); a caption under a table names the roles with runs
+without a duration and how many. **Reviewers** (Role, Runs, Pass, Changes with its share of Runs,
+Average, Median) has every `review` role, one run per `reviews` row with a verdict, timed
+`completedAt - createdAt`, plus `spec-challenger`, one run per registered `spec-review-N.md`
+artifact (`SPEC_REVIEW_PATH` in `src/core/artifact-rules.ts`) whose `VERDICT` marker gives Pass or
+Changes; it has no start time, so its durations read Unavailable. **Stages** (Role, Runs,
+Completed, Failed, Escalated, Sent back, Cancelled, Interrupted, Average, Median) has
+`spec-writer`, `builder` (full jobs), `fast-builder` (fast jobs), `simplifier`, and `approver`, one
+run per `stage.started` of their stage paired with its end by the same rule as `orch job usage`;
+the end `stage.completed`, `stage.failed`, `job.blocked`, `job.reworked`, `job.cancelled`, or
+`job.interrupted` picks the column. Stage time includes coordinator work.
 
 **Usage** (`GET /api/usage?hours=<24|168|720>`, `tokenUsage` in `src/server/api.ts`, read model
 in `src/server/token-usage.ts`) charts tokens per UTC hour (labelled in local time) over the last

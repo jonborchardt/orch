@@ -2,7 +2,7 @@
 import type {
   ActionRequest,
   ActionResponse,
-  AgentRow,
+  AgentsView,
   ApiError,
   Area,
   BoardRow,
@@ -54,7 +54,7 @@ export const fetchBoard = (repo?: string) =>
 export const fetchRepos = () => getJson<string[]>('/api/repos');
 export const fetchDetail = (id: string) => getJson<JobDetailView>(`/api/jobs/${id}`);
 export const fetchRuns = () => getJson<RunsView>('/api/runs');
-export const fetchAgents = () => getJson<AgentRow[]>('/api/agents');
+export const fetchAgents = () => getJson<AgentsView>('/api/agents');
 export const fetchUsage = (hours: UsageRange) =>
   getJson<UsageView>(`/api/usage?hours=${String(hours)}`);
 export const fetchSessionLog = (id: string) =>

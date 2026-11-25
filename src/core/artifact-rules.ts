@@ -21,11 +21,14 @@ export interface ArtifactRule {
   marker?: { name: string; values?: readonly string[]; pattern?: RegExp } | undefined;
 }
 
+/** The spec challenger's verdicts; also how the Agents read model counts its runs. */
+export const SPEC_REVIEW_PATH = /^spec-review-[12]\.md$/;
+
 export const ARTIFACT_RULES: readonly ArtifactRule[] = [
   { path: /^spec\.md$/, stage: 'spec', headings: ['Goal', 'Scope', 'Acceptance criteria'] },
   {
     // The independent spec challenge: one review, one more after a revision, nothing else.
-    path: /^spec-review-[12]\.md$/,
+    path: SPEC_REVIEW_PATH,
     stage: 'spec',
     headings: ['Findings'],
     marker: { name: 'VERDICT', values: ['PASS', 'CHANGES'] },
