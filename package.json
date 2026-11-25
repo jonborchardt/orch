@@ -26,12 +26,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check",
-    "build:cli": "tsc -p tsconfig.build.json",
     "web:dev": "vite --config web/vite.config.ts",
     "test:e2e": "playwright test",
     "ui:seed": "node scripts/seed-dashboard.ts"

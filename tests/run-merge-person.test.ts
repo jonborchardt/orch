@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { formatSummary, summaryExitCode } from '../src/cli/run.ts';
+import { ticketKey } from '../src/core/tickets.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { getJob } from '../src/storage/jobs.ts';
 import type { Job } from '../src/storage/schema.ts';
@@ -26,8 +27,6 @@ import {
   store,
   ticket,
 } from './run-fixture.ts';
-
-const key = (id: number) => String(id).padStart(4, '0');
 
 /** GitHub's file list for a PR that edits a workflow. */
 const WORKFLOW_FILES = { files: [{ filename: '.github/workflows/ci.yml' }] };
@@ -71,7 +70,7 @@ describe('a merge only a person can unblock', () => {
     });
     expect(summaryExitCode(s)).toBe(1);
     const text = formatSummary(s);
-    expect(text).toContain(`${key(first)} needs-human:`);
+    expect(text).toContain(`${ticketKey(first)} needs-human:`);
     expect(text).toContain(`     next: ${human?.next ?? ''}`);
   });
 
@@ -103,7 +102,7 @@ describe('a merge only a person can unblock', () => {
     expect(s.tickets).toHaveLength(1);
     expect(s.tickets[0]).toMatchObject({ ticketId: first, outcome: 'blocked' });
     expect(s.tickets[0]?.next).toContain('tries again');
-    expect(s.reason).toContain(`ticket ${key(first)} is blocked: github-refused`);
+    expect(s.reason).toContain(`ticket ${ticketKey(first)} is blocked: github-refused`);
     expect(jobsOf(second)).toHaveLength(0);
   });
 });
