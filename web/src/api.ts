@@ -15,6 +15,8 @@ import type {
   TicketEvent,
   TicketList,
   TicketView,
+  UsageRange,
+  UsageView,
 } from '../../src/server/types.ts';
 
 export class ApiFailure extends Error {
@@ -53,6 +55,8 @@ export const fetchRepos = () => getJson<string[]>('/api/repos');
 export const fetchDetail = (id: string) => getJson<JobDetailView>(`/api/jobs/${id}`);
 export const fetchRuns = () => getJson<RunsView>('/api/runs');
 export const fetchAgents = () => getJson<AgentRow[]>('/api/agents');
+export const fetchUsage = (hours: UsageRange) =>
+  getJson<UsageView>(`/api/usage?hours=${String(hours)}`);
 export const fetchSessionLog = (id: string) =>
   getJson<SessionLogView>(`/api/jobs/${id}/session-log`);
 

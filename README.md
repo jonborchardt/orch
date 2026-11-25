@@ -306,7 +306,9 @@ Optional email reports of every job change: [docs/operations.md](docs/operations
 - GitHub only, through `gh`; checks and commit statuses; one automatic re-run per commit; a job
   that "was not started" by Actions is indistinguishable from a failed check until a human reads the
   log, so it costs one repair cycle before escalation.
-- No token or cost accounting (`orch job usage` reports measured durations and configured models).
+- No cost accounting. Token counts come only from Claude Code's undocumented transcript format,
+  summed per hour and per job in the dashboard's Usage section; `orch job usage` reports measured
+  durations and configured models, not tokens.
 - Private repositories on GitHub's free plan hide the required-check configuration (HTTP 403), so
   every reported check must pass there.
 - The dashboard is single-user and loopback-only; it has no authentication because it has no

@@ -42,6 +42,7 @@ import {
   repos,
   runs,
   sessionLog,
+  tokenUsage,
 } from './api.ts';
 import type { ApiError, SessionInfo } from './types.ts';
 
@@ -251,6 +252,14 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
       }
       if (root === 'agents' && !id) {
         send(res, 200, agents(store));
+        return;
+      }
+      // Token usage summed from transcripts: guarded like the Session tab, and never a write.
+      if (root === 'usage' && !id) {
+        refuseForeignOrigin(req);
+        send(res, 200, tokenUsage(store, url.searchParams.get('hours')), {
+          'X-Content-Type-Options': 'nosniff',
+        });
         return;
       }
       // What `orch status` prints. Read-only: the controller is started and stopped from the CLI.

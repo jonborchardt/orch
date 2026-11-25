@@ -2,7 +2,8 @@
  * Usage report for a job: what the recorded events, reviews, and verification runs measure
  * about where the job's time went. Wall-clock per stage visit and per reviewer run, the models
  * the plan assigned, verification time, CI repairs and re-runs. Token counts and money are not
- * measured anywhere `orch` can read them, and the report says so instead of estimating.
+ * measured here, and the report says so instead of estimating; the dashboard Usage section sums
+ * tokens from transcripts.
  */
 import { resolveRoles } from '../core/roles.ts';
 import type { JobMode, Stage } from '../core/workflow.ts';
@@ -136,7 +137,9 @@ export function jobUsage(store: Store, id: string): UsageReport {
       reason:
         'Claude Code does not expose subagent token counts or cost to the coordinating session or ' +
         'to orch through a supported interface; durations and configured models are the measured ' +
-        'cost drivers. See decision 61 under docs/decisions/.',
+        'cost drivers here. Tokens per hour and per job, read from the Claude Code transcripts, ' +
+        'are in the dashboard Usage section (orch ui, #/usage). See decision 61 and decision ' +
+        '2026-11-24-dashboard-token-usage-from-transcripts under docs/decisions/.',
     },
     models,
   };
