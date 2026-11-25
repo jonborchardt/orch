@@ -14,7 +14,7 @@ import {
   SCOPE_GAP_REASON,
 } from '../src/core/workflow.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
-import { board, detail } from '../src/server/api.ts';
+import { board, detail, isLogPath } from '../src/server/api.ts';
 import { liveness } from '../src/server/status.ts';
 import { blockerOf, ciView, type Evidence, resumeOf } from '../src/server/status.ts';
 import type { Artifact, Event, VerificationRun } from '../src/storage/schema.ts';
@@ -403,7 +403,16 @@ describe('seeded board and detail', () => {
       expect(detail(own, pushed.id).links.branch).toBe(
         'https://github.com/acme/alpha/tree/factory/pushed',
       );
-      expect(detail(own, mk('unpushed', 'factory/unpushed').id).links.branch).toBeNull();
+      expect(detail(own, pushed.id).links.branchUnpushed).toBe(false);
+      const unpushed = detail(own, mk('unpushed', 'factory/unpushed').id).links;
+      expect(unpushed.branch).toBeNull();
+      // github.com, a branch, no PR, no branch.pushed event: the dashboard says "not pushed yet".
+      expect(unpushed.branchUnpushed).toBe(true);
+      // Another host gives no push claim either way.
+      expect(
+        detail(own, mk('elsewhere', 'factory/elsewhere', 'git.example/acme/alpha').id).links
+          .branchUnpushed,
+      ).toBe(false);
       expect(detail(own, mk('no branch', null).id).links.branch).toBeNull();
 
       // Each branch path segment is URI-encoded.
@@ -1521,6 +1530,39 @@ describe('recorded logs on the artifact route (todo 0019)', () => {
       'https://github.com/acme/alpha/pull/9',
     );
     expect(withPr('github.com/acme/alpha', 'not a url').pr).toBeNull();
+  });
+
+  it('accepts only the log shapes orch writes (isLogPath)', () => {
+    for (const ok of ['verification/3/check.log', 'ci/abcdef0/test.log', 'ci/abcdef0/a_b-c.d.log'])
+      expect(isLogPath(ok)).toBe(true);
+    for (const bad of [
+      '/abs/x.log',
+      '..\\x.log',
+      'C:\\x.log',
+      'notes.txt',
+      'ci/x/../../secret.log',
+      'ci/abcdef0/../../../x.log',
+      'verification/3/../x.log',
+      'ci/ABCDEF0/x.log',
+      'verification/x/c.log',
+      42,
+      null,
+    ])
+      expect(isLogPath(bad)).toBe(false);
+  });
+
+  it('sends links.logs: the artifact route of each log-shaped recorded path, nothing else', () => {
+    // ci.failures is read only for the recorded CI head.
+    own.db.update(jobs).set({ ciHead: 'abcdef0123456789' }).where(eq(jobs.id, a.id)).run();
+    const route = (p: string) => `/api/jobs/${a.id}/artifacts/${p}`;
+    const logs = detail(own, a.id).links.logs;
+    expect(logs).toEqual({
+      [ciLog]: route(ciLog),
+      'ci/fedcba9/test.log': route('ci/fedcba9/test.log'),
+      'ci/1234567/gone.log': route('ci/1234567/gone.log'),
+    });
+    for (const bad of ['notes.txt', 'ci/x/../../secret.log', '42', 'ci/abcdef0/../../../x.log'])
+      expect(logs[bad]).toBeUndefined();
   });
 });
 

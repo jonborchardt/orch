@@ -52,6 +52,42 @@ export function FastChip({ size }: { size?: 'small' }) {
   );
 }
 
+/** The board's two-line caption: clamped, focusable, the whole text in its tooltip. */
+function ClampedCaption({
+  tip,
+  text,
+  ...data
+}: {
+  tip: string;
+  text: string;
+  [attr: `data-${string}`]: string;
+}) {
+  return (
+    <Tooltip title={tip}>
+      <Typography
+        component="div"
+        variant="caption"
+        color="text.secondary"
+        {...data}
+        tabIndex={0}
+        sx={{
+          maxWidth: 240,
+          whiteSpace: 'normal',
+          overflowWrap: 'anywhere',
+          overflow: 'hidden',
+          display: '-webkit-box',
+          WebkitBoxOrient: 'vertical',
+          WebkitLineClamp: 2,
+          cursor: 'help',
+          textDecoration: 'underline dotted',
+        }}
+      >
+        {text}
+      </Typography>
+    </Tooltip>
+  );
+}
+
 /** One compact line explaining why the job is not progressing. */
 export function BlockerText({
   blocker,
@@ -69,27 +105,11 @@ export function BlockerText({
   const text = blocker.detail ? `${blocker.summary}: ${blocker.detail}` : blocker.summary;
   if (compact) {
     return (
-      <Tooltip title={`${BLOCKER_LABEL[blocker.kind]} — ${text}`}>
-        <Typography
-          component="div"
-          variant="caption"
-          color="text.secondary"
-          data-blocker={blocker.kind}
-          tabIndex={0}
-          sx={{
-            maxWidth: 240,
-            whiteSpace: 'normal',
-            overflow: 'hidden',
-            display: '-webkit-box',
-            WebkitBoxOrient: 'vertical',
-            WebkitLineClamp: 2,
-            cursor: 'help',
-            textDecoration: 'underline dotted',
-          }}
-        >
-          {text}
-        </Typography>
-      </Tooltip>
+      <ClampedCaption
+        tip={`${BLOCKER_LABEL[blocker.kind]} — ${text}`}
+        text={text}
+        data-blocker={blocker.kind}
+      />
     );
   }
   // The detail's summary sentence: a ci blocker reads the CI line, which already names the head
@@ -116,30 +136,7 @@ export function FlakeText({ flake, compact }: { flake: Flake; compact?: boolean 
       ? `Likely machine-wide flaky test (also failing in ${flake.sharedWith.join(', ')}): ${flake.reason}`
       : `Likely flaky test: ${flake.reason}`;
   if (compact) {
-    return (
-      <Tooltip title={text}>
-        <Typography
-          component="div"
-          variant="caption"
-          color="text.secondary"
-          data-flake={flake.rule}
-          tabIndex={0}
-          sx={{
-            maxWidth: 240,
-            whiteSpace: 'normal',
-            overflowWrap: 'anywhere',
-            overflow: 'hidden',
-            display: '-webkit-box',
-            WebkitBoxOrient: 'vertical',
-            WebkitLineClamp: 2,
-            cursor: 'help',
-            textDecoration: 'underline dotted',
-          }}
-        >
-          {text}
-        </Typography>
-      </Tooltip>
-    );
+    return <ClampedCaption tip={text} text={text} data-flake={flake.rule} />;
   }
   return (
     <Typography component="div" variant="body2" color="text.secondary" data-flake={flake.rule}>
@@ -167,8 +164,8 @@ export function BlockerNotes({ blocker }: { blocker: Blocker }) {
   return null;
 }
 
-/** Same label as the Resume control in Actions.tsx (`ci` and `pr` in capitals). */
-const resumeAt = (stage: string) =>
+/** `approve` resumes the job at a stage; label it by that stage (`ci` and `pr` in capitals). */
+export const resumeAt = (stage: string) =>
   `Resume at ${stage === 'ci' || stage === 'pr' ? stage.toUpperCase() : stage}`;
 
 /** The detail's one "Next:" line, from fields the detail view already carries; null when cancelled. */

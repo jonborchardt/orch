@@ -23,24 +23,21 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useCallback, useState } from 'react';
 
 import type {
   Area,
   BlockReason,
   BoardRow,
-  TicketDetail as TicketDetailView,
-  TicketEvent,
   TicketStatus,
   TicketSummary,
   TicketView,
 } from '../../src/server/types.ts';
 import { Markdown } from './Markdown.tsx';
-import { ApiFailure, fetchTicket, fetchTicketHistory, ticketAction } from './api.ts';
+import { usePolled } from './Runs.tsx';
+import { ApiFailure, errorText, fetchTicket, fetchTicketHistory, ticketAction } from './api.ts';
 import { ago, httpsHref } from './format.ts';
 import { EFFORTS, PRIORITIES, TYPES, ticketHref, ticketKey, ticketState } from './ticketState.ts';
-
-export const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /** A native select: compact, labelled, and the same control in every ticket form. */
 export function Pick({
@@ -50,6 +47,7 @@ export function Pick({
   options,
   all,
   width = 120,
+  size,
 }: {
   label: string;
   value: string;
@@ -58,10 +56,12 @@ export function Pick({
   /** Label of the empty first option; omitted when a value is required. */
   all?: string;
   width?: number;
+  size?: 'small';
 }) {
   return (
     <TextField
       select
+      size={size}
       label={label}
       value={value}
       onChange={(e) => {
@@ -80,6 +80,82 @@ export function Pick({
         );
       })}
     </TextField>
+  );
+}
+
+type TicketField = (typeof FIELDS)[number];
+
+/**
+ * The fields of the Create and Edit ticket forms. `lead` (Create's Repository) comes first in the
+ * row of selects; `create` marks the new-ticket dialog's title and body.
+ */
+export function TicketFields({
+  value,
+  onChange,
+  areas,
+  efforts,
+  lead,
+  create = false,
+}: {
+  value: Record<TicketField, string>;
+  onChange: (k: TicketField, v: string) => void;
+  areas: readonly string[];
+  efforts: readonly string[];
+  lead?: ReactNode;
+  create?: boolean;
+}) {
+  const pick = (k: TicketField) => (v: string) => {
+    onChange(k, v);
+  };
+  return (
+    <>
+      <TextField
+        label="Title"
+        value={value.title}
+        onChange={(e) => {
+          onChange('title', e.target.value);
+        }}
+        required={create}
+        autoFocus={create}
+        fullWidth
+      />
+      <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', rowGap: 2 }}>
+        {lead}
+        <Pick
+          label="Priority"
+          value={value.priority}
+          onChange={pick('priority')}
+          options={PRIORITIES}
+          width={90}
+        />
+        <Pick label="Type" value={value.type} onChange={pick('type')} options={TYPES} />
+        <Pick label="Area" value={value.area} onChange={pick('area')} options={areas} />
+        <Pick
+          label="Effort (days)"
+          value={value.effort}
+          onChange={pick('effort')}
+          options={efforts}
+          width={110}
+        />
+      </Stack>
+      <TextField
+        label="Description (Markdown)"
+        value={value.body}
+        onChange={(e) => {
+          onChange('body', e.target.value);
+        }}
+        multiline
+        minRows={create ? 8 : 10}
+        maxRows={create ? 20 : undefined}
+        fullWidth
+        helperText={
+          create
+            ? undefined
+            : 'Checklist items are plain Markdown: - [ ] open, - [x] done. A merge does not close a ticket while one is unchecked.'
+        }
+        slotProps={{ htmlInput: { style: { fontFamily: 'monospace' } } }}
+      />
+    </>
   );
 }
 
@@ -139,7 +215,7 @@ const LIFECYCLE_HINT: Record<Lifecycle, string> = {
 };
 
 const FIELDS = ['title', 'priority', 'type', 'area', 'effort', 'body'] as const;
-type Draft = Record<(typeof FIELDS)[number], string> & {
+type Draft = Record<TicketField, string> & {
   /** The ticket as it was when editing began: only fields that differ from it are sent. */
   base: TicketView;
   /** The revision the save is checked against. */
@@ -200,9 +276,18 @@ export function TicketDetail({
   /** A write happened: the list is stale. */
   onChanged: () => unknown;
 }) {
-  const [detail, setDetail] = useState<TicketDetailView | null>(null);
-  const [history, setHistory] = useState<TicketEvent[]>([]);
-  const [loadError, setLoadError] = useState<ApiFailure | Error | null>(null);
+  const fetcher = useCallback(
+    () =>
+      Promise.all([fetchTicket(id), fetchTicketHistory(id)]).then(([detail, history]) => ({
+        detail,
+        history,
+      })),
+    [id],
+  );
+  // The raw error, so a 404 still reads as "no such ticket".
+  const { data, error: loadError, reload } = usePolled(fetcher, refreshMs);
+  const detail = data?.detail ?? null;
+  const history = data?.history ?? [];
   const [error, setError] = useState<string | null>(null);
   // Polls replace `detail` only; an open draft is its own state and is never touched by one.
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -211,39 +296,13 @@ export function TicketDetail({
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(
-    () =>
-      Promise.all([fetchTicket(id), fetchTicketHistory(id)]).then(
-        ([d, h]) => {
-          setDetail(d);
-          setHistory(h);
-          setLoadError(null);
-          return d;
-        },
-        (err: unknown) => {
-          setLoadError(err instanceof Error ? err : new Error(String(err)));
-          return null;
-        },
-      ),
-    [id],
-  );
-  useEffect(() => {
-    void load();
-    const timer = setInterval(() => {
-      if (!document.hidden) void load();
-    }, refreshMs);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [load, refreshMs]);
-
   const back = (
     <Link href="#/tickets" underline="hover">
       ← Tickets
     </Link>
   );
   if (!detail) {
-    if (!loadError) {
+    if (loadError === null) {
       return (
         <Box sx={{ p: 2 }}>
           <LinearProgress aria-label={`Loading ticket ${ticketKey(id)}`} />
@@ -253,7 +312,7 @@ export function TicketDetail({
     const missing = loadError instanceof ApiFailure && loadError.status === 404;
     return (
       <Alert severity={missing ? 'warning' : 'error'} role="alert" sx={{ m: 2 }}>
-        {missing ? `There is no ticket ${ticketKey(id)}.` : loadError.message} {back}
+        {missing ? `There is no ticket ${ticketKey(id)}.` : errorText(loadError)} {back}
       </Alert>
     );
   }
@@ -281,7 +340,7 @@ export function TicketDetail({
       )
       .finally(() => {
         setBusy(false);
-        void load();
+        void reload();
         void onChanged();
       });
   };
@@ -325,7 +384,7 @@ export function TicketDetail({
       .then(
         () => {
           setDraft(null);
-          return load();
+          return reload();
         },
         async (err: unknown) => {
           if (!(err instanceof ApiFailure && err.type === 'OwnershipError')) {
@@ -334,8 +393,8 @@ export function TicketDetail({
           }
           // Never overwrite silently: keep the draft, show what is there now, and let a second,
           // deliberate Save apply the user's own changes on top of it.
-          const fresh = await load();
-          if (fresh) setDraft({ ...draft, revision: fresh.ticket.revision });
+          const fresh = await reload();
+          if (fresh) setDraft({ ...draft, revision: fresh.detail.ticket.revision });
           setError(
             `Ticket ${key} was changed elsewhere while you were editing, so nothing was saved. ` +
               'Your draft is kept. Compare it with the current ticket, then Save again to apply ' +
@@ -411,7 +470,9 @@ export function TicketDetail({
             title={state.describe}
             data-ticket-state={state.label}
           />
-          {loadError && <Chip label={`refresh failed: ${loadError.message}`} color="warning" />}
+          {loadError !== null && (
+            <Chip label={`refresh failed: ${errorText(loadError)}`} color="warning" />
+          )}
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           <span title={t.repoPath}>{t.repo}</span> · {t.status} · {t.priority} · {t.type} · {t.area}{' '}
@@ -448,61 +509,13 @@ export function TicketDetail({
 
       {draft ? (
         <Stack component="form" spacing={2} sx={{ mt: 2 }} aria-label={`Edit ticket ${key}`}>
-          <TextField
-            label="Title"
-            value={draft.title}
-            onChange={(e) => {
-              setDraft({ ...draft, title: e.target.value });
+          <TicketFields
+            value={draft}
+            onChange={(k, v) => {
+              setDraft({ ...draft, [k]: v });
             }}
-            fullWidth
-          />
-          <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', rowGap: 2 }}>
-            <Pick
-              label="Priority"
-              value={draft.priority}
-              onChange={(v) => {
-                setDraft({ ...draft, priority: v });
-              }}
-              options={PRIORITIES}
-              width={90}
-            />
-            <Pick
-              label="Type"
-              value={draft.type}
-              onChange={(v) => {
-                setDraft({ ...draft, type: v });
-              }}
-              options={TYPES}
-            />
-            <Pick
-              label="Area"
-              value={draft.area}
-              onChange={(v) => {
-                setDraft({ ...draft, area: v });
-              }}
-              options={[...new Set([...areas.map((a) => a.name), draft.base.area])]}
-            />
-            <Pick
-              label="Effort (days)"
-              value={draft.effort}
-              onChange={(v) => {
-                setDraft({ ...draft, effort: v });
-              }}
-              options={[...new Set([...EFFORTS.map(String), String(draft.base.effort)])]}
-              width={110}
-            />
-          </Stack>
-          <TextField
-            label="Description (Markdown)"
-            value={draft.body}
-            onChange={(e) => {
-              setDraft({ ...draft, body: e.target.value });
-            }}
-            multiline
-            minRows={10}
-            fullWidth
-            helperText="Checklist items are plain Markdown: - [ ] open, - [x] done. A merge does not close a ticket while one is unchecked."
-            slotProps={{ htmlInput: { style: { fontFamily: 'monospace' } } }}
+            areas={[...new Set([...areas.map((a) => a.name), draft.base.area])]}
+            efforts={[...new Set([...EFFORTS.map(String), String(draft.base.effort)])]}
           />
           <Stack direction="row" spacing={1}>
             <Button variant="contained" onClick={save} disabled={busy || !draft.title.trim()}>

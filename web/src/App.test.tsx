@@ -26,7 +26,6 @@ import {
   ciColor,
   commitHref,
   httpsHref,
-  logHref,
   prParts,
   repoLabels,
   reviewRollup,
@@ -248,6 +247,8 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       pr: null,
       repo: null,
       branch: null,
+      branchUnpushed: false,
+      logs: {},
     },
     session: null,
     claudeSessions: [],
@@ -261,6 +262,13 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
 }
 
 type FetchMock = ReturnType<typeof vi.fn>;
+
+/** Pick a native select's option by its label, as a user does. */
+async function choose(select: string, option: string | RegExp) {
+  const el = screen.getByRole('combobox', { name: select });
+  const opt = await within(el).findByRole<HTMLOptionElement>('option', { name: option });
+  fireEvent.change(el, { target: { value: opt.value } });
+}
 
 function must<T>(x: T | null | undefined): T {
   if (x === null || x === undefined) throw new Error('expected an element');
@@ -737,8 +745,7 @@ describe('App board', () => {
     mockFetch();
     mount();
     await screen.findByRole('table', { name: 'Factory jobs' });
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
-    fireEvent.click(await screen.findByRole('option', { name: 'cancelled (1)' }));
+    await choose('Show', 'cancelled (1)');
     await waitFor(() => {
       expect(screen.getAllByRole('row')).toHaveLength(2);
     });
@@ -752,8 +759,7 @@ describe('App board', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter' }), {
       target: { value: 'delta' },
     });
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
-    fireEvent.click(await screen.findByRole('option', { name: 'cancelled (1)' }));
+    await choose('Show', 'cancelled (1)');
     window.location.hash = '#/jobs/job-00000003';
     fireEvent(window, new HashChangeEvent('hashchange'));
     await screen.findByRole('heading', { name: 'Gamma blocked' });
@@ -765,7 +771,7 @@ describe('App board', () => {
     window.location.hash = '#/';
     fireEvent(window, new HashChangeEvent('hashchange'));
     expect(await screen.findByRole('searchbox', { name: 'Filter' })).toHaveValue('delta');
-    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent('cancelled (1)');
+    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveDisplayValue('cancelled (1)');
     expect(screen.getByRole('combobox', { name: 'Repository' })).toBeInTheDocument();
     expect(await screen.findByText('Delta cancelled')).toBeInTheDocument();
   });
@@ -1501,7 +1507,12 @@ describe('Job detail: header', () => {
     expect(screen.getByTestId('branch-line')).not.toHaveTextContent('not pushed yet');
     cleanup();
 
-    await open(detail({ job: { ...detail().job, repo: 'github.com/x/y' } }));
+    await open(
+      detail({
+        job: { ...detail().job, repo: 'github.com/x/y' },
+        links: { ...detail().links, branchUnpushed: true },
+      }),
+    );
     expect(within(header()).queryByRole('link', { name: branch })).toBeNull();
     expect(must(within(header()).getByText(branch).closest('[title]'))).toHaveAttribute(
       'title',
@@ -1937,10 +1948,7 @@ describe('Archive', () => {
   });
 
   async function show(filter: string) {
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
-    fireEvent.click(
-      await screen.findByRole('option', { name: new RegExp(`^${filter} [(][0-9]+[)]$`) }),
-    );
+    await choose('Show', new RegExp(`^${filter} [(][0-9]+[)]$`));
   }
 
   it('hides archived jobs from every view except Show: archived', async () => {
@@ -1953,7 +1961,9 @@ describe('Archive', () => {
     for (const f of ['finished', 'cancelled']) {
       await show(f);
       await waitFor(() => {
-        expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent(f);
+        expect(screen.getByRole('combobox', { name: 'Show' })).toHaveDisplayValue(
+          new RegExp(`^${f} [(]`),
+        );
       });
       expect(screen.queryByText('Omega archived')).not.toBeInTheDocument();
     }
@@ -2059,10 +2069,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
       .filter(([, i]) => i?.method === 'POST')
       .map(([u, i]) => [u, JSON.parse(i?.body as string) as unknown]);
   async function show(filter: string) {
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Show' }));
-    fireEvent.click(
-      await screen.findByRole('option', { name: new RegExp(`^${filter} [(][0-9]+[)]$`) }),
-    );
+    await choose('Show', new RegExp(`^${filter} [(][0-9]+[)]$`));
   }
 
   it('hides Repository, Session, and Branch by default; the Columns menu toggles and remembers', async () => {
@@ -2166,8 +2173,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     });
     // The Repository select narrows server-side; the text filter applies on top.
     data.rows = rows.filter((r) => r.repo === 'gamma');
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Repository' }));
-    fireEvent.click(await screen.findByRole('option', { name: 'gamma' }));
+    await choose('Repository', 'gamma');
     fireEvent.change(filter, { target: { value: 'delta' } });
     await waitFor(() => {
       expect(ids()).toEqual(['job-00000004']);
@@ -2217,8 +2223,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     await screen.findByRole('table', { name: 'Factory jobs' });
     expect(document.querySelectorAll('[data-repo-label]')).toHaveLength(4);
     data.rows = rows.filter((r) => r.repo === 'gamma');
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Repository' }));
-    fireEvent.click(await screen.findByRole('option', { name: 'gamma' }));
+    await choose('Repository', 'gamma');
     await waitFor(() => {
       expect(ids()).toEqual(['job-00000003', 'job-00000004']);
     });
@@ -3122,7 +3127,7 @@ describe('Board attention order, summary chips, review rollup', () => {
     }
     expect(ringed()).toEqual([]);
     const show = screen.getByRole('combobox', { name: 'Show' });
-    expect(show).toHaveTextContent('current (7)');
+    expect(show).toHaveDisplayValue('current (7)');
 
     fireEvent.click(chip('1 need human'));
     await waitFor(() => {
@@ -3133,7 +3138,7 @@ describe('Board attention order, summary chips, review rollup', () => {
     // An explicit text-colour ring, not currentColor (white on a filled chip).
     expect(getComputedStyle(chip('1 need human')).outlineColor).toBe(theme.palette.text.primary);
     expect(getComputedStyle(chip('1 need human')).outlineWidth).toBe('2px');
-    expect(show).toHaveTextContent('needs human (1)');
+    expect(show).toHaveDisplayValue('needs human (1)');
     fireEvent.click(chip('2 failed'));
     await waitFor(() => {
       expect(ids()).toEqual(['job-0000000b', 'job-0000000c']);
@@ -3144,7 +3149,7 @@ describe('Board attention order, summary chips, review rollup', () => {
     await waitFor(() => {
       expect(ids()).toHaveLength(7);
     });
-    expect(show).toHaveTextContent('current (7)');
+    expect(show).toHaveDisplayValue('current (7)');
     for (const [name, id] of [
       ['1 running', 'job-00000001'],
       ['1 stale', 'job-00000002'],
@@ -3156,10 +3161,8 @@ describe('Board attention order, summary chips, review rollup', () => {
       });
     }
 
-    fireEvent.mouseDown(show);
-    const listbox = await screen.findByRole('listbox');
     expect(
-      within(listbox)
+      within(show)
         .getAllByRole('option')
         .map((o) => o.textContent),
     ).toEqual([
@@ -3957,12 +3960,12 @@ describe('Loading and refresh progress', () => {
         .getAllByRole('button')
         .map((c) => c.textContent),
     ).toEqual(['running', 'stale', 'need human', 'failed', 'idle']);
-    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent(/^current$/);
+    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveDisplayValue('current');
     hold = {};
     gate.resolve(undefined);
     await screen.findByRole('table', { name: 'Factory jobs' });
     expect(screen.queryByRole('progressbar', { name: 'Loading jobs' })).not.toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveTextContent('current (4)');
+    expect(screen.getByRole('combobox', { name: 'Show' })).toHaveDisplayValue('current (4)');
   });
 
   it('shows Refreshing under the app bar only while a board poll is in flight', async () => {
@@ -4166,7 +4169,18 @@ describe('Job detail: navigable PR, commit, and log references (todo 0019)', () 
     const b = detail();
     return detail({
       job: { ...b.job, repo: 'github.com/acme/alpha', prUrl: pr, prState: 'draft', ciHead },
-      links: { ...b.links, pr, repo },
+      links: {
+        ...b.links,
+        pr,
+        repo,
+        // What the server's isLogPath accepts of the paths below (tests/server.test.ts).
+        logs: Object.fromEntries(
+          ['ci/5555555/test.log', 'verification/12/check.log'].map((l) => [
+            l,
+            `/api/jobs/${b.job.id}/artifacts/${l}`,
+          ]),
+        ),
+      },
       events: [
         {
           id: 1,
@@ -4495,7 +4509,7 @@ describe('prParts (R6)', () => {
   });
 });
 
-describe('reference helpers (R2, R4, R8)', () => {
+describe('reference helpers (R2, R8)', () => {
   it('builds commit hrefs only from a repo base and a lowercase hex SHA', () => {
     expect(commitHref('https://github.com/a/b', 'abcdef0')).toBe(
       'https://github.com/a/b/commit/abcdef0',
@@ -4505,25 +4519,6 @@ describe('reference helpers (R2, R4, R8)', () => {
     expect(commitHref('https://github.com/a/b', 'ABCDEF0')).toBeNull();
     expect(commitHref('https://github.com/a/b', '../x')).toBeNull();
     expect(commitHref('https://github.com/a/b', 'a'.repeat(41))).toBeNull();
-  });
-
-  it('accepts only the log shapes orch writes', () => {
-    for (const ok of ['verification/3/check.log', 'ci/abcdef0/test.log', 'ci/abcdef0/a_b-c.d.log'])
-      expect(logHref('job-00000001', ok)).toBe(`/api/jobs/job-00000001/artifacts/${ok}`);
-    for (const bad of [
-      '/abs/x.log',
-      '..\\x.log',
-      'C:\\x.log',
-      'notes.txt',
-      'ci/x/../../secret.log',
-      'ci/abcdef0/../../../x.log',
-      'verification/3/../x.log',
-      'ci/ABCDEF0/x.log',
-      'verification/x/c.log',
-      42,
-      null,
-    ])
-      expect(logHref('job-00000001', bad)).toBeNull();
   });
 
   it('accepts only https for GitHub log URLs', () => {

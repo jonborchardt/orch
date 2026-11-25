@@ -35,9 +35,11 @@ import type {
   TicketSummary,
   TicketView,
 } from '../../src/server/types.ts';
-import { Pick, Reasons, TicketDetail, errorText } from './TicketDetail.tsx';
+import { usePolled } from './Runs.tsx';
+import { Pick, Reasons, TicketDetail, TicketFields } from './TicketDetail.tsx';
 import {
   createTicket,
+  errorText,
   fetchAreas,
   fetchBoard,
   fetchRunner,
@@ -110,6 +112,16 @@ function matches(t: TicketSummary, f: TicketFilters): boolean {
     (!q || `${ticketKey(t.id)} #${String(t.id)} ${t.title}`.toLowerCase().includes(q))
   );
 }
+
+/** The look of the native inputs in the ticket table. */
+const NATIVE_SX = {
+  font: 'inherit',
+  color: 'inherit',
+  bgcolor: 'transparent',
+  border: 1,
+  borderColor: 'divider',
+  borderRadius: 1,
+} as const;
 
 const RUNNER_COLOR = { running: 'primary', interrupted: 'warning', idle: 'default' } as const;
 
@@ -231,15 +243,7 @@ function PositionInput({
       onBlur={() => {
         setValue(String(at));
       }}
-      sx={{
-        width: '4.5em',
-        font: 'inherit',
-        color: 'inherit',
-        bgcolor: 'transparent',
-        border: 1,
-        borderColor: 'divider',
-        borderRadius: 1,
-      }}
+      sx={{ width: '4.5em', ...NATIVE_SX }}
     />
   );
 }
@@ -299,60 +303,26 @@ function CreateTicket({
                 {error}
               </Alert>
             )}
-            <TextField
-              label="Title"
-              value={f.title}
-              onChange={(e) => {
-                set('title')(e.target.value);
+            <TicketFields
+              create
+              value={f}
+              onChange={(k, v) => {
+                set(k)(v);
               }}
-              required
-              autoFocus
-              fullWidth
-            />
-            <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', rowGap: 2 }}>
-              <Pick
-                label="Repository"
-                value={f.repo}
-                onChange={set('repo')}
-                options={repos.map((r) => ({
-                  value: r.repoPath,
-                  label: `${r.repo} (${r.repoPath})`,
-                }))}
-                width={260}
-              />
-              <Pick label="Type" value={f.type} onChange={set('type')} options={TYPES} />
-              <Pick
-                label="Area"
-                value={f.area}
-                onChange={set('area')}
-                options={areas.length ? areas.map((a) => a.name) : ['other']}
-              />
-              <Pick
-                label="Priority"
-                value={f.priority}
-                onChange={set('priority')}
-                options={PRIORITIES}
-                width={90}
-              />
-              <Pick
-                label="Effort (days)"
-                value={f.effort}
-                onChange={set('effort')}
-                options={EFFORTS.map(String)}
-                width={110}
-              />
-            </Stack>
-            <TextField
-              label="Description (Markdown)"
-              value={f.body}
-              onChange={(e) => {
-                set('body')(e.target.value);
-              }}
-              multiline
-              minRows={8}
-              maxRows={20}
-              fullWidth
-              slotProps={{ htmlInput: { style: { fontFamily: 'monospace' } } }}
+              areas={areas.length ? areas.map((a) => a.name) : ['other']}
+              efforts={EFFORTS.map(String)}
+              lead={
+                <Pick
+                  label="Repository"
+                  value={f.repo}
+                  onChange={set('repo')}
+                  options={repos.map((r) => ({
+                    value: r.repoPath,
+                    label: `${r.repo} (${r.repoPath})`,
+                  }))}
+                  width={260}
+                />
+              }
             />
           </Stack>
         )}
@@ -390,36 +360,34 @@ export function TicketsPage({
   filters: TicketFilters;
   onFilters: (f: TicketFilters) => void;
 }) {
-  const [data, setData] = useState<Data | null>(null);
   const [areas, setAreas] = useState<Area[]>([]);
-  const [error, setError] = useState<string | null>(null);
   // A refused write; kept until dismissed, where a poll's error clears with the next good poll.
   const [refused, setRefused] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const load = useCallback(
-    () =>
-      // Four requests for the whole view, whatever the number of tickets: never one per row.
-      Promise.all([fetchTickets('all'), fetchTickets('order'), fetchBoard(), fetchRunner()]).then(
-        ([all, order, rows, runner]) => {
-          setData({ tickets: all.tickets, order: order.tickets.map((t) => t.id), rows, runner });
-          setError(null);
-        },
-        (err: unknown) => {
-          setError(errorText(err));
-        },
-      ),
-    [],
+  // Four requests for the whole view, whatever the number of tickets: never one per row.
+  const {
+    data,
+    error: polled,
+    reload,
+  } = usePolled(
+    useCallback(
+      () =>
+        Promise.all([fetchTickets('all'), fetchTickets('order'), fetchBoard(), fetchRunner()]).then(
+          ([all, order, rows, runner]): Data => ({
+            tickets: all.tickets,
+            order: order.tickets.map((t) => t.id),
+            rows,
+            runner,
+          }),
+        ),
+      [],
+    ),
+    refreshMs,
   );
-  useEffect(() => {
-    void load();
-    const timer = setInterval(() => {
-      if (!document.hidden) void load();
-    }, refreshMs);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [load, refreshMs]);
+  // Dismissing a poll's error hides that one error; the next failed poll shows again.
+  const [dismissed, setDismissed] = useState<unknown>(null);
+  const error = polled === null || polled === dismissed ? null : errorText(polled);
   useEffect(() => {
     fetchAreas().then(setAreas, () => undefined);
   }, []);
@@ -449,7 +417,7 @@ export function TicketsPage({
         jobs={jobs}
         areas={areas}
         refreshMs={refreshMs}
-        onChanged={load}
+        onChanged={reload}
       />
     );
   }
@@ -470,25 +438,23 @@ export function TicketsPage({
   };
   const labels = repoLabels(tickets.map((t) => t.repo));
   const repoIds = [...new Set(tickets.map((t) => t.repo))].sort();
-  const reprioritize = (t: TicketSummary, priority: string) => {
+  /** One ticket write; a refusal is kept until dismissed, and the queue is re-read either way. */
+  const send = (t: TicketSummary, body: { action: string } & Record<string, unknown>) => {
     setRefused(null);
-    ticketAction(t.id, { action: 'edit', priority, revision: t.revision })
+    ticketAction(t.id, { ...body, revision: t.revision })
       .catch((err: unknown) => {
         setRefused(`Ticket ${ticketKey(t.id)}: ${errorText(err)}`);
       })
-      // The queue is re-read either way: the order is the server's to give.
-      .finally(() => void load());
+      // The order is the server's to give.
+      .finally(() => void reload());
+  };
+  const reprioritize = (t: TicketSummary, priority: string) => {
+    send(t, { action: 'edit', priority });
   };
   // Up, Down, and a typed position move within the global order, not the filtered rows (as
   // `orch ticket move`); the server places the ticket, this only sends the number typed.
   const move = (t: TicketSummary, to: 'up' | 'down' | 'top' | { position: number }) => {
-    setRefused(null);
-    const where = typeof to === 'string' ? { [to]: true } : to;
-    ticketAction(t.id, { action: 'move', ...where, revision: t.revision })
-      .catch((err: unknown) => {
-        setRefused(`Ticket ${ticketKey(t.id)}: ${errorText(err)}`);
-      })
-      .finally(() => void load());
+    send(t, { action: 'move', ...(typeof to === 'string' ? { [to]: true } : to) });
   };
 
   return (
@@ -501,7 +467,7 @@ export function TicketsPage({
           sx={{ m: 1 }}
           onClose={() => {
             setRefused(null);
-            setError(null);
+            setDismissed(polled);
           }}
         >
           {refused ?? error}
@@ -655,14 +621,7 @@ export function TicketsPage({
                         onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
                           reprioritize(t, e.target.value);
                         }}
-                        sx={{
-                          font: 'inherit',
-                          color: 'inherit',
-                          bgcolor: 'transparent',
-                          border: 1,
-                          borderColor: 'divider',
-                          borderRadius: 1,
-                        }}
+                        sx={NATIVE_SX}
                       >
                         {PRIORITIES.map((p) => (
                           <option key={p}>{p}</option>
@@ -718,7 +677,7 @@ export function TicketsPage({
           }}
           onCreated={(t) => {
             setCreating(false);
-            void load();
+            void reload();
             window.location.hash = ticketHref(t.id);
           }}
         />

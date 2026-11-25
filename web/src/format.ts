@@ -236,22 +236,6 @@ export function knownCommits(d: JobDetailView): Set<string> {
   return known;
 }
 
-/** R4, the same check as `isLogPath` in src/server/api.ts: only log paths orch itself writes. */
-export function isLogPath(p: unknown): p is string {
-  return (
-    typeof p === 'string' &&
-    /^(?:verification\/\d+|ci\/[0-9a-f]{7})\/[A-Za-z0-9._-]+\.log$/.test(p) &&
-    !p.split('/').some((s) => s === '.' || s === '..')
-  );
-}
-
-/** The artifact route for a recorded log, each segment encoded; null for any other path. */
-export function logHref(jobId: string, p: unknown): string | null {
-  return isLogPath(p)
-    ? `/api/jobs/${jobId}/artifacts/${p.split('/').map(encodeURIComponent).join('/')}`
-    : null;
-}
-
 /** R8: GitHub's log URL is an href only over https. */
 export function httpsHref(url: unknown): string | null {
   if (typeof url !== 'string') return null;

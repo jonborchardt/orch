@@ -4,26 +4,23 @@ import {
   Box,
   Button,
   Chip,
-  FormControl,
-  InputLabel,
   LinearProgress,
-  MenuItem,
-  Select,
   Stack,
   TextField,
   Toolbar,
   Typography,
 } from '@mui/material';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import type { BoardRow, RunnerStatus } from '../../src/server/types.ts';
 import { AgentsPage } from './Agents.tsx';
 import { JobBoard } from './JobBoard.tsx';
 import { type DetailActivity, JobDetail } from './JobDetail.tsx';
-import { RunsPage } from './Runs.tsx';
+import { RunsPage, usePolled } from './Runs.tsx';
+import { Pick } from './TicketDetail.tsx';
 import { NO_FILTERS, type TicketFilters, TicketsPage } from './Tickets.tsx';
 import { UsagePage } from './Usage.tsx';
-import { ApiFailure, fetchBoard, fetchRepos, fetchRunner } from './api.ts';
+import { failureText, fetchBoard, fetchRepos, fetchRunner } from './api.ts';
 
 function useHashRoute(): string {
   const [hash, setHash] = useState(() => window.location.hash);
@@ -106,14 +103,9 @@ function matchesText(row: BoardRow, text: string): boolean {
 
 export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const hash = useHashRoute();
-  const [rows, setRows] = useState<BoardRow[] | null>(null);
-  const [repos, setRepos] = useState<string[]>([]);
   const [repo, setRepo] = useState<string>('');
   const [status, setStatus] = useState<StatusFilter>('current');
   const [text, setText] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  const [inFlight, setInFlight] = useState(0);
   const [detailActivity, setDetailActivity] = useState<DetailActivity>('loading');
   const [ticketFilters, setTicketFilters] = useState<TicketFilters>(NO_FILTERS);
   const [build, setBuild] = useState<RunnerStatus['build']>(null);
@@ -134,36 +126,24 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   // alert, and filters rest.
   const other = section !== 'Jobs';
 
-  const load = useCallback(() => {
-    setInFlight((n) => n + 1);
-    Promise.all([fetchBoard(repo || undefined), fetchRepos()])
-      .then(
-        ([b, r]) => {
-          setRows(b);
-          setRepos(r);
-          setError(null);
-          setNow(Date.now());
-        },
-        (err: unknown) => {
-          setError(err instanceof ApiFailure ? `${err.type}: ${err.message}` : String(err));
-        },
-      )
-      .finally(() => {
-        setInFlight((n) => n - 1);
-      });
-  }, [repo]);
-
-  useEffect(() => {
-    // The other sections poll what they show themselves; the job board rests meanwhile.
-    if (section !== 'Jobs') return;
-    load();
-    const timer = setInterval(() => {
-      if (!document.hidden) load();
-    }, refreshMs);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [load, refreshMs, section]);
+  // The other sections poll what they show themselves; the job board rests meanwhile.
+  const fetcher = useMemo(
+    () =>
+      other
+        ? null
+        : () =>
+            Promise.all([fetchBoard(repo || undefined), fetchRepos()]).then(([rows, repos]) => ({
+              rows,
+              repos,
+              now: Date.now(),
+            })),
+    [other, repo],
+  );
+  const board = usePolled(fetcher, refreshMs);
+  const rows = board.data?.rows ?? null;
+  const repos = board.data?.repos ?? [];
+  const now = board.data?.now ?? 0;
+  const error = board.error === null ? null : failureText(board.error);
 
   // Whether the installed build lags its checkout; checked on load and on every section change.
   // A failed request shows nothing: this is advice, never an error.
@@ -192,7 +172,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
     [rows],
   );
   // A background poll after the first load; never shown alongside a first-load bar.
-  const boardPolling = inFlight > 0 && rows !== null;
+  const boardPolling = board.loading && rows !== null;
   const refreshing = other
     ? false
     : jobMatch
@@ -272,45 +252,28 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
                 slotProps={{ inputLabel: { shrink: true } }}
                 sx={{ minWidth: 200 }}
               />
-              <FormControl size="small" sx={{ minWidth: 180 }}>
-                <InputLabel id="repo-label" shrink>
-                  Repository
-                </InputLabel>
-                <Select
-                  labelId="repo-label"
-                  label="Repository"
-                  value={repo}
-                  onChange={(e) => {
-                    setRepo(e.target.value);
-                  }}
-                  displayEmpty
-                  notched
-                >
-                  <MenuItem value="">All repositories</MenuItem>
-                  {repos.map((r) => (
-                    <MenuItem key={r} value={r}>
-                      {r}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <FormControl size="small" sx={{ minWidth: 140 }}>
-                <InputLabel id="status-label">Show</InputLabel>
-                <Select
-                  labelId="status-label"
-                  label="Show"
-                  value={status}
-                  onChange={(e) => {
-                    setStatus(e.target.value);
-                  }}
-                >
-                  {STATUS_FILTERS.map((s) => (
-                    <MenuItem key={s} value={s}>
-                      {counts ? `${s} (${String(counts[s])})` : s}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              <Pick
+                size="small"
+                label="Repository"
+                value={repo}
+                onChange={setRepo}
+                options={repos}
+                all="All repositories"
+                width={180}
+              />
+              <Pick
+                size="small"
+                label="Show"
+                value={status}
+                onChange={(v) => {
+                  setStatus(v as StatusFilter);
+                }}
+                options={STATUS_FILTERS.map((s) => ({
+                  value: s,
+                  label: counts ? `${s} (${String(counts[s])})` : s,
+                }))}
+                width={140}
+              />
             </Box>
           )}
         </Toolbar>
@@ -353,7 +316,12 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             </Box>
           )
         ) : (
-          <JobBoard rows={visible} total={rows.length} now={now} onChanged={load} />
+          <JobBoard
+            rows={visible}
+            total={rows.length}
+            now={now}
+            onChanged={() => void board.reload()}
+          />
         )}
       </Box>
       <Box component="footer" sx={{ p: 1, borderTop: 1, borderColor: 'divider' }}>
