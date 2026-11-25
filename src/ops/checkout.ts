@@ -106,6 +106,8 @@ export interface HookOutcome {
   action: 'claimed' | 'refused' | 'reported' | 'released' | 'ignored';
 }
 
+const IGNORED: HookOutcome = { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
+
 export function parseHookInput(text: string): HookInput {
   if (text.trim() === '') return {};
   let raw: unknown;
@@ -134,21 +136,15 @@ function describe(owner: LiveClaim): string {
  */
 export function hookCheckout(paths: RuntimePaths, input: HookInput): HookOutcome {
   const session = input.session_id;
-  if (!session) return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
+  if (!session) return IGNORED;
   const event = input.hook_event_name;
   if (event === 'SessionEnd') {
-    const { released } = releaseAllCheckouts(paths, session);
-    return {
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-      action: released.length ? 'released' : 'ignored',
-    };
+    return releaseAll(paths, session).length ? { ...IGNORED, action: 'released' } : IGNORED;
   }
   if (event === 'SessionStart') {
     const s = input.cwd ? checkoutStatus(paths, input.cwd) : null;
     if (!s?.checkout || !s.owner || s.owner.session === session || !s.owner.live) {
-      return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
+      return IGNORED;
     }
     return {
       exitCode: 0,
@@ -160,15 +156,15 @@ export function hookCheckout(paths: RuntimePaths, input: HookInput): HookOutcome
       action: 'reported',
     };
   }
-  if (event !== 'PreToolUse') return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
+  if (event !== 'PreToolUse') return IGNORED;
   const file = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
-  if (!file) return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
+  if (!file) return IGNORED;
   const checkout = checkoutIdentity(file);
-  if (!checkout) return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
+  if (!checkout) return IGNORED;
   // A file Git ignores is in no commit of this checkout, so two sessions may share it (decision
   // 2026-11-18-checkout-guard-skips-ignored-files).
   if (tryGit(checkout.root, 'check-ignore', '-q', file) !== undefined) {
-    return { exitCode: 0, stdout: '', stderr: '', action: 'ignored' };
+    return IGNORED;
   }
   try {
     claimCheckout(paths, checkout, session, { transcript: input.transcript_path });

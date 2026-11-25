@@ -23,8 +23,6 @@ import { mailWatermark, reportJobMail } from '../ops/mail.ts';
 import { runnerStatus } from '../ops/run.ts';
 import {
   addTicket,
-  addTicketArea,
-  jobsOfTicket,
   listTickets,
   showTicket,
   ticketAction,
@@ -274,8 +272,7 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
         else if (!sub) send(res, 200, showTicket(store, id));
         else if (sub === 'history' && rest.length === 0) {
           send(res, 200, ticketHistory(store, id, Object.fromEntries(url.searchParams)));
-        } else if (sub === 'jobs' && rest.length === 0) send(res, 200, jobsOfTicket(store, id));
-        else throw new HttpError(404, 'Not found');
+        } else throw new HttpError(404, 'Not found');
         return;
       }
       if (root === 'jobs' && !id) {
@@ -328,7 +325,6 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
         }
         const raw = { actor: DASHBOARD_SESSION, ...(body as Record<string, unknown>) };
         if (!id) send(res, 201, addTicket(store, raw));
-        else if (id === 'areas' && !sub) send(res, 201, addTicketArea(store, raw));
         else if (sub === 'actions') send(res, 200, ticketAction(store, id, raw));
         else throw new HttpError(404, 'Not found');
         return;

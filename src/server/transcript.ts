@@ -31,32 +31,23 @@ import type {
   SubagentSummary,
 } from './types.ts';
 
-/** Bytes read from the end of each transcript file. */
-export const TAIL_WINDOW_BYTES = 256 * 1024;
-/** Bytes read across all files of one request, newest file first. */
-export const TOTAL_READ_BYTES = 2 * 1024 * 1024;
-/** Newest subagent files read (by modification time); the rest are counted. */
-export const MAX_SUBAGENT_FILES = 24;
-/** Bytes read from each `agent-<id>.meta.json`. */
-export const META_MAX_BYTES = 16 * 1024;
-/** Entries in one response, newest first. */
-export const MAX_ENTRIES = 400;
-/** Characters of one entry's text. */
-export const ENTRY_TEXT_MAX = 4000;
-/** Bytes of the serialized response. */
-export const MAX_RESPONSE_BYTES = 1024 * 1024;
-/** Characters of a subagent's type or description from its meta file. */
-export const META_TEXT_MAX = 200;
-
 export const LIMITS = {
-  TAIL_WINDOW_BYTES,
-  TOTAL_READ_BYTES,
-  MAX_SUBAGENT_FILES,
-  META_MAX_BYTES,
-  MAX_ENTRIES,
-  ENTRY_TEXT_MAX,
-  MAX_RESPONSE_BYTES,
-  META_TEXT_MAX,
+  /** Bytes read from the end of each transcript file. */
+  TAIL_WINDOW_BYTES: 256 * 1024,
+  /** Bytes read across all files of one request, newest file first. */
+  TOTAL_READ_BYTES: 2 * 1024 * 1024,
+  /** Newest subagent files read (by modification time); the rest are counted. */
+  MAX_SUBAGENT_FILES: 24,
+  /** Bytes read from each `agent-<id>.meta.json`. */
+  META_MAX_BYTES: 16 * 1024,
+  /** Entries in one response, newest first. */
+  MAX_ENTRIES: 400,
+  /** Characters of one entry's text. */
+  ENTRY_TEXT_MAX: 4000,
+  /** Bytes of the serialized response. */
+  MAX_RESPONSE_BYTES: 1024 * 1024,
+  /** Characters of a subagent's type or description from its meta file. */
+  META_TEXT_MAX: 200,
 };
 export type Limits = typeof LIMITS;
 
@@ -117,7 +108,7 @@ function resultText(content: unknown): string {
 export function parseTranscript(
   text: string,
   agent: SessionAgent | null,
-  entryTextMax: number = ENTRY_TEXT_MAX,
+  entryTextMax: number = LIMITS.ENTRY_TEXT_MAX,
 ): SessionEntry[] {
   const out: SessionEntry[] = [];
   for (const line of text.split('\n')) {
@@ -166,7 +157,10 @@ export function parseTranscript(
 }
 
 /** One timeline from several files' entries (each in file order): newest first, at most `max`. */
-export function mergeEntries(lists: SessionEntry[][], max: number = MAX_ENTRIES): SessionEntry[] {
+export function mergeEntries(
+  lists: SessionEntry[][],
+  max: number = LIMITS.MAX_ENTRIES,
+): SessionEntry[] {
   return lists
     .flatMap((l) => l.map((e, i) => ({ e, i, t: Date.parse(e.at) })))
     .sort((a, b) => b.t - a.t || b.i - a.i)
