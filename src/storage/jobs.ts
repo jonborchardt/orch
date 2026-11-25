@@ -26,7 +26,7 @@ import {
 } from '../core/ownership.ts';
 import { stripControl } from '../core/flake.ts';
 import { jobArtifactDir } from '../core/paths.ts';
-import { DEFAULT_CONFIG } from '../core/roles.ts';
+import { DEFAULT_CONFIG, drawModels, drawnModelsOf, type FactoryConfig } from '../core/roles.ts';
 import { SESSION_EVENT, type SessionRef } from '../core/session.ts';
 import type { Authority } from '../core/verification.ts';
 import {
@@ -84,6 +84,8 @@ export interface CreateJobInput {
    * the new job in the same transaction, as its owner, so neither exists without the other.
    */
   supersedes?: { id: string; token: string | undefined } | undefined;
+  /** The config's role models; the job's per-role draw (`models.drawn`) is made from them. */
+  models?: FactoryConfig['models'] | undefined;
 }
 
 export interface Auth {
@@ -143,6 +145,9 @@ export function createJob(store: Store, input: CreateJobInput): Job {
         input.actor ?? null,
         ts,
       );
+      // Drawn once, here, where the id is made; the plan and review rows read this event.
+      const roles = drawModels(id, input.models ?? {});
+      appendEvent(tx, id, 'models.drawn', { roles }, input.actor ?? null, ts);
       if (input.supersedes) {
         const old = getJob(tx, input.supersedes.id);
         checkAuth(old, { token: input.supersedes.token });
@@ -749,6 +754,9 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
       }).id;
     }
     const head = input.verdict ? (input.head ?? null) : null;
+    const drawn = drawnModelsOf(eventsOfTypes(tx, id, ['models.drawn']))?.[input.reviewer];
+    const model = drawn?.model ?? null;
+    const sameAsAuthor = drawn?.sameAsAuthor ?? null;
     const review = tx
       .insert(reviews)
       .values({
@@ -759,6 +767,8 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
         artifactId,
         head,
         summary: input.summary ?? null,
+        model,
+        sameAsAuthor,
         createdAt: ts,
         completedAt: input.verdict ? ts : null,
       })
@@ -769,6 +779,8 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
           artifactId,
           head,
           summary: input.summary ?? null,
+          model,
+          sameAsAuthor,
           completedAt: input.verdict ? ts : null,
         },
       })

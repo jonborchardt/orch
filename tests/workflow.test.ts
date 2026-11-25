@@ -97,6 +97,8 @@ function review(round: number, reviewer: string, verdict: Review['verdict']): Re
     artifactId: null,
     head: null,
     summary: null,
+    model: null,
+    sameAsAuthor: null,
     createdAt: '',
     completedAt: null,
   };

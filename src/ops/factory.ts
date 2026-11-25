@@ -16,6 +16,7 @@ import type { SensitiveReport } from '../core/sensitive.ts';
 import { CHECKLIST_DELIMITER, openChecklist, ticketKey } from '../core/tickets.ts';
 import {
   detectUi,
+  drawnModelsOf,
   type FactoryConfig,
   parseConfig,
   resolveRoles,
@@ -429,7 +430,12 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const detail = jobDetail(store, id, 1000);
   const job = detail.job;
   const config = loadConfig(store);
-  const roles = resolveRoles(config);
+  // The job's recorded draw; a job from before pools draws from the current config, as before.
+  const roles = resolveRoles(
+    config,
+    id,
+    drawnModelsOf(eventsOfTypes(store.db, id, ['models.drawn'])),
+  );
   const ts = now();
   const { worktree: wt } = showWorktree(store, id);
   const worktree = wt.exists && wt.isWorktree ? { ...wt, fingerprint: fingerprint(wt) } : null;
@@ -944,6 +950,7 @@ export function createRequestedJob(store: Store, req: JobRequest): Job {
     baseBranch: req.base,
     maxRounds: req.maxRounds ?? config.maxRounds,
     maxCiRepairs: config.maxCiRepairs,
+    models: config.models,
     actor: req.session,
     supersedes: req.supersedes,
   });

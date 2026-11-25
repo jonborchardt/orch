@@ -215,6 +215,7 @@ describe('mail state is metadata, claimed at most once', () => {
       expect(after).toMatchObject({ mailCursor: mark, mailThreadId: '<a@example.test>' });
       expect(listEvents(store.db, job.id).map((e) => e.type)).toEqual([
         'job.created',
+        'models.drawn',
         'mail.sent',
         'mail.failed',
       ]);

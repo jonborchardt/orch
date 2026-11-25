@@ -217,7 +217,11 @@ without CI. Details: [docs/workflow.md](docs/workflow.md#verification-authority)
 
 The merge opt-in is off by default, per repository, and kept in your own `<config>/factory.json`,
 never in a repository. Model overrides, `maxRounds`, `maxCiRepairs`, and `runnerClaudeArgs` go in
-the same file (`orch factory config` prints it). The controller's Claude session gets
+the same file (`orch factory config` prints it). `models.<role>` is a model (`opus`, `sonnet`,
+`haiku`, `fable`, `inherit`) or a pool, a non-empty array of distinct ones such as
+`{"builder": ["opus", "fable"]}`: orch draws one model per role when it creates a job, keeps it for
+the whole job, and records it on the job and on every review. You maintain the pools; orch never
+prunes them. The controller's Claude session gets
 `--permission-mode auto` plus an allow-list for `orch`, `git`, `npm`, `npx`, `node`, and `cd`,
 never a permission bypass. A repository whose builder needs other tools (`pnpm`, `cargo`,
 `pytest`) needs them in `"runnerClaudeArgs"`, which replaces the default list. A Windows

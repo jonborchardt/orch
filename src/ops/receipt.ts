@@ -3,6 +3,7 @@
  * verified commit and its checks, review verdicts, budgets used, sensitive-path labels, human
  * decisions, and the merge). Read-only over existing rows and Git objects; it decides nothing.
  */
+import { type DrawnModels, drawnModelsOf } from '../core/roles.ts';
 import { classifyChanges, type SensitiveChange } from '../core/sensitive.ts';
 import { changesBetween } from '../git/worktree.ts';
 import type { Store } from '../storage/client.ts';
@@ -17,7 +18,16 @@ export interface Receipt {
   /** `job.ciHead`, else the head of the newest passing verification run. */
   verifiedHead: string | null;
   checks: { id: string; status: string; durationMs: number | null }[];
-  reviews: { round: number; reviewer: string; verdict: string | null }[];
+  /** The job's `models.drawn` event: each role's model and `sameAsAuthor`; null if not recorded. */
+  models: DrawnModels | null;
+  /** `model` and `sameAsAuthor` are null when the row did not record them (legacy jobs). */
+  reviews: {
+    round: number;
+    reviewer: string;
+    verdict: string | null;
+    model: string | null;
+    sameAsAuthor: boolean | null;
+  }[];
   round: number;
   maxRounds: number;
   ciRepairs: number;
@@ -89,8 +99,15 @@ export function buildReceipt(store: Store, job: Job): Receipt {
           durationMs: c.durationMs,
         }))
       : [],
+    models: drawnModelsOf(eventsOfTypes(store.db, job.id, ['models.drawn'])),
     reviews: listReviews(store.db, job.id)
-      .map((r) => ({ round: r.round, reviewer: r.reviewer, verdict: r.verdict }))
+      .map((r) => ({
+        round: r.round,
+        reviewer: r.reviewer,
+        verdict: r.verdict,
+        model: r.model,
+        sameAsAuthor: r.sameAsAuthor,
+      }))
       .sort((a, b) => a.round - b.round),
     round: job.round,
     maxRounds: job.maxRounds,
@@ -113,6 +130,12 @@ export function buildReceipt(store: Store, job: Job): Receipt {
 
 const seconds = (ms: number | null) => (ms === null ? '-' : `${(ms / 1000).toFixed(1)} s`);
 const code = (v: string | null) => (v ? `\`${v}\`` : 'unknown');
+/** "opus, same as author: no"; the flag is left out for roles without an author. */
+const modelText = (model: string | null, same: boolean | null | undefined) =>
+  (model ?? 'model not recorded') +
+  (same === undefined
+    ? ''
+    : `, same as author: ${same === null ? 'not recorded' : same ? 'yes' : 'no'}`);
 
 export function receiptMarkdown(r: Receipt): string {
   const rounds = [...new Set(r.reviews.map((x) => x.round))];
@@ -149,10 +172,21 @@ export function receiptMarkdown(r: Receipt): string {
             `- Round ${String(n)}: ` +
             r.reviews
               .filter((x) => x.round === n)
-              .map((x) => `${x.reviewer} ${x.verdict ?? 'pending'}`)
+              .map(
+                (x) =>
+                  `${x.reviewer} ${x.verdict ?? 'pending'} (${modelText(x.model, x.sameAsAuthor)})`,
+              )
               .join(', '),
         )
       : ['None.']),
+    '',
+    '### Models',
+    '',
+    ...(r.models
+      ? Object.entries(r.models).map(
+          ([role, m]) => `- ${role}: ${modelText(m.model, m.sameAsAuthor)}`,
+        )
+      : ['Not recorded.']),
     '',
     '### Human decisions',
     '',
