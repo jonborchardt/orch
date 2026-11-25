@@ -57,6 +57,7 @@ import {
   writeSession,
 } from './runner-state.ts';
 import { listTickets, showTicket } from './tickets.ts';
+import { recordSession } from './token-usage.ts';
 import { sleep } from './verify-lock.ts';
 
 /** The controller's owner identity on every job it runs; its Claude child claims under it too. */
@@ -394,6 +395,13 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
         ...pickOf(run.session),
       },
     }));
+    // The session ended: record its token counts once. Evidence only, like the note above.
+    try {
+      const problem = recordSession(store, jobId, sessionId, 'runner');
+      if (problem !== null) run.log(`  usage: session ${sessionId} not recorded: ${problem}`);
+    } catch (err) {
+      run.log(`  usage: session ${sessionId} not recorded: ${(err as Error).message}`);
+    }
     if (stopped) return { kind: 'stopped' };
     // A spent account would fail every ticket the same way: end the run, resumably, before the
     // exit counts as idle (decision 2026-11-24-usage-limit-ends-run-resumably).

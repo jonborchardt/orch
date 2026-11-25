@@ -9,6 +9,7 @@ import { openStore } from '../src/storage/client.ts';
 import { appendEvent } from '../src/storage/events.ts';
 import { createJob, getJob } from '../src/storage/jobs.ts';
 import { jobs } from '../src/storage/schema.ts';
+import { insertUsage, recordedRefs, usageInRange } from '../src/storage/usage.ts';
 import { homePaths, tempDir } from './helpers.ts';
 
 const input = (title = 'T') => ({
@@ -80,6 +81,7 @@ describe('openStore', () => {
         'ticket_events',
         'ticket_links',
         'tickets',
+        'token_usage',
         'verification_checks',
         'verification_runs',
       ]);
@@ -188,5 +190,40 @@ describe('openStore', () => {
     const h = home();
     expect(databasePath(homePaths(h))).toBe(join(h, 'orch.sqlite'));
     expect(migrationsDir()).not.toContain(h);
+  });
+});
+
+describe('recorded token usage (ticket 0144 AC2)', () => {
+  it('stores per-hour counts once per ref, and a zero-usage session reads back as recorded', () => {
+    const h = tempDir();
+    const store = openStore(homePaths(h));
+    try {
+      const job = createJob(store, input('usage'));
+      const c = { input: 1, output: 2, cacheRead: 3, cacheCreation: 4 };
+      const hours = [
+        { hour: 3_600_000, ...c, input: 5 },
+        { hour: 7_200_000, ...c },
+      ];
+      insertUsage(store, { ref: 'r1', jobId: job.id, source: 'runner', hours });
+      const [row] = usageInRange(store.db, 0, 7_200_000);
+      expect(row).toMatchObject({ ref: 'r1', jobId: job.id, source: 'runner' });
+      expect(row).toMatchObject({ firstHour: 3_600_000, lastHour: 7_200_000 });
+      expect(row?.hours.map((x) => [x.hour, x.input])).toEqual([
+        [3_600_000, 5],
+        [7_200_000, 1],
+      ]);
+      // The same ref again changes nothing.
+      const again = { ref: 'r1', jobId: job.id, source: 'backfill' as const, hours: [] };
+      insertUsage(store, again);
+      expect(usageInRange(store.db, 0, 7_200_000)).toEqual([row]);
+      expect(usageInRange(store.db, 10_800_000, 14_400_000)).toEqual([]);
+      // No assistant usage: still a row, never in a range, but recorded.
+      insertUsage(store, { ref: 'r0', jobId: job.id, source: 'read', hours: [] });
+      expect(recordedRefs(store.db)).toEqual(new Set(['r1', 'r0']));
+      expect(usageInRange(store.db, 0, Number.MAX_SAFE_INTEGER).map((r) => r.ref)).toEqual(['r1']);
+    } finally {
+      store.close();
+      rmSync(h, { recursive: true, force: true });
+    }
   });
 });
