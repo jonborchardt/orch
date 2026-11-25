@@ -1,7 +1,7 @@
 {
-  "name": "agent-orchestrator",
+  "name": "orch",
   "version": "0.1.0",
-  "description": "Local, multi-repository AI software factory orchestrator for Claude Code",
+  "description": "A local software factory for Claude Code: unattended, not unchecked",
   "private": true,
   "type": "module",
   "license": "MIT",

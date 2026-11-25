@@ -46,7 +46,7 @@ describe('runtimePaths', () => {
 
 describe('install metadata', () => {
   it('reads package.json from the install root', () => {
-    expect(packageInfo().name).toBe('agent-orchestrator');
+    expect(packageInfo().name).toBe('orch');
     expect(installRoot()).toMatch(/[\\/]$/);
   });
 });
