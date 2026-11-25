@@ -28,7 +28,7 @@ import type { TokenUsageRow } from '../storage/schema.ts';
 import { insertUsage, recordedRefs, usageInRange } from '../storage/usage.ts';
 
 /** Bytes read from the start of a transcript to find its `cwd` during a backfill. */
-export const CWD_HEAD_BYTES = 1024 * 1024;
+const CWD_HEAD_BYTES = 1024 * 1024;
 
 /**
  * Record session `ref` on `jobId` from its main file and every subagent file, read in full. When

@@ -10,27 +10,23 @@ import type { Db, Store } from './client.ts';
 import { type HourUsage, tokenUsage, type TokenUsageRow } from './schema.ts';
 
 /**
- * Store session `ref`'s per-hour counts on `jobId`. A ref already stored is left as it is.
- * Returns whether a row was inserted.
+ * Store session `ref`'s per-hour counts (sorted by hour) on `jobId`. A ref already stored is
+ * left as it is.
  */
 export function insertUsage(
   store: Store,
   row: { ref: string; jobId: string; source: TokenUsageRow['source']; hours: HourUsage[] },
-): boolean {
-  const hours = [...row.hours].sort((a, b) => a.hour - b.hour);
-  const inserted = store.db
+): void {
+  store.db
     .insert(tokenUsage)
     .values({
       ...row,
-      hours,
-      firstHour: hours[0]?.hour ?? null,
-      lastHour: hours.at(-1)?.hour ?? null,
+      firstHour: row.hours[0]?.hour ?? null,
+      lastHour: row.hours.at(-1)?.hour ?? null,
       recordedAt: now(),
     })
     .onConflictDoNothing()
-    .returning({ ref: tokenUsage.ref })
-    .all();
-  return inserted.length > 0;
+    .run();
 }
 
 /** Every recorded session ref. */

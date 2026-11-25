@@ -201,10 +201,10 @@ describe('recorded token usage (ticket 0144 AC2)', () => {
       const job = createJob(store, input('usage'));
       const c = { input: 1, output: 2, cacheRead: 3, cacheCreation: 4 };
       const hours = [
-        { hour: 7_200_000, ...c },
         { hour: 3_600_000, ...c, input: 5 },
+        { hour: 7_200_000, ...c },
       ];
-      expect(insertUsage(store, { ref: 'r1', jobId: job.id, source: 'runner', hours })).toBe(true);
+      insertUsage(store, { ref: 'r1', jobId: job.id, source: 'runner', hours });
       const [row] = usageInRange(store.db, 0, 7_200_000);
       expect(row).toMatchObject({ ref: 'r1', jobId: job.id, source: 'runner' });
       expect(row).toMatchObject({ firstHour: 3_600_000, lastHour: 7_200_000 });
@@ -214,13 +214,11 @@ describe('recorded token usage (ticket 0144 AC2)', () => {
       ]);
       // The same ref again changes nothing.
       const again = { ref: 'r1', jobId: job.id, source: 'backfill' as const, hours: [] };
-      expect(insertUsage(store, again)).toBe(false);
+      insertUsage(store, again);
       expect(usageInRange(store.db, 0, 7_200_000)).toEqual([row]);
       expect(usageInRange(store.db, 10_800_000, 14_400_000)).toEqual([]);
       // No assistant usage: still a row, never in a range, but recorded.
-      expect(insertUsage(store, { ref: 'r0', jobId: job.id, source: 'read', hours: [] })).toBe(
-        true,
-      );
+      insertUsage(store, { ref: 'r0', jobId: job.id, source: 'read', hours: [] });
       expect(recordedRefs(store.db)).toEqual(new Set(['r1', 'r0']));
       expect(usageInRange(store.db, 0, Number.MAX_SAFE_INTEGER).map((r) => r.ref)).toEqual(['r1']);
     } finally {
