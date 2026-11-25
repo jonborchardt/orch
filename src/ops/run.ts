@@ -27,10 +27,18 @@ import {
   launchClaude,
   type LaunchInput,
 } from '../integrations/claude-session.ts';
+import type { TokenCounts } from '../server/types.ts';
 import { listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import { latestEventsByJob, listEvents } from '../storage/events.ts';
-import { attachSession, claimJob, getJob, recordEvent, releaseJob } from '../storage/jobs.ts';
+import { eventsOfTypes, latestEventsByJob, listEvents } from '../storage/events.ts';
+import {
+  attachSession,
+  claimJob,
+  getJob,
+  mergeEvidence,
+  recordEvent,
+  releaseJob,
+} from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { ticketJobs } from '../storage/tickets.ts';
 import { dispatchJob } from './dispatch.ts';
@@ -38,8 +46,9 @@ import { loadConfig, resumeFactoryJob, specResumeSteps } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
 import { reconcileCi } from './github.ts';
 import { type InstallBuild, installBuild } from './install-build.ts';
-import { mailWatermark, reportJobMail } from './mail.ts';
+import { mailWatermark, reportJobMail, reportRunMail } from './mail.ts';
 import { mergeAuthorized, mergeJob } from './merge.ts';
+import { mergedHead } from './merge-view.ts';
 import {
   acquireRunnerLock,
   awaitsPerson,
@@ -58,7 +67,7 @@ import {
   writeSession,
 } from './runner-state.ts';
 import { listTickets, showTicket } from './tickets.ts';
-import { recordSession } from './token-usage.ts';
+import { jobTokens, recordSession } from './token-usage.ts';
 import { sleep } from './verify-lock.ts';
 
 /** The controller's owner identity on every job it runs; its Claude child claims under it too. */
@@ -104,6 +113,23 @@ export interface RunSummary {
   elapsedSeconds: number;
   tickets: TicketResult[];
   skipped: RunnerSession['skipped'];
+  /** The `done` tickets with the evidence of their result job: display only, nothing decides from it. */
+  merged: MergedTicket[];
+}
+
+/** A merged ticket's head, receipt link, and recorded cost, all of its result job only. */
+export interface MergedTicket {
+  ticketId: number;
+  title: string;
+  jobId: string;
+  /** GitHub's PR head at merge time (`mergedHead`); null if unknown. */
+  head: string | null;
+  mergeCommit: string | null;
+  /** The receipt: the PR body carries the merge receipt (`writeReceipt`). */
+  prUrl: string | null;
+  /** Summed `runner.session` seconds; null when none is recorded. */
+  seconds: number | null;
+  tokens: TokenCounts | null;
 }
 
 interface Run {
@@ -793,7 +819,30 @@ async function runQueue(
   }
 }
 
-function summarize(session: RunnerSession, reason: string, stopped: boolean): RunSummary {
+/** What a merged ticket's result job has on record: never estimated, never a second head lookup. */
+function mergedTicket(store: Store, r: TicketResult & { jobId: string }): MergedTicket {
+  const secs = eventsOfTypes(store.db, r.jobId, ['runner.session'])
+    .map((e) => e.payload['seconds'])
+    .filter((v): v is number => typeof v === 'number');
+  const commit = mergeEvidence(store.db, r.jobId)?.['mergeCommit'];
+  return {
+    ticketId: r.ticketId,
+    title: r.title,
+    jobId: r.jobId,
+    head: mergedHead(store, r.jobId),
+    mergeCommit: typeof commit === 'string' ? commit : null,
+    prUrl: getJob(store.db, r.jobId).prUrl,
+    seconds: secs.length === 0 ? null : secs.reduce((a, b) => a + b, 0),
+    tokens: jobTokens(store, r.jobId),
+  };
+}
+
+function summarize(
+  store: Store,
+  session: RunnerSession,
+  reason: string,
+  stopped: boolean,
+): RunSummary {
   const count = (...o: TicketOutcome[]) =>
     session.results.filter((r) => o.includes(r.outcome)).length;
   return {
@@ -806,6 +855,11 @@ function summarize(session: RunnerSession, reason: string, stopped: boolean): Ru
     elapsedSeconds: Math.round((Date.now() - Date.parse(session.startedAt)) / 1000),
     tickets: session.results,
     skipped: session.skipped,
+    merged: session.results
+      .filter(
+        (r): r is TicketResult & { jobId: string } => r.outcome === 'done' && r.jobId !== null,
+      )
+      .map((r) => mergedTicket(store, r)),
   };
 }
 
@@ -901,7 +955,12 @@ async function drive(
     if (stopped || reason === null) {
       run.save(); // first: a lost lock leaves the stop request to the controller that has it
       clearStop(paths, 'now');
-      return summarize(session, 'stopped on request; orch resume continues the session', true);
+      return summarize(
+        store,
+        session,
+        'stopped on request; orch resume continues the session',
+        true,
+      );
     }
     // Only a limit-hit ticket is still in flight here (`attempt`): the run ended on it, and the
     // session stays unfinished with it, so `orch resume` continues it.
@@ -910,7 +969,7 @@ async function drive(
     );
     if (limited !== undefined) {
       run.save();
-      return summarize(session, limited.reason, false);
+      return summarize(store, session, limited.reason, false);
     }
     session.finished = { at: now(), reason };
     session.ticketId = null;
@@ -918,10 +977,16 @@ async function drive(
     session.jobId = null;
     run.save();
     clearStop(paths, 'next');
-    return summarize(session, reason, false);
+    return summarize(store, session, reason, false);
   } finally {
     clearInterval(beat);
   }
+}
+
+/** The session's end: mail its report when mail is configured (never throws), then return it. */
+async function ended(store: Store, s: RunSummary, opts: RunOptions): Promise<RunSummary> {
+  await reportRunMail(store, s, opts.log ?? (() => undefined));
+  return s;
 }
 
 export interface StartInput {
@@ -968,7 +1033,7 @@ export async function startSession(
       skipped: [],
       finished: null,
     };
-    return await drive(store, release, session, false, opts);
+    return await ended(store, await drive(store, release, session, false, opts), opts);
   } finally {
     release();
   }
@@ -1003,7 +1068,7 @@ export async function resumeSession(
       if (identity === 'original' || identity === 'unknown')
         throw new ValidationError(orphanRefusal(session, identity, 'orch resume'));
     }
-    return await drive(store, release, session, true, opts);
+    return await ended(store, await drive(store, release, session, true, opts), opts);
   } finally {
     release();
   }

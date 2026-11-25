@@ -7,9 +7,10 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { formatSummary, summaryExitCode } from '../src/cli/run.ts';
+import { summaryExitCode } from '../src/cli/run.ts';
 import { ticketKey } from '../src/core/tickets.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
+import { formatSummary } from '../src/ops/run-report.ts';
 import { getJob } from '../src/storage/jobs.ts';
 import type { Job } from '../src/storage/schema.ts';
 import {

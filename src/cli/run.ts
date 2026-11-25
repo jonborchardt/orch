@@ -14,6 +14,7 @@ import {
   startSession,
   stopSession,
 } from '../ops/run.ts';
+import { formatSummary } from '../ops/run-report.ts';
 import { openStore } from '../storage/client.ts';
 
 export const RUN_COMMANDS = ['start', 'do', 'stop', 'status', 'resume'] as const;
@@ -60,26 +61,6 @@ export interface RunCliOptions {
   force?: boolean | undefined;
   /** `orch do --fast` only. */
   fast?: boolean | undefined;
-}
-
-export function formatSummary(s: RunSummary): string {
-  const lines = [
-    '',
-    `Session ended: ${s.reason}`,
-    `tickets   ${String(s.attempted)} attempted, ${String(s.completed)} verified and completed, ` +
-      `${String(s.blocked)} blocked`,
-    `re-lands  ${String(s.relands)}`,
-    `elapsed   ${String(Math.floor(s.elapsedSeconds / 60))} min ${String(s.elapsedSeconds % 60)} s`,
-  ];
-  for (const t of s.tickets) {
-    if (t.outcome === 'done') continue;
-    lines.push(`${String(t.ticketId).padStart(4, '0')} ${t.outcome}: ${t.reason}`);
-    if (t.next !== null) lines.push(`     next: ${t.next}`);
-  }
-  for (const k of s.skipped) {
-    lines.push(`${String(k.ticketId).padStart(4, '0')} passed over: ${k.reason}`);
-  }
-  return lines.join('\n');
 }
 
 export function formatStatus(s: RunnerStatus): string {
