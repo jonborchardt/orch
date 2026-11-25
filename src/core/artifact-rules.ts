@@ -70,11 +70,19 @@ export function ruleFor(relPath: string): ArtifactRule | undefined {
 /**
  * Workflow artifacts belong to one stage (and, under round-N/, one round): they can only be
  * registered or replaced while the job is there, so nothing rewrites accepted evidence later.
- * Paths without a rule (evidence, notes) are free.
+ * Paths without a rule (evidence, notes) are free. One exception: a spec escalation (needs-human
+ * returning to spec) may re-register spec.md, the human's edit, which the challenger then reviews
+ * (decision 2026-11-25-edit-spec-in-needs-human).
  */
-export function assertStageOwns(relPath: string, stage: Stage, round: number): void {
+export function assertStageOwns(
+  relPath: string,
+  stage: Stage,
+  round: number,
+  returnStage: Stage | null = null,
+): void {
   const rule = ruleFor(relPath);
   if (!rule) return;
+  if (relPath === 'spec.md' && stage === 'needs-human' && returnStage === 'spec') return;
   const m = /^round-(\d+)\//.exec(relPath);
   const wrongRound = m !== null && Number(m[1]) !== round;
   if (rule.stage !== stage || wrongRound) {

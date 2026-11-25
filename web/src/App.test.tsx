@@ -2937,6 +2937,52 @@ describe('PR phase, Merge, and Refresh PR', () => {
     expect(posts(f)).toEqual([{ action: 'fix-conflicts' }]);
   });
 
+  it('Edit spec shows only when listed, opens prefilled, and posts the edited text', async () => {
+    const f = mockFetch();
+    const spec = '# Spec\n\n## Goal\n\nold\n';
+    data.detail = detail({ actions: ['request-rework', 'cancel'], contents: { 'spec.md': spec } });
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByRole('button', { name: 'Edit spec' })).not.toBeInTheDocument();
+    cleanup();
+
+    const job = { ...detail().job, returnStage: 'spec' as const };
+    data.detail = detail({
+      job,
+      actions: ['edit-spec', 'request-rework', 'cancel'],
+      contents: { 'spec.md': spec },
+    });
+    data.actionBody = { job, message: 'spec.md replaced (abc1234). The job still waits.' };
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit spec' }));
+    let dialog = await screen.findByRole('dialog');
+    const box = within(dialog).getByRole('textbox', { name: 'spec.md' });
+    expect(box).toHaveValue(spec);
+    fireEvent.change(box, { target: { value: spec + 'new\n' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('spec.md replaced');
+    });
+    expect(posts(f)).toEqual([{ action: 'edit-spec', content: spec + 'new\n' }]);
+    const post = (f.mock.calls as [RequestInfo | URL, RequestInit | undefined][]).find(
+      ([, i]) => i?.method === 'POST',
+    );
+    expect(new Headers(post?.[1]?.headers).get('X-Orch-Csrf')).toBe('tok');
+
+    data.actionStatus = 400;
+    data.actionBody = {
+      error: { type: 'ValidationError', message: 'spec.md is missing required section(s)' },
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'Edit spec' }));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(
+      await within(dialog).findByText('ValidationError: spec.md is missing required section(s)'),
+    ).toBeInTheDocument();
+  });
+
   it('Fix merge conflicts words its dialog for ci, a completed re-land, and GitHub-only', async () => {
     mockFetch();
     const base = detail().job;

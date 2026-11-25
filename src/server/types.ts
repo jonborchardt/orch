@@ -378,6 +378,8 @@ export interface ActionRequest {
   to?: string;
   /** `answer` only: the index into `JobDetailView.choices`. */
   choice?: number;
+  /** `edit-spec` only: the new spec.md text. */
+  content?: string;
 }
 
 export interface ChoiceView extends Choice {
