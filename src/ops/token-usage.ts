@@ -24,8 +24,8 @@ import { confined, readConfined, USAGE_LIMITS, type UsageLimits } from '../serve
 import type { UsageRange } from '../server/types.ts';
 import type { Store } from '../storage/client.ts';
 import { listJobs } from '../storage/jobs.ts';
-import type { TokenUsageRow } from '../storage/schema.ts';
-import { insertUsage, recordedRefs, usageInRange } from '../storage/usage.ts';
+import type { HourUsage, TokenUsageRow } from '../storage/schema.ts';
+import { insertUsage, recordedRefs, usageInRange, usageOfJob } from '../storage/usage.ts';
 
 /** Bytes read from the start of a transcript to find its `cwd` during a backfill. */
 const CWD_HEAD_BYTES = 1024 * 1024;
@@ -184,4 +184,20 @@ export function backfillUsage(store: Store, claudeDir: string = claudeHome()): B
     .filter((j) => !matched.has(j.id))
     .map((j) => ({ jobId: j.id, worktreePath: j.worktreePath ?? '' }));
   return report;
+}
+
+export type TokenTotals = Omit<HourUsage, 'hour'>;
+
+/** The summed counts of every session recorded on `jobId`; null when none is recorded. */
+export function jobTokens(store: Store, jobId: string): TokenTotals | null {
+  const rows = usageOfJob(store.db, jobId);
+  if (rows.length === 0) return null;
+  const t: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  for (const h of rows.flatMap((r) => r.hours)) {
+    t.input += h.input;
+    t.output += h.output;
+    t.cacheRead += h.cacheRead;
+    t.cacheCreation += h.cacheCreation;
+  }
+  return t;
 }

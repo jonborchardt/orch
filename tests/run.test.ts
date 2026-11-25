@@ -179,6 +179,9 @@ describe('orch start: the queue', () => {
     expect(s.skipped).toHaveLength(1);
     expect(s.skipped[0]?.reason).toContain('orch factory config merge enable');
     expect(s.reason).toContain('passed over');
+    const text = formatSummary(s);
+    expect(text.indexOf('Passed over')).toBeGreaterThan(text.indexOf('Needs you (0)'));
+    expect(text).toContain(`${ticketKey(id)} passed over: ${s.skipped[0]?.reason ?? '?'}`);
   });
 
   it('treats a lost claim as ordinary: the other job stays the only one', async () => {
