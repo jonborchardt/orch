@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { ToolError, ValidationError } from '../src/core/errors.ts';
 import { jobArtifactDir } from '../src/core/paths.ts';
@@ -17,15 +17,13 @@ import { claimJob, createJob, getJob, transitionJob } from '../src/storage/jobs.
 import {
   commitFile,
   type GhShim,
-  ghShim,
   gitIn,
   json,
-  makeRepoWithOrigin,
   orch,
   type ShimState,
   tempDir,
   type TempStore,
-  tempStore,
+  useJobRepo,
   writeArtifact,
 } from './helpers.ts';
 
@@ -38,25 +36,7 @@ const writeState = (patch: Partial<ShimState>) => {
   shim.write(patch);
 };
 
-beforeAll(() => {
-  shim = ghShim();
-  Object.assign(process.env, shim.env);
-});
-afterAll(() => {
-  delete process.env['ORCH_GH_SHIM'];
-  delete process.env['ORCH_GH_SHIM_STATE'];
-  shim.cleanup();
-});
-beforeEach(() => {
-  shim.reset();
-  store = tempStore();
-  ({ clone, bare } = makeRepoWithOrigin('git@github.com:acme/alpha.git'));
-});
-afterEach(() => {
-  store.cleanup();
-  rmSync(clone, { recursive: true, force: true });
-  rmSync(bare, { recursive: true, force: true });
-});
+useJobRepo({ shim: 'acme/alpha' }, (s) => ({ store, clone, bare, shim } = s));
 
 /** Create, claim, and drive a job to the given stage with valid fixture artifacts. */
 function jobAt(stage: 'spec' | 'pr') {

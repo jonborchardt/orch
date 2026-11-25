@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { REPORTED_EVENTS } from '../src/core/mail-report.ts';
+import { ticketKey } from '../src/core/tickets.ts';
 import type { LaunchInput } from '../src/integrations/claude-session.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
@@ -54,7 +55,6 @@ beforeEach(() => {
 
 const sessions = (jobId: string) => eventsOf(jobId, 'runner.session');
 const stops = (jobId: string) => eventsOf(jobId, 'runner.stopped');
-const key = (id: number) => String(id).padStart(4, '0');
 
 /** A session that escalates and exits still holding the job, as a child that forgot to release. */
 const escalate: Act = (job) => {
@@ -346,14 +346,14 @@ describe('a job that needs a person', () => {
       { outcome: 'needs-human', code: 'needs-human', stage: 'needs-human', status: 'blocked' },
     ]);
     expect(stops(jobId)[0]?.payload['reason']).toContain('two designs are possible');
-    expect(stops(jobId)[0]?.payload['next']).toContain(`orch do ${key(id)}`);
+    expect(stops(jobId)[0]?.payload['next']).toContain(`orch do ${ticketKey(id)}`);
     // Escalated from spec: the hint names the steps that work (todo 0107), in both places.
     for (const next of [s.tickets[0]?.next, stops(jobId)[0]?.payload['next']]) {
       for (const part of [
         'spec.md',
         'Resume at spec',
         '--to spec --release',
-        `orch do ${key(id)}`,
+        `orch do ${ticketKey(id)}`,
       ]) {
         expect(next).toContain(part);
       }
@@ -417,7 +417,7 @@ describe('a job that needs a person', () => {
       reason: 'keep it small',
     });
     expect(answered.job).toMatchObject({ stage: 'spec', status: 'pending', ownerSession: null });
-    expect(answered.resumeCommand).toBe(`orch do ${key(id)}`);
+    expect(answered.resumeCommand).toBe(`orch do ${ticketKey(id)}`);
     expect(eventsOf(jobId, 'notice.posted').map((e) => e.payload['text'])).toEqual([
       'Human answered "Take the first design": keep it small',
     ]);

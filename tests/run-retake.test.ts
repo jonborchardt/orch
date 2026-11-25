@@ -7,6 +7,7 @@
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
+import { ticketKey } from '../src/core/tickets.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { RUNNER_SESSION, startSession } from '../src/ops/run.ts';
 import { detail } from '../src/server/api.ts';
@@ -136,7 +137,7 @@ describe('the queue takes a decided escalation again', () => {
     const jobA = jobOf(a).id;
     // No second Claude session: the completed job goes straight to the merge.
     expect(l.calls.map((c) => c.jobId)).toEqual([jobA, jobOf(b).id]);
-    const retaken = lines.findIndex((x) => x.startsWith(`ticket ${key(a)} taken again`));
+    const retaken = lines.findIndex((x) => x.startsWith(`ticket ${ticketKey(a)} taken again`));
     expect(retaken).toBeGreaterThan(0);
     expect(lines.slice(retaken).some((x) => x.startsWith('  merge: '))).toBe(true);
     expect(s.tickets.find((t) => t.ticketId === a)?.code).not.toBe('needs-human');
@@ -187,5 +188,3 @@ describe('the queue takes a decided escalation again', () => {
     expect(s.reason).toBe('no ready ticket is left (1 waits for a person)');
   });
 });
-
-const key = (id: number) => String(id).padStart(4, '0');

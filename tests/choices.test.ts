@@ -7,6 +7,7 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { ticketKey } from '../src/core/tickets.ts';
 import {
   type Choice,
   defaultChoices,
@@ -226,7 +227,6 @@ describe('the after-action line (AC6)', () => {
     release?.();
     release = null;
   });
-  const key = () => String(ticketId).padStart(4, '0');
 
   /** Runner state as `run.ts` leaves it: a held lock and a session record with results. */
   function controller(over: Partial<RunnerSession>): void {
@@ -275,25 +275,25 @@ describe('the after-action line (AC6)', () => {
   });
 
   it('says run orch do NNNN when the controller is idle', () => {
-    expect(line()).toBe(`no session is running it; run orch do ${key()}`);
+    expect(line()).toBe(`no session is running it; run orch do ${ticketKey(ticketId)}`);
     const r = dashboardAction(store, id, { action: 'answer', choice: 0 });
-    expect(r.message).toContain(`run orch do ${key()}`);
-    expect(r.resumeCommand).toBe(`orch do ${key()}`);
+    expect(r.message).toContain(`run orch do ${ticketKey(ticketId)}`);
+    expect(r.resumeCommand).toBe(`orch do ${ticketKey(ticketId)}`);
   });
 
   it('says run orch do NNNN while orch do runs another ticket', () => {
     controller({ mode: 'ticket', ticket: ticketId + 1 });
-    expect(line()).toContain(`run orch do ${key()}`);
+    expect(line()).toContain(`run orch do ${ticketKey(ticketId)}`);
   });
 
   it('says run orch do NNNN when the queue is filtered to another repository', () => {
     controller({ repo: other });
-    expect(line()).toContain(`run orch do ${key()}`);
+    expect(line()).toContain(`run orch do ${ticketKey(ticketId)}`);
   });
 
   it('says run orch do NNNN when the queue session never saw the ticket', () => {
     controller({ results: [] });
-    expect(line()).toContain(`run orch do ${key()}`);
+    expect(line()).toContain(`run orch do ${ticketKey(ticketId)}`);
   });
 
   it('says run orch do NNNN for a person-merge needs-human result, and null outside needs-human', () => {
@@ -312,7 +312,7 @@ describe('the after-action line (AC6)', () => {
         },
       ],
     });
-    expect(line()).toContain(`run orch do ${key()}`);
+    expect(line()).toContain(`run orch do ${ticketKey(ticketId)}`);
     const { token } = claimJob(store, id, { session: 's' });
     transitionJob(store, id, 'resume', { token, to: 'build' });
     expect(detail(store, id).afterAction).toBeNull();

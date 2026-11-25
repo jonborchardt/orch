@@ -4,36 +4,18 @@
  * run as two files in parallel.
  */
 import * as drive from './drive.ts';
-import { rmSync } from 'node:fs';
-import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 import { transitionJob } from '../src/storage/jobs.ts';
 import { type Ctx } from './drive.ts';
-import { type GhShim, ghShim, makeRepoWithOrigin, type TempStore, tempStore } from './helpers.ts';
+import { type GhShim, type TempStore, useJobRepo } from './helpers.ts';
 
 export let store: TempStore;
 export let clone: string;
 export let bare: string;
 export let shim: GhShim;
-export const extra: string[] = [];
-
-beforeAll(() => {
-  shim = ghShim('acme/alpha');
-  Object.assign(process.env, shim.env);
-});
-afterAll(() => {
-  delete process.env['ORCH_GH_SHIM'];
-  delete process.env['ORCH_GH_SHIM_STATE'];
-  shim.cleanup();
-});
-beforeEach(() => {
-  shim.reset();
-  store = tempStore();
-  ({ clone, bare } = makeRepoWithOrigin('git@github.com:acme/alpha.git'));
-});
-afterEach(() => {
-  store.cleanup();
-  for (const d of [clone, bare, ...extra.splice(0)]) rmSync(d, { recursive: true, force: true });
-});
+export const { extra } = useJobRepo(
+  { shim: 'acme/alpha' },
+  (s) => ({ store, clone, bare, shim } = s),
+);
 
 // The drivers from tests/drive.ts, bound to this file's store and clone.
 export const start = (title?: string) => drive.start(store, clone, title);
