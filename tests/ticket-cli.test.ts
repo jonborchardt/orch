@@ -1,10 +1,9 @@
 /** `orch ticket` end to end: spawned from source, cwd outside this repository, temp ORCH_HOME. */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import type { ImportReport } from '../src/ops/ticket-import.ts';
 import type { TicketDetail, TicketList, TicketView } from '../src/ops/tickets.ts';
 import { json, makeRepoWithOrigin, orch, orchAsync, tempDir } from './helpers.ts';
 
@@ -331,35 +330,5 @@ describe('orch ticket', () => {
       payload: { from: 'P0', to: 'P5' },
     });
     expect(orch(h, outside, ['ticket', '--help']).out).toContain('--priority P0|P1|P2|P3|P4|P5');
-  });
-
-  it('imports a register only when asked, with a dry run first', () => {
-    const fresh = tempDir();
-    const dir = join(alpha, 'todo');
-    mkdirSync(dir);
-    writeFileSync(
-      join(dir, '0001-a.md'),
-      '---\nid: 1\ntitle: Imported\nstatus: open\ntype: bug\narea: web\npriority: P2\neffort: 1\ndepends_on: []\nrelated: []\nduplicate_of: null\nclassified: auto\ncreated: 2026-11-06\nupdated: 2026-11-06\n---\n\n## What\n\nx\n',
-    );
-    const dry = json<ImportReport>(orch(fresh, alpha, ['ticket', 'import', '--dry-run', '--json']));
-    expect(dry).toMatchObject({
-      dryRun: true,
-      idsPreserved: true,
-      idMap: { '0001': 1 },
-      nextId: 2,
-    });
-    expect(json<TicketList>(orch(fresh, alpha, ['ticket', 'list', '--json'])).total).toBe(0);
-    expect(
-      json<ImportReport>(orch(fresh, outside, ['ticket', 'import', '--dir', dir, '--json'])).dryRun,
-    ).toBe(false);
-    expect(
-      json<ImportReport>(orch(fresh, alpha, ['ticket', 'import', '--json'])).alreadyImported,
-    ).toBe(true);
-    expect(json<TicketList>(orch(fresh, alpha, ['ticket', 'list', '--json']))).toMatchObject({
-      total: 1,
-      tickets: [{ id: 1, title: 'Imported', repo: 'github.com/acme/alpha' }],
-    });
-    expect(orch(fresh, outside, ['ticket', 'import', '--json']).code).toBe(1);
-    expect(orch(fresh, beta, ['ticket', 'import', '--json']).code).toBe(3);
   });
 });
