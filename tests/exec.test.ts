@@ -6,7 +6,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -323,10 +323,18 @@ describe('git is never started from the working directory', () => {
   });
 
   it('whichSync skips a relative PATH entry, even one that leads to a planted git', () => {
-    const rel = relative(process.cwd(), repo);
-    expect(isAbsolute(rel)).toBe(false);
-    const found = whichSync('git', { PATH: ['.', rel].join(delimiter), PATHEXT: '.EXE' });
-    expect(found).toBeUndefined();
+    // Run from the repository so both entries lead to the fake on any drive layout.
+    const rel = join('..', basename(repo));
+    const fake = WIN ? 'git.exe' : 'git';
+    const before = process.cwd();
+    process.chdir(repo);
+    try {
+      expect(existsSync(join('.', fake)) && existsSync(join(rel, fake))).toBe(true);
+      const found = whichSync('git', { PATH: ['.', rel].join(delimiter), PATHEXT: '.EXE' });
+      expect(found).toBeUndefined();
+    } finally {
+      process.chdir(before);
+    }
   });
 });
 
