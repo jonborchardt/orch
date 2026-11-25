@@ -30,6 +30,13 @@ rests while any other section is. Usage does not poll at all: it loads on open, 
 and from its Refresh button. A further section is one entry in `SECTIONS` in `web/src/App.tsx` and one branch
 where the page body is chosen.
 
+**Installed build.** Under the app bar, on every section, a warning shows `build.message` from
+`GET /api/runner` when the installed build is older than the install checkout or its upstream
+("built from X, main is at Y: pull, `npm run build`, `orch install`"; `installBuild` in
+`src/ops/install-build.ts`, reading the stamp `npm run build` writes to `dist/build-info.json`).
+It is read on load and on each section change. Local refs only, nothing is fetched; no stamp, or a
+failed request, shows nothing.
+
 **Runs** (`GET /api/runs`, `runs` in `src/server/api.ts`) aggregates every job in every repository,
 archived ones included, from rows already stored; nothing is estimated, and a value that cannot be
 measured is null and reads "Unavailable". `total` is every job; `completed` and `cancelled` count

@@ -37,6 +37,7 @@ import { dispatchJob } from './dispatch.ts';
 import { loadConfig, resumeFactoryJob, specResumeSteps } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
 import { reconcileCi } from './github.ts';
+import { type InstallBuild, installBuild } from './install-build.ts';
 import { mailWatermark, reportJobMail } from './mail.ts';
 import { mergeAuthorized, mergeJob } from './merge.ts';
 import {
@@ -1126,6 +1127,8 @@ export interface RunnerStatus {
   next: string;
   /** How the last session that ran to its end finished. */
   last: { at: string; reason: string; completed: number; attempted: number } | null;
+  /** The installed build against its checkout; null without a build stamp. */
+  build: InstallBuild | null;
 }
 
 /** `orch status`: the controller's own state plus the job row of the ticket in flight. Read-only. */
@@ -1206,5 +1209,6 @@ export function runnerStatus(store: Store): RunnerStatus {
             completed: session.results.filter((r) => r.outcome === 'done').length,
             attempted: session.results.length,
           },
+    build: installBuild(),
   };
 }

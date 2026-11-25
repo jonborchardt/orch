@@ -278,6 +278,8 @@ let data: {
   actionStatus: number;
   actionBody: unknown;
   sessionLog: SessionLogView;
+  /** `/api/runner`'s body; unset, the request fails like any unmocked route. */
+  runner?: unknown;
 };
 const ATTACH = 'orch job session attach job-00000003 --provider claude-code';
 const NO_SESSION =
@@ -312,6 +314,7 @@ function mockFetch(): FetchMock {
       );
     if (url.startsWith('/api/jobs?') || url === '/api/jobs')
       return (hold.board ?? Promise.resolve()).then(() => json(200, data.rows));
+    if (url === '/api/runner' && data.runner !== undefined) return json(200, data.runner);
     if (url === '/api/repos') return json(200, [...new Set(data.rows.map((r) => r.repo))]);
     if (url === '/api/session')
       return json(200, { csrf: 'tok', version: '0', database: 'db', actions: [] });
@@ -805,6 +808,35 @@ describe('App board', () => {
     });
     // A failed first load shows the error, not a loading bar that never ends.
     expect(screen.queryByRole('progressbar', { name: 'Loading jobs' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Installed build warning', () => {
+  const message = 'built from aaaaaaa, main is at bbbbbbb: pull, `npm run build`, `orch install`';
+  const runner = (stale: boolean) => ({
+    build: { builtFrom: 'a', head: 'b', upstream: null, stale, message },
+  });
+
+  it('warns above the Jobs tab when the installed build is stale', async () => {
+    data.runner = runner(true);
+    mockFetch();
+    mount();
+    expect(await screen.findByText(message)).toBeInTheDocument();
+  });
+
+  it('shows nothing when the build is current or /api/runner fails', async () => {
+    for (const r of [runner(false), undefined]) {
+      data.runner = r;
+      const f = mockFetch();
+      mount();
+      await screen.findByRole('table', { name: 'Factory jobs' });
+      await waitFor(() => {
+        expect(f.mock.calls.some(([u]) => u === '/api/runner')).toBe(true);
+      });
+      expect(screen.queryByText(message)).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+      cleanup();
+    }
   });
 });
 
