@@ -94,9 +94,10 @@ describe('Usage section', () => {
     expect(link('Usage')).toHaveAttribute('href', '#/usage');
     expect(link('Usage')).toHaveAttribute('aria-current', 'page');
     await screen.findByRole('table', { name: 'Usage total' });
-    // Wait past several poll intervals: Usage loads once, and the board never.
+    // Wait past several poll intervals: Usage loads once, and the board never. The app-wide
+    // installed-build warning reads the runner once per section change.
     await new Promise((r) => setTimeout(r, 200));
-    expect(gets).toEqual(['/api/usage?hours=24']);
+    expect(gets).toEqual(['/api/usage?hours=24', '/api/runner']);
     expect(screen.queryByLabelText('Summary')).toBeNull();
     expect(screen.queryByRole('searchbox', { name: 'Filter' })).toBeNull();
   });
