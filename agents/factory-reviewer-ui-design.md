@@ -48,6 +48,7 @@ Write it even if your harness discourages report files; answer with a two-line s
 Ownership: visual design of what the diff renders. Consistency with the project's design system
 or existing screens (components, tokens, spacing scale, typography, color), visual hierarchy,
 alignment, density, empty/loading/error states, light and dark modes if the project has them,
-responsive layout at the project's breakpoints. Use existing screenshots in the evidence directory;
+responsive layout at the project's breakpoints. Also flag a large jump in bundle size (a new heavy
+dependency or import) or a misused browser API. Use existing screenshots in the evidence directory;
 if none exist and the project has Playwright or a dev server, capture your own into your evidence
 folder. Do not comment on code structure or on behaviour that is not visual.

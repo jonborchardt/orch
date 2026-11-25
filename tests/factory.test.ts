@@ -138,7 +138,7 @@ describe('review rounds', () => {
     runStage(c, 'build.md');
   }
 
-  it('plans only the always-on reviewers for non-UI changes, all seven for UI changes', () => {
+  it('plans only the always-on reviewers for non-UI changes, all six for UI changes', () => {
     const c = start();
     toReview(c);
     const plan = next(c.id);
@@ -148,7 +148,7 @@ describe('review rounds', () => {
     expect(plan.agents.map((a) => a.role)).toEqual(['security', 'correctness', 'code-quality']);
     expect(plan.agents.map((a) => a.model)).toEqual(['opus', 'sonnet', 'sonnet']);
     expect(plan.agents[0]?.artifact).toBe('round-1/review-security.md');
-    expect(next(c.id, true).agents).toHaveLength(7);
+    expect(next(c.id, true).agents).toHaveLength(6);
 
     const u = start('Restyle header');
     toReview(u, ['src/Header.tsx', 'src/header.css']);
@@ -161,7 +161,6 @@ describe('review rounds', () => {
       'ui-design',
       'ux',
       'accessibility',
-      'web-platform',
     ]);
     expect(next(u.id, false).agents).toHaveLength(3);
 

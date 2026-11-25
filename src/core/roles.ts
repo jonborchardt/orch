@@ -52,13 +52,6 @@ export const ROLES: readonly Role[] = [
     kind: 'review',
     ui: true,
   },
-  {
-    name: 'web-platform',
-    agent: 'factory-reviewer-web-platform',
-    model: 'sonnet',
-    kind: 'review',
-    ui: true,
-  },
   { name: 'approver', agent: 'factory-approver', model: 'opus', kind: 'approve' },
 ];
 
