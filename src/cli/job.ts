@@ -100,8 +100,9 @@ export const JOB_HELP = `Usage: orch job <command> [options]
             with GitHub, record the merge commit, and close the job's ticket when nothing is left
             on it. Needs the repository opted in (orch factory config merge enable); a PR GitHub
             already merged is recorded without that. Safe to repeat. Prints an outcome: merged,
-            already_merged, waiting, reland, blocked, or error; exit 0 only for the first two,
-            and only when the merged head is the CI-verified one (verified: true)
+            already_merged, waiting, reland, base-moved (the base moved after CI passed: it is
+            merged into the branch and the job reopened in pr), blocked, or error; exit 0 only
+            for the first two, and only when the merged head is the CI-verified one (verified: true)
   session attach <id> --provider <${SESSION_PROVIDERS.join('|')}> --ref <link|uuid> [--cwd <dir>] [--token <t>]
             record the execution session driving the job (metadata; the owner's token is
             required while the job is claimed, none while it is unowned)

@@ -7,12 +7,13 @@
  * only once a second read says MERGED, whatever gh's exit status was. What GitHub confirmed is
  * recorded in one transaction with the job's ticket (`recordMerge`). Nothing is kept between
  * calls, so a call after a crash, a timeout, or someone else's merge starts from GitHub's answer
- * and finishes the record. Nothing here changes a job's stage, status, or CI verdict.
+ * and finishes the record. Nothing here changes a job's stage, status, or CI verdict, except the
+ * reopen into pr after a moved base was merged into the branch (`baseMoved`).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { ToolError, ValidationError, WorkflowError } from '../core/errors.ts';
+import { MergeConflictError, ToolError, ValidationError, WorkflowError } from '../core/errors.ts';
 import {
   type Completion,
   completionOf,
@@ -22,6 +23,7 @@ import {
   touchesWorkflows,
 } from '../core/workflow.ts';
 import {
+  baseContains,
   type GhPr,
   type GhPrFile,
   listPrFiles,
@@ -32,6 +34,7 @@ import {
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob } from '../storage/events.ts';
 import {
+  baseReopens,
   type ConfirmedMerge,
   getJob,
   pendingMerge,
@@ -39,6 +42,9 @@ import {
   recordMerge,
   recordEvent,
   recordPrState,
+  reopenJob,
+  siblingOnTicket,
+  transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import type { TicketMergeOutcome } from '../storage/tickets.ts';
@@ -48,7 +54,7 @@ import { configPath, loadConfig } from './factory.ts';
 import { ghCwd } from './github.ts';
 import { type LeaseMode, withLease } from './lease.ts';
 import { jobRepository } from './repo.ts';
-import { dropWorktree } from './worktree.ts';
+import { dropWorktree, integrateBase, type IntegrateResult } from './worktree.ts';
 
 /** gh may take up to two minutes per call; the episode makes three. */
 const MERGE_LEASE_MINUTES = 10;
@@ -58,6 +64,7 @@ export const MERGE_OUTCOMES = [
   'already_merged',
   'waiting',
   'reland',
+  'base-moved',
   'blocked',
   'error',
 ] as const;
@@ -68,6 +75,8 @@ export interface MergeResult {
    * `merged`: this call merged the PR and GitHub confirmed it. `already_merged`: GitHub had
    * merged it before; the record is complete now. `waiting`: GitHub is still computing
    * mergeability; call again. `reland`: the PR conflicts, and `relandJob` replaces this job.
+   * `base-moved`: the base moved after CI passed; it was merged into the branch and the job was
+   * reopened, so `/factory <job>` verifies, pushes, and checks the new head before a merge.
    * `blocked`: refused, see `code`; a retry changes nothing until that state does. `error`: a
    * tool or GitHub failure left the outcome unknown; calling again is safe.
    */
@@ -207,6 +216,10 @@ function look(store: Store, job: Job, input: MergeInput): Seen {
     isReland: predecessorsOf(store.db, job.id).length > 0,
     changesWorkflows: changesWorkflows(files, pr),
     byHuman: input.mode === 'dashboard',
+    // GitHub's compare, never the local clone (decision 2026-11-24-merge-requires-current-base).
+    baseContained:
+      job.ciHead === null ? null : baseContains(job.prUrl, job.baseBranch, job.ciHead, cwd),
+    baseReopens: baseReopens(store.db, job.id),
   });
   return { pr, step };
 }
@@ -340,6 +353,115 @@ function cleanUp(store: Store, job: Job, token: string): string {
   }
 }
 
+/** Replace the conflicting job with a re-land job, as the holder of `token`. */
+function reland(
+  store: Store,
+  job: Job,
+  pr: GhPr,
+  why: string,
+  input: MergeInput,
+  token: string,
+): MergeResult {
+  const observed = {
+    event: 'pr.observed',
+    state: prWorkflowState(pr),
+    head: pr.headSha,
+    mergeable: pr.mergeable,
+  } as const;
+  recordPrState(store, job.id, { token }, observed);
+  try {
+    const created = relandJob(store, job, token, input.session);
+    return result(job, pr, {
+      outcome: 'reland',
+      relandJob: created.id,
+      reason:
+        `${why}. Created ${created.id} to re-land the work; ${job.id} is superseded and ` +
+        `its PR must not merge. Run /factory ${created.id}, then merge that job.`,
+    });
+  } catch (err) {
+    if (!(err instanceof ValidationError) && !(err instanceof WorkflowError)) throw err;
+    return result(job, pr, {
+      outcome: 'blocked',
+      code: 'reland-refused',
+      reason: `${why}, and no re-land job could be created: ${err.message}`,
+    });
+  }
+}
+
+/**
+ * The base moved after CI passed: merge it into the job's branch with `integrateBase` while the job
+ * is still completed, and only once a merge commit exists reopen the job into pr, so that commit is
+ * verified, pushed, and checked before a later merge (decision 2026-11-24-merge-requires-current-base).
+ * A conflict re-lands; anything else leaves the job completed.
+ */
+function baseMoved(
+  store: Store,
+  job: Job,
+  pr: GhPr,
+  why: string,
+  input: MergeInput,
+  token: string,
+): MergeResult {
+  const refused = (detail: string) =>
+    result(job, pr, {
+      outcome: 'blocked',
+      code: 'reopen-refused',
+      reason: `${why}, and the job cannot be reopened: ${detail}`,
+    });
+  const other = siblingOnTicket(store.db, job);
+  if (other !== null) return refused(`${other} is already working on its ticket`);
+  let integrated: IntegrateResult;
+  try {
+    integrated = integrateBase(store, job.id, { token });
+  } catch (err) {
+    if (err instanceof MergeConflictError) {
+      const conflict = `${why}, and merging it into ${job.branch ?? 'the branch'} conflicts in ${err.files.join(', ') || 'unknown files'}`;
+      if (input.reland === false) {
+        return result(job, pr, { outcome: 'blocked', code: 'conflict', reason: conflict });
+      }
+      return reland(store, job, pr, conflict, input, token);
+    }
+    if (err instanceof ValidationError || err instanceof ToolError) return refused(err.message);
+    throw err;
+  }
+  const { integration } = integrated;
+  if (integration.status !== 'merged' || integration.resultHead === null) {
+    return result(job, pr, {
+      outcome: 'error',
+      reason:
+        `${why}, but ${integration.baseRef} fetched from origin is already in the branch ` +
+        `(integration ${integration.status}); GitHub and origin disagree, so run the command again`,
+    });
+  }
+  const mergeHead = integration.resultHead;
+  try {
+    reopenJob(store, job.id, { token }, { reason: why, mergeHead, baseSha: integration.baseSha });
+  } catch (err) {
+    if (!(err instanceof WorkflowError)) throw err;
+    return refused(err.message);
+  }
+  const material = integration.material ?? [];
+  if (material.length > 0) {
+    transitionJob(store, job.id, 'rework', {
+      token,
+      reason: `merge ${short(mergeHead)} edited ${material.join(', ')} beyond either parent`,
+      integration: true,
+    });
+  }
+  const next =
+    job.ticketId === null
+      ? `/factory ${job.id}`
+      : `orch do ${ticketKey(job.ticketId)} or /factory ${job.id}`;
+  return result(job, pr, {
+    outcome: 'base-moved',
+    reason:
+      `${why}: merged ${integration.baseRef} into ${job.branch ?? 'the branch'} ` +
+      `(merge commit ${short(mergeHead)}) and reopened ${job.id} in ` +
+      `${material.length > 0 ? 'build, since the merge edited files' : 'pr'}; ${next} ` +
+      'verifies, pushes, and checks it, then merges at the new head.',
+  });
+}
+
 /** The steps that write, as the holder of `token`. */
 function act(store: Store, job: Job, seen: Seen, input: MergeInput, token: string): MergeResult {
   const { pr, step } = seen;
@@ -361,32 +483,8 @@ function act(store: Store, job: Job, seen: Seen, input: MergeInput, token: strin
     return record(pr, confirmed(pr, pr.mergeCommit, step), 'already_merged');
   }
 
-  if (step.step === 'reland') {
-    const observed = {
-      event: 'pr.observed',
-      state: prWorkflowState(pr),
-      head: pr.headSha,
-      mergeable: pr.mergeable,
-    } as const;
-    recordPrState(store, job.id, auth, observed);
-    try {
-      const created = relandJob(store, job, token, input.session);
-      return result(job, pr, {
-        outcome: 'reland',
-        relandJob: created.id,
-        reason:
-          `${step.reason}. Created ${created.id} to re-land the work; ${job.id} is superseded and ` +
-          `its PR must not merge. Run /factory ${created.id}, then merge that job.`,
-      });
-    } catch (err) {
-      if (!(err instanceof ValidationError) && !(err instanceof WorkflowError)) throw err;
-      return result(job, pr, {
-        outcome: 'blocked',
-        code: 'reland-refused',
-        reason: `${step.reason}, and no re-land job could be created: ${err.message}`,
-      });
-    }
-  }
+  if (step.step === 'reland') return reland(store, job, pr, step.reason, input, token);
+  if (step.step === 'base-moved') return baseMoved(store, job, pr, step.reason, input, token);
 
   if (step.step !== 'merge') throw new Error(`unreachable: ${step.step} writes nothing`);
   const cwd = ghCwd(job);

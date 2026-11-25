@@ -174,7 +174,8 @@ export function activeJobsByTicket(db: Db): Map<number, string> {
   return new Map(rows.flatMap((r) => (r.ticketId === null ? [] : [[r.ticketId, r.id]])));
 }
 
-function activeJobOf(db: Db, id: number): string | null {
+/** The unfinished job working on ticket `id`, or null. */
+export function activeJobOf(db: Db, id: number): string | null {
   return (
     db
       .select({ id: jobs.id })

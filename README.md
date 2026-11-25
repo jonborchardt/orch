@@ -271,8 +271,11 @@ Optional email reports of every job change: [docs/operations.md](docs/operations
   marks the PR ready; failed checks get one re-run, then a repair cycle through build, review, and
   approval (bounded by `maxCiRepairs`).
 - Merging, where you opted in: `gh pr merge --merge --match-head-commit <ciHead>`, confirmed by a
-  second read of GitHub; a conflict becomes one re-land job; the ticket closes only on a verified
-  merge with no unchecked checklist item.
+  second read of GitHub, and only when GitHub's compare says `ciHead` contains the base's current
+  tip; a base that moved after CI passed is merged into the branch and the job reopened into `pr`
+  (outcome `base-moved`; at most twice per job, then `base-moving` waits for a person; a job that
+  cannot be reopened is `reopen-refused`); a conflict becomes one re-land job; the ticket closes
+  only on a verified merge with no unchecked checklist item.
 - Sensitive changes (tests, CI, dependencies, the policy, and files the policy's commands run
   directly) are labelled and must be named in the consolidated review and the PR body. Labelling is
   not prevention: the policy fixes which commands run, not what the job's scripts do.
@@ -313,6 +316,9 @@ Optional email reports of every job change: [docs/operations.md](docs/operations
   recorded per session and summed per hour and per job in the dashboard's Usage section
   (`orch usage backfill` records older finished jobs, matched by worktree path); `orch job usage`
   reports measured durations and configured models, not tokens.
+- The base can still move between the compare read and `gh pr merge`: `--match-head-commit` pins
+  only the head. Without GitHub's "require branches to be up to date" rule that window remains;
+  there is no merge queue.
 - Private repositories on GitHub's free plan hide the required-check configuration (HTTP 403), so
   every reported check must pass there.
 - The dashboard is single-user and loopback-only; it has no authentication because it has no

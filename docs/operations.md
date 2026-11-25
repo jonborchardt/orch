@@ -102,8 +102,8 @@ ready ticket (decision 2026-11-24-default-needs-human-choices). The queue takes 
 ticket, and the end-of-session summary lists the passed-over ticket
 with its next step. So is a completed job whose merge only a person can unblock (`personMergeStep`
 in `src/core/workflow.ts`): `workflow-changed` (next step: Merge on the dashboard),
-`not-authorized`, `head-changed`, `pr-closed`, `pr-draft`, and `second-conflict` (decision
-2026-11-23-queue-passes-over-person-merge-blocks). So is every other ticket that ends `blocked`
+`not-authorized`, `head-changed`, `pr-closed`, `pr-draft`, `second-conflict`, and `base-moving`
+(decision 2026-11-23-queue-passes-over-person-merge-blocks). So is every other ticket that ends `blocked`
 or `refused` for a reason of its own, such as a merge that left a checklist box open
 (`ticket-open`; next step: tick or move the remaining boxes, then `orch ticket done <id>`), an
 unverified merge, or a job that made no progress. The run ends when no ready ticket is left,
@@ -396,9 +396,9 @@ Stop codes `src/ops/run.ts` can write:
 - any `blocked` code `mergeJob` returns (`MERGE_BLOCKS` in `src/core/workflow.ts`): `no-pr`,
   `not-completed`, `wrong-completion`, `no-ci-evidence`, `superseded`, `wrong-repository`,
   `wrong-base`, `wrong-head-branch`, `pr-closed`, `pr-draft`, `head-changed`, `workflow-changed`,
-  `not-authorized`, `conflict`, `second-conflict`, `reland-refused`, `github-refused`. Those only
-  a person can lift (`workflow-changed`, `not-authorized`, `head-changed`, `pr-closed`,
-  `pr-draft`, `second-conflict`) come with outcome `needs-human` and that person's step as `next`;
+  `not-authorized`, `conflict`, `second-conflict`, `reland-refused`, `base-moving`,
+  `reopen-refused`, `github-refused`. Those only a person can lift (`workflow-changed`,
+  `not-authorized`, `head-changed`, `pr-closed`, `pr-draft`, `second-conflict`, `base-moving`) come with outcome `needs-human` and that person's step as `next`;
   the rest with `blocked`;
 - `merge-blocked`, the fallback when `mergeJob` blocks without a code.
 
