@@ -5,7 +5,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { join, sep } from 'node:path';
 
-import { ValidationError } from '../core/errors.ts';
+import { UsageError, ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { claudeHome, jobArtifactDir } from '../core/paths.ts';
 import { ROLES, type RoleKind } from '../core/roles.ts';
@@ -58,6 +58,7 @@ import {
   TIMELINE_EVENTS,
   timelineOf,
 } from './status.ts';
+import { readTokenUsage, spanEnd, USAGE_RANGES } from './token-usage.ts';
 import { readSessionLog } from './transcript.ts';
 import type {
   ActionRequest,
@@ -72,6 +73,7 @@ import type {
   SafeJob,
   SessionLogView,
   SessionView,
+  UsageView,
 } from './types.ts';
 
 export const JOB_ID = /^job-[0-9a-f]{8}$/;
@@ -411,8 +413,12 @@ function sessionView(events: Event[]): SessionView | null {
  * job and a transcript. Read from all `session.attached` events, not the timeline's capped list.
  */
 function claudeSessions(store: Store, id: string): ClaudeSession[] {
+  return claudeSessionsOf(eventsOfTypes(store.db, id, [SESSION_EVENT]));
+}
+
+function claudeSessionsOf(attached: readonly Event[]): ClaudeSession[] {
   const out: ClaudeSession[] = [];
-  for (const e of eventsOfTypes(store.db, id, [SESSION_EVENT])) {
+  for (const e of attached) {
     const s = sessionOf(e);
     if (s?.provider !== 'claude-code' || !UUID.test(s.ref) || out.some((x) => x.ref === s.ref)) {
       continue;
@@ -420,6 +426,33 @@ function claudeSessions(store: Store, id: string): ClaudeSession[] {
     out.push({ ref: s.ref, attachedAt: e.createdAt });
   }
   return out;
+}
+
+/**
+ * The Usage section: tokens per UTC hour over the last `hours` (24, 168, or 720) from the
+ * transcripts of every job, archived included, with a claude-code session. A job's span starts at
+ * its first claude-code attach and ends now, or at `max(updatedAt, completedAt)` once finished.
+ */
+export function tokenUsage(store: Store, hours: string | null, at = Date.now()): UsageView {
+  const range = USAGE_RANGES.find((r) => String(r) === hours);
+  if (range === undefined) throw new UsageError('hours must be one of 24, 168, or 720');
+  const jobs = listJobs(store.db).flatMap((j) => {
+    const attached = eventsOfTypes(store.db, j.id, [SESSION_EVENT]);
+    // Newest attach per ref, ordered oldest first.
+    const sessions = claudeSessionsOf(attached).sort((a, b) =>
+      a.attachedAt < b.attachedAt ? -1 : a.attachedAt > b.attachedAt ? 1 : 0,
+    );
+    if (sessions.length === 0) return [];
+    // The first attach of any claude-code session (events are newest first).
+    const firstAttach = attached
+      .filter((e) => sessionOf(e)?.provider === 'claude-code')
+      .reduce((t, e) => Math.min(t, Date.parse(e.createdAt)), Infinity);
+    const end = spanEnd(j, TERMINAL_STATUSES.includes(j.status), at);
+    return [
+      { id: j.id, title: j.title, refs: sessions.map((s) => s.ref), start: firstAttach, end },
+    ];
+  });
+  return readTokenUsage(claudeHome(), jobs, range, at);
 }
 
 /** The Session tab: the bounded tail of the newest attached claude-code session's transcript. */

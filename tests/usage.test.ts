@@ -84,6 +84,7 @@ describe('jobUsage', () => {
     expect(u.ci).toEqual({ repairs: 0, reruns: 0, observations: 0 });
     expect(u.tokens.measured).toBe(false);
     expect(u.tokens.reason).toContain('not expose');
+    expect(u.tokens.reason).toContain('dashboard Usage section');
 
     // A stage that fails, is escalated, or reworked closes its visit with that event.
     go('fail');
@@ -92,11 +93,12 @@ describe('jobUsage', () => {
       endedBy: 'stage.failed',
     });
     // The CLI prints the same report.
-    const cli = json<{ stages: unknown[]; tokens: { measured: boolean } }>(
+    const cli = json<{ stages: unknown[]; tokens: { measured: boolean; reason: string } }>(
       orch(store.home, store.home, ['--json', 'job', 'usage', job.id]),
     );
     expect(cli.stages).toHaveLength(4);
     expect(cli.tokens.measured).toBe(false);
+    expect(cli.tokens.reason).toContain('dashboard Usage section');
     expect(orch(store.home, store.home, ['job', 'usage']).code).toBe(2);
     expect(orch(store.home, store.home, ['job', 'usage', 'job-00000000']).code).toBe(3);
   });

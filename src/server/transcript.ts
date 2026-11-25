@@ -60,6 +60,18 @@ export const LIMITS = {
 };
 export type Limits = typeof LIMITS;
 
+/**
+ * The Usage section's bounds (`src/server/token-usage.ts`), which read whole files: a file larger
+ * than the per-file cap, past the request's byte budget, or beyond the subagent file cap is not
+ * read and its job is reported missing.
+ */
+export const USAGE_LIMITS = {
+  USAGE_FILE_BYTES: 64 * 1024 * 1024,
+  USAGE_TOTAL_BYTES: 512 * 1024 * 1024,
+  USAGE_SUBAGENT_FILES: 500,
+};
+export type UsageLimits = typeof USAGE_LIMITS;
+
 const AGENT_FILE = /^agent-([0-9a-z]+)\.jsonl$/;
 /** Inputs that name what a tool call is about, preferred first (Bash: description, then command). */
 const KEY_INPUTS = ['description', 'file_path', 'pattern', 'url', 'query', 'command'];
@@ -281,6 +293,80 @@ function readMeta(path: string, root: string, max: number): Obj {
   }
 }
 
+const projectsDir = (claudeDir: string) => join(claudeDir, 'projects');
+
+/** A session's files as found, before any is read: the newest main file and its subagent names. */
+export interface SessionFiles {
+  /** The real projects directory, the confinement root of the main file. */
+  projects: string;
+  main: Found;
+  /** Project directories holding a `<ref>.jsonl`. */
+  matches: number;
+  /** The real `subagents/` directory, the root of its files; '' when absent or refused. */
+  sub: string;
+  /** True when a `subagents` entry exists beside the main file but does not resolve inside projects. */
+  subRefused: boolean;
+  /** `agent-<id>.jsonl` names in `sub`, unordered, each with one cheap lstat; not yet confined. */
+  agents: { id: string; name: string; mtimeMs: number }[];
+}
+
+/**
+ * Find claude-code session `ref` under `claudeDir`: `<projects>/<dir>/<ref>.jsonl` (the newest by
+ * modification time when several directories hold one) and `<dir>/<ref>/subagents/agent-<id>.jsonl`.
+ * The one discovery both the Session tab and the Usage section use; reads go through `readConfined`.
+ */
+export function discoverSession(
+  claudeDir: string,
+  ref: string,
+): SessionFiles | 'no-projects' | 'not-found' {
+  let projects: string;
+  let names: string[];
+  try {
+    projects = realpathSync(projectsDir(claudeDir));
+    names = readdirSync(projects);
+  } catch {
+    return 'no-projects';
+  }
+  const seen = new Set<string>();
+  const matches = names
+    .flatMap((n) => confined(join(projects, n, `${ref}.jsonl`), projects) ?? [])
+    .filter((f) => !seen.has(f.path) && seen.add(f.path))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const main = matches[0];
+  if (!main) return 'not-found';
+  // The session's own `subagents/`, itself inside projects; each file inside it.
+  const subPath = join(dirname(main.path), ref, 'subagents');
+  const subDir = confined(subPath, projects, true)?.path ?? '';
+  let subRefused = false;
+  if (!subDir) {
+    try {
+      lstatSync(subPath);
+      subRefused = true;
+    } catch {
+      // Absent: a session with no subagents.
+    }
+  }
+  const agents = list(subDir).flatMap((name) => {
+    const id = AGENT_FILE.exec(name)?.[1];
+    if (!id) return [];
+    try {
+      return [{ id, name, mtimeMs: lstatSync(join(subDir, name)).mtimeMs }];
+    } catch {
+      return [];
+    }
+  });
+  // Typed apart from the string results, whose `String.prototype.sub` would otherwise match.
+  const files: SessionFiles = {
+    projects,
+    main,
+    matches: matches.length,
+    sub: subDir,
+    subRefused,
+    agents,
+  };
+  return files;
+}
+
 /**
  * The bounded Session tab view for claude-code session `ref` under `claudeDir`. Never throws for
  * missing, unreadable, or malformed files: they are reported as not found or skipped.
@@ -307,47 +393,23 @@ export function readSessionLog(
   if (ref === null || !UUID.test(ref)) {
     return { ...view, ref: null, reason: NO_SESSION };
   }
-  const dir = join(claudeDir, 'projects');
-  let projects: string;
-  let names: string[];
-  try {
-    projects = realpathSync(dir);
-    names = readdirSync(projects);
-  } catch {
+  const found = discoverSession(claudeDir, ref);
+  if (found === 'no-projects') {
     return {
       ...view,
-      reason: `${recorded(ref)} no Claude Code projects directory exists at ${dir}. ${ELSEWHERE}`,
+      reason: `${recorded(ref)} no Claude Code projects directory exists at ${projectsDir(claudeDir)}. ${ELSEWHERE}`,
     };
   }
-  const seen = new Set<string>();
-  const matches = names
-    .flatMap((n) => confined(join(projects, n, `${ref}.jsonl`), projects) ?? [])
-    .filter((f) => !seen.has(f.path) && seen.add(f.path))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
-  const main = matches[0];
-  if (!main) {
+  if (found === 'not-found') {
     return {
       ...view,
       reason:
         `${recorded(ref)} its transcript ${ref}.jsonl was not found in any project directory ` +
-        `under ${dir}. ${ELSEWHERE}`,
+        `under ${projectsDir(claudeDir)}. ${ELSEWHERE}`,
     };
   }
-
-  // The session's own `subagents/`, itself inside projects; each file inside it.
-  const sub = confined(join(dirname(main.path), ref, 'subagents'), projects, true)?.path ?? '';
-  // Ordered by one cheap lstat each; only the newest MAX_SUBAGENT_FILES are resolved and checked.
-  const candidates = list(sub)
-    .flatMap((name) => {
-      const id = AGENT_FILE.exec(name)?.[1];
-      if (!id) return [];
-      try {
-        return [{ id, name, mtimeMs: lstatSync(join(sub, name)).mtimeMs }];
-      } catch {
-        return [];
-      }
-    })
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const { projects, main, matches, sub } = found;
+  const candidates = [...found.agents].sort((a, b) => b.mtimeMs - a.mtimeMs);
   const chosen = candidates.slice(0, L.MAX_SUBAGENT_FILES);
   const read = chosen.flatMap((c) => {
     const f = confined(join(sub, c.name), sub);
@@ -408,7 +470,7 @@ export function readSessionLog(
   const out: SessionLogView = {
     ...view,
     found: true,
-    matches: matches.length,
+    matches,
     files,
     subagents,
     subagentsNotRead: candidates.length - chosen.length,

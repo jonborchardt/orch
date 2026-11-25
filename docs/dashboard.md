@@ -21,12 +21,13 @@ started it with a piped stdin closes that pipe. A null or closed stdin is ignore
 scheduled task, or a background shell can launch it (`orch ui --port 0 < /dev/null &`, or `< NUL`
 on Windows) and it keeps serving; a pipe that closes at once (`echo | orch ui`) still stops it.
 
-**Sections.** The app bar has four: **Jobs** (`#/`, and `#/jobs/<id>` for one job), **Tickets**
-(`#/tickets`, and `#/tickets/<id>` for one ticket), **Runs** (`#/runs`), and **Agents**
-(`#/agents`). Each is a link, so every view can be opened, reloaded, and bookmarked by its URL. The
-job counts, the job filters, and the board's error alert show only in Jobs; a section polls only
-what it shows, so the ticket queue is not read while Jobs is open and the job board rests while any
-other section is. A further section is one entry in `SECTIONS` in `web/src/App.tsx` and one branch
+**Sections.** The app bar has five: **Jobs** (`#/`, and `#/jobs/<id>` for one job), **Tickets**
+(`#/tickets`, and `#/tickets/<id>` for one ticket), **Runs** (`#/runs`), **Agents** (`#/agents`),
+and **Usage** (`#/usage`). Each is a link, so every view can be opened, reloaded, and bookmarked by
+its URL. The job counts, the job filters, and the board's error alert show only in Jobs; a section
+polls only what it shows, so the ticket queue is not read while Jobs is open and the job board
+rests while any other section is. Usage does not poll at all: it loads on open, on a range change,
+and from its Refresh button. A further section is one entry in `SECTIONS` in `web/src/App.tsx` and one branch
 where the page body is chosen.
 
 **Runs** (`GET /api/runs`, `runs` in `src/server/api.ts`) aggregates every job in every repository,
@@ -50,6 +51,28 @@ stage, paired with its end by the same rule as `orch job usage`: `stage.complete
 `stage.failed` is failure, `job.blocked`, `job.reworked`, `job.cancelled`, or `job.interrupted` is
 other, and no end is open. Their runtime is labelled "stage time (includes coordinator work)".
 `spec-challenger` has no record of its own (source `none`) and reads "Not recorded".
+
+**Usage** (`GET /api/usage?hours=<24|168|720>`, `tokenUsage` in `src/server/api.ts`, read model
+in `src/server/token-usage.ts`) charts tokens per UTC hour (labelled in local time) over the last
+24 hours, 7 days, or 30 days, the current partial hour included; any other `hours` is a 400. It
+reads the Claude Code transcripts of every job, archived included, with a claude-code
+`session.attached` UUID: every such session, its main `<ref>.jsonl` and its
+`subagents/agent-<id>.jsonl` files, found by `discoverSession` in `src/server/transcript.ts` (shared
+with the Session tab) and read whole through `readConfined` only. Each assistant record's `usage`
+gives four counts kept apart: input, output, cache read, cache creation. Sidechain records count in
+subagent files and are skipped in the main file, as the Session tab does. Records are deduplicated
+by `message.id` over one fixed order (jobs by id, sessions oldest attach first, main file then
+subagent files by name, lines in order); the last line for an id is counted, in its job and hour. A
+job's span runs from its first claude-code attach to now, or to `max(updatedAt, completedAt)` once
+completed or cancelled. A job whose span misses the range is not read and not listed; a file last
+modified before the range starts is not read and is not a gap. A main transcript not found or
+refused, a refused `subagents/` directory or file, a file over `USAGE_FILE_BYTES`, past the
+request's `USAGE_TOTAL_BYTES`, or beyond `USAGE_SUBAGENT_FILES`, makes the job _missing_: every
+bucket overlapping its span lists the job id in `missing` and is drawn hatched and outlined with
+its text label ("missing data for ..."), never as a plain zero; the job's row carries the reason
+and the total's `complete` is false. The page shows the total per kind and overall, the stacked
+bar chart (SVG, no chart library), and a per-job table linking each job. Nothing is cached or
+written. Decision 2026-11-24-dashboard-token-usage-from-transcripts.
 
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
 worktree, review round, reviews, elapsed time, start time, last update, PR link and CI rollup.
