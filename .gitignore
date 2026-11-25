@@ -43,3 +43,4 @@ Thumbs.db
 
 # Private log-todo register (.claude/skills/log-todo)
 /todo/
+/private/
