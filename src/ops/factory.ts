@@ -60,6 +60,7 @@ import { latestRun, listIntegrations } from '../storage/verification.ts';
 import { isPreReview } from './gates.ts';
 import { issue as ghIssue, isObservation, rerunsFor } from './github.ts';
 import { jobRepository } from './repo.ts';
+import { controllerTakesCi } from './runner-state.ts';
 import { type TicketJobRequest, ticketJobRequest } from './tickets.ts';
 import {
   currentFlakes,
@@ -163,7 +164,11 @@ export interface Plan {
     reruns: number;
     /** Seconds to sleep before the next `orch gh ci` while checks are pending. */
     waitSeconds: number;
-    /** True when this session has observed the head pending CI_MAX_SESSION_POLLS times. */
+    /**
+     * True when CI is pending and this session has observed the head CI_MAX_SESSION_POLLS times,
+     * or once when a live controller launched this session and polls CI itself
+     * (`controllerTakesCi`).
+     */
     release: boolean;
     /** Reason from the newest observation. */
     lastReason: string | null;
@@ -457,6 +462,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const polls = observations.filter(ofHead).length;
   const claimedAt = detail.events.filter((e) => e.type === 'job.claimed').at(-1)?.id ?? 0;
   const sessionPolls = observations.filter((e) => e.id > claimedAt && ofHead(e)).length;
+  const controllerCi = job.stage === 'ci' && controllerTakesCi(store.paths, job);
   const has = (p: string) => detail.artifacts.some((a) => a.path === p);
   // Every mutating command carries the token explicitly: shells spawned by Claude Code do not
   // keep environment variables between calls, so the skill substitutes <token> each time.
@@ -503,7 +509,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       sessionPolls,
       reruns: rerunsFor(detail.events, job.ciHead).requested,
       waitSeconds: waitSeconds(polls),
-      release: job.ciStatus === 'pending' && sessionPolls >= CI_MAX_SESSION_POLLS,
+      release:
+        job.ciStatus === 'pending' && sessionPolls >= (controllerCi ? 1 : CI_MAX_SESSION_POLLS),
       lastReason: (lastObserved?.payload['reason'] as string | undefined) ?? null,
     },
     notices,
@@ -814,7 +821,13 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const budget = `Repairs used: ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}.`;
       // A stored verdict, even a passing one for HEAD, never completes the stage: orch gh ci
       // re-reads GitHub and completes in the same call when the checks still pass for this head.
-      if (plan.ci.release) {
+      if (plan.ci.release && controllerCi) {
+        plan.reason =
+          `CI is pending, and the factory controller that launched this session polls CI itself. ` +
+          `Release the job and stop; the controller waits for CI and carries the job on. ${budget}` +
+          (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
+        plan.commands = [`orch job release ${id}${tok}`];
+      } else if (plan.ci.release) {
         plan.reason =
           `CI is still pending after ${String(sessionPolls)} observations in this session. Release the job, ` +
           `tell the user CI is running, and stop; orch factory resume re-reads GitHub later. ${budget}` +

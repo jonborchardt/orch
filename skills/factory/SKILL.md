@@ -331,7 +331,9 @@ interrupted attempt.
   `orch factory next` and the command again in the next call. Never chain the wait and the `orch`
   commands in one script, so that a session killed while waiting leaves no scheduled write behind.
   When `plan.ci.release` is true, the plan's only command is `orch job release <id> --token <t>`:
-  run it, tell the user CI is still running, give the resume command, and stop.
+  run it, tell the user CI is still running, give the resume command, and stop. In a session the
+  factory controller launched this comes at the first pending observation, since the controller
+  polls CI itself.
 - `complete`: usually the job is `completed`; `orch factory next` confirms `done`. In a repository
   with `verification.authority: "ci"` the first pr/ci pass runs before review (simplify leads to
   `pr`): there `complete` with `ready: null` moves the job to `review` and the PR stays a draft.

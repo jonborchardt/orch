@@ -330,3 +330,15 @@ export function controllerContinues(
     return false; // the filtered checkout is gone: nothing can say it covers the job
   }
 }
+
+/**
+ * Whether a live controller takes the job's `ci` stage: its unfinished session is on this job,
+ * has started a child for it, and the live lock holder is that session's controller. Read-only;
+ * `planJob` asks this so the child releases at the first pending observation and the
+ * controller's `pollCi` waits for CI without spending a Claude turn.
+ */
+export function controllerTakesCi(paths: RuntimePaths, job: { id: string }): boolean {
+  const s = readSession(paths);
+  if (s?.finished !== null || s.jobId !== job.id || s.child === null) return false;
+  return controllerPid(paths) === s.pid;
+}

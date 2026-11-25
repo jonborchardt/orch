@@ -1,12 +1,14 @@
 /**
  * The controller and the ci stage, with a real job: the Claude session delivers the PR, sees CI
- * pending, releases the job and exits, as the /factory skill does after its polls. The controller
- * then reads GitHub itself, without a second session, and merges once the checks pass.
+ * pending, and its plan tells it to release at once because the controller polls CI; it releases
+ * the job and exits. The controller then reads GitHub itself, without a second session, and
+ * merges once the checks pass.
  */
 import { describe, expect, it } from 'vitest';
 
 import { jobArtifactDir } from '../src/core/paths.ts';
 import type { ClaudeChild, LaunchInput } from '../src/integrations/claude-session.ts';
+import { planJob } from '../src/ops/factory.ts';
 import { setMergeAuthorization } from '../src/ops/merge.ts';
 import { RUNNER_SESSION, runnerStatus, startSession } from '../src/ops/run.ts';
 import { addTicket, showTicket } from '../src/ops/tickets.ts';
@@ -22,6 +24,7 @@ describe('controller: pending CI', () => {
     const id = addTicket(store, { title: 'Export CSV', repo: clone }).id;
     const launches: string[] = [];
     let sha = '';
+    let released: boolean | null = null;
     const launch = (input: LaunchInput): ClaudeChild => {
       const jobId = /job-[0-9a-f]{8}/.exec(input.prompt)?.[0] ?? '';
       launches.push(jobId);
@@ -37,11 +40,17 @@ describe('controller: pending CI', () => {
       sha = head(c.wt);
       checks(sha, [run('test', null, 'queued')]);
       expect(reconcile(c).action).toBe('wait');
-      releaseJob(store, jobId, { token });
+      // Read the plan after launch returns: the controller saves `session.child` only then.
+      const done = (async () => {
+        await Promise.resolve();
+        released = planJob(store, jobId).ci.release;
+        if (released) releaseJob(store, jobId, { token });
+        return { code: 0, signal: null, error: null };
+      })();
       return {
         pid: 2 ** 31 - 1,
         startedAt: new Date().toISOString(),
-        done: Promise.resolve({ code: 0, signal: null, error: null }),
+        done,
         kill: () => undefined,
       };
     };
@@ -59,6 +68,7 @@ describe('controller: pending CI', () => {
     const s = await startSession(store, { mode: 'ticket', ticket: id }, { launch, sleep });
 
     const [job] = ticketJobs(store.db, id);
+    expect(released).toBe(true);
     expect(launches).toEqual([job?.id]);
     expect(ticketJobs(store.db, id)).toHaveLength(1);
     expect(sleeps).toBeGreaterThan(0);
@@ -78,6 +88,8 @@ describe('controller: pending CI', () => {
     expect(ghCalls('create')).toHaveLength(1);
     expect(ghCalls('merge')).toHaveLength(1);
     expect(s.tickets[0]).toMatchObject({ outcome: 'done', relands: 0 });
+    expect(s.tickets[0]?.code).not.toBe('no-progress');
+    expect(s.reason).not.toContain('no-progress');
     expect(showTicket(store, id).ticket.status).toBe('done');
   });
 });
