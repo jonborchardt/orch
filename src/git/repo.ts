@@ -44,11 +44,7 @@ export function describeRepo(cwd: string): RepoInfo {
 
 /** The shared `.git` directory of a checkout or worktree, resolved to an absolute real path. */
 export function commonGitDir(cwd: string): string {
-  const dir = commonGitDirWithin(cwd, 120_000); // git()'s own limit (spawnTool's default)
-  if (typeof dir === 'string') return dir;
-  throw new ToolError(
-    `git rev-parse failed in ${cwd}: --git-common-dir ${dir ? 'timed out' : 'exited non-zero'}`,
-  );
+  return canonicalPath(resolve(cwd, git(cwd, 'rev-parse', '--git-common-dir')));
 }
 
 /**
