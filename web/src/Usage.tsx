@@ -33,8 +33,17 @@ const KINDS = [
   { key: 'cacheCreation', label: 'Cache creation' },
 ] as const;
 
+/** Approximate API price ratios, in plain-input-token equivalents. Not real prices. */
+const WEIGHTS: TokenCounts = { input: 1, cacheCreation: 1.25, cacheRead: 0.1, output: 5 };
+
 const sum = (c: TokenCounts) => c.input + c.output + c.cacheRead + c.cacheCreation;
+const weight = (c: TokenCounts) => KINDS.reduce((a, k) => a + c[k.key] * WEIGHTS[k.key], 0);
 const n = (x: number) => x.toLocaleString();
+/** The one display rule for a weight: a whole number. */
+const w = (x: number) => Math.round(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
+const timeLabel = (d: Date) =>
+  d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const dayLabel = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 const hourLabel = (iso: string) =>
   new Date(iso).toLocaleString(undefined, {
     month: 'short',
@@ -44,11 +53,32 @@ const hourLabel = (iso: string) =>
   });
 
 function bucketText(b: UsageBucket): string {
-  const base = `${hourLabel(b.hour)}: ${n(sum(b))} tokens`;
+  const base = `${hourLabel(b.hour)}: weight ${w(weight(b))} (${n(sum(b))} tokens)`;
   return b.missing.length ? `${base}, missing data for ${b.missing.join(', ')}` : base;
 }
 
-/** Stacked bars, one per hour; an hour with a missing source is hatched and outlined, and says so. */
+/** Y ticks: 0 up to a round top at or above `max`, about four steps. */
+function yTicks(max: number): number[] {
+  const raw = Math.max(1, max) / 4;
+  const p = 10 ** Math.floor(Math.log10(raw));
+  const step = ([1, 2, 5, 10].find((m) => m * p >= raw) ?? 10) * p;
+  const top = Math.max(step, Math.ceil(max / step) * step);
+  return Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step);
+}
+
+/** X ticks in local time: every 3 hours over a day, each midnight over a week, every 5th beyond. */
+function xTicks(buckets: UsageBucket[]): { i: number; label: string }[] {
+  const dates = buckets.map((b) => new Date(b.hour));
+  if (buckets.length <= 24)
+    return dates.flatMap((d, i) => (d.getHours() % 3 === 0 ? [{ i, label: timeLabel(d) }] : []));
+  const nights = dates.flatMap((d, i) => (d.getHours() === 0 ? [{ i, label: dayLabel(d) }] : []));
+  return buckets.length <= 168 ? nights : nights.filter((_, k) => k % 5 === 0);
+}
+
+/**
+ * Stacked bars of weight, one per hour, each kind drawn at its weighted share; an hour with a
+ * missing source is hatched and outlined, and says so. Axis text is HTML outside the stretched SVG.
+ */
 function Chart({
   buckets,
   fills,
@@ -58,18 +88,38 @@ function Chart({
   fills: string[];
   hatch: string;
 }) {
+  const { palette } = useTheme();
+  const [active, setActive] = useState<number | null>(null);
   const W = 10;
   const HT = 160;
-  const max = Math.max(1, ...buckets.map(sum));
-  return (
+  const yt = yTicks(Math.max(0, ...buckets.map(weight)));
+  const max = yt.at(-1) ?? 1;
+  const pct = (i: number) => `${String(((i + 0.5) / buckets.length) * 100)}%`;
+  const a = active === null ? undefined : buckets[active];
+  const svg = (
     <svg
       viewBox={`0 0 ${String(buckets.length * W)} ${String(HT)}`}
       preserveAspectRatio="none"
       width="100%"
       height={HT}
-      aria-label="Tokens per hour"
+      aria-label="Estimated cost weight per hour"
       role="group"
+      onMouseLeave={() => {
+        setActive(null);
+      }}
     >
+      {yt.map((t) => (
+        <line
+          key={t}
+          x1={0}
+          x2={buckets.length * W}
+          y1={HT - (t / max) * HT}
+          y2={HT - (t / max) * HT}
+          stroke={palette.divider}
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
       <defs>
         <pattern
           id="usage-missing"
@@ -84,9 +134,30 @@ function Chart({
       {buckets.map((b, i) => {
         let y = HT;
         const text = bucketText(b);
+        const show = () => {
+          setActive(i);
+        };
         return (
-          <g key={b.hour} role="img" aria-label={text}>
+          <g
+            key={b.hour}
+            role="img"
+            aria-label={text}
+            tabIndex={0}
+            onMouseEnter={show}
+            onFocus={show}
+            onBlur={() => {
+              setActive(null);
+            }}
+          >
             <title>{text}</title>
+            <rect
+              x={i * W}
+              y={0}
+              width={W}
+              height={HT}
+              fill={active === i ? palette.action.hover : 'none'}
+              pointerEvents="all"
+            />
             {b.missing.length > 0 && (
               <rect
                 x={i * W + 1}
@@ -100,7 +171,7 @@ function Chart({
               />
             )}
             {KINDS.map((k, j) => {
-              const h = (b[k.key] / max) * HT;
+              const h = ((b[k.key] * WEIGHTS[k.key]) / max) * HT;
               y -= h;
               return h > 0 ? (
                 <rect key={k.key} x={i * W + 1} y={y} width={W - 2} height={h} fill={fills[j]} />
@@ -110,6 +181,61 @@ function Chart({
         );
       })}
     </svg>
+  );
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Typography variant="caption" color="text.secondary" component="div">
+        Weight (input-token equivalents)
+      </Typography>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 1, mt: 1 }}>
+        <Box sx={{ position: 'relative', height: HT, minWidth: 48 }} aria-label="Weight axis">
+          {yt.map((t) => (
+            <Typography
+              key={t}
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                position: 'absolute',
+                right: 0,
+                bottom: `${String((t / max) * 100)}%`,
+                transform: 'translateY(50%)',
+                lineHeight: 1,
+              }}
+            >
+              {w(t)}
+            </Typography>
+          ))}
+        </Box>
+        {svg}
+        <span />
+        <Box sx={{ position: 'relative', height: 20 }} aria-label="Time axis">
+          {xTicks(buckets).map((t) => (
+            <Typography
+              key={t.i}
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                position: 'absolute',
+                left: pct(t.i),
+                transform: 'translateX(-50%)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {t.label}
+            </Typography>
+          ))}
+        </Box>
+      </Box>
+      <Box role="status" sx={{ minHeight: 24, mt: 0.5 }}>
+        <Typography variant="body2" color={a ? 'text.primary' : 'text.secondary'}>
+          {a
+            ? `${hourLabel(a.hour)}: weight ${w(weight(a))}; ${KINDS.map(
+                (k) => `${k.label.toLowerCase()} ${n(a[k.key])}`,
+              ).join(', ')}${a.missing.length ? `; missing data for ${a.missing.join(', ')}` : ''}`
+            : 'Hover over or focus an hour for its weight and counts.'}
+        </Typography>
+      </Box>
+    </Box>
   );
 }
 
@@ -151,8 +277,6 @@ export function UsagePage() {
   }, [hours, nonce]);
 
   const missingHours = data?.buckets.filter((b) => b.missing.length > 0).length ?? 0;
-  const first = data?.buckets[0];
-  const last = data?.buckets.at(-1);
   return (
     <Polled label="Usage" error={error} loaded={data !== null}>
       <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: 'center' }}>
@@ -219,21 +343,24 @@ export function UsagePage() {
                   </TableCell>
                   <TableCell align="right">{n(sum(data.total))}</TableCell>
                 </TableRow>
+                <TableRow>
+                  <TableCell component="th" scope="row">
+                    Weight
+                  </TableCell>
+                  <TableCell align="right">{w(weight(data.total))}</TableCell>
+                </TableRow>
               </TableBody>
             </Table>
           </TableContainer>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Weight is an estimated cost in input-token equivalents: input x {WEIGHTS.input} + cache
+            creation x {WEIGHTS.cacheCreation} + cache read x {WEIGHTS.cacheRead} + output x{' '}
+            {WEIGHTS.output}. The multipliers are approximate API price ratios, not a bill.
+          </Typography>
           <Chart buckets={data.buckets} fills={fills} hatch={palette.error.main} />
-          <Stack direction="row" sx={{ justifyContent: 'space-between', mb: 2 }}>
-            <Typography variant="caption" color="text.secondary">
-              {first ? hourLabel(first.hour) : ''}
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Hourly, local time. Hatched: a job&apos;s transcript could not be read.
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              {last ? hourLabel(last.hour) : ''}
-            </Typography>
-          </Stack>
+          <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 2 }}>
+            Hourly, local time. Hatched: a job&apos;s transcript could not be read.
+          </Typography>
           <TableContainer>
             <Table size="small" aria-label="Usage per job">
               <TableHead>
@@ -245,6 +372,7 @@ export function UsagePage() {
                     </TableCell>
                   ))}
                   <TableCell align="right">Total</TableCell>
+                  <TableCell align="right">Weight</TableCell>
                   <TableCell>Missing</TableCell>
                 </TableRow>
               </TableHead>
@@ -267,6 +395,7 @@ export function UsagePage() {
                       </TableCell>
                     ))}
                     <TableCell align="right">{n(sum(j))}</TableCell>
+                    <TableCell align="right">{w(weight(j))}</TableCell>
                     <TableCell>{j.missing ?? '—'}</TableCell>
                   </TableRow>
                 ))}
