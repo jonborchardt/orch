@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { jobArtifactDir } from '../src/core/paths.ts';
 import { jobUsage } from '../src/ops/usage.ts';
+import { detail } from '../src/server/api.ts';
 import {
   claimJob,
   createJob,
@@ -23,35 +24,40 @@ afterEach(() => {
   store.cleanup();
 });
 
+/** A job driven into a running round-1 review, the way the CLI records it. */
+function toReview() {
+  const job = createJob(store, {
+    title: 'Export CSV',
+    description: 'Test request',
+    repo: 'github.com/acme/alpha',
+    repoPath: '/repos/alpha',
+    baseBranch: 'main',
+  });
+  const { token } = claimJob(store, job.id, { session: 's1' });
+  const dir = jobArtifactDir(job.id, store.paths);
+  const go = (a: Parameters<typeof transitionJob>[2]) => transitionJob(store, job.id, a, { token });
+  const art = (rel: string) => {
+    writeArtifact(dir, rel);
+    registerArtifact(store, job.id, rel, { token });
+  };
+  go('start');
+  art('spec.md');
+  art('spec-review-1.md');
+  go('complete');
+  go('start');
+  art('build.md');
+  go('complete');
+  go('start');
+  art('round-1/simplify-review.md');
+  art('round-1/simplify.md');
+  go('complete');
+  go('start');
+  return { job, token, dir, go };
+}
+
 describe('jobUsage', () => {
   it('derives stage visits, reviewer runs, and CI counters from the records; tokens are unmeasured', () => {
-    const job = createJob(store, {
-      title: 'Export CSV',
-      description: 'Test request',
-      repo: 'github.com/acme/alpha',
-      repoPath: '/repos/alpha',
-      baseBranch: 'main',
-    });
-    const { token } = claimJob(store, job.id, { session: 's1' });
-    const dir = jobArtifactDir(job.id, store.paths);
-    const go = (a: Parameters<typeof transitionJob>[2]) =>
-      transitionJob(store, job.id, a, { token });
-    const art = (rel: string) => {
-      writeArtifact(dir, rel);
-      registerArtifact(store, job.id, rel, { token });
-    };
-    go('start');
-    art('spec.md');
-    art('spec-review-1.md');
-    go('complete');
-    go('start');
-    art('build.md');
-    go('complete');
-    go('start');
-    art('round-1/simplify-review.md');
-    art('round-1/simplify.md');
-    go('complete');
-    go('start');
+    const { job, token, dir, go } = toReview();
     for (const r of ['security', 'correctness', 'code-quality']) {
       recordReview(store, job.id, { token, reviewer: r }); // launched, no verdict yet
     }
@@ -101,5 +107,20 @@ describe('jobUsage', () => {
     expect(cli.tokens.reason).toContain('dashboard Usage section');
     expect(orch(store.home, store.home, ['job', 'usage']).code).toBe(2);
     expect(orch(store.home, store.home, ['job', 'usage', 'job-00000000']).code).toBe(3);
+  });
+
+  it('still loads a review recorded by the retired web-platform role', () => {
+    const { job, token, dir } = toReview();
+    writeArtifact(dir, 'round-1/review-web-platform.md');
+    recordReview(store, job.id, { token, reviewer: 'web-platform', verdict: 'pass' });
+
+    const r = jobUsage(store, job.id).reviews;
+    expect(r.map((x) => [x.reviewer, x.verdict, x.configuredModel])).toEqual([
+      ['web-platform', 'pass', null],
+    ]);
+    const round = detail(store, job.id).rounds.find((x) => x.round === 1);
+    expect(round?.reviews.map((x) => [x.reviewer, x.verdict, x.path])).toEqual([
+      ['web-platform', 'pass', 'round-1/review-web-platform.md'],
+    ]);
   });
 });

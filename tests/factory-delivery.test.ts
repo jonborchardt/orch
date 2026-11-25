@@ -262,6 +262,6 @@ describe('resume, ownership, and cross-project', () => {
     expect(() => next(c.id)).toThrow(/not valid JSON/);
     writeFileSync(file, JSON.stringify({ extra: 1 }));
     expect(() => next(c.id)).toThrow(/unknown key/);
-    expect(ROLES.filter((r) => r.kind === 'review')).toHaveLength(7);
+    expect(ROLES.filter((r) => r.kind === 'review')).toHaveLength(6);
   });
 });
