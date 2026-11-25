@@ -32,6 +32,7 @@ import {
   reviewRollup,
 } from './format.ts';
 import { Markdown } from './Markdown.tsx';
+import { RUNNING_WINDOW_MS, subagentState } from './SessionLog.tsx';
 import { RESUME_NOTE } from './Status.tsx';
 import { TABS, detailTabs, resolveTab } from './tabs.ts';
 import { theme } from './main.tsx';
@@ -3658,6 +3659,26 @@ describe('Job detail: Session tab (todo 0074)', () => {
     );
   });
 
+  it('reads status unknown only for a null finished, whatever the modified time', () => {
+    const now = Date.parse('2026-01-01T12:00:00Z');
+    const s = (finished: boolean | null, ageMs: number) =>
+      subagentState(
+        {
+          id: 'x',
+          type: null,
+          description: null,
+          finished,
+          modifiedAt: new Date(now - ageMs).toISOString(),
+        },
+        now,
+      );
+    for (const age of [0, 60_000, RUNNING_WINDOW_MS, 3_600_000]) {
+      expect(s(null, age)).toBe('status unknown');
+      expect(s(true, age)).toBe('finished');
+      expect(s(false, age)).toBe(age < RUNNING_WINDOW_MS ? 'running' : 'not finished');
+    }
+  });
+
   it('renders the timeline newest first with times, agent labels, subagents, and earlier sessions (AC2, AC9)', async () => {
     data.sessionLog = found();
     await open(withSession(), 'Session');
@@ -3679,9 +3700,13 @@ describe('Job detail: Session tab (todo 0074)', () => {
     const sub = (id: string) => must(subs.querySelector(`[data-agent-id="${id}"]`));
     expect(sub('a1')).toHaveTextContent(/^builder: Build round 1 — running, last active 2m ago$/);
     expect(sub('a2')).toHaveTextContent(/^reviewer: Security review — finished, last active/);
-    // finished missing, or false but quiet past the window: never a confident "running".
-    expect(sub('a3')).toHaveTextContent(/^agent: a3 — status unknown, last active 1m ago$/);
-    expect(sub('a4')).toHaveTextContent(/^tester: Old run — status unknown, last active 30m ago$/);
+    // finished missing: status unknown, explained; false but quiet past the window: not finished.
+    expect(sub('a3')).toHaveTextContent(
+      /^agent: a3 — status unknown \(its meta file has no readable finished field\), last active 1m ago$/,
+    );
+    expect(sub('a4')).toHaveTextContent(/^tester: Old run — not finished, last active 30m ago$/);
+    expect(sub('a4')).not.toHaveTextContent('status unknown');
+    expect(within(subs).getAllByText(/status unknown/)).toHaveLength(1);
     expect(within(subs).getAllByRole('listitem')).toHaveLength(4);
     expect(subs).toHaveTextContent('3 older subagent transcript(s) not read.');
     expect(screen.getByTestId('session-log-header')).toHaveTextContent(SESSION_UUID);
