@@ -4,30 +4,18 @@
  * file, so files running in parallel never share it). Split out so the slow ci-stage scenarios can
  * run as several files in parallel instead of one long serial file.
  */
-import { rmSync } from 'node:fs';
-import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
+import { beforeEach, expect } from 'vitest';
 import { reconcileCi } from '../src/ops/github.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { getJob } from '../src/storage/jobs.ts';
-import {
-  add,
-  approve,
-  type Ctx,
-  deliverPr,
-  go,
-  makePolicyRepo,
-  passRound,
-  simplify,
-  verify,
-} from './drive.ts';
+import { add, approve, type Ctx, deliverPr, go, passRound, simplify, verify } from './drive.ts';
 import {
   commitFile,
   fixture,
   type GhShim,
-  ghShim,
   type ShimCheckRun,
   type TempStore,
-  tempStore,
+  useJobRepo,
 } from './helpers.ts';
 
 export let store: TempStore;
@@ -35,28 +23,13 @@ export let clone: string;
 export let bare: string;
 export let shim: GhShim;
 
-beforeAll(() => {
-  shim = ghShim('acme/alpha');
-  Object.assign(process.env, shim.env);
-});
-afterAll(() => {
-  delete process.env['ORCH_GH_SHIM'];
-  delete process.env['ORCH_GH_SHIM_STATE'];
-  shim.cleanup();
-});
+useJobRepo({ shim: 'acme/alpha', policy: true }, (s) => ({ store, clone, bare, shim } = s));
 beforeEach(() => {
-  shim.reset();
-  store = tempStore();
-  ({ clone, bare } = makePolicyRepo());
   // GitHub knows the pushed head: the shim reads PR heads from the local origin.
   shim.write({ bare });
 });
-afterEach(() => {
-  store.cleanup();
-  for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true });
-});
 
-export let nextId = 100;
+let nextId = 100;
 export function run(
   name: string,
   conclusion: string | null,

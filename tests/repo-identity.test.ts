@@ -10,13 +10,14 @@ import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { OwnershipError, ValidationError } from '../src/core/errors.ts';
-import { resumeFactoryJob, startJob } from '../src/ops/factory.ts';
+import { resumeFactoryJob } from '../src/ops/factory.ts';
 import { findJobs, jobCheckout, sameLocalRepo } from '../src/ops/repo.ts';
 import { showVerification } from '../src/ops/verify.ts';
 import { adoptWorktree, createWorktree, integrateBase, repointRepo } from '../src/ops/worktree.ts';
 import { listArtifacts } from '../src/storage/artifacts.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { claimJob, createJob, getJob } from '../src/storage/jobs.ts';
+import * as drive from './drive.ts';
 import { add, go, SESSION, verify } from './drive.ts';
 import {
   commitFile,
@@ -43,10 +44,7 @@ function localRepo(dir = tempDir('orch-local-')): string {
   return r;
 }
 
-function start(cwd: string, title = 'Local job') {
-  const r = startJob(store, { title, description: 'Test request', session: SESSION, cwd });
-  return { id: r.job.id, token: r.token, dir: r.plan.artifactDir, wt: r.job.worktreePath ?? '' };
-}
+const start = (cwd: string, title = 'Local job') => drive.start(store, cwd, title);
 
 const events = (id: string) => listEvents(store.db, id).map((e) => e.type);
 

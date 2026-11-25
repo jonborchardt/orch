@@ -7,7 +7,7 @@
 import { rmSync } from 'node:fs';
 
 import { eq } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
+import { afterAll, beforeAll, beforeEach } from 'vitest';
 
 import type { ClaudeChild, LaunchInput } from '../src/integrations/claude-session.ts';
 import { setMergeAuthorization } from '../src/ops/merge.ts';
@@ -18,8 +18,7 @@ import { appendEvent, listEvents } from '../src/storage/events.ts';
 import { getJob } from '../src/storage/jobs.ts';
 import { type Event, type Job, jobs } from '../src/storage/schema.ts';
 import { ticketJobs } from '../src/storage/tickets.ts';
-import { makePolicyRepo } from './drive.ts';
-import { type GhShim, ghShim, gitIn, type TempStore, tempStore } from './helpers.ts';
+import { type GhShim, gitIn, makePolicyRepo, type TempStore, useJobRepo } from './helpers.ts';
 
 /** The verified head: a real commit (the clone's main), so the merge's workflow check reads it. */
 export let SHA = '';
@@ -28,32 +27,24 @@ export const DEAD_PID = 2 ** 31 - 1;
 
 export let store: TempStore;
 export let clone: string;
-export let bare: string;
 export let beta: { clone: string; bare: string };
 export let shim: GhShim;
 let n = 0;
 
+useJobRepo(
+  { shim: 'acme/alpha', policy: true, perFile: true },
+  (s) => ({ store, clone, shim } = s),
+);
 beforeAll(() => {
-  shim = ghShim('acme/alpha');
-  Object.assign(process.env, shim.env);
-  ({ clone, bare } = makePolicyRepo());
   SHA = gitIn(clone, 'rev-parse', 'HEAD');
   beta = makePolicyRepo('git@github.com:acme/beta.git');
 });
 afterAll(() => {
-  delete process.env['ORCH_GH_SHIM'];
-  delete process.env['ORCH_GH_SHIM_STATE'];
-  shim.cleanup();
-  for (const d of [clone, bare, beta.clone, beta.bare]) rmSync(d, { recursive: true, force: true });
+  for (const d of [beta.clone, beta.bare]) rmSync(d, { recursive: true, force: true });
 });
 beforeEach(() => {
-  shim.reset();
-  store = tempStore();
   n = 0;
   setMergeAuthorization(store, clone, true);
-});
-afterEach(() => {
-  store.cleanup();
 });
 
 export const ticket = (title: string, o: Record<string, unknown> = {}) =>

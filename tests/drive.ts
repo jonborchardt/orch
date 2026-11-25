@@ -7,24 +7,15 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { dispatchJob } from '../src/ops/dispatch.ts';
-import { planJob, resumeFactoryJob, startJob } from '../src/ops/factory.ts';
+import { type Plan, planJob, resumeFactoryJob, startJob } from '../src/ops/factory.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
 import { ensureDraftPr, pushBranch } from '../src/ops/github.ts';
 import { verifyJob } from '../src/ops/verify.ts';
 import type { Store } from '../src/storage/client.ts';
 import { getJob, transitionJob } from '../src/storage/jobs.ts';
-import { commitFile, fixture, gitIn, makeRepoWithOrigin, writeArtifact } from './helpers.ts';
+import { commitFile, fixture, gitIn, POLICY, writeArtifact } from './helpers.ts';
 
-/** `check.js` exits 1 when marker.txt contains BREAK; the policy runs it with node. */
-export const CHECK_JS =
-  "const fs = require('node:fs');\n" +
-  "const t = fs.readFileSync('marker.txt', 'utf8');\n" +
-  "if (t.includes('BREAK')) { console.error('marker broken'); process.exit(1); }\n" +
-  "console.log('OK');\n";
-
-export const POLICY = {
-  verification: { commands: [{ id: 'check', command: 'node', args: ['check.js'] }] },
-};
+export { CHECK_JS, makePolicyRepo, POLICY } from './helpers.ts';
 
 /** POLICY with GitHub CI as the authoritative test gate. */
 export const CI_POLICY = {
@@ -39,25 +30,6 @@ export function useCiAuthority(clone: string): void {
   gitIn(clone, 'push', '-q', 'origin', 'main');
 }
 
-/** A clone with origin whose main branch carries check.js, marker.txt, and factory.json. */
-export function makePolicyRepo(
-  originUrl = 'git@github.com:acme/alpha.git',
-  policy: unknown = POLICY,
-): { clone: string; bare: string } {
-  const r = makeRepoWithOrigin(originUrl);
-  commitFile(r.clone, 'check.js', CHECK_JS);
-  commitFile(r.clone, 'marker.txt', 'fine\n');
-  commitFile(r.clone, 'src/app.ts', 'export const app = 1;\n');
-  if (policy !== null) {
-    commitFile(r.clone, 'factory.json', JSON.stringify(policy, null, 2) + '\n');
-  } else {
-    gitIn(r.clone, 'rm', '-q', 'factory.json');
-    gitIn(r.clone, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'no policy');
-  }
-  gitIn(r.clone, 'push', '-q', 'origin', 'main');
-  return r;
-}
-
 export interface Ctx {
   id: string;
   token: string;
@@ -67,9 +39,26 @@ export interface Ctx {
 
 export const SESSION = 'claude-20261113-1200-5b5b';
 
-export function start(store: Store, clone: string, title = 'Add CSV export'): Ctx {
-  const r = startJob(store, { title, description: 'Test request', session: SESSION, cwd: clone });
-  return { id: r.job.id, token: r.token, dir: r.plan.artifactDir, wt: r.job.worktreePath ?? '' };
+export function start(
+  store: Store,
+  clone: string,
+  title = 'Add CSV export',
+  maxRounds?: number,
+): Ctx & { plan: Plan } {
+  const r = startJob(store, {
+    title,
+    description: 'Test request',
+    session: SESSION,
+    cwd: clone,
+    maxRounds,
+  });
+  return {
+    id: r.job.id,
+    token: r.token,
+    dir: r.plan.artifactDir,
+    wt: r.job.worktreePath ?? '',
+    plan: r.plan,
+  };
 }
 
 /**
@@ -123,24 +112,20 @@ export const verify = (store: Store, c: Ctx) => verifyJob(store, c.id, { token: 
 
 export const head = (dir: string) => gitIn(dir, 'rev-parse', 'HEAD');
 
+/** The `## Sensitive changes` section naming whatever the plan currently flags as sensitive. */
+function sensitiveSection(store: Store, c: Ctx): string {
+  const paths = planJob(store, c.id).sensitive?.changes.map((x) => x.path) ?? [];
+  return `\n## Sensitive changes\n\n${paths.length ? paths.map((p) => `- ${p}`).join('\n') : 'None'}\n`;
+}
+
 /** Consolidated findings that name whatever the plan currently flags as sensitive. */
 export function consolidated(store: Store, c: Ctx, blocking = '0'): string {
-  const s = planJob(store, c.id).sensitive;
-  const paths = s?.changes.map((x) => x.path) ?? [];
   const rel = `round-${String(getJob(store.db, c.id).round)}/consolidated.md`;
-  return fixture(rel, blocking).replace(
-    '\nBLOCKING:',
-    `\n## Sensitive changes\n\n${paths.length ? paths.map((p) => `- ${p}`).join('\n') : 'None'}\n\nBLOCKING:`,
-  );
+  return fixture(rel, blocking).replace('\nBLOCKING:', `${sensitiveSection(store, c)}\nBLOCKING:`);
 }
 
 export function prBody(store: Store, c: Ctx): string {
-  const s = planJob(store, c.id).sensitive;
-  const paths = s?.changes.map((x) => x.path) ?? [];
-  return (
-    fixture('pr.md') +
-    `\n## Sensitive changes\n\n${paths.length ? paths.map((p) => `- ${p}`).join('\n') : 'None'}\n`
-  );
+  return fixture('pr.md') + sensitiveSection(store, c);
 }
 
 /** spec written, challenged with a PASS, completed: build pending. */

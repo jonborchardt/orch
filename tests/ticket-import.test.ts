@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { NotFoundError, ValidationError } from '../src/core/errors.ts';
+import { ticketKey } from '../src/core/tickets.ts';
 import { parseTodo, REGISTER_KEYS } from '../src/core/todo-register.ts';
 import { importRegister, todoIdsInTitle } from '../src/ops/ticket-import.ts';
 import {
@@ -39,7 +40,6 @@ const BASE = {
   created: '2026-11-06',
   updated: '2026-11-07',
 };
-const pad = (n: number) => String(n).padStart(4, '0');
 const BODY =
   '## What\n\nThe text, with a checklist.\n\n- [ ] first box\n- [x] second box\n\n## Notes\n\n- 2026-11-06: logged.\n- 2026-11-07: started; dotodo\n';
 
@@ -54,7 +54,7 @@ function write(
     const v = all[k];
     return `${k}: ${Array.isArray(v) ? `[${v.join(', ')}]` : String(v)}`;
   }).join('\n');
-  writeFileSync(join(to, `${pad(id)}-todo.md`), `---\n${fm}\n---\n\n${body}`);
+  writeFileSync(join(to, `${ticketKey(id)}-todo.md`), `---\n${fm}\n---\n\n${body}`);
 }
 
 /** A register shaped like the real one: every status, links, a duplicate, an extra area. */

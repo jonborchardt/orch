@@ -3,78 +3,34 @@
  * per test file, so files running in parallel never share it; split out so a long serial file can
  * run as two files in parallel.
  */
-import { rmSync } from 'node:fs';
-import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
-import { addArtifact, recordVerdict, transitionGuarded } from '../src/ops/gates.ts';
+import { expect } from 'vitest';
+import { addArtifact, recordVerdict } from '../src/ops/gates.ts';
 import { verifyJob } from '../src/ops/verify.ts';
-import { checkReadonly, type Plan, planJob, startJob } from '../src/ops/factory.ts';
+import { checkReadonly, type Plan, planJob } from '../src/ops/factory.ts';
 import { getJob, transitionJob } from '../src/storage/jobs.ts';
-import {
-  fixture,
-  type GhShim,
-  ghShim,
-  makeRepoWithOrigin,
-  type TempStore,
-  tempStore,
-  writeArtifact,
-} from './helpers.ts';
+import * as drive from './drive.ts';
+import { fixture, type GhShim, type TempStore, useJobRepo, writeArtifact } from './helpers.ts';
 
 export let store: TempStore;
 export let clone: string;
 export let bare: string;
 export let shim: GhShim;
-export const extra: string[] = [];
+export const { extra } = useJobRepo(
+  { shim: 'acme/alpha' },
+  (s) => ({ store, clone, bare, shim } = s),
+);
 
-beforeAll(() => {
-  shim = ghShim('acme/alpha');
-  Object.assign(process.env, shim.env);
-});
-afterAll(() => {
-  delete process.env['ORCH_GH_SHIM'];
-  delete process.env['ORCH_GH_SHIM_STATE'];
-  shim.cleanup();
-});
-beforeEach(() => {
-  shim.reset();
-  store = tempStore();
-  ({ clone, bare } = makeRepoWithOrigin('git@github.com:acme/alpha.git'));
-});
-afterEach(() => {
-  store.cleanup();
-  for (const d of [clone, bare, ...extra.splice(0)]) rmSync(d, { recursive: true, force: true });
-});
+export { SESSION } from './drive.ts';
 
-export const SESSION = 'claude-20261113-0900-ab12';
-
-export interface Ctx {
-  id: string;
-  token: string;
-  dir: string;
-  wt: string;
-  plan: Plan;
-}
+export type Ctx = drive.Ctx & { plan: Plan };
 
 /** `orch factory start` as the skill runs it. */
-export function start(title = 'Add CSV export', repoPath = clone, maxRounds?: number): Ctx {
-  const r = startJob(store, {
-    title,
-    description: 'Test request',
-    session: SESSION,
-    cwd: repoPath,
-    maxRounds,
-  });
-  return {
-    id: r.job.id,
-    token: r.token,
-    dir: r.plan.artifactDir,
-    wt: r.job.worktreePath ?? '',
-    plan: r.plan,
-  };
-}
+export const start = (title?: string, repoPath = clone, maxRounds?: number): Ctx =>
+  drive.start(store, repoPath, title, maxRounds);
 
 export const next = (id: string, ui?: boolean) => planJob(store, id, { ui });
 export const go = (c: Ctx, action: Parameters<typeof transitionJob>[2], reason?: string) =>
-  transitionGuarded(store, c.id, action, { token: c.token, reason });
+  drive.go(store, c, action, reason);
 
 /** Fixture subagent: writes a valid artifact, registers it, completes the stage. */
 export function runStage(c: Ctx, artifact: string, body = fixture(artifact), replace = false) {

@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { ticketKey } from '../src/core/tickets.ts';
 import { resumeSession } from '../src/ops/run.ts';
 import { type RunnerSession, writeSession } from '../src/ops/runner-state.ts';
 import {
@@ -21,8 +22,6 @@ import {
   ticket,
 } from './run-fixture.ts';
 
-const key = (id: number) => String(id).padStart(4, '0');
-
 describe('the queue passes over a ticket-specific outcome', () => {
   it('a merge that leaves the ticket open is reported with a true next step, and the queue goes on', async () => {
     const first = ticket('Box left', {
@@ -36,7 +35,7 @@ describe('the queue passes over a ticket-specific outcome', () => {
     const [open, merged] = s.tickets;
     expect(open).toMatchObject({ ticketId: first, outcome: 'blocked', code: 'ticket-open' });
     expect(open?.next).toBe(
-      `tick the remaining boxes (orch ticket edit ${key(first)} --body-file -) or move them to a follow-up ticket, then orch ticket done ${key(first)}`,
+      `tick the remaining boxes (orch ticket edit ${ticketKey(first)} --body-file -) or move them to a follow-up ticket, then orch ticket done ${ticketKey(first)}`,
     );
     expect(open?.next).not.toContain('tries again');
     expect(merged).toMatchObject({ ticketId: second, outcome: 'done' });
@@ -82,7 +81,7 @@ describe('the queue passes over a ticket-specific outcome', () => {
       outcome: 'blocked',
       code: 'claude-failed',
     });
-    expect(s.reason).toBe(`ticket ${key(first)} is blocked: claude: spawn claude ENOENT`);
+    expect(s.reason).toBe(`ticket ${ticketKey(first)} is blocked: claude: spawn claude ENOENT`);
     expect(jobsOf(second)).toHaveLength(0);
   });
 
