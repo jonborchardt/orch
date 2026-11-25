@@ -328,6 +328,8 @@ ci`, never completed. When `orch gh ci` completes the job on a passing verdict i
 ready` for an open draft (event `pr.ready` with the head, `ok`, and gh's error; `prState` becomes
 `ready` on success). That step comes strictly after the completion commits, changes no stage,
 status, or CI field, and is never retried: a failure is reported and a human runs `gh pr ready`.
+Then, the same way, it rewrites the PR body once as the registered `pr.md` plus a `## Merge receipt`
+built read-only from recorded evidence (`src/ops/receipt.ts`; result `receipt: updated | failed`).
 The PR state can be updated later (ready → merged, `orch gh pr status`) without changing the
 workflow. `closed` means GitHub reported the PR closed
 without merging; it is recorded from `orch gh pr status` or `orch gh ci`, never inferred from the

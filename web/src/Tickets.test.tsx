@@ -101,6 +101,8 @@ let db: {
   rows: BoardRow[];
   runner: RunnerStatus;
   jobs: Record<number, TicketJob[]>;
+  /** Merge receipts the server computed, by ticket. */
+  receipts: Record<number, { jobId: string; markdown: string }>;
   history: TicketEvent[];
   /** Every POST, in order. */
   posts: { url: string; body: Record<string, unknown> }[];
@@ -195,6 +197,7 @@ function mockFetch() {
         jobs: db.jobs[t.id] ?? [],
         assets: [],
         assetDir: '/assets',
+        receipt: db.receipts[t.id] ?? null,
       });
     }
     return json(404, { error: { type: 'NotFoundError', message: `no ${url}` } });
@@ -327,6 +330,7 @@ beforeEach(() => {
         createdAt: '2026-11-20T08:05:00.000Z',
       },
     ],
+    receipts: {},
     posts: [],
     refuse: null,
     gets: [],
@@ -850,6 +854,26 @@ describe('ticket detail', () => {
     );
     expect(jobs.getAllByRole('row')[1]).toHaveTextContent('build');
     expect(screen.getByRole('link', { name: '← Tickets' })).toHaveAttribute('href', '#/tickets');
+  });
+
+  it('shows the merge receipt the server computed, and no section without one', async () => {
+    db.receipts[4] = {
+      jobId: 'job-00000004',
+      markdown: '## Merge receipt\n\n- Verified commit: `abc1234`\n\n### Merge\n\nNot merged.\n',
+    };
+    mount('#/tickets/4');
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: 'Merge receipt' })).toHaveTextContent(
+        'Verified commit: abc1234',
+      );
+    });
+    expect(screen.getByRole('region', { name: 'Merge receipt' })).toHaveTextContent('Not merged.');
+
+    go('#/tickets/1');
+    await waitFor(() => {
+      expect(screen.getByTestId('ticket-header')).toHaveTextContent('Fix the race');
+    });
+    expect(screen.queryByRole('region', { name: 'Merge receipt' })).toBeNull();
   });
 
   it('says so when the ticket does not exist', async () => {
