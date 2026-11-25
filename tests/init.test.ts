@@ -13,7 +13,7 @@ import { UsageError, ValidationError } from '../src/core/errors.ts';
 import { canonicalPath } from '../src/core/paths.ts';
 import { parsePolicyText, policyFingerprint } from '../src/core/verification.ts';
 import { startJob } from '../src/ops/factory.ts';
-import { checkReadiness, initRepo, parseCommandFlag } from '../src/ops/init.ts';
+import { checkReadiness, gradedReadiness, initRepo, parseCommandFlag } from '../src/ops/init.ts';
 import { worktreeOf } from '../src/ops/tree.ts';
 import { effectivePolicy } from '../src/ops/verify.ts';
 import type { Store } from '../src/storage/client.ts';
@@ -21,6 +21,7 @@ import { getJob } from '../src/storage/jobs.ts';
 import { makePolicyRepo, POLICY, SESSION, start } from './drive.ts';
 import {
   commitFile,
+  ghShim,
   gitIn,
   json,
   makeRepo,
@@ -297,6 +298,76 @@ describe('orch init --check: readiness', () => {
     commitFile(ok, 'factory.json', JSON.stringify(POLICY) + '\n');
     expect(orch(home, ok, ['init', '--check']).code).toBe(0);
     expect(orch(home, ok, ['init', '--check']).out).toMatch(/^READY/);
+  });
+});
+
+describe('orch init --check: readiness grade (advice, never the exit code)', () => {
+  const home = () => {
+    const h = tempDir('orch-init-home-');
+    dirs.push(h);
+    return h;
+  };
+  const gh = () => {
+    const shim = ghShim('acme/alpha');
+    dirs.push(shim.dir);
+    return shim;
+  };
+  interface Graded {
+    status: string;
+    ready: boolean;
+    grade: { letter: string; met: number; facts: Record<string, boolean | null> } | null;
+  }
+
+  it('grades a ready repository with a non-GitHub origin without running gh, and exits 0 at D', () => {
+    const { clone, bare } = makeRepoWithOrigin('https://git.example.com/acme/alpha.git');
+    dirs.push(clone, bare);
+    const shim = gh();
+    const r = orch(home(), tmpdir(), ['--json', 'init', '--check', '--repo', clone], shim.env);
+    expect(r.code, r.err).toBe(0);
+    expect(json<Graded>(r)).toMatchObject({
+      ready: true,
+      grade: {
+        letter: 'D',
+        met: 0,
+        // NOOP_POLICY's only check is "noop": no test command.
+        facts: { policyTest: false, requiredChecks: null, upToDate: null, protection: null },
+      },
+    });
+    expect(shim.read().calls).toEqual([]);
+    expect(checkReadiness(clone)).not.toHaveProperty('grade');
+  });
+
+  it('keeps exit 1 for a missing policy, graded with policyTest false', () => {
+    const dir = repo();
+    const r = orch(home(), dir, ['--json', 'init', '--check']);
+    expect(r.code).toBe(1);
+    expect(json<Graded>(r)).toMatchObject({
+      status: 'missing',
+      grade: { letter: 'D', facts: { policyTest: false } },
+    });
+    const plain = tempDir('orch-init-plain-');
+    dirs.push(plain);
+    expect(gradedReadiness(plain).grade).toBeNull();
+  });
+
+  it('prints the grade line and the advice for each unmet fact, from GitHub for a github.com origin', () => {
+    const { clone, bare } = makeRepoWithOrigin();
+    dirs.push(clone, bare);
+    commitFile(clone, 'factory.json', JSON.stringify(POLICY) + '\n', 'test policy');
+    gitIn(clone, 'push', '-q', 'origin', 'main');
+    const shim = gh();
+    shim.write({
+      protection: { strict: false, contexts: ['ci'] },
+      api: { 'repos/acme/alpha/branches/main': { protected: true } },
+    });
+    const r = orch(home(), clone, ['init', '--check'], shim.env);
+    expect(r.code, r.err).toBe(0);
+    const lines = r.out.split('\n');
+    const at = lines.findIndex((l) => l.startsWith('grade'));
+    expect(lines[at]).toBe('grade     B (3/4)');
+    expect(lines.slice(at + 1).filter((l) => l.trim().startsWith('- '))).toEqual([
+      expect.stringMatching(/up to date.*merge queue/),
+    ]);
   });
 });
 

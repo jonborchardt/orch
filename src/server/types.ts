@@ -1,5 +1,6 @@
 /** Shapes shared by the API (src/server/api.ts) and the web client (web/src). Types only. */
 import type { Flake } from '../core/flake.ts';
+import type { ReadinessGrade } from '../core/readiness.ts';
 import type { SessionLinks, SessionRef } from '../core/session.ts';
 import type { Choice, Completion, PrPhase } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
@@ -341,6 +342,12 @@ export interface SubagentSummary extends SessionAgent {
  * The Session tab: a bounded, read-only tail of the job's Claude Code transcript and its
  * subagents' transcripts (src/server/transcript.ts). `found: false` carries the reason.
  */
+/** `GET /api/jobs/:id/readiness`: the job repository's readiness grade, advice beside Merge. */
+export interface ReadinessView {
+  /** null when the job's repository path is no longer a Git repository. */
+  grade: ReadinessGrade | null;
+}
+
 export interface SessionLogView {
   found: boolean;
   reason: string | null;

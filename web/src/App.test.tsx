@@ -288,6 +288,8 @@ let data: {
   sessionLog: SessionLogView;
   /** `/api/runner`'s body; unset, the request fails like any unmocked route. */
   runner?: unknown;
+  /** `/api/jobs/:id/readiness`'s body; unset, the request fails like any unmocked route. */
+  readiness?: unknown;
 };
 const ATTACH = 'orch job session attach job-00000003 --provider claude-code';
 const NO_SESSION =
@@ -330,6 +332,8 @@ function mockFetch(): FetchMock {
       return json(data.actionStatus, data.actionBody);
     }
     if (/^\/api\/jobs\/job-[0-9a-f]{8}\/session-log$/.test(url)) return json(200, data.sessionLog);
+    if (/^\/api\/jobs\/job-[0-9a-f]{8}\/readiness$/.test(url) && data.readiness !== undefined)
+      return json(200, data.readiness);
     if (/^\/api\/jobs\/job-[0-9a-f]{8}$/.test(url))
       return (hold.detail ?? Promise.resolve()).then(() => json(200, data.detail));
     return json(404, { error: { type: 'NotFoundError', message: `no ${url}` } });
@@ -2843,6 +2847,32 @@ describe('PR phase, Merge, and Refresh PR', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Merged');
     });
     expect(posts(f)).toEqual([{ action: 'merge', force: true }]);
+  });
+
+  it('Merge shows the readiness grade, fetched when the dialog opens, as advice', async () => {
+    const f = mockFetch();
+    data.detail = readyDetail();
+    data.readiness = {
+      grade: {
+        letter: 'C',
+        met: 2,
+        facts: { policyTest: true, requiredChecks: true, upToDate: false, protection: null },
+        unknown: ['protection'],
+        advice: ['Require branches to be up to date.', 'Protect the base branch.'],
+      },
+    };
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    const asked = () => f.mock.calls.filter(([u]) => String(u).endsWith('/readiness')).length;
+    expect(asked()).toBe(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    const dialog = await screen.findByRole('dialog');
+    const grade = await within(dialog).findByTestId('merge-readiness');
+    expect(grade).toHaveTextContent('Repository readiness C (2/4), advice only.');
+    expect(grade).toHaveTextContent('Protect the base branch.');
+    expect(within(dialog).getByRole('button', { name: 'Merge' })).toBeEnabled();
+    expect(asked()).toBe(1);
   });
 
   it('Remove worktree is a plain confirm naming the path and the kept branch', async () => {

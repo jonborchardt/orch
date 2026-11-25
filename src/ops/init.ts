@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { UsageError, ValidationError } from '../core/errors.ts';
 import { whichSync } from '../core/exec.ts';
 import { findProjectRoot } from '../core/paths.ts';
+import { gradeReadiness, type ReadinessGrade, runsTests } from '../core/readiness.ts';
 import {
   formatPolicy,
   parsePolicy,
@@ -19,6 +20,7 @@ import {
 } from '../core/verification.ts';
 import { baseRef, describeRepo } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
+import { branchRuleFacts } from '../integrations/github.ts';
 import { policyAt } from './verify.ts';
 
 /** package.json scripts worth proposing, in order. `check` stands in for the three it usually runs. */
@@ -267,4 +269,32 @@ export function checkReadiness(cwd: string, repo?: string, branch?: string): Rea
     detail: `${String(policy.commands.length)} check(s) committed at ${ref} (${sha.slice(0, 7)}): ${base.checks.join(', ')}.`,
     next: null,
   };
+}
+
+export interface GradedReadiness extends Readiness {
+  /** Readiness grade: advice, never a gate. Null outside a Git repository. */
+  grade: ReadinessGrade | null;
+}
+
+/**
+ * `checkReadiness` plus the readiness grade (decision 2026-11-25-readiness-grade-is-advice).
+ * GitHub is asked, read-only, only when origin is github.com/<owner>/<name>; otherwise its facts
+ * stay null and `gh` never runs. Nothing gates on the result.
+ */
+export function gradedReadiness(cwd: string, repo?: string, branch?: string): GradedReadiness {
+  const r = checkReadiness(cwd, repo, branch);
+  if (!r.root) return { ...r, grade: null };
+  const info = describeRepo(r.root);
+  const base = branch ?? info.currentBranch;
+  // Ready means the working copy is the trusted policy, so reading it here reads the trusted one.
+  const policyTest =
+    r.ready &&
+    r.path !== null &&
+    parsePolicyText(readFileSync(r.path, 'utf8')).commands.some((c) => c.required && runsTests(c));
+  const nameWithOwner = /^github\.com\/([^/]+\/[^/]+)$/.exec(info.remote ?? '')?.[1];
+  const github =
+    nameWithOwner && base !== 'HEAD'
+      ? branchRuleFacts(nameWithOwner, base, r.root)
+      : { requiredChecks: null, upToDate: null, protection: null };
+  return { ...r, grade: gradeReadiness({ policyTest, ...github }) };
 }

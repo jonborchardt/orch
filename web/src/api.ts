@@ -7,6 +7,7 @@ import type {
   Area,
   BoardRow,
   JobDetailView,
+  ReadinessView,
   RunnerStatus,
   RunsView,
   SessionInfo,
@@ -64,6 +65,7 @@ export const fetchRuns = () => getJson<RunsView>('/api/runs');
 export const fetchAgents = () => getJson<AgentsView>('/api/agents');
 export const fetchUsage = (hours: UsageRange) =>
   getJson<UsageView>(`/api/usage?hours=${String(hours)}`);
+export const fetchReadiness = (id: string) => getJson<ReadinessView>(`/api/jobs/${id}/readiness`);
 export const fetchSessionLog = (id: string) =>
   getJson<SessionLogView>(`/api/jobs/${id}/session-log`);
 
