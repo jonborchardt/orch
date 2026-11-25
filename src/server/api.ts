@@ -569,10 +569,13 @@ function modelMetrics(
       job.mode === 'fast' ? 'fast-builder' : 'builder',
       ...(artifacts.some((a) => a.path === 'spec.md') ? ['spec-writer'] : []),
     ];
+    // listRuns is newest first, so the last finished run is the job's first.
     const first = listRuns(store.db, job.id)
       .filter((r) => r.status !== 'running')
       .at(-1);
     const t = jobTokens(store, job.id);
+    const roundCount = new Set(reviews.map((r) => r.round)).size;
+    const blocked = events.filter((e) => e.type === 'job.blocked').length;
     for (const role of roles) {
       const k = { role, model: drawn?.[role]?.model ?? null, sameAsAuthor: null };
       const acc = getOr(builders, keyOf(k), () => ({
@@ -589,9 +592,9 @@ function modelMetrics(
       acc.jobs += 1;
       if (first) acc.verified += 1;
       if (first?.status === 'passed') acc.firstPass += 1;
-      acc.rounds += new Set(reviews.map((r) => r.round)).size;
+      acc.rounds += roundCount;
       acc.ciRepairs += job.ciRepairs;
-      acc.blocked += events.filter((e) => e.type === 'job.blocked').length;
+      acc.blocked += blocked;
       if (t) {
         acc.tokenJobs += 1;
         acc.tokens += t.input + t.output + t.cacheRead + t.cacheCreation;
