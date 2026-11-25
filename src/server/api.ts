@@ -279,23 +279,25 @@ export function agents(store: Store): AgentsView {
   const eventsOf = eventsByJob(store.db, ids, ['stage.started', ...ENDS]);
   const allReviews = [...reviewsOf.values()].flat();
   // The spec challenger records no review row; its verdicts are the registered spec reviews.
-  const specReviews = [...artifactsByJob(store.db, ids).values()]
+  const specVerdicts = [...artifactsByJob(store.db, ids).values()]
     .flat()
-    .filter((a) => SPEC_REVIEW_PATH.test(a.path) && a.marker !== null);
+    .flatMap((a) =>
+      SPEC_REVIEW_PATH.test(a.path) && a.marker !== null
+        ? [{ verdict: a.marker.toLowerCase(), ms: null }]
+        : [],
+    );
   const jobVisits = jobs.map((j) => ({ mode: j.mode, visits: visits(eventsOf.get(j.id) ?? []) }));
   const view: AgentsView = { reviewers: [], stages: [] };
   for (const role of ROLES) {
-    if (role.kind === 'spec-challenge') {
-      const xs = specReviews.map((a) => ({ verdict: (a.marker ?? '').toLowerCase(), ms: null }));
-      view.reviewers.push(reviewerRow(role.name, xs));
-      continue;
-    }
-    if (role.kind === 'review') {
-      const xs = allReviews.flatMap((r) =>
-        r.reviewer === role.name && r.verdict !== null
-          ? [{ verdict: r.verdict, ms: span(r.createdAt, r.completedAt) }]
-          : [],
-      );
+    if (role.kind === 'spec-challenge' || role.kind === 'review') {
+      const xs =
+        role.kind === 'spec-challenge'
+          ? specVerdicts
+          : allReviews.flatMap((r) =>
+              r.reviewer === role.name && r.verdict !== null
+                ? [{ verdict: r.verdict, ms: span(r.createdAt, r.completedAt) }]
+                : [],
+            );
       view.reviewers.push(reviewerRow(role.name, xs));
       continue;
     }
