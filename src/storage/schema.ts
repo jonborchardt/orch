@@ -349,3 +349,36 @@ export const integrations = sqliteTable(
 export type VerificationRun = typeof verificationRuns.$inferSelect;
 export type VerificationCheck = typeof verificationChecks.$inferSelect;
 export type Integration = typeof integrations.$inferSelect;
+
+/** One UTC hour's token counts of a recorded session; `hour` is the hour's start in epoch ms. */
+export interface HourUsage {
+  hour: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+/**
+ * Token counts of one Claude Code session, recorded once from its whole transcript (decision
+ * 2026-11-24-recorded-token-usage). Keyed by the session ref, so a session counts once. Display
+ * evidence only: nothing decides from it. Rows are never rewritten.
+ */
+export const tokenUsage = sqliteTable(
+  'token_usage',
+  {
+    ref: text().primaryKey(),
+    jobId: text()
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    source: text().$type<'runner' | 'read' | 'backfill'>().notNull(),
+    /** First and last hour in `hours` (epoch ms); null for a session without assistant usage. */
+    firstHour: integer(),
+    lastHour: integer(),
+    hours: text({ mode: 'json' }).$type<HourUsage[]>().notNull(),
+    recordedAt: text().notNull(),
+  },
+  (t) => [index('token_usage_hours_idx').on(t.lastHour, t.firstHour)],
+);
+
+export type TokenUsageRow = typeof tokenUsage.$inferSelect;

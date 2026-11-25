@@ -32,6 +32,7 @@ import {
 } from '../ops/actions.ts';
 import { planJob } from '../ops/factory.ts';
 import { mergeView } from '../ops/merge-view.ts';
+import { storedUsage } from '../ops/token-usage.ts';
 import { ENDS, visits } from '../ops/usage.ts';
 import { currentFlakes } from '../ops/verify.ts';
 import { baseConflicts } from '../ops/worktree.ts';
@@ -459,9 +460,11 @@ function claudeSessionsOf(attached: readonly Event[]): ClaudeSession[] {
 }
 
 /**
- * The Usage section: tokens per UTC hour over the last `hours` (24, 168, or 720) from the
- * transcripts of every job, archived included, with a claude-code session. A job's span starts at
- * its first claude-code attach and ends now, or at `max(updatedAt, completedAt)` once finished.
+ * The Usage section: tokens per UTC hour over the last `hours` (24, 168, or 720) of every job,
+ * archived included: recorded sessions from the database, the rest read live from the
+ * transcripts of its claude-code sessions (a finished job's are recorded on that read). A job's
+ * live span starts at its first claude-code attach and ends now, or at
+ * `max(updatedAt, completedAt)` once finished.
  */
 export function tokenUsage(store: Store, hours: string | null, at = Date.now()): UsageView {
   const range = USAGE_RANGES.find((r) => String(r) === hours);
@@ -472,17 +475,25 @@ export function tokenUsage(store: Store, hours: string | null, at = Date.now()):
     const sessions = claudeSessionsOf(attached).sort((a, b) =>
       a.attachedAt < b.attachedAt ? -1 : a.attachedAt > b.attachedAt ? 1 : 0,
     );
-    if (sessions.length === 0) return [];
-    // The first attach of any claude-code session (events are newest first).
+    // The first attach of any claude-code session (events are newest first); none: no live span.
     const firstAttach = attached
       .filter((e) => sessionOf(e)?.provider === 'claude-code')
       .reduce((t, e) => Math.min(t, Date.parse(e.createdAt)), Infinity);
-    const end = spanEnd(j, TERMINAL_STATUSES.includes(j.status), at);
+    const terminal = TERMINAL_STATUSES.includes(j.status);
+    const end = spanEnd(j, terminal, at);
     return [
-      { id: j.id, title: j.title, refs: sessions.map((s) => s.ref), start: firstAttach, end },
+      {
+        id: j.id,
+        title: j.title,
+        refs: sessions.map((s) => s.ref),
+        start: firstAttach,
+        end,
+        terminal,
+      },
     ];
   });
-  return readTokenUsage(claudeHome(), jobs, range, at);
+  const stored = storedUsage(store, jobs, range, at);
+  return readTokenUsage(claudeHome(), jobs, range, at, {}, stored);
 }
 
 /** The Session tab: the bounded tail of the newest attached claude-code session's transcript. */

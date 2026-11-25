@@ -74,8 +74,18 @@ request's `USAGE_TOTAL_BYTES`, or beyond `USAGE_SUBAGENT_FILES`, makes the job _
 bucket overlapping its span lists the job id in `missing` and is drawn hatched and outlined with
 its text label ("missing data for ..."), never as a plain zero; the job's row carries the reason
 and the total's `complete` is false. The page shows the total per kind and overall, the stacked
-bar chart (SVG, no chart library), and a per-job table linking each job. Nothing is cached or
-written. Decision 2026-11-24-dashboard-token-usage-from-transcripts.
+bar chart (SVG, no chart library), and a per-job table linking each job. Sessions already
+recorded in the `token_usage` table (one row per session ref, counts per UTC hour; decision
+2026-11-24-recorded-token-usage) are summed from the database by their own hours and never read or
+flagged; only unrecorded sessions are read live as above, and a stored job with no
+`session.attached` (backfilled) is listed in any range holding one of its stored hours. A session is
+recorded once, from all its files read in full: when the controller's child exits, when this view
+reads a session of a completed or cancelled job live (the only write a GET makes; a failure is
+ignored), and by `orch usage backfill`, which matches a transcript to a job only when its first
+`cwd` is the job's worktree path and reports what it could not match. A session with any file
+missing, refused, or over a cap is not recorded and stays live-read. Decision
+2026-11-24-dashboard-token-usage-from-transcripts, partly superseded by
+2026-11-24-recorded-token-usage.
 
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
 worktree, review round, reviews, elapsed time, start time, last update, PR link and CI rollup.

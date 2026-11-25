@@ -13,8 +13,22 @@ import { summaryExitCode } from '../src/cli/run.ts';
 import { CLAUDE_SHIM_ENV } from '../src/integrations/claude-session.ts';
 import { resumeSession, startSession } from '../src/ops/run.ts';
 import { readSession } from '../src/ops/runner-state.ts';
-import { done, eventsOf, jobsOf, launcher, quick, status, store, ticket } from './run-fixture.ts';
+import { usageInRange } from '../src/storage/usage.ts';
+import {
+  type Act,
+  done,
+  eventsOf,
+  finish,
+  jobsOf,
+  launcher,
+  one,
+  quick,
+  status,
+  store,
+  ticket,
+} from './run-fixture.ts';
 import { tempDir } from './helpers.ts';
+import { usage, writeSession } from './transcript-fixture.ts';
 
 let dir: string;
 beforeAll(() => {
@@ -108,5 +122,49 @@ describe('a usage limit ends the run resumably', () => {
 
     expect(s.tickets[0]).toMatchObject({ ticketId: id, outcome: 'done' });
     expect(status(id)).toBe('done');
+  });
+});
+
+describe('token usage of a runner child (ticket 0144 AC3)', () => {
+  it("records the child's session on its job once it exits; a missing transcript changes nothing", async () => {
+    const saved = process.env['CLAUDE_CONFIG_DIR'];
+    const claude = tempDir('claude-');
+    process.env['CLAUDE_CONFIG_DIR'] = claude;
+    try {
+      const writes: Act = (job, input) => {
+        writeSession(claude, 'p', usage(0, 'm1', { i: 7, o: 2 }), input.sessionId);
+        finish(job);
+      };
+      const a = ticket('Leaves a transcript');
+      const ra = await one(launcher(writes), a);
+      const b = ticket('Leaves none');
+      const rb = await one(launcher(done), b);
+
+      const [ja] = jobsOf(a);
+      const [jb] = jobsOf(b);
+      const [ea] = eventsOf(ja?.id ?? '', 'runner.session');
+      const [eb] = eventsOf(jb?.id ?? '', 'runner.session');
+      const rows = usageInRange(store.db, 0, Number.MAX_SAFE_INTEGER);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        ref: ea?.payload['sessionId'],
+        jobId: ja?.id,
+        source: 'runner',
+      });
+      expect(rows[0]?.hours).toMatchObject([{ input: 7, output: 2 }]);
+
+      // Without a transcript nothing is stored, and the outcome and evidence are the same.
+      expect(ra.tickets.map((t) => t.outcome)).toEqual(['done']);
+      expect(rb.tickets.map((t) => t.outcome)).toEqual(['done']);
+      const shape = (p: Record<string, unknown> | undefined) => {
+        const rest = { ...p };
+        for (const k of ['pid', 'seconds', 'sessionId']) Reflect.deleteProperty(rest, k);
+        return rest;
+      };
+      expect(shape(eb?.payload)).toEqual(shape(ea?.payload));
+      expect(status(b)).toBe('done');
+    } finally {
+      process.env['CLAUDE_CONFIG_DIR'] = saved;
+    }
   });
 });
