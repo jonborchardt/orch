@@ -358,6 +358,12 @@ export function markPrReady(url: string, cwd: string): string | null {
   return r.status === 0 ? null : (r.stderr || r.stdout).trim() || `exit ${String(r.status)}`;
 }
 
+/** `gh pr edit <url> --body-file <file>`: null on success, else gh's message. */
+export function editPrBody(url: string, bodyFile: string, cwd: string): string | null {
+  const r = ghResult(['pr', 'edit', url, '--body-file', bodyFile], cwd);
+  return r.status === 0 ? null : (r.stderr || r.stdout).trim() || `exit ${String(r.status)}`;
+}
+
 /**
  * `gh pr merge <url> --merge --match-head-commit <head>`: a merge commit, refused by GitHub if the
  * head moved. Never deletes the branch, bypasses protection, or queues an auto-merge. Returns null

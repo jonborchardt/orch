@@ -302,11 +302,14 @@ export function baseConflicts(
   return files.length > 0 || github ? { files, github } : null;
 }
 
+/** The empty lists of an integration that merged nothing. */
+const NONE = { conflicts: [] as string[], changedFiles: [] as string[], material: [] as string[] };
+
 function mergeOutcome(wt: string, fromHead: string, resultHead: string) {
   const changed = tryGit(wt, 'diff', '--name-only', fromHead, resultHead) ?? '';
   return {
+    ...NONE,
     resultHead,
-    conflicts: [] as string[],
     changedFiles: changed ? changed.split(/\r?\n/) : [],
     material: mergeEdits(wt, resultHead),
   };
@@ -324,9 +327,7 @@ function reconcile(store: Store, id: string, auth: Auth, wt: string, open: Integ
     finishIntegration(store, id, auth, open.id, {
       status: 'interrupted',
       resultHead: null,
-      conflicts: [],
-      changedFiles: [],
-      material: [],
+      ...NONE,
     });
     return;
   }
@@ -342,9 +343,7 @@ function reconcile(store: Store, id: string, auth: Auth, wt: string, open: Integ
   finishIntegration(store, id, auth, open.id, {
     status: 'interrupted',
     resultHead: head === open.fromHead ? null : head,
-    conflicts: [],
-    changedFiles: [],
-    material: [],
+    ...NONE,
   });
 }
 
@@ -390,9 +389,7 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
     integration = finishIntegration(store, id, auth, integration.id, {
       status: 'up-to-date',
       resultHead: fromHead,
-      conflicts: [],
-      changedFiles: [],
-      material: [],
+      ...NONE,
     });
     return {
       job: getJob(store.db, id),
@@ -411,9 +408,8 @@ export function integrateBase(store: Store, id: string, auth: Auth): IntegrateRe
     integration = finishIntegration(store, id, auth, integration.id, {
       status: 'conflict',
       resultHead: null,
+      ...NONE,
       conflicts: files,
-      changedFiles: [],
-      material: [],
     });
     if (!reworksOnIntegration(job.stage)) throw err;
     const reworked = transitionJob(store, id, 'rework', {

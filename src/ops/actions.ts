@@ -17,7 +17,7 @@ import {
   TERMINAL_STATUSES,
   withDefaultChoice,
 } from '../core/workflow.ts';
-import { prWorkflowState, viewPr } from '../integrations/github.ts';
+import { viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
 import { eventsOfTypes } from '../storage/events.ts';
 import { policyFingerprint } from '../core/verification.ts';
@@ -25,14 +25,13 @@ import { ticketKey } from '../core/tickets.ts';
 import {
   getJob,
   postNotice as storeNotice,
-  recordPrState,
   setArchived,
   supersedeJob,
   transitionJob,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { authorizePolicy } from '../storage/verification.ts';
-import { ghCwd } from './github.ts';
+import { ghCwd, observePr } from './github.ts';
 import { type LeaseMode, withLease } from './lease.ts';
 import { completionFor, mergeJob, type MergeResult, relandJob, ticketText } from './merge.ts';
 import { worktreeOf } from './tree.ts';
@@ -337,7 +336,8 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
   const url = before.prUrl ?? '';
   if (!merge) {
     const message = withLease(store, before, DASHBOARD_SESSION, input.force, (token) => {
-      const { pr, state } = observePr(store, before, token);
+      const pr = viewPr(url, ghCwd(before));
+      const { state } = observePr(store, before.id, pr, { token });
       return `GitHub reports ${url} as ${state ?? pr.state}.`;
     });
     return { job: withoutToken(getJob(store.db, before.id)), message };
@@ -366,20 +366,6 @@ function prAction(store: Store, before: Job, input: ActionInput): ActionResult {
   };
 }
 
-/** Re-read the job's PR and record what GitHub reports, including whether it is mergeable. */
-function observePr(store: Store, job: Job, token: string) {
-  const pr = viewPr(job.prUrl ?? '', ghCwd(job));
-  const state = prWorkflowState(pr);
-  const observed = {
-    event: 'pr.observed',
-    state,
-    head: pr.headSha,
-    mergeable: pr.mergeable,
-  } as const;
-  recordPrState(store, job.id, { token }, observed);
-  return { pr, state };
-}
-
 const resumeCommand = (id: string): string => `orch factory resume ${id} --session <name>`;
 
 /** The command that continues the job when no controller will: `orch do` for a ticket. */
@@ -406,7 +392,8 @@ export function afterAction(store: Store, job: Job): string {
 function reland(store: Store, before: Job, force: boolean | undefined): ActionResult {
   const url = before.prUrl ?? '';
   const created = withLease(store, before, DASHBOARD_SESSION, force, (token) => {
-    const { pr } = observePr(store, before, token);
+    const pr = viewPr(url, ghCwd(before));
+    observePr(store, before.id, pr, { token });
     if (pr.state !== 'OPEN' || pr.mergeable !== 'CONFLICTING') {
       throw new ValidationError(
         `Nothing to re-land: GitHub reports ${url} ${pr.state} and ${pr.mergeable ?? 'UNKNOWN'}, ` +

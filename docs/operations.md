@@ -118,6 +118,15 @@ Those codes are `RUN_ENDING_CODES` in `src/core/workflow.ts`; a code not named t
 the queue (decision 2026-11-23-queue-ends-only-on-run-wide-outcomes). It exits 0 unless a ticket
 ended blocked, refused, or waiting for a person.
 
+The end-of-session summary (also `--json`, as `merged`) is the report to read after an
+unattended run, in four parts: **Merged**, each done ticket with its job, merged head, merge
+commit, and its PR as the receipt (the PR body carries the merge receipt); **Needs you**, each
+ticket that ended `needs-human`, `blocked`, or `refused`, with its reason and `next:` command;
+**Passed over**, each skipped ticket and other unfinished result, with why; and the cost of each
+merged ticket's result job only (after a re-land, the re-land job): the summed `runner.session`
+seconds and recorded token counts, or "not recorded". Nothing estimates it, and nothing decides
+from it.
+
 ### 5. `orch start repo`: one repository
 
 ```sh
@@ -696,6 +705,12 @@ not mailed. All mails of a job share one subject (`[orch] <id>: <title>`) and re
 previous one, so a mail client shows them as one conversation.
 `orch mail report "<subject>" (--text "<body>" | --text-file <file>) [--reply-to <message-id>]` sends any
 text the same way and prints `SENT <message-id>`.
+
+When a controller session (`orch start`, `orch do`, `orch resume`) ends, it also sends one
+session mail, subject `[orch] session ended: <n> merged, <m> need you`, whose body is the
+end-of-session summary as printed. It is not threaded or recorded on any job; a configuration
+error or failed send is one `session mail not sent:` line in the run's output and changes nothing
+else. A controller that crashes sends none.
 
 Limits: one recipient, plain text, implicit TLS only (no STARTTLS/587, so not providers that
 require it), no replies read. A mail is sent at most once: a failed send is recorded on the job as

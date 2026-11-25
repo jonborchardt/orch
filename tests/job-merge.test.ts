@@ -4,12 +4,12 @@
  * the bounded re-land, retries after interruption, and the per-repository opt-in. Jobs are put in
  * their completed state directly (tests/pr-merge.test.ts drives a real one through the dashboard).
  */
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { eq } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { OwnershipError, ValidationError } from '../src/core/errors.ts';
 import { uncheckedItems } from '../src/core/tickets.ts';
@@ -27,17 +27,16 @@ import { detail } from '../src/server/api.ts';
 import { appendEvent, listEvents } from '../src/storage/events.ts';
 import { claimJob, createJob, getJob, listJobs } from '../src/storage/jobs.ts';
 import { type Job, jobs } from '../src/storage/schema.ts';
-import { makePolicyRepo } from './drive.ts';
 import {
   commitFile,
   type GhShim,
-  ghShim,
   gitIn,
   json,
   makeRepo,
   orch,
   type TempStore,
   tempStore,
+  useJobRepo,
 } from './helpers.ts';
 
 const REPO = 'github.com/acme/alpha';
@@ -48,31 +47,20 @@ const MERGE_COMMIT = 'c'.repeat(40);
 
 let store: TempStore;
 let clone: string;
-let bare: string;
 let shim: GhShim;
 let n = 0;
 
+useJobRepo(
+  { shim: 'acme/alpha', policy: true, perFile: true },
+  (s) => ({ store, clone, shim } = s),
+);
 beforeAll(() => {
-  shim = ghShim('acme/alpha');
-  Object.assign(process.env, shim.env);
-  ({ clone, bare } = makePolicyRepo());
   SHA = gitIn(clone, 'rev-parse', 'HEAD');
 });
-afterAll(() => {
-  delete process.env['ORCH_GH_SHIM'];
-  delete process.env['ORCH_GH_SHIM_STATE'];
-  shim.cleanup();
-  for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true });
-});
 beforeEach(() => {
-  shim.reset();
-  store = tempStore();
   n = 0;
   // Most tests are about the gates behind the opt-in; the ones about the opt-in turn it off.
   setMergeAuthorization(store, clone, true);
-});
-afterEach(() => {
-  store.cleanup();
 });
 
 const prUrl = (num: number) => `https://github.com/acme/alpha/pull/${String(num)}`;

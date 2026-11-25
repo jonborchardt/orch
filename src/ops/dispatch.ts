@@ -16,10 +16,9 @@ import { findProjectRoot } from '../core/paths.ts';
 import { baseRef } from '../git/repo.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob } from '../storage/events.ts';
-import { createJob, listJobs, sessionsByJob } from '../storage/jobs.ts';
+import { listJobs, sessionsByJob } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
-import { loadConfig } from './factory.ts';
-import { issue as ghIssue } from './github.ts';
+import { createRequestedJob } from './factory.ts';
 import { checkReadiness, type Readiness } from './init.ts';
 import { findJobs, jobRepository } from './repo.ts';
 import { ticketJobRequest } from './tickets.ts';
@@ -122,35 +121,7 @@ export function dispatchJob(store: Store, input: DispatchInput): DispatchResult 
     );
     if (existing) return { job: existing, duplicate: true, readiness, launch: launchFor(existing) };
   }
-  let title = input.title;
-  let description = input.description;
-  if ((!title || description === undefined) && input.issue) {
-    const found = ghIssue(input.issue, repo.root);
-    if (!title) ({ title } = found); // also replaces an empty --title, as before
-    description ??= `${found.url}\n\n${found.body}`;
-  }
-  if (title === undefined || title === '') title = forTicket?.title;
-  description ??= forTicket?.description;
-  if (!title) {
-    throw new ValidationError(
-      'Provide --title (or --issue or --ticket so the title can be fetched).',
-    );
-  }
-  const config = loadConfig(store);
-  const job = createJob(store, {
-    title,
-    description,
-    ticketId: forTicket?.ticket.id,
-    mode: input.mode,
-    issueRef: issue,
-    repo: repo.identity,
-    repoPath: repo.root,
-    baseBranch: base,
-    maxRounds: input.maxRounds ?? config.maxRounds,
-    maxCiRepairs: config.maxCiRepairs,
-    actor: input.session,
-    supersedes: input.supersedes,
-  });
+  const job = createRequestedJob(store, { ...input, issueRef: issue, forTicket, repo, base });
   return { job, duplicate: false, readiness, launch: launchFor(job) };
 }
 

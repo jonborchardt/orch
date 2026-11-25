@@ -39,7 +39,7 @@ import type { Event, Job } from '../storage/schema.ts';
 import { launchFor } from './dispatch.ts';
 import { resumeFactoryJob } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
-import { reconcileCi } from './github.ts';
+import { isObservation, reconcileCi } from './github.ts';
 import { mailWatermark, reportJobMail } from './mail.ts';
 import { alive, sleep } from './verify-lock.ts';
 
@@ -77,12 +77,7 @@ export interface RecoveryPass {
 
 /** Observations of the job's current CI head, as `planJob` counts them. */
 function pollsOf(job: Job, events: readonly Event[]): number {
-  return events.filter(
-    (e) =>
-      e.type === 'ci.observed' &&
-      e.payload['head'] === job.ciHead &&
-      e.payload['outcome'] !== undefined,
-  ).length;
+  return events.filter((e) => isObservation(e, job.ciHead)).length;
 }
 
 /** Record a failed attempt as the owner, escalate when the budget is spent, and release. */

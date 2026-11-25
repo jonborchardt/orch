@@ -1,22 +1,47 @@
-# agent-orchestrator (`orch`)
+# orch
 
-`orch` is a local software factory for Claude Code. You keep one ticket queue for all your
-repositories; `orch` takes the best ready ticket, has an independent Claude Code session specify
-it, build it in its own Git worktree, run the repository's own checks, and get it reviewed by
-specialised subagents, then waits for GitHub's required checks on the exact pull-request head,
-merges that head, closes the ticket, and takes the next one.
+**A local software factory for Claude Code.** Unattended, not unchecked: `orch` works the one
+ticket queue of all your repositories without supervision, has independent Claude Code sessions
+specify each ticket, build it in its own Git worktree, and review it, and merges only the changes
+it has proven. What stops a wrong merge:
 
-It exists because one agent writing code is not evidence that the code is right. `orch` is the
-small deterministic part that makes the work checkable: a one-shot CLI over one SQLite database
-that decides which step is legal next, validates every artifact, runs the verification itself,
-and records evidence pinned to commits. Claude Code does the creative work and changes state only
-through that CLI.
+- **Stages enforced in code.** A one-shot CLI over one SQLite database decides which of eight
+  stages, `spec` to `completed`, is legal next and validates every artifact; Claude Code changes
+  state only through it ([docs/workflow.md](docs/workflow.md#the-ticket-lifecycle-end-to-end)).
+- **Evidence `orch` executed.** It runs the repository's own committed checks itself and pins the
+  result to the commit; every gate recomputes it instead of taking an agent's word.
+- **An exact-head merge.** GitHub's required checks must pass on the exact PR head; `orch` merges
+  that head only, and a second read of GitHub confirms it.
+
+It builds itself: as of 2026-11-25, `orch` had merged 117 of this repository's PRs from its
+`factory/` branches, and 120 of its tickets were done.
 
 ```mermaid
 flowchart LR
-    A["Tickets"] --> B["Factory"] --> C["Review + CI"] --> D["Verified merge"]
+    A["Tickets"] --> B["Spec, build, verify"] --> C["Review + CI"] --> D["Verified merge"]
     D -->|"Next ready ticket"| A
 ```
+
+## Who it's for, and who it isn't
+
+For a developer with several repositories, a backlog, and a Claude plan, but no time to review
+every agent PR. Choose something else for parallel throughput (`orch` works one ticket at a time),
+live steering (it never messages a running session), a team tracker (the queue is local and
+single-user), other agents or hosts (Claude Code and GitHub only), a weak test suite (the evidence
+is only as good as the checks), or large, ambiguous work (tickets must be small enough to specify).
+
+| category                   | who decides the steps   | who runs the checks        | what stops a wrong merge                  | what runs unattended            |
+| -------------------------- | ----------------------- | -------------------------- | ----------------------------------------- | ------------------------------- |
+| Cloud, tracker, OSS agents | the agent               | the agent, then CI         | branch protection and human review        | one task, up to a PR            |
+| Claude Code, worktree GUIs | the person and agent    | the agent                  | human review                              | the sessions a person watches   |
+| Spec frameworks            | a written procedure     | the agent                  | human review                              | one feature's steps             |
+| Review bots                | (comment only)          | an LLM reading the diff    | a person acting on comments               | a review per PR                 |
+| Merge queues               | (merge only)            | CI, on the merged result   | the queue's test of the merged result     | merging approved PRs            |
+| Gas Town                   | agents, from procedures | the merging agent          | the merging agent's judgement             | a daemon and supervising agents |
+| AO                         | an orchestrating agent  | GitHub                     | a person asks for each merge              | many sessions, under a daemon   |
+| `orch`                     | code                    | `orch`, pinned to a commit | code: exact-head merge, verified evidence | a backlog, drained to merged    |
+
+Dated, sourced, and per category: [docs/landscape.md](docs/landscape.md).
 
 ## Key capabilities
 
@@ -26,16 +51,11 @@ flowchart LR
 - **Autonomous ticket execution.** `orch start` works the ready queue in the foreground, one
   ticket at a time, continuing a stranded in-progress ticket (its job released) before a new
   one, launching `claude -p "/factory <job>"` for each job.
-- **A multi-stage engineering workflow.** Eight stages, `spec` to `completed`, each gated by
-  TypeScript on a validated artifact and a verification run for the exact commit
-  ([docs/workflow.md](docs/workflow.md#the-ticket-lifecycle-end-to-end)).
 - **Independent review and rework.** A spec challenger, a simplifier, three always-on reviewers
   (security, correctness, code quality) plus three UI reviewers when the diff renders UI, and an
   approver; findings send the job back to build, within a budget.
 - **CI verification and repair.** GitHub's verdict for the PR head is read and acted on: one
   re-run per head, then a bounded repair cycle through build, review, and approval.
-- **Verified PR integration.** A merge commit at the CI-verified head only, confirmed by reading
-  GitHub again; the ticket closes in the same transaction, and only when nothing is left on it.
 - **Recovery and human escalation.** State lives in the database, artifacts, and Git, never in a
   conversation; every retry is bounded; a decision only a person can make is a `needs-human`
   stage the job cannot leave by itself ([docs/operations.md](docs/operations.md)).
@@ -154,7 +174,7 @@ it never fetches, pulls, or rebuilds, so it sees upstream commits only after a `
 
 ## Configure a repository
 
-The factory runs only the checks a repository has committed in `factory.json`, read from the merge
+`orch` runs only the checks a repository has committed in `factory.json`, read from the merge
 base of the job branch (code the job did not write). Onboard a repository once:
 
 ```sh
@@ -249,7 +269,7 @@ or disables a test is refused and escalates. Nothing classifies tickets for you,
 never turns into a full one: cancel it instead, which reopens the ticket for a new full job
 ([docs/workflow.md](docs/workflow.md#fast-jobs)).
 
-Optional email reports of every job change: [docs/operations.md](docs/operations.md#email-reports).
+Optional email reports of every job change and of each controller session's end: [docs/operations.md](docs/operations.md#email-reports).
 
 ## What `orch` automates and enforces
 
@@ -306,27 +326,20 @@ Optional email reports of every job change: [docs/operations.md](docs/operations
 
 ## Limitations
 
-- The controller starts and stops headless Claude Code sessions (`claude -p`), one at a time, and
-  never messages or steers one. Dispatch relies on VS Code's documented `create_session`; outside
-  the Agents window it prints the command for a human to run.
-- GitHub only, through `gh`; checks and commit statuses; one automatic re-run per commit; a job
-  that "was not started" by Actions is indistinguishable from a failed check until a human reads the
-  log, so it costs one repair cycle before escalation.
-- No cost accounting. Token counts come only from Claude Code's undocumented transcript format,
-  recorded per session and summed per hour and per job in the dashboard's Usage section
-  (`orch usage backfill` records older finished jobs, matched by worktree path); `orch job usage`
-  reports measured durations and configured models, not tokens.
-- The base can still move between the compare read and `gh pr merge`: `--match-head-commit` pins
-  only the head. Without GitHub's "require branches to be up to date" rule that window remains;
-  there is no merge queue.
-- Private repositories on GitHub's free plan hide the required-check configuration (HTTP 403), so
-  every reported check must pass there.
-- The dashboard is single-user and loopback-only; it has no authentication because it has no
-  network exposure. It cannot start, stop, or resume the controller.
-- Ownership is advisory at the filesystem level: a process pointed at the wrong directory can
-  write anywhere; `orch` refuses to count such writes as progress but cannot stop them.
-- The boundaries that are design choices (no daemon, one ticket at a time, bounded retries, no
-  adoption of surviving processes, ...) and why: [docs/operations.md](docs/operations.md#intentional-limitations).
+Each limit is the price of a guarantee ([why](docs/operations.md#intentional-limitations)): one
+ticket and one headless `claude -p` session at a time, never steered, keeps evidence pinned to a
+single head; no daemon means no hidden state outlives a command; bounded retries and no adoption of
+surviving processes make every stop explicit; GitHub only, through `gh`, gives one source for
+checks and the merge (one automatic re-run per commit, so a run Actions never started costs a repair
+cycle); a loopback-only, single-user dashboard needs no login and cannot start the controller.
+
+Still open: the base can move between the compare read and `gh pr merge` (`--match-head-commit`
+pins only the head), and no merge queue tests the merged result; GitHub's "require branches to be
+up to date" rule closes that window. GitHub's free plan hides a private repository's required
+checks (HTTP 403), so every reported check must pass there. Ownership is advisory on the
+filesystem: a write outside the worktree is not counted as progress, but it is not prevented.
+Dispatch outside VS Code's Agents window prints the command for a human. No cost accounting: token
+counts come from Claude Code's undocumented transcript format (the dashboard's Usage section).
 
 ## Where things live
 
@@ -353,10 +366,12 @@ Details: [docs/operations.md](docs/operations.md#backup-and-restore).
 - [docs/overview.md](docs/overview.md): the architecture: control and execution planes, sources of
   truth, tickets and jobs, ownership, verification boundaries, recovery, and how `orch` compares
   with Beads, agent-orchestrator, and Gas Town.
+- [docs/landscape.md](docs/landscape.md): where `orch` sits among AI coding tools, by category,
+  each claim dated and marked demonstrated or claimed.
 - [docs/workflow.md](docs/workflow.md): the ticket lifecycle end to end, stages, transitions,
   artifacts, events, worktrees, verification evidence, CI reconciliation, merging, the controller,
   ownership.
-- [docs/operations.md](docs/operations.md): operating the factory, stop and resume, diagnosing
+- [docs/operations.md](docs/operations.md): operating `orch`, stop and resume, diagnosing
   blocked tickets, needs-human, recovery budgets, limitations, metrics, backup and restore, email
   reports.
 - [docs/tickets.md](docs/tickets.md): the ticket queue, its CLI and HTTP API, and the import.

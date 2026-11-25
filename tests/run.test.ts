@@ -10,7 +10,8 @@ import { join } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { formatSummary, summaryExitCode } from '../src/cli/run.ts';
+import { summaryExitCode } from '../src/cli/run.ts';
+import { ticketKey } from '../src/core/tickets.ts';
 import { runnerPaths } from '../src/core/paths.ts';
 import { cancelJob } from '../src/ops/actions.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
@@ -23,6 +24,7 @@ import {
   startSession,
   stopSession,
 } from '../src/ops/run.ts';
+import { formatSummary } from '../src/ops/run-report.ts';
 import {
   acquireRunnerLock,
   controllerPid,
@@ -146,7 +148,7 @@ describe('orch start: the queue', () => {
     const jobId = jobsOf(first)[0]?.id;
     expect(human).toMatchObject({ ticketId: first, outcome: 'needs-human', jobId });
     expect(human?.reason).toContain('two designs are possible');
-    expect(human?.next).toContain(`orch do ${String(first).padStart(4, '0')}`);
+    expect(human?.next).toContain(`orch do ${ticketKey(first)}`);
     expect(merged).toMatchObject({ ticketId: second, outcome: 'done' });
     expect(s).toMatchObject({ blocked: 1, completed: 1 });
     expect(getJob(store.db, jobId ?? '')).toMatchObject({
@@ -160,7 +162,7 @@ describe('orch start: the queue', () => {
     expect(summaryExitCode(s)).toBe(1);
     const text = formatSummary(s);
     expect(text).toContain(
-      `${String(first).padStart(4, '0')} needs-human: job ${jobId ?? ''} waits for a person`,
+      `${ticketKey(first)} needs-human: job ${jobId ?? ''} waits for a person`,
     );
     expect(text).toContain(`     next: ${human?.next ?? ''}`);
   });
@@ -178,6 +180,9 @@ describe('orch start: the queue', () => {
     expect(s.skipped).toHaveLength(1);
     expect(s.skipped[0]?.reason).toContain('orch factory config merge enable');
     expect(s.reason).toContain('passed over');
+    const text = formatSummary(s);
+    expect(text.indexOf('Passed over')).toBeGreaterThan(text.indexOf('Needs you (0)'));
+    expect(text).toContain(`${ticketKey(id)} passed over: ${s.skipped[0]?.reason ?? '?'}`);
   });
 
   it('treats a lost claim as ordinary: the other job stays the only one', async () => {
@@ -333,7 +338,7 @@ describe('orch do: one ticket, from wherever it is', () => {
     expect(l.calls).toHaveLength(1);
     expect(s.tickets).toHaveLength(1);
     expect(s.tickets[0]).toMatchObject({ ticketId: id, outcome: 'blocked' });
-    expect(s.tickets[0]?.next).toContain(`orch do ${String(id).padStart(4, '0')}`);
+    expect(s.tickets[0]?.next).toContain(`orch do ${ticketKey(id)}`);
     expect(s.tickets[0]?.next).not.toContain('orch ticket reopen');
     expect(status(id)).toBe('open');
     expect(jobsOf(id)).toHaveLength(1);
@@ -690,7 +695,7 @@ describe('ticket lifecycle', () => {
     expect(s.tickets[0]?.outcome).toBe('blocked');
     expect(s.tickets[0]?.reason).toContain('the ticket stays in-progress');
     // Merged and verified: the step is the boxes and ticket done, never a retry.
-    const k = String(id).padStart(4, '0');
+    const k = ticketKey(id);
     expect(s.tickets[0]?.code).toBe('ticket-open');
     expect(s.tickets[0]?.next).toContain('tick the remaining boxes');
     expect(s.tickets[0]?.next).toContain('move them to a follow-up ticket');

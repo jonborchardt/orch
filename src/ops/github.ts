@@ -4,7 +4,7 @@
  * ownership first and validates that the GitHub repository and base branch match the job before
  * anything is pushed or created.
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -26,6 +26,7 @@ import {
   actionsJobLog,
   actionsJobRunId,
   createDraftPr,
+  editPrBody,
   type GhIssue,
   type GhPr,
   type GhRepo,
@@ -53,8 +54,9 @@ import {
   recordPrState,
   transitionJob,
 } from '../storage/jobs.ts';
-import type { Job } from '../storage/schema.ts';
+import type { Event, Job } from '../storage/schema.ts';
 import { completeCi, deliverableRefusal, deliveryGate } from './gates.ts';
+import { buildReceipt, receiptMarkdown } from './receipt.ts';
 import { type Tree, worktreeOf } from './tree.ts';
 import { cap } from './verify.ts';
 
@@ -212,6 +214,18 @@ export function ghCwd(job: Pick<Job, 'worktreePath' | 'repoPath'>): string {
   return job.worktreePath && existsSync(job.worktreePath) ? job.worktreePath : job.repoPath;
 }
 
+/** Record a PR the caller already read as `pr.observed`; never reads it again. */
+export function observePr(store: Store, id: string, pr: GhPr, auth: Auth) {
+  const state = prWorkflowState(pr);
+  const job = recordPrState(store, id, auth, {
+    event: 'pr.observed',
+    state,
+    head: pr.headSha,
+    mergeable: pr.mergeable,
+  });
+  return { job, state };
+}
+
 /**
  * Fetch PR state and checks. With a token, the observation is stored on the job; on a completed
  * job only the PR state is, so the verdict that completed it is never overwritten by a rollup.
@@ -224,12 +238,10 @@ export function prStatus(store: Store, id: string, auth: Partial<Auth> = {}): Pr
   const state = prWorkflowState(pr);
   if (auth.token && job.status === 'completed') {
     // The completed verdict (ciHead, ciStatus) stays as recorded; only the PR's state is news.
-    const updated = recordPrState(
-      store,
-      id,
-      { token: auth.token, expectRevision: auth.expectRevision },
-      { event: 'pr.observed', state, head: pr.headSha, mergeable: pr.mergeable },
-    );
+    const { job: updated } = observePr(store, id, pr, {
+      token: auth.token,
+      expectRevision: auth.expectRevision,
+    });
     return { job: updated, pr, ciStatus, prState: state, recorded: true };
   }
   if (auth.token && state === 'merged' && job.stage === 'ci' && job.status === 'running') {
@@ -288,12 +300,18 @@ export interface CiReconcileResult {
    */
   ready: 'marked' | 'already' | 'failed' | null;
   readyError: string | null;
+  /**
+   * When the job completed: whether the PR body was rewritten as pr.md plus the merge receipt
+   * (`updated`) or the write failed (`failed`, see receiptError). Null otherwise; never retried.
+   */
+  receipt: 'updated' | 'failed' | null;
+  receiptError: string | null;
 }
 
 /** Reconciliations already recorded for `head` (`pr status` observations carry no outcome). */
-function isObservation(
+export function isObservation(
   e: { type: string; payload: Record<string, unknown> },
-  head: string,
+  head: string | null,
 ): boolean {
   return (
     e.type === 'ci.observed' && e.payload['head'] === head && e.payload['outcome'] !== undefined
@@ -304,7 +322,7 @@ function pollsFor(store: Store, id: string, head: string): number {
   return listEvents(store.db, id, 1000).filter((e) => isObservation(e, head)).length;
 }
 
-interface Reruns {
+export interface Reruns {
   /** Re-runs GitHub accepted for this head. */
   requested: number;
   /** Check-run ids those re-runs replaced; seeing them again means GitHub has not caught up. */
@@ -313,8 +331,8 @@ interface Reruns {
   observedSince: number;
 }
 
-function rerunsFor(store: Store, id: string, head: string): Reruns {
-  const events = listEvents(store.db, id, 1000);
+/** Accepted re-runs of `head` among `events` (oldest first), and what followed the latest. */
+export function rerunsFor(events: readonly Event[], head: string | null): Reruns {
   const accepted = events.filter(
     (e) => e.type === 'ci.rerun' && e.payload['head'] === head && e.payload['ok'] === true,
   );
@@ -418,7 +436,7 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
   let reason = evaluation.reason;
   let failures: CiFailure[] = [];
   const tok = { token: auth.token };
-  const reruns = rerunsFor(store, id, head);
+  const reruns = rerunsFor(listEvents(store.db, id, 1000), head);
   let rerun: { runs: number[]; checks: CiCheck[]; error: string | null } | null = null;
   const after = reruns.requested > 0 ? ` (after ${String(reruns.requested)} re-run)` : '';
   // A human merged the job's own PR at the worktree HEAD (origin/<branch> may be deleted by now).
@@ -551,6 +569,8 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
   let updated: Job;
   let ready: CiReconcileResult['ready'] = null;
   let readyError: string | null = null;
+  let receipt: CiReconcileResult['receipt'] = null;
+  let receiptError: string | null = null;
   if (action === 'rework' || action === 'exhausted') {
     updated = transitionJob(store, id, 'rework', { ...tok, reason });
   } else if (action === 'escalate') {
@@ -572,6 +592,10 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     } else {
       ready = 'already';
     }
+    if (updated.stage === 'completed') {
+      receiptError = writeReceipt(store, updated, tree.path);
+      receipt = receiptError === null ? 'updated' : 'failed';
+    }
   } else {
     updated = getJob(store.db, id);
   }
@@ -591,5 +615,25 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     reason,
     ready,
     readyError,
+    receipt,
+    receiptError,
   };
+}
+
+/**
+ * Rewrite the PR body of a completed job as its registered pr.md followed by the merge receipt.
+ * Runs after the completion committed: an error is returned, never thrown, and changes no state.
+ */
+function writeReceipt(store: Store, job: Job, cwd: string): string | null {
+  try {
+    const dir = jobArtifactDir(job.id, store.paths);
+    const pr = readFileSync(join(dir, 'pr.md'), 'utf8').trimEnd();
+    const body = `${pr}\n\n${receiptMarkdown(buildReceipt(store, job))}`;
+    mkdirSync(join(dir, 'ci'), { recursive: true });
+    const file = join(dir, 'ci', 'pr-body.md');
+    writeFileSync(file, body);
+    return editPrBody(job.prUrl ?? '', file, cwd);
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
 }

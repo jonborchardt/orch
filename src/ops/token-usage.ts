@@ -13,19 +13,21 @@ import { canonicalPath, claudeHome } from '../core/paths.ts';
 import { UUID } from '../core/session.ts';
 import { type Status, TERMINAL_STATUSES } from '../core/workflow.ts';
 import {
+  add,
   hourCounts,
   rangeOf,
   readSessionUsage,
   spanOverlaps,
   type StoredUsage,
   type UsageJob,
+  zero,
 } from '../server/token-usage.ts';
 import { confined, readConfined, USAGE_LIMITS, type UsageLimits } from '../server/transcript.ts';
-import type { UsageRange } from '../server/types.ts';
+import type { TokenCounts, UsageRange } from '../server/types.ts';
 import type { Store } from '../storage/client.ts';
 import { listJobs } from '../storage/jobs.ts';
 import type { TokenUsageRow } from '../storage/schema.ts';
-import { insertUsage, recordedRefs, usageInRange } from '../storage/usage.ts';
+import { insertUsage, recordedRefs, usageInRange, usageOfJob } from '../storage/usage.ts';
 
 /** Bytes read from the start of a transcript to find its `cwd` during a backfill. */
 const CWD_HEAD_BYTES = 1024 * 1024;
@@ -184,4 +186,13 @@ export function backfillUsage(store: Store, claudeDir: string = claudeHome()): B
     .filter((j) => !matched.has(j.id))
     .map((j) => ({ jobId: j.id, worktreePath: j.worktreePath ?? '' }));
   return report;
+}
+
+/** The summed counts of every session recorded on `jobId`; null when none is recorded. */
+export function jobTokens(store: Store, jobId: string): TokenCounts | null {
+  const rows = usageOfJob(store.db, jobId);
+  if (rows.length === 0) return null;
+  const t = zero();
+  for (const h of rows.flatMap((r) => r.hours)) add(t, h);
+  return t;
 }

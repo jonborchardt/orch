@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rmSync, writeFileSync } from 'node:fs';
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { OwnershipError, UsageError, ValidationError } from '../src/core/errors.ts';
 import { canonicalPath } from '../src/core/paths.ts';
@@ -30,7 +30,6 @@ import { dirtyFiles } from '../src/git/repo.ts';
 import {
   commitFile,
   type GhShim,
-  ghShim,
   gitIn,
   json,
   makeRepo,
@@ -39,7 +38,7 @@ import {
   orch,
   tempDir,
   type TempStore,
-  tempStore,
+  useJobRepo,
 } from './helpers.ts';
 
 const PARENT = 'claude-20261114-0900-aaaa';
@@ -53,25 +52,13 @@ let beta: string;
 let shim: GhShim;
 const dirs: string[] = [];
 
-beforeAll(() => {
-  shim = ghShim('acme/beta');
-  Object.assign(process.env, shim.env);
-});
-afterAll(() => {
-  delete process.env['ORCH_GH_SHIM'];
-  delete process.env['ORCH_GH_SHIM_STATE'];
-  shim.cleanup();
-});
+useJobRepo({ shim: 'acme/beta' }, (s) => ({ store, clone: alpha, shim } = s));
 beforeEach(() => {
-  store = tempStore();
-  const a = makeRepoWithOrigin('git@github.com:acme/alpha.git');
   const b = makeRepoWithOrigin('git@github.com:acme/beta.git');
-  alpha = a.clone;
   beta = b.clone;
-  dirs.push(a.clone, a.bare, b.clone, b.bare);
+  dirs.push(b.clone, b.bare);
 });
 afterEach(() => {
-  store.cleanup();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 

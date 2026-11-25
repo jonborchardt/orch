@@ -3,25 +3,17 @@
  * per test file, so files running in parallel never share it; split out so a long serial file can
  * run as two files in parallel.
  */
-import { rmSync } from 'node:fs';
-import { afterEach, beforeEach } from 'vitest';
 import { type Store } from '../src/storage/client.ts';
-import { add, type Ctx, go, makePolicyRepo } from './drive.ts';
-import { commitFile, gitIn, type TempStore, tempStore } from './helpers.ts';
+import { add, type Ctx, go } from './drive.ts';
+import { commitFile, gitIn, type TempStore, useJobRepo } from './helpers.ts';
 
 export let store: TempStore;
 export let clone: string;
 export let bare: string;
-export const extra: string[] = [];
-
-beforeEach(() => {
-  store = tempStore();
-  ({ clone, bare } = makePolicyRepo());
-});
-afterEach(() => {
-  store.cleanup();
-  for (const d of [clone, bare, ...extra.splice(0)]) rmSync(d, { recursive: true, force: true });
-});
+export const { extra } = useJobRepo(
+  { shim: null, policy: true },
+  (s) => ({ store, clone, bare } = s),
+);
 
 export function policyWith(commands: Record<string, unknown>[]): string {
   return JSON.stringify({ verification: { commands } }, null, 2) + '\n';

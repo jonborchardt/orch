@@ -21,6 +21,8 @@ import type { Event, Job } from '../storage/schema.ts';
 import { latestRun } from '../storage/verification.ts';
 import { allowedActions, type DashboardAction } from './actions.ts';
 import { planJob } from './factory.ts';
+import type { RunSummary } from './run.ts';
+import { formatSummary, runSubject } from './run-report.ts';
 
 export interface JobMailOutcome {
   jobId: string;
@@ -165,4 +167,24 @@ export async function reportJobMail(
     out.push({ jobId: '(all)', messageId: null, error: message(err) });
   }
   return out;
+}
+
+/**
+ * The end-of-session mail: the controller's report (`formatSummary`) sent once, unthreaded, when
+ * mail is configured. Nothing is recorded and nothing retried; a configuration error or a failed
+ * send is one `log` line. Never throws.
+ */
+export async function reportRunMail(
+  store: Store,
+  summary: RunSummary,
+  log: (line: string) => void,
+  env: Record<string, string | undefined> = process.env,
+): Promise<void> {
+  try {
+    const cfg = mailConfig(env, store.paths.config);
+    if (cfg === null) return;
+    await sendReport(cfg, { subject: runSubject(summary), text: formatSummary(summary) });
+  } catch (err) {
+    log(`session mail not sent: ${message(err)}`);
+  }
 }

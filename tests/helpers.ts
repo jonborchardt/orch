@@ -13,6 +13,8 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
+
 import { installRoot, type RuntimePaths } from '../src/core/paths.ts';
 import { openStore, type Store } from '../src/storage/client.ts';
 
@@ -173,6 +175,114 @@ export const NOOP_POLICY =
     2,
   ) + '\n';
 
+/** `check.js` exits 1 when marker.txt contains BREAK; the policy runs it with node. */
+export const CHECK_JS =
+  "const fs = require('node:fs');\n" +
+  "const t = fs.readFileSync('marker.txt', 'utf8');\n" +
+  "if (t.includes('BREAK')) { console.error('marker broken'); process.exit(1); }\n" +
+  "console.log('OK');\n";
+
+export const POLICY = {
+  verification: { commands: [{ id: 'check', command: 'node', args: ['check.js'] }] },
+};
+
+/** A clone with origin whose main branch carries check.js, marker.txt, and factory.json. */
+export function makePolicyRepo(
+  originUrl = 'git@github.com:acme/alpha.git',
+  policy: unknown = POLICY,
+): { clone: string; bare: string } {
+  const r = makeRepoWithOrigin(originUrl);
+  commitFile(r.clone, 'check.js', CHECK_JS);
+  commitFile(r.clone, 'marker.txt', 'fine\n');
+  commitFile(r.clone, 'src/app.ts', 'export const app = 1;\n');
+  if (policy !== null) {
+    commitFile(r.clone, 'factory.json', JSON.stringify(policy, null, 2) + '\n');
+  } else {
+    gitIn(r.clone, 'rm', '-q', 'factory.json');
+    gitIn(r.clone, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'no policy');
+  }
+  gitIn(r.clone, 'push', '-q', 'origin', 'main');
+  return r;
+}
+
+export interface JobRepo {
+  store: TempStore;
+  clone: string;
+  bare: string;
+  shim: GhShim;
+}
+
+export interface JobRepoOptions {
+  /** GitHub repository the gh shim answers for; `null` for no shim (and no ORCH_GH_SHIM env). */
+  shim: string | null;
+  /** `makePolicyRepo()` instead of a plain `makeRepoWithOrigin` acme/alpha clone. */
+  policy?: boolean;
+  /** One repository for the whole file (made in `beforeAll`) instead of one per test. */
+  perFile?: boolean;
+}
+
+/**
+ * Register the hooks every job test file shares: a gh shim (env set for the file, state reset per
+ * test), a temp store per test, and a clone with a bare origin. After each setup hook it calls
+ * `assign` with the current state, so the caller's own `let` bindings (which only the declaring
+ * module can reassign) stay live. Register file-specific hooks after this call. `extra` holds
+ * directories removed after each test.
+ */
+export function useJobRepo(
+  opts: JobRepoOptions & { shim: string },
+  assign: (s: JobRepo) => void,
+): { extra: string[] };
+export function useJobRepo(
+  opts: JobRepoOptions & { shim: null },
+  assign: (s: Omit<JobRepo, 'shim'>) => void,
+): { extra: string[] };
+export function useJobRepo(
+  opts: JobRepoOptions,
+  assign: (s: JobRepo) => void,
+): { extra: string[] } {
+  const s = {} as JobRepo;
+  const extra: string[] = [];
+  const repo = () => {
+    ({ clone: s.clone, bare: s.bare } = opts.policy
+      ? makePolicyRepo()
+      : makeRepoWithOrigin('git@github.com:acme/alpha.git'));
+  };
+  const removeRepo = () => {
+    for (const d of [s.clone, s.bare]) rmSync(d, { recursive: true, force: true });
+  };
+  const { shim: name } = opts;
+  if (name !== null || opts.perFile) {
+    beforeAll(() => {
+      if (name !== null) {
+        s.shim = ghShim(name);
+        Object.assign(process.env, s.shim.env);
+      }
+      if (opts.perFile) repo();
+      assign(s);
+    });
+    afterAll(() => {
+      if (name !== null) {
+        delete process.env['ORCH_GH_SHIM'];
+        delete process.env['ORCH_GH_SHIM_STATE'];
+        s.shim.cleanup();
+      }
+      if (opts.perFile) removeRepo();
+    });
+  }
+  beforeEach(() => {
+    if (name !== null) s.shim.reset();
+    s.store = tempStore();
+    if (!opts.perFile) repo();
+    assign(s);
+  });
+  afterEach(() => {
+    s.store.cleanup();
+    if (!opts.perFile) removeRepo();
+    for (const d of extra.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  return { extra };
+}
+
 const main = () => join(installRoot(), 'src', 'cli', 'main.ts');
 
 export interface CliResult {
@@ -247,7 +357,7 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * (the recovery worker's probe), else HTTP 404. A PR's
  * `pulls/<n>/files` come from its `files` entries (paginated the same way; a string is printed
  * as is), and its `changedFiles`, unless set, is their count (0 without any). `gh run rerun` succeeds and is only logged; `gh pr ready`
- * takes the PR out of draft; `gh pr merge` sets it MERGED with `mergeOid` as its merge commit.
+ * takes the PR out of draft; `gh pr edit --body-file` stores the PR's `body`; `gh pr merge` sets it MERGED with `mergeOid` as its merge commit.
  * `failAfter` fails a command after it took effect (a timeout that followed a merge).
  */
 const GH_SHIM_SOURCE = String.raw`
@@ -282,6 +392,9 @@ else if (a === 'pr' && b === 'view') {
 } else if (a === 'pr' && b === 'ready') {
   const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
   if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.isDraft = false; out(''); }
+} else if (a === 'pr' && b === 'edit') {
+  const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
+  if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.body = fs.readFileSync(flag('--body-file'), 'utf8'); out(''); }
 } else if (a === 'pr' && b === 'merge') {
   const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
   if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.state = 'MERGED'; pr.mergeCommit = { oid: state.mergeOid || 'c'.repeat(40) }; out(''); }

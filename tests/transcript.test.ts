@@ -16,12 +16,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  ENTRY_TEXT_MAX,
-  MAX_ENTRIES,
-  MAX_RESPONSE_BYTES,
-  MAX_SUBAGENT_FILES,
   confined,
   heldPath,
+  LIMITS,
   mergeEntries,
   NO_SESSION,
   parseTranscript,
@@ -30,6 +27,8 @@ import {
 } from '../src/server/transcript.ts';
 import type { SessionEntry } from '../src/server/types.ts';
 import { tempDir } from './helpers.ts';
+
+const { ENTRY_TEXT_MAX, MAX_ENTRIES, MAX_RESPONSE_BYTES, MAX_SUBAGENT_FILES } = LIMITS;
 import {
   assistant,
   at,

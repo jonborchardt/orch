@@ -63,7 +63,7 @@ agents/          factory-spec-writer, factory-spec-challenger, factory-builder, 
 ## Install and develop
 
 ```sh
-git clone <this repo> && cd agent-orchestrator
+git clone <this repo> && cd orch
 npm install
 npm run build          # dist/ and web/dist; the linked `orch` runs dist/
 npm link               # puts `orch` on PATH from any directory

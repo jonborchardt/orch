@@ -243,6 +243,9 @@ Tickets section with the queue and each ticket's detail, a read-only factory sta
 human decisions the workflow allows. It never starts, stops, or resumes the controller and never
 messages a session. Details: [dashboard.md](dashboard.md).
 
+The two comparisons below are the deep ones; the wide one, by category across about 45 tools, is
+[landscape.md](landscape.md).
+
 ## Compared with Beads
 
 Beads (`bd`) is a dependency-aware issue tracker built for AI agents. `orch` took its model of
