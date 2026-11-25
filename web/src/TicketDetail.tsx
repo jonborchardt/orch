@@ -650,6 +650,12 @@ export function TicketDetail({
         )}
       </Section>
 
+      {detail.receipt && (
+        <Section title="Merge receipt">
+          <Markdown text={detail.receipt.markdown} />
+        </Section>
+      )}
+
       <Section title="History">
         <Box component="ol" sx={{ m: 0, pl: 0, listStyle: 'none' }}>
           {history.map((e) => (

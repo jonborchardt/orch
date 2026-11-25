@@ -4,7 +4,7 @@
  * ownership first and validates that the GitHub repository and base branch match the job before
  * anything is pushed or created.
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -26,6 +26,7 @@ import {
   actionsJobLog,
   actionsJobRunId,
   createDraftPr,
+  editPrBody,
   type GhIssue,
   type GhPr,
   type GhRepo,
@@ -55,6 +56,7 @@ import {
 } from '../storage/jobs.ts';
 import type { Event, Job } from '../storage/schema.ts';
 import { completeCi, deliverableRefusal, deliveryGate } from './gates.ts';
+import { buildReceipt, receiptMarkdown } from './receipt.ts';
 import { type Tree, worktreeOf } from './tree.ts';
 import { cap } from './verify.ts';
 
@@ -298,6 +300,12 @@ export interface CiReconcileResult {
    */
   ready: 'marked' | 'already' | 'failed' | null;
   readyError: string | null;
+  /**
+   * When the job completed: whether the PR body was rewritten as pr.md plus the merge receipt
+   * (`updated`) or the write failed (`failed`, see receiptError). Null otherwise; never retried.
+   */
+  receipt: 'updated' | 'failed' | null;
+  receiptError: string | null;
 }
 
 /** Reconciliations already recorded for `head` (`pr status` observations carry no outcome). */
@@ -561,6 +569,8 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
   let updated: Job;
   let ready: CiReconcileResult['ready'] = null;
   let readyError: string | null = null;
+  let receipt: CiReconcileResult['receipt'] = null;
+  let receiptError: string | null = null;
   if (action === 'rework' || action === 'exhausted') {
     updated = transitionJob(store, id, 'rework', { ...tok, reason });
   } else if (action === 'escalate') {
@@ -582,6 +592,10 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     } else {
       ready = 'already';
     }
+    if (updated.stage === 'completed') {
+      receiptError = writeReceipt(store, updated, tree.path);
+      receipt = receiptError === null ? 'updated' : 'failed';
+    }
   } else {
     updated = getJob(store.db, id);
   }
@@ -601,5 +615,25 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
     reason,
     ready,
     readyError,
+    receipt,
+    receiptError,
   };
+}
+
+/**
+ * Rewrite the PR body of a completed job as its registered pr.md followed by the merge receipt.
+ * Runs after the completion committed: an error is returned, never thrown, and changes no state.
+ */
+function writeReceipt(store: Store, job: Job, cwd: string): string | null {
+  try {
+    const dir = jobArtifactDir(job.id, store.paths);
+    const pr = readFileSync(join(dir, 'pr.md'), 'utf8').trimEnd();
+    const body = `${pr}\n\n${receiptMarkdown(buildReceipt(store, job))}`;
+    mkdirSync(join(dir, 'ci'), { recursive: true });
+    const file = join(dir, 'ci', 'pr-body.md');
+    writeFileSync(file, body);
+    return editPrBody(job.prUrl ?? '', file, cwd);
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
 }

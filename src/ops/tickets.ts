@@ -45,6 +45,7 @@ import {
   ticketLifecycle,
 } from '../storage/tickets.ts';
 import { commonGitDirWithin } from '../git/repo.ts';
+import { buildReceipt, receiptMarkdown } from './receipt.ts';
 import { inRepositoryAt, jobRepository } from './repo.ts';
 
 export interface TicketView extends LinkedTicket {
@@ -345,17 +346,21 @@ export interface TicketDetail {
   /** Attached files, and the private directory they live in. */
   assets: string[];
   assetDir: string;
+  /** Merge receipt of the ticket's newest completed job; null until a job completes. */
+  receipt: { jobId: string; markdown: string } | null;
 }
 
 export function showTicket(store: Store, id: unknown): TicketDetail {
   const n = parseTicketId(id);
   const assetDir = ticketAssetDir(n, store.paths);
+  const done = ticketJobs(store.db, n).findLast((j) => j.stage === 'completed');
   return {
     ticket: viewOf(store, n),
     dependents: dependentsOf(store.db, n),
     jobs: jobsOfTicket(store, n),
     assets: existsSync(assetDir) ? readdirSync(assetDir).sort() : [],
     assetDir,
+    receipt: done ? { jobId: done.id, markdown: receiptMarkdown(buildReceipt(store, done)) } : null,
   };
 }
 

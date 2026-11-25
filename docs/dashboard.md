@@ -556,7 +556,9 @@ related to, each a link; a ticket id and Add dependency or Add related adds one,
 a Depends on or Related chip removes it (Blocks chips have none: that link belongs to the other
 ticket). Jobs lists every job that worked on the ticket with its stage, status, PR
 state, and supersession, each linked to its job detail; a job's header links back to its ticket.
-History is the ticket's events, oldest first.
+Merge receipt (only once a job of the ticket completed) renders `receipt.markdown` from
+`GET /api/tickets/<id>`: the newest completed job's evidence summary (`src/ops/receipt.ts`),
+including the merge evidence once merged. History is the ticket's events, oldest first.
 
 A write based on an outdated revision is refused by the server (409) and never applied over the
 other change. An action then shows the refusal and the current ticket. An edit keeps the draft,
