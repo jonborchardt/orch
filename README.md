@@ -381,7 +381,7 @@ Details: [docs/operations.md](docs/operations.md#backup-and-restore).
 - [docs/operations.md](docs/operations.md): operating `orch`, stop and resume, diagnosing
   blocked tickets, needs-human, recovery budgets, limitations, metrics, backup and restore, email
   reports.
-- [docs/tickets.md](docs/tickets.md): the ticket queue, its CLI and HTTP API, and the import.
+- [docs/tickets.md](docs/tickets.md): the ticket queue, its CLI and HTTP API.
 - [docs/dashboard.md](docs/dashboard.md): the dashboard's views, actions, and security model.
 - [docs/development.md](docs/development.md): stack, layout, build, tests, migrations, install
   mechanics, Windows notes, CLI reference. `CLAUDE.md` has the rules for changing the code.
