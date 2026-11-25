@@ -90,16 +90,12 @@ export function packageInfo(): { name: string; version: string } {
  * Top-level directory of the Git repository containing `cwd`, or undefined if none (or no Git on
  * PATH). Git is spawned by absolute path so a `git.exe` planted in `cwd` never runs.
  */
-export function findProjectRoot(
-  cwd: string = process.cwd(),
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  const git = whichSync('git', env);
+export function findProjectRoot(cwd: string = process.cwd()): string | undefined {
+  const git = whichSync('git');
   if (!git) return undefined;
   try {
     const out = execFileSync(git, ['rev-parse', '--show-toplevel'], {
       cwd,
-      env,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });

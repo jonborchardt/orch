@@ -318,7 +318,7 @@ describe('git is never started from the working directory', () => {
   });
 
   it('findProjectRoot runs the real Git found on PATH', () => {
-    expect(findProjectRoot(repo, env)).toBe(resolve(repo));
+    expect(findProjectRoot(repo)).toBe(resolve(repo));
     expect(existsSync(marker)).toBe(false);
   });
 
@@ -337,10 +337,10 @@ describe('spawnTool resolution failures', () => {
     const r = spawnTool('git', ['--version'], { env });
     expect(r.status).toBeNull();
     expect(r.stderr).toContain('git not found on PATH');
-    expect(findProjectRoot(empty, env)).toBeUndefined();
     const saved = process.env['PATH'];
     process.env['PATH'] = empty;
     try {
+      expect(findProjectRoot(empty)).toBeUndefined();
       expect(() => git(empty, 'status')).toThrow(ToolError);
       expect(() => git(empty, 'status')).toThrow(/git not found on PATH/);
     } finally {
