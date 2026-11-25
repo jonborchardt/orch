@@ -23,7 +23,6 @@ describe('gradeReadiness', () => {
       letter: 'A',
       met: 4,
       advice: [],
-      unknown: [],
     });
     expect(gradeReadiness(facts(true, true, false, true))).toMatchObject({ letter: 'B', met: 3 });
     expect(gradeReadiness(facts(true, false, false, true))).toMatchObject({ letter: 'C', met: 2 });
@@ -36,7 +35,7 @@ describe('gradeReadiness', () => {
 
   it('never counts an unknown fact as met, names it, and gives one advice line per unmet fact', () => {
     const g = gradeReadiness(facts(true, null, false, null));
-    expect(g).toMatchObject({ letter: 'D', met: 1, unknown: ['requiredChecks', 'protection'] });
+    expect(g).toMatchObject({ letter: 'D', met: 1 });
     expect(g.advice).toHaveLength(3);
     expect(g.advice[0]).toMatch(/status check.*unknown/);
     expect(g.advice[1]).toMatch(/up to date.*merge queue/);

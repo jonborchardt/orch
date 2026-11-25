@@ -124,11 +124,11 @@ export interface MergeAuthorization {
   enabled: boolean;
   /** The file that holds the setting. */
   file: string;
-  /**
-   * The repository's readiness grade, shown next to the opt-in as advice (set by `mergeOptIn`).
-   * Nothing that merges reads it.
-   */
-  grade?: ReadinessGrade | null;
+}
+
+/** The opt-in with the repository's readiness grade beside it, as advice; nothing that merges reads it. */
+export interface MergeOptIn extends MergeAuthorization {
+  grade: ReadinessGrade | null;
 }
 
 /** Whether `orch job merge` may merge in the repository with this identity. Off unless opted in. */
@@ -173,7 +173,7 @@ export function mergeOptIn(
   store: Store,
   path: string,
   action: 'enable' | 'disable' | 'status',
-): MergeAuthorization {
+): MergeOptIn {
   const auth =
     action === 'status'
       ? mergeAuthorization(store, path)

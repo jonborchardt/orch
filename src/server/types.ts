@@ -338,16 +338,16 @@ export interface SubagentSummary extends SessionAgent {
   modifiedAt: string;
 }
 
-/**
- * The Session tab: a bounded, read-only tail of the job's Claude Code transcript and its
- * subagents' transcripts (src/server/transcript.ts). `found: false` carries the reason.
- */
 /** `GET /api/jobs/:id/readiness`: the job repository's readiness grade, advice beside Merge. */
 export interface ReadinessView {
   /** null when the job's repository path is no longer a Git repository. */
   grade: ReadinessGrade | null;
 }
 
+/**
+ * The Session tab: a bounded, read-only tail of the job's Claude Code transcript and its
+ * subagents' transcripts (src/server/transcript.ts). `found: false` carries the reason.
+ */
 export interface SessionLogView {
   found: boolean;
   reason: string | null;

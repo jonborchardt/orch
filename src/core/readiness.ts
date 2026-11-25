@@ -23,8 +23,6 @@ export interface ReadinessGrade {
   /** Facts that are true, out of four. */
   met: number;
   facts: ReadinessFacts;
-  /** Facts orch could not determine; never counted as met. */
-  unknown: ReadinessFact[];
   /** One line per fact that is not met. */
   advice: string[];
 }
@@ -44,12 +42,10 @@ const FACTS = Object.keys(ADVICE) as ReadinessFact[];
 /** A = all four facts true, B = three, C = two, D = one or none. */
 export function gradeReadiness(facts: ReadinessFacts): ReadinessGrade {
   const met = FACTS.filter((f) => facts[f] === true).length;
-  const unknown = FACTS.filter((f) => facts[f] === null);
   return {
     letter: met === 4 ? 'A' : met === 3 ? 'B' : met === 2 ? 'C' : 'D',
     met,
     facts,
-    unknown,
     advice: FACTS.filter((f) => facts[f] !== true).map((f) =>
       facts[f] === null ? `${ADVICE[f]} (unknown: GitHub did not say)` : ADVICE[f],
     ),

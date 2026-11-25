@@ -2857,7 +2857,6 @@ describe('PR phase, Merge, and Refresh PR', () => {
         letter: 'C',
         met: 2,
         facts: { policyTest: true, requiredChecks: true, upToDate: false, protection: null },
-        unknown: ['protection'],
         advice: ['Require branches to be up to date.', 'Protect the base branch.'],
       },
     };
