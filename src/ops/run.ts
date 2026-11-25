@@ -439,7 +439,11 @@ export function mergeNotEnabled(
 }
 
 type MergeRun =
-  { kind: 'done' } | { kind: 'reland'; jobId: string } | { kind: 'stopped' } | Blocked;
+  | { kind: 'done' }
+  | { kind: 'reland'; jobId: string }
+  | { kind: 'continue' }
+  | { kind: 'stopped' }
+  | Blocked;
 
 /** `mergeJob` until it gives an answer that is not "try again", within a small budget. */
 async function merge(run: Run, jobId: string): Promise<MergeRun> {
@@ -465,6 +469,9 @@ async function merge(run: Run, jobId: string): Promise<MergeRun> {
           code: 'ticket-open',
           reason: `merged, but the ticket stays ${m.ticket?.status ?? 'open'}: ${m.ticket?.reason ?? 'not closed'}`,
         };
+      case 'base-moved':
+        // The job is back in pr (or build) on a merge commit: runJob takes it from there.
+        return { kind: 'continue' };
       case 'reland':
         if (m.relandJob !== null) return { kind: 'reland', jobId: m.relandJob };
         return { kind: 'blocked', code: 'reland-refused', reason: m.reason };
@@ -647,6 +654,10 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
             ? `tick the remaining boxes (orch ticket edit ${key} --body-file -) or move them to a follow-up ticket, then orch ticket done ${key}`
             : `orch do ${key} tries again`;
         return out('blocked', m.reason, jobId, step, m.code);
+      }
+      if (m.kind === 'continue') {
+        run.log(`  job ${jobId}: reopened for a moved base`);
+        continue;
       }
       relands += 1;
       jobId = m.jobId;

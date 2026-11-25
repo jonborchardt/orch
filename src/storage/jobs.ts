@@ -9,7 +9,13 @@ import { mkdirSync } from 'node:fs';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import { assertStageOwns } from '../core/artifact-rules.ts';
-import { NotFoundError, OwnershipError, UsageError, ValidationError } from '../core/errors.ts';
+import {
+  NotFoundError,
+  OwnershipError,
+  UsageError,
+  ValidationError,
+  WorkflowError,
+} from '../core/errors.ts';
 import {
   assertOwner,
   decideClaim,
@@ -27,6 +33,7 @@ import {
   type Action,
   approvalPath,
   challengeSpecHash,
+  completionOf,
   type Choice,
   type CiStatus,
   isSpecChallenge,
@@ -35,6 +42,7 @@ import {
   now,
   type PrState,
   requiredArtifact,
+  reopenForBase,
   RESUMABLE_STATUSES,
   reviewArtifact,
   type Stage,
@@ -49,6 +57,7 @@ import type { Db, Store } from './client.ts';
 import { appendEvent, eventsOfTypes, latestEventsByJob, listEvents } from './events.ts';
 import { type Artifact, type Event, type Job, jobs, type Review, reviews } from './schema.ts';
 import {
+  activeJobOf,
   claimTicketForJob,
   releaseTicketForCancel,
   settleTicketForMerge,
@@ -404,6 +413,41 @@ export function transitionJob(
       releaseTicketForCancel(tx, job.ticketId, id, opts.reason, job.ownerSession, ts);
     }
     return decided;
+  });
+}
+
+/** Another unfinished job working on `job`'s ticket, or null. */
+export function siblingOnTicket(db: Db, job: Pick<Job, 'id' | 'ticketId'>): string | null {
+  if (job.ticketId === null) return null;
+  const other = activeJobOf(db, job.ticketId);
+  return other === job.id ? null : other;
+}
+
+/** How many times the job was reopened for a moved base. */
+export function baseReopens(db: Db, id: string): number {
+  return eventsOfTypes(db, id, ['job.reopened']).length;
+}
+
+/**
+ * Reopen a completed job into pr for a moved base (`reopenForBase`), as the owner. Refused in the
+ * same transaction when another unfinished job holds the ticket, which `jobs_active_ticket_idx`
+ * would otherwise reject as a raw constraint failure.
+ */
+export function reopenJob(
+  store: Store,
+  id: string,
+  auth: Auth,
+  ctx: { reason: string; mergeHead: string; baseSha: string },
+): Job {
+  return mutate(store, id, auth, (job, tx) => {
+    const other = siblingOnTicket(tx, job);
+    if (other !== null) {
+      throw new WorkflowError(
+        `Cannot reopen job for a moved base: ${other} is already working on its ticket`,
+      );
+    }
+    const completed = latestEventsByJob(tx, [id], ['job.completed']).get(id)?.get('job.completed');
+    return reopenForBase(job, completionOf(job.stage, completed?.payload), ctx);
   });
 }
 

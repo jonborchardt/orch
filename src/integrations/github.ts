@@ -217,6 +217,28 @@ export function listPrFiles(prUrl: string, cwd: string): GhPrFile[] {
     });
 }
 
+/**
+ * Whether `head` contains the current tip of `base` in the PR's repository, from GitHub's compare
+ * (`behind_by === 0`); false when the base moved past it, null when GitHub gave no usable answer.
+ */
+export function baseContains(
+  prUrl: string,
+  base: string,
+  head: string,
+  cwd: string,
+): boolean | null {
+  const m = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/\d+$/.exec(prUrl);
+  if (!m) return null;
+  const path = `repos/${m[1] ?? ''}/${m[2] ?? ''}/compare/${encodeURIComponent(base)}...${head}`;
+  try {
+    const behind = ghJson<{ behind_by?: unknown } | null>(['api', path], cwd)?.behind_by;
+    return typeof behind === 'number' && behind >= 0 ? behind === 0 : null;
+  } catch (err) {
+    if (err instanceof ToolError) return null;
+    throw err;
+  }
+}
+
 export interface CreatePrInput {
   base: string;
   head: string;

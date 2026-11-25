@@ -243,7 +243,8 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * With `bare` set to the local origin repository, PR heads are read from it like GitHub would;
  * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default; paginated in
  * pages of 100 under `--paginate --slurp`), `protection`, `rules`, `logs` (keyed by job id), or
- * `api` (keyed by path), `rate_limit` (the recovery worker's probe), else HTTP 404. A PR's
+ * `api` (keyed by path; a `compare/<base>...<head>` defaults to `{ behind_by: 0 }`), `rate_limit`
+ * (the recovery worker's probe), else HTTP 404. A PR's
  * `pulls/<n>/files` come from its `files` entries (paginated the same way; a string is printed
  * as is), and its `changedFiles`, unless set, is their count (0 without any). `gh run rerun` succeeds and is only logged; `gh pr ready`
  * takes the PR out of draft; `gh pr merge` sets it MERGED with `mergeOid` as its merge commit.
@@ -311,6 +312,7 @@ else if (a === 'pr' && b === 'view') {
     const log = (state.logs || {})[m[1]];
     if (log === undefined) notFound(); else out(log);
   } else if (state.api && state.api[path] !== undefined) out(state.api[path]);
+  else if (/\/compare\/[^/]+$/.test(path)) out({ behind_by: 0 });
   else if (path === 'rate_limit') out({ resources: {} });
   else notFound();
 } else if (a === 'pr' && b === 'create') {
