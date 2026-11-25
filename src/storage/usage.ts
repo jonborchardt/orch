@@ -3,7 +3,7 @@
  * 2026-11-24-recorded-token-usage). Only `src/ops/token-usage.ts` calls this module. Rows are
  * inserted once and never rewritten or deleted.
  */
-import { and, gte, lte } from 'drizzle-orm';
+import { and, eq, gte, lte } from 'drizzle-orm';
 
 import { now } from '../core/workflow.ts';
 import type { Db, Store } from './client.ts';
@@ -47,4 +47,9 @@ export function usageInRange(db: Db, first: number, last: number): TokenUsageRow
     .from(tokenUsage)
     .where(and(gte(tokenUsage.lastHour, first), lte(tokenUsage.firstHour, last)))
     .all();
+}
+
+/** Every recorded session of `jobId`. */
+export function usageOfJob(db: Db, jobId: string): TokenUsageRow[] {
+  return db.select().from(tokenUsage).where(eq(tokenUsage.jobId, jobId)).all();
 }
