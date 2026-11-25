@@ -249,6 +249,10 @@ export const reviews = sqliteTable(
     /** Worktree HEAD the verdict was recorded against; every reviewer in a round must match. */
     head: text(),
     summary: text(),
+    /** The reviewer's drawn model from the job's `models.drawn` event; null for legacy jobs. */
+    model: text(),
+    /** Whether `model` equals the builder's drawn model; null for legacy jobs. */
+    sameAsAuthor: integer({ mode: 'boolean' }),
     createdAt: text().notNull(),
     completedAt: text(),
   },

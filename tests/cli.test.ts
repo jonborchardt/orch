@@ -283,6 +283,7 @@ describe('orch CLI: jobs across repositories', () => {
     );
     expect(events.map((e) => e.type)).toEqual([
       'job.created',
+      'models.drawn',
       'job.claimed',
       'stage.started',
       'artifact.registered',

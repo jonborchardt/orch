@@ -1,6 +1,7 @@
 /** Shapes shared by the API (src/server/api.ts) and the web client (web/src). Types only. */
 import type { Flake } from '../core/flake.ts';
 import type { ReadinessGrade } from '../core/readiness.ts';
+import type { DrawnModels } from '../core/roles.ts';
 import type { SessionLinks, SessionRef } from '../core/session.ts';
 import type { Choice, Completion, PrPhase } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
@@ -221,6 +222,8 @@ export interface RoundView {
 
 export interface JobDetailView {
   job: SafeJob;
+  /** Each role's drawn model from the job's `models.drawn` event; null when not recorded. */
+  models: DrawnModels | null;
   liveness: Liveness;
   /** Null unless the job completed. */
   outcome: Outcome | null;

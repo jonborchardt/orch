@@ -60,8 +60,13 @@ describe('cancelJob (ops)', () => {
     expect(r.job.status).toBe('cancelled');
     expect(cleared(r.job)).toEqual([null, null, null, false]);
     const evs = events(id);
-    expect(evs.map((e) => e.type)).toEqual(['job.created', 'job.claimed', 'job.cancelled']);
-    expect(evs.slice(1).map((e) => e.actor)).toEqual(['s1', 's1']);
+    expect(evs.map((e) => e.type)).toEqual([
+      'job.created',
+      'models.drawn',
+      'job.claimed',
+      'job.cancelled',
+    ]);
+    expect(evs.slice(2).map((e) => e.actor)).toEqual(['s1', 's1']);
     expect(evs.at(-1)?.payload).toEqual({ stage: 'spec', reason: 'not needed' });
   });
 

@@ -20,6 +20,7 @@ import {
 import { SESSION_PROVIDERS, type SessionProvider, validateSessionRef } from '../core/session.ts';
 import { postNotice, supersede } from '../ops/actions.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
+import { loadConfig } from '../ops/factory.ts';
 import { mergeJob, type MergeResult } from '../ops/merge.ts';
 import { findJobs, jobRepository } from '../ops/repo.ts';
 import { jobUsage } from '../ops/usage.ts';
@@ -78,7 +79,7 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   show <id>
   events <id> [--limit <n>]
   usage <id>                                time per stage visit, reviewer run, verification, and CI;
-                                            configured models; token counts are not measured
+                                            drawn models; token counts are not measured
   claim <id> --session <name> [--lease <minutes>] [--force]
   release <id> --token <t>
   resume <id> --session <name> [--to <stage>] [--force]
@@ -171,6 +172,7 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
         repoPath: repo.root,
         baseBranch: base,
         maxRounds: int(o['max-rounds'], '--max-rounds', 1),
+        models: loadConfig(store).models,
         actor: session,
       });
       return summary(job, store);

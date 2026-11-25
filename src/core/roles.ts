@@ -2,10 +2,12 @@
  * Factory roles: which subagent plays each part, its default model, and when it applies. Model
  * assignments are data here and overridable from <config>/factory.json, never spread through code.
  */
+import { createHash } from 'node:crypto';
+
 import { ValidationError } from './errors.ts';
 import { classifyPath } from './sensitive.ts';
 
-export const MODELS = ['opus', 'sonnet', 'haiku', 'inherit'] as const;
+export const MODELS = ['opus', 'sonnet', 'haiku', 'fable', 'inherit'] as const;
 export type Model = (typeof MODELS)[number];
 
 export type RoleKind =
@@ -62,7 +64,8 @@ export const DEFAULT_UI_PATTERNS = [
 ];
 
 export interface FactoryConfig {
-  models: Partial<Record<string, Model>>;
+  /** A fixed model, or a pool orch draws one model from per job (`drawModel`). */
+  models: Partial<Record<string, Model | Model[]>>;
   uiPatterns: string[];
   /** Default review rounds for new jobs. */
   maxRounds: number;
@@ -125,12 +128,14 @@ export function parseConfig(raw: unknown): FactoryConfig {
               `factory.json: unknown role "${role}" (known: ${ROLES.map((r) => r.name).join(', ')})`,
             );
           }
-          if (typeof model !== 'string' || !MODELS.includes(model as Model)) {
+          const pool: unknown[] = Array.isArray(model) ? model : [model];
+          const known = (m: unknown) => typeof m === 'string' && MODELS.includes(m as Model);
+          if (pool.length === 0 || !pool.every(known) || new Set(pool).size !== pool.length) {
             throw new ValidationError(
-              `factory.json: model for "${role}" must be one of ${MODELS.join(', ')}`,
+              `factory.json: model for "${role}" must be one of ${MODELS.join(', ')}, or a non-empty array of distinct ones`,
             );
           }
-          config.models[role] = model as Model;
+          config.models[role] = model as Model | Model[];
         }
         break;
       }
@@ -187,9 +192,64 @@ export function parseConfig(raw: unknown): FactoryConfig {
   return config;
 }
 
-/** Apply model overrides. */
-export function resolveRoles(config: FactoryConfig): Role[] {
-  return ROLES.map((r) => ({ ...r, model: config.models[r.name] ?? r.model }));
+/** The pool a role draws from: the configured model or array, else the role's default. */
+export function poolFor(models: FactoryConfig['models'], role: Role): Model[] {
+  const m = models[role.name] ?? role.model;
+  return Array.isArray(m) ? m : [m];
+}
+
+/**
+ * One model from a role's pool for a job: uniform, and fixed for the job because it depends only
+ * on a stable hash of the job id and role (never Math.random or a seeded PRNG).
+ */
+export function drawModel(jobId: string, role: string, pool: readonly Model[]): Model {
+  const n = createHash('sha256').update(`${jobId}:${role}`).digest().readUInt32BE(0);
+  const m = pool[n % pool.length];
+  if (m === undefined) throw new ValidationError(`Empty model pool for ${role}`);
+  return m;
+}
+
+/** Whose work a role judges: its drawn model is compared with that author's (`sameAsAuthor`). */
+export function authorOf(role: Role): string | null {
+  if (role.kind === 'spec-challenge') return 'spec-writer';
+  if (role.kind === 'simplify' || role.kind === 'review' || role.kind === 'approve')
+    return 'builder';
+  return null;
+}
+
+/** The `models.drawn` payload's `roles`: each role's drawn model, `sameAsAuthor` where it has one. */
+export type DrawnModels = Record<string, { model: Model; sameAsAuthor?: boolean }>;
+
+/** Draw every role in ROLES for a new job. `inherit` equals `inherit`: orch sees only the strings. */
+export function drawModels(jobId: string, models: FactoryConfig['models']): DrawnModels {
+  const drawn: DrawnModels = {};
+  for (const r of ROLES) drawn[r.name] = { model: drawModel(jobId, r.name, poolFor(models, r)) };
+  for (const r of ROLES) {
+    const author = authorOf(r);
+    const entry = drawn[r.name];
+    if (author && entry) entry.sameAsAuthor = entry.model === drawn[author]?.model;
+  }
+  return drawn;
+}
+
+/** The recorded draw from a job's `models.drawn` event; null for a job created before pools. */
+export function drawnModelsOf(
+  events: readonly { type: string; payload: Record<string, unknown> }[],
+): DrawnModels | null {
+  const roles = events.find((e) => e.type === 'models.drawn')?.payload['roles'];
+  return roles && typeof roles === 'object' ? (roles as DrawnModels) : null;
+}
+
+/** Roles with a job's models: its recorded draw, else (legacy jobs) a draw from the config. */
+export function resolveRoles(
+  config: FactoryConfig,
+  jobId: string,
+  drawn: DrawnModels | null = null,
+): Role[] {
+  return ROLES.map((r) => ({
+    ...r,
+    model: drawn?.[r.name]?.model ?? drawModel(jobId, r.name, poolFor(config.models, r)),
+  }));
 }
 
 /**

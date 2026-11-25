@@ -311,6 +311,14 @@ export function JobDetail({
             ) : (
               <Alert severity="warning">Plan unavailable: {detail.planError}</Alert>
             )}
+            <Typography variant="body2" data-testid="drawn-models">
+              Models drawn:{' '}
+              {detail.models
+                ? Object.entries(detail.models)
+                    .map(([role, m]) => `${role} ${modelText(m.model, m.sameAsAuthor)}`)
+                    .join(', ')
+                : 'not recorded'}
+            </Typography>
             {job.description && (
               <>
                 <Divider />
@@ -378,6 +386,9 @@ export function JobDetail({
                       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                         <Typography sx={{ fontWeight: 600 }}>{rv.reviewer}</Typography>
                         <Chip label={rv.verdict ?? 'pending'} color={verdictColor(rv.verdict)} />
+                        <Typography variant="body2" color="text.secondary">
+                          {modelText(rv.model, rv.sameAsAuthor)}
+                        </Typography>
                         {rv.summary && <Typography variant="body2">{rv.summary}</Typography>}
                       </Stack>
                     </AccordionSummary>
@@ -498,6 +509,15 @@ export function JobDetail({
       </Box>
     </Box>
   );
+}
+
+/** "opus (same as author: no)"; no flag for roles without an author. Null means not recorded. */
+function modelText(model: string | null, same: boolean | null | undefined): string {
+  const flag =
+    same === undefined
+      ? ''
+      : ` (same as author: ${same === null ? 'not recorded' : same ? 'yes' : 'no'})`;
+  return `${model ?? 'model not recorded'}${flag}`;
 }
 
 /** `lease until|lapsed <ISO>`, or null without a lease. */

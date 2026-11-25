@@ -11,6 +11,13 @@ import {
   WorkflowError,
 } from '../src/core/errors.ts';
 import { jobArtifactDir } from '../src/core/paths.ts';
+import {
+  drawModel,
+  drawModels,
+  drawnModelsOf,
+  type FactoryConfig,
+  ROLES,
+} from '../src/core/roles.ts';
 import { listEvents } from '../src/storage/events.ts';
 import {
   claimJob,
@@ -73,7 +80,32 @@ describe('jobs: create, read, list', () => {
       1,
     ]);
     expect(existsSync(jobArtifactDir(a.id, store.paths))).toBe(true);
-    expect(listEvents(store.db, a.id).map((e) => e.type)).toEqual(['job.created']);
+    expect(listEvents(store.db, a.id).map((e) => e.type)).toEqual(['job.created', 'models.drawn']);
+  });
+
+  it('draws every role from the config pools once, in the creating transaction (ticket 0168 AC4)', () => {
+    const models: FactoryConfig['models'] = {
+      builder: ['opus', 'fable'],
+      security: ['opus', 'sonnet'],
+    };
+    const job = createJob(store, { ...input(), models });
+    const drawnEvents = () => listEvents(store.db, job.id).filter((e) => e.type === 'models.drawn');
+    expect(drawnEvents()).toHaveLength(1);
+    const drawn = drawnModelsOf(drawnEvents());
+    expect(drawn).toEqual(drawModels(job.id, models));
+    expect(Object.keys(drawn ?? {})).toEqual(ROLES.map((r) => r.name));
+    expect(drawn?.['builder']?.model).toBe(drawModel(job.id, 'builder', ['opus', 'fable']));
+    for (const name of ['spec-writer', 'builder', 'fast-builder']) {
+      expect(drawn?.[name]).not.toHaveProperty('sameAsAuthor');
+    }
+    for (const r of ROLES.filter(
+      (x) => !['spec-writer', 'builder', 'fast-builder'].includes(x.name),
+    )) {
+      expect(typeof drawn?.[r.name]?.sameAsAuthor, r.name).toBe('boolean');
+    }
+    claimJob(store, job.id, { session: 's1' });
+    resumeJob(store, job.id, { session: 's2', force: true });
+    expect(drawnEvents()).toHaveLength(1);
   });
 
   it('refuses a missing, empty, or whitespace-only description and writes nothing', () => {
@@ -524,9 +556,11 @@ describe('jobs: full workflow through storage', () => {
     ]);
     const types = detail.events.map((e) => e.type);
     expect(types[0]).toBe('job.created');
+    expect(types[1]).toBe('models.drawn');
     expect(types.at(-1)).toBe('pr.recorded');
     expect(types).toContain('job.completed');
-    expect(detail.events.slice(1).every((e) => e.actor === 's1')).toBe(true);
+    // job.created and models.drawn carry the creator (none here); every later event the owner.
+    expect(detail.events.slice(2).every((e) => e.actor === 's1')).toBe(true);
   });
 
   it('escalates when the maximum round still requests changes, then resumes to build', () => {
