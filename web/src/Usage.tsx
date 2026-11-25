@@ -123,7 +123,7 @@ export function UsagePage() {
   const fills = [
     palette.primary.main,
     palette.secondary.main,
-    palette.info.main,
+    palette.success.main,
     palette.warning.main,
   ];
 
@@ -184,8 +184,10 @@ export function UsagePage() {
           {!data.total.complete && (
             <Alert severity="warning" sx={{ mb: 1 }}>
               Incomplete: some jobs&apos; transcripts could not be read, so these totals are a lower
-              bound. {String(missingHours)} hour{missingHours === 1 ? '' : 's'} with missing data
-              are hatched in the chart.
+              bound.{' '}
+              {missingHours === 1
+                ? '1 hour with missing data is hatched in the chart.'
+                : `${String(missingHours)} hours with missing data are hatched in the chart.`}
             </Alert>
           )}
           <TableContainer sx={{ mb: 2 }}>
