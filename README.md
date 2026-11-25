@@ -30,7 +30,7 @@ flowchart LR
   TypeScript on a validated artifact and a verification run for the exact commit
   ([docs/workflow.md](docs/workflow.md#the-ticket-lifecycle-end-to-end)).
 - **Independent review and rework.** A spec challenger, a simplifier, three always-on reviewers
-  (security, correctness, code quality) plus four UI reviewers when the diff renders UI, and an
+  (security, correctness, code quality) plus three UI reviewers when the diff renders UI, and an
   approver; findings send the job back to build, within a budget.
 - **CI verification and repair.** GitHub's verdict for the PR head is read and acted on: one
   re-run per head, then a bounded repair cycle through build, review, and approval.

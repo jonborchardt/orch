@@ -38,8 +38,8 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
    ([Verification evidence](#verification-evidence)). `build.md` is registered against that HEAD.
 10. **Simplify.** `factory-simplifier` lists over-engineering in the diff; the builder applies what
     makes sense, verifies again, and records each declined finding.
-11. **Review.** `security`, `correctness`, and `code-quality` always review. `ui-design`, `ux`,
-    `accessibility`, and `web-platform` join when the diff matches `uiPatterns` (by default
+11. **Review.** `security`, `correctness`, and `code-quality` always review. `ui-design`, `ux`, and
+    `accessibility` join when the diff matches `uiPatterns` (by default
     `DEFAULT_UI_PATTERNS` in `src/core/roles.ts`: `.tsx`, `.jsx`, `.vue`, `.svelte`, `.astro`,
     `.html`, `.htm`, and style-sheet files, and images under `public/`, `static/`, or `assets/`).
     Test files (paths `src/core/sensitive.ts` labels `tests` or `test-config`) never count. A
@@ -77,7 +77,7 @@ flowchart TD
     SC -->|"PASS"| B["build: builder commits; orch verify runs factory.json"]
     B -->|"verification fails: one fix, then escalate"| H
     B --> SI["simplify: simplifier reviews the diff; builder applies, verifies"]
-    SI --> RV["review: security, correctness, code-quality; four UI reviewers when UI changed"]
+    SI --> RV["review: security, correctness, code-quality; three UI reviewers when UI changed"]
     RV --> RB{"All PASS and BLOCKING: 0?"}
     RB -->|"No, rounds left"| B
     RB -->|"No, round maxRounds"| H
