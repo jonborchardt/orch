@@ -4,12 +4,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ROLES } from '../src/core/roles.ts';
 import { jobUsage } from '../src/ops/usage.ts';
-import { agentRow, median } from '../src/server/api.ts';
+import { median, timing } from '../src/server/api.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
-import type { AgentRow, RunsView } from '../src/server/types.ts';
+import type { AgentsView, RunsView } from '../src/server/types.ts';
 import { appendEvent } from '../src/storage/events.ts';
 import { claimJob, createJob, listJobs } from '../src/storage/jobs.ts';
-import { jobs, reviews } from '../src/storage/schema.ts';
+import { artifacts, jobs, reviews } from '../src/storage/schema.ts';
 import { tempDir, type TempStore, tempStore } from './helpers.ts';
 
 let store: TempStore;
@@ -67,30 +67,11 @@ function seedRuns() {
 }
 
 describe('pure helpers', () => {
-  it('takes medians and folds invocations', () => {
+  it('takes medians and times finished runs', () => {
     expect(median([])).toBeNull();
     expect(median([3, 1, 2])).toBe(2);
     expect(median([4, 1, 3, 2])).toBe(2.5);
-    expect(
-      agentRow('x', 'stage', [
-        { outcome: 'success', ms: 10 },
-        { outcome: 'failure', ms: 0 },
-        { outcome: 'other', ms: 30 },
-        { outcome: 'open', ms: null },
-      ]),
-    ).toEqual({
-      role: 'x',
-      source: 'stage',
-      invocations: 4,
-      success: 1,
-      failure: 1,
-      other: 1,
-      open: 1,
-      measured: 2,
-      unmeasured: 2,
-      averageMs: 20,
-      medianMs: 20,
-    });
+    expect(timing([10, 0, 30, null])).toEqual({ unmeasured: 2, averageMs: 20, medianMs: 20 });
   });
 });
 
@@ -126,7 +107,26 @@ describe('GET /api/runs', () => {
 });
 
 describe('GET /api/agents', () => {
-  it('has one row per role, reviews from review rows (AC3)', async () => {
+  const ev = (job: string, type: string, min: number, stage?: string) =>
+    appendEvent(store.db, job, type, stage ? { stage } : {}, null, at(min * MIN));
+
+  it('puts every role in exactly one list, in ROLES order (AC6, AC9)', async () => {
+    const view = await json<AgentsView>('/api/agents');
+    const names = [...view.reviewers, ...view.stages].map((r) => r.role);
+    expect(names.sort()).toEqual(ROLES.map((r) => r.name).sort());
+    const order = (xs: { role: string }[]) =>
+      xs.map((r) => ROLES.findIndex((x) => x.name === r.role));
+    for (const xs of [view.reviewers, view.stages]) {
+      expect(order(xs)).toEqual([...order(xs)].sort((a, b) => a - b));
+    }
+    expect(view.reviewers.map((r) => r.role)).toContain('spec-challenger');
+    for (const r of [...view.reviewers, ...view.stages]) {
+      for (const k of ['open', 'invocations', 'measured', 'source'])
+        expect(r).not.toHaveProperty(k);
+    }
+  });
+
+  it('counts reviewer verdicts from review rows, skipping open ones (AC3)', async () => {
     const id = seedJob({ createdAt: at(0) });
     const row = (round: number, verdict: 'pass' | 'changes' | null, from: number, to?: number) => ({
       jobId: id,
@@ -145,75 +145,100 @@ describe('GET /api/agents', () => {
         row(4, 'pass', 5 * MIN, 5 * MIN), // recorded without a pending row: zero-length
       ])
       .run();
-    const rows = await json<AgentRow[]>('/api/agents');
-    expect(rows.map((r) => r.role)).toEqual(ROLES.map((r) => r.name));
-    expect(rows.every((r) => ['reviews', 'stage', 'none'].includes(r.source))).toBe(true);
-    expect(rows.find((r) => r.role === 'security')).toEqual({
+    const view = await json<AgentsView>('/api/agents');
+    expect(view.reviewers.find((r) => r.role === 'security')).toEqual({
       role: 'security',
-      source: 'reviews',
-      invocations: 4,
-      success: 2,
-      failure: 1,
-      other: 0,
-      open: 1,
-      measured: 2,
-      unmeasured: 2,
+      runs: 3,
+      pass: 2,
+      changes: 1,
+      unmeasured: 1,
       averageMs: 20 * MIN,
       medianMs: 20 * MIN,
     });
   });
 
-  it('counts stage visits by mode and leaves spec-challenger unrecorded (AC4)', async () => {
+  it('counts spec-challenger runs from registered spec reviews (AC8)', async () => {
+    const art = (jobId: string, path: string, marker: string | null) => ({
+      jobId,
+      stage: 'spec' as const,
+      round: null,
+      path,
+      bytes: 1,
+      marker,
+      createdAt: at(0),
+    });
+    const a = seedJob({ createdAt: at(0) });
+    const b = seedJob({ createdAt: at(0) });
+    store.db
+      .insert(artifacts)
+      .values([
+        art(a, 'spec-review-1.md', 'changes'),
+        art(a, 'spec-review-2.md', 'pass'),
+        art(a, 'spec.md', null),
+        art(a, 'round-1/review-security.md', 'changes'), // a review artifact, not the challenger's
+        art(b, 'spec-review-1.md', 'pass'),
+      ])
+      .run();
+    const view = await json<AgentsView>('/api/agents');
+    expect(view.stages.map((r) => r.role)).not.toContain('spec-challenger');
+    expect(view.reviewers.find((r) => r.role === 'spec-challenger')).toEqual({
+      role: 'spec-challenger',
+      runs: 3,
+      pass: 2,
+      changes: 1,
+      unmeasured: 3,
+      averageMs: null,
+      medianMs: null,
+    });
+  });
+
+  it('maps each stage end to its column and splits builders by mode (AC5)', async () => {
     const full = seedJob({ createdAt: at(0) });
-    const ev = (job: string, type: string, min: number, stage?: string) =>
-      appendEvent(store.db, job, type, stage ? { stage } : {}, null, at(min * MIN));
     ev(full, 'stage.started', 0, 'build');
     ev(full, 'stage.completed', 1, 'build');
     ev(full, 'stage.started', 2, 'build');
     ev(full, 'stage.failed', 5, 'build');
     ev(full, 'stage.started', 6, 'build');
-    ev(full, 'job.reworked', 10);
-    ev(full, 'stage.started', 11, 'review'); // review visits belong to no stage role
-    ev(full, 'stage.completed', 12, 'review');
+    ev(full, 'job.blocked', 10);
+    ev(full, 'stage.started', 11, 'build');
+    ev(full, 'job.reworked', 12);
     ev(full, 'stage.started', 13, 'build');
+    ev(full, 'job.cancelled', 14);
+    ev(full, 'stage.started', 15, 'build');
+    ev(full, 'job.interrupted', 16);
+    ev(full, 'stage.started', 17, 'review'); // review visits belong to no stage role
+    ev(full, 'stage.completed', 18, 'review');
+    ev(full, 'stage.started', 19, 'build'); // no end yet: not counted
     const fast = seedJob({ createdAt: at(0) }, 'fast');
     ev(fast, 'stage.started', 0, 'build');
     ev(fast, 'stage.completed', 7, 'build');
 
-    const rows = await json<AgentRow[]>('/api/agents');
-    const of = (role: string) => rows.find((r) => r.role === role);
+    const view = await json<AgentsView>('/api/agents');
+    const of = (role: string) => view.stages.find((r) => r.role === role);
     const usage = jobUsage(store, full)
       .stages.filter((v) => v.stage === 'build')
       .flatMap((v) => (v.durationMs ? [v.durationMs] : []));
-    expect(usage).toEqual([MIN, 3 * MIN, 4 * MIN]);
+    expect(usage).toEqual([MIN, 3 * MIN, 4 * MIN, MIN, MIN, MIN]);
     expect(of('builder')).toEqual({
       role: 'builder',
-      source: 'stage',
-      invocations: 4,
-      success: 1,
-      failure: 1,
-      other: 1,
-      open: 1,
-      measured: 3,
-      unmeasured: 1,
-      averageMs: usage.reduce((a, b) => a + b, 0) / usage.length,
-      medianMs: 3 * MIN,
-    });
-    expect(of('fast-builder')).toMatchObject({ invocations: 1, success: 1, medianMs: 7 * MIN });
-    expect(of('spec-challenger')).toEqual({
-      role: 'spec-challenger',
-      source: 'none',
-      invocations: 0,
-      success: 0,
-      failure: 0,
-      other: 0,
-      open: 0,
-      measured: 0,
+      runs: 6,
+      completed: 1,
+      failed: 1,
+      escalated: 1,
+      sentBack: 1,
+      cancelled: 1,
+      interrupted: 1,
       unmeasured: 0,
-      averageMs: null,
-      medianMs: null,
+      averageMs: usage.reduce((a, b) => a + b, 0) / usage.length,
+      medianMs: MIN,
     });
-    for (const r of rows) expect(r.invocations).toBe(r.success + r.failure + r.other + r.open);
+    expect(of('fast-builder')).toMatchObject({ runs: 1, completed: 1, medianMs: 7 * MIN });
+    for (const r of view.stages) {
+      expect(r.runs).toBe(
+        r.completed + r.failed + r.escalated + r.sentBack + r.cancelled + r.interrupted,
+      );
+    }
+    for (const r of view.reviewers) expect(r.runs).toBe(r.pass + r.changes);
   });
 });
 
