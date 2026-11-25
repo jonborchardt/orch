@@ -347,7 +347,11 @@ Each ticket the controller attempts ends with one outcome (`TICKET_OUTCOMES` in
 
 The one exception is a result whose code would hit every ticket (`RUN_ENDING_CODES` in
 `src/core/workflow.ts`: `claude-failed`, `usage-limit`, `github-unreadable`, `merge-no-answer`,
-`github-refused`): it ends the run with the reason; after `usage-limit` the run stays resumable. A ticket of a repository without the merge
+`github-refused`): it ends the run with the reason; after `usage-limit` the run stays resumable.
+A GitHub failure that `transientGitHubError` calls transient (5xx, GraphQL "Something went
+wrong", timeouts, network errors; never a refusal or a rate limit) is first retried after 1, 2, 4,
+8, and 16 minutes (`GITHUB_BACKOFF_SECONDS`, decision 2026-11-25-bounded-github-retry); `orch stop`
+ends the wait. A ticket of a repository without the merge
 opt-in is not an outcome: the queue records it as skipped and moves on. `orch do` reports its one
 ticket's outcome and exits either way.
 
@@ -395,11 +399,12 @@ Stop codes `src/ops/run.ts` can write:
 - the controller's own: `no-progress` (two Claude sessions in a row without moving the job),
   `claude-failed` (Claude could not be started), `usage-limit` (the session ended on a Claude
   usage or rate limit; next step `orch resume`), `ci-pending` (60 CI reads without a verdict),
-  `github-unreadable` (five unreadable GitHub answers in a row during CI), `unverified-merge` (the
+  `github-unreadable` (five unreadable GitHub answers in a row during CI, six for a transient
+  failure), `unverified-merge` (the
   PR merged at a head other than the verified one), `ticket-open` (merged and verified, but the
   ticket stays open, for example an unchecked checklist item), `reland-refused` (a conflict, and no
-  re-land job could be created), `merge-no-answer` (five merge attempts answered `waiting` or
-  `error`), `ownership` (an `orch` operation refused because another session held the job), and
+  re-land job could be created), `merge-no-answer` (five merge attempts answered `waiting`, or six
+  answered `error`), `ownership` (an `orch` operation refused because another session held the job), and
   `error` (any other `orch` refusal);
 - `needs-human`, the outcome used as the code, when the job waits for a person;
 - any `blocked` code `mergeJob` returns (`MERGE_BLOCKS` in `src/core/workflow.ts`): `no-pr`,
@@ -455,7 +460,8 @@ The controller reads CI with the same rules as `orch gh ci` ([workflow.md](workf
   list), so it changed what CI runs; a person
   reviews the workflow change and clicks Merge on the dashboard. No setting lifts this.
 - `blocked` / `github-refused`: branch protection or a repository setting refused the merge; gh's
-  message is recorded on `pr.merged` with `ok: false`.
+  message is recorded on `pr.merged` with `ok: false`. When the message looks transient, the
+  controller (not `orch job merge`) tries again on the backoff schedule first.
 - `merged` or `already_merged` with `verified: false`, or a ticket that stays open: see
   [workflow.md](workflow.md#verified-integration-and-reconciliation). Tick what was delivered
   (`orch ticket edit <id> --body-file <file>`) and run `orch job merge <job>` again, or close the
@@ -508,7 +514,8 @@ A Cancel returns the job's ticket to open, so the controller gives it a new job 
 Every automatic recovery is bounded. A spent budget is not a success: it stops the ticket with
 its reason. The queue passes a `blocked` ticket over and goes on, except for the run-wide codes
 `claude-failed`, `usage-limit`, `github-unreadable`, and `merge-no-answer` (and `github-refused`
-at merge), which end the run there.
+at merge), which end the run there, after the bounded backoff on a transient GitHub failure
+(decision 2026-11-25-bounded-github-retry).
 
 ```mermaid
 flowchart TD
@@ -544,8 +551,8 @@ flowchart TD
 | Claude cannot be started           | none: stops at once (`claude-failed`)                                                                                                                                                                                               | –                                           | –                                         |
 | Claude usage or rate limit         | none: ends the run at once, unfinished, for `orch resume` (`usage-limit`)                                                                                                                                                           | the session file                            | yes, until `orch resume` or `orch stop`   |
 | CI pending                         | `CI_MAX_POLLS` = 60 controller reads (`ci-pending`)                                                                                                                                                                                 | the running controller                      | no: reset                                 |
-| GitHub unreadable during CI        | `TRANSIENT_ATTEMPTS` = 5 consecutive failed reads (`github-unreadable`)                                                                                                                                                             | the running controller                      | no: reset                                 |
-| merge `waiting` or `error`         | 5 attempts in total, `RETRY_SECONDS` = 30 s apart (`merge-no-answer`)                                                                                                                                                               | the running controller                      | no: reset                                 |
+| GitHub unreadable during CI        | `TRANSIENT_ATTEMPTS` = 5 consecutive failed reads, or 6 transient ones `GITHUB_BACKOFF_SECONDS` apart (`github-unreadable`)                                                                                                         | the running controller                      | no: reset                                 |
+| merge `waiting` or `error`         | `waiting`: 5 attempts, `RETRY_SECONDS` = 30 s apart; `error`: 6 attempts, `GITHUB_BACKOFF_SECONDS` apart (`merge-no-answer`)                                                                                                        | the running controller                      | no: reset                                 |
 | recovery worker episode fails      | 5 consecutive `recovery.failed` for one CI head, then `needs-human`                                                                                                                                                                 | job events                                  | yes, durable                              |
 | a person must decide               | none: the job waits in `needs-human`                                                                                                                                                                                                | job row (`stage`, `returnStage`)            | yes, durable                              |
 

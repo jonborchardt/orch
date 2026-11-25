@@ -58,7 +58,10 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   says MERGED, and `recordMerge` in `storage/jobs.ts` writes the evidence and the ticket's
   completion in one transaction. Callers other than the dashboard need the repository in the
   user's `mergeRepos` (`orch factory config merge`); never read that from a repository file. No
-  merge queue, lock, or polling; a completed job stays completed.
+  merge queue, lock, or polling; a completed job stays completed. The one exception is the
+  factory controller's bounded backoff on a transient GitHub failure (`transientGitHubError` in
+  `core/workflow.ts`), inside its foreground command (decision
+  [2026-11-25-bounded-github-retry](docs/decisions/2026-11-25-bounded-github-retry.md)).
 - `skills/factory/` and `agents/` are prose for Claude, linked into `~/.claude` by `orch install`.
   They must only call `orch` commands; any rule that matters is enforced in TypeScript first and
   described in prose second. `tests/skill-contract.test.ts` keeps roles, agent frontmatter, and the

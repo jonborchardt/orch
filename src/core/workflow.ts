@@ -945,6 +945,25 @@ export function endsRun(code: string | undefined): boolean {
   return code !== undefined && RUN_ENDING_CODES.includes(code);
 }
 
+/**
+ * Messages GitHub (or gh) gives when it refused, whatever else they say: merge rules, branch
+ * protection, permissions, a moved head, an unmergeable PR, 401/403/404/422, and rate limits.
+ */
+const GITHUB_REFUSAL =
+  /\brules?\b|protect|policy|prohibit|required status|permission|denied|forbidden|unauthori[sz]ed|head branch was modified|match-head-commit|head commit|not mergeable|merge conflict|\bHTTP\s*(401|403|404|422)\b|not found|rate limit/i;
+/** Messages of a failure that passes: GitHub 5xx, GraphQL's internal error, timeouts, the network. */
+const GITHUB_TRANSIENT =
+  /\bHTTP\s*5\d\d\b|internal server error|bad gateway|service unavailable|gateway time-?out|something went wrong|timed out|timeout|connection reset|connection refused|dial tcp|no such host|error connecting to/i;
+
+/**
+ * Whether a GitHub failure looks transient, so the factory controller may try again after a
+ * backoff (decision 2026-11-25-bounded-github-retry). Biased toward refusal: a message that
+ * matches a refusal pattern, or no pattern at all, is not transient.
+ */
+export function transientGitHubError(message: string): boolean {
+  return !GITHUB_REFUSAL.test(message) && GITHUB_TRANSIENT.test(message);
+}
+
 /** What GitHub says about the PR right now (a `GhPr`; restated here so this module stays pure). */
 export interface LivePr {
   url: string;

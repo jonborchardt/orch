@@ -31,6 +31,7 @@ import {
   touchesWorkflows,
   transition,
   type TransitionContext,
+  transientGitHubError,
 } from '../src/core/workflow.ts';
 import type { Artifact, Review } from '../src/storage/schema.ts';
 
@@ -1280,6 +1281,70 @@ describe('endsRun: only run-wide outcomes end the queue', () => {
     ]) {
       expect(endsRun(code), String(code)).toBe(false);
     }
+  });
+});
+
+describe('transientGitHubError: a failure that passes, biased toward refusal', () => {
+  it.each([
+    ['HTTP 500', 'gh pr merge failed: HTTP 500: Internal Server Error'],
+    ['HTTP 502', 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)'],
+    ['HTTP 503', 'gh pr view failed: HTTP 503: Service Unavailable'],
+    ['HTTP 504', 'HTTP 504: Gateway Timeout'],
+    ['GraphQL (ticket 0157)', 'GraphQL: Something went wrong while executing your query'],
+    ['timed out', 'shim: timed out'],
+    ['timeout', 'context deadline exceeded (Client.Timeout exceeded while awaiting headers)'],
+    [
+      'connection reset',
+      'read tcp 10.0.0.2:5123->140.82.112.6:443: read: connection reset by peer',
+    ],
+    ['connection refused', 'dial: connection refused'],
+    ['dial tcp', 'Post "https://api.github.com/graphql": dial tcp 140.82.112.6:443: connect'],
+    ['no such host', 'lookup api.github.com: no such host'],
+    ['i/o timeout', 'read udp 10.0.0.2:53: i/o timeout'],
+    ['TLS handshake timeout', 'net/http: TLS handshake timeout'],
+    ['error connecting to', 'error connecting to api.github.com'],
+  ])('transient: %s', (_name, message) => {
+    expect(transientGitHubError(message)).toBe(true);
+  });
+
+  it.each([
+    ['merge rule', 'GraphQL: Repository rule violations found (mergePullRequest)'],
+    ['branch protection', 'GraphQL: Base branch policy prohibits the merge. (mergePullRequest)'],
+    ['protected branch', 'Protected branch update failed for refs/heads/main.'],
+    ['required status', 'Required status check "test" is expected.'],
+    [
+      'permission',
+      'GraphQL: jon does not have the correct permissions to execute `MergePullRequest`',
+    ],
+    ['head mismatch', 'GraphQL: Head branch was modified. Review and try the merge again.'],
+    ['match-head-commit', 'gh: --match-head-commit refused: the head moved'],
+    [
+      'not mergeable',
+      'Pull request #12 is not mergeable: the merge commit cannot be cleanly created.',
+    ],
+    ['HTTP 401', 'HTTP 401: Bad credentials'],
+    ['HTTP 403', 'HTTP 403: Resource not accessible by integration'],
+    ['HTTP 404', 'gh: Not Found (HTTP 404)'],
+    ['HTTP 422', 'HTTP 422: Validation Failed'],
+    ['API rate limit', 'HTTP 403: API rate limit exceeded for user ID 1.'],
+    [
+      'secondary rate limit',
+      'You have exceeded a secondary rate limit. Please wait a few minutes.',
+    ],
+    ['unknown', 'shim: simulated failure'],
+    ['empty', ''],
+  ])('refusal: %s', (_name, message) => {
+    expect(transientGitHubError(message)).toBe(false);
+  });
+
+  it('a refusal pattern wins over a transient one in the same message', () => {
+    expect(transientGitHubError('HTTP 502 Bad Gateway, then: Head branch was modified')).toBe(
+      false,
+    );
+    expect(
+      transientGitHubError('Something went wrong: API rate limit exceeded (request timed out)'),
+    ).toBe(false);
+    expect(transientGitHubError('HTTP 403: timeout while checking permissions')).toBe(false);
   });
 });
 
