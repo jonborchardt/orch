@@ -8,7 +8,7 @@ import { mkdirSync } from 'node:fs';
 
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
-import { assertStageOwns } from '../core/artifact-rules.ts';
+import { assertStageOwns, ruleFor } from '../core/artifact-rules.ts';
 import {
   NotFoundError,
   OwnershipError,
@@ -517,7 +517,7 @@ export function registerArtifact(
 ): Artifact {
   return mutateReturning(store, id, opts, (job, tx, ts) => {
     const checked = validateArtifact(jobArtifactDir(id, store.paths), relPath);
-    assertStageOwns(checked.path, job.stage, job.round);
+    assertStageOwns(checked.path, job.stage, job.round, job.returnStage);
     const existing = findArtifact(tx, id, checked.path);
     const head = opts.head ?? null;
     // A spec challenge is bound to the spec.md registered now (core/workflow.ts); so is a decision,
@@ -547,7 +547,8 @@ export function registerArtifact(
     }
     const artifact = upsertArtifact(tx, {
       jobId: id,
-      stage: job.stage,
+      // A ruled artifact keeps its own stage (spec.md registered during a spec escalation).
+      stage: ruleFor(checked.path)?.stage ?? job.stage,
       round: job.stage === 'review' || job.stage === 'simplify' ? job.round : null,
       path: checked.path,
       bytes: checked.bytes,
