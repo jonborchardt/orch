@@ -357,7 +357,7 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * (the recovery worker's probe), else HTTP 404. A PR's
  * `pulls/<n>/files` come from its `files` entries (paginated the same way; a string is printed
  * as is), and its `changedFiles`, unless set, is their count (0 without any). `gh run rerun` succeeds and is only logged; `gh pr ready`
- * takes the PR out of draft; `gh pr merge` sets it MERGED with `mergeOid` as its merge commit.
+ * takes the PR out of draft; `gh pr edit --body-file` stores the PR's `body`; `gh pr merge` sets it MERGED with `mergeOid` as its merge commit.
  * `failAfter` fails a command after it took effect (a timeout that followed a merge).
  */
 const GH_SHIM_SOURCE = String.raw`
@@ -392,6 +392,9 @@ else if (a === 'pr' && b === 'view') {
 } else if (a === 'pr' && b === 'ready') {
   const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
   if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.isDraft = false; out(''); }
+} else if (a === 'pr' && b === 'edit') {
+  const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
+  if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.body = fs.readFileSync(flag('--body-file'), 'utf8'); out(''); }
 } else if (a === 'pr' && b === 'merge') {
   const pr = state.prs.find((p) => p.url === args[2] || String(p.number) === args[2]);
   if (!pr) { process.stderr.write('no pull requests found'); code = 1; } else { pr.state = 'MERGED'; pr.mergeCommit = { oid: state.mergeOid || 'c'.repeat(40) }; out(''); }

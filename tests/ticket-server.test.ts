@@ -71,6 +71,8 @@ describe('ticket API', () => {
     expect(b).toMatchObject({ id: 2, dependsOn: [1], related: [1] });
     expect((await body<TicketDetail>(get('/api/tickets/1'))).ticket.body).toBe('- [ ] box');
     expect((await body<TicketDetail>(get('/api/tickets/0001'))).dependents).toEqual([2]);
+    // No job of the ticket has completed: no merge receipt.
+    expect((await body<TicketDetail>(get('/api/tickets/1'))).receipt).toBeNull();
     expect((await body<TicketList>(get('/api/tickets'))).total).toBe(2);
     const inBeta = await body<TicketList>(get(`/api/tickets?repo=${encodeURIComponent(beta)}`));
     expect(inBeta.tickets.map((t) => t.id)).toEqual([2]);

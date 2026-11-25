@@ -32,7 +32,8 @@ export interface MergeView {
 const SHA = /^[0-9a-f]{7,64}$/i;
 const sha = (v: unknown): string | null => (typeof v === 'string' && SHA.test(v) ? v : null);
 
-function mergedHead(store: Store, id: string): string | null {
+/** GitHub's PR head at merge time, from `pr.merged` (ok) or `pr.observed` (merged); null if unknown. */
+export function mergedHead(store: Store, id: string): string | null {
   const events = eventsOfTypes(store.db, id, ['pr.merged', 'pr.observed']);
   const merged = events.find((e) => e.type === 'pr.merged' && e.payload['ok'] === true);
   const observed = events.find((e) => e.type === 'pr.observed' && e.payload['state'] === 'merged');
