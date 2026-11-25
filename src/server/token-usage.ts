@@ -30,8 +30,8 @@ export interface UsageRecord extends TokenCounts {
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
-const zero = (): TokenCounts => ({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
-function add(to: TokenCounts, c: TokenCounts) {
+export const zero = (): TokenCounts => ({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
+export function add(to: TokenCounts, c: TokenCounts) {
   to.input += c.input;
   to.output += c.output;
   to.cacheRead += c.cacheRead;

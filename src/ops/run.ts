@@ -27,6 +27,7 @@ import {
   launchClaude,
   type LaunchInput,
 } from '../integrations/claude-session.ts';
+import type { TokenCounts } from '../server/types.ts';
 import { listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import { eventsOfTypes, latestEventsByJob, listEvents } from '../storage/events.ts';
@@ -66,7 +67,7 @@ import {
   writeSession,
 } from './runner-state.ts';
 import { listTickets, showTicket } from './tickets.ts';
-import { jobTokens, recordSession, type TokenTotals } from './token-usage.ts';
+import { jobTokens, recordSession } from './token-usage.ts';
 import { sleep } from './verify-lock.ts';
 
 /** The controller's owner identity on every job it runs; its Claude child claims under it too. */
@@ -128,7 +129,7 @@ export interface MergedTicket {
   prUrl: string | null;
   /** Summed `runner.session` seconds; null when none is recorded. */
   seconds: number | null;
-  tokens: TokenTotals | null;
+  tokens: TokenCounts | null;
 }
 
 interface Run {

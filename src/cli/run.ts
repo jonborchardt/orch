@@ -17,8 +17,6 @@ import {
 import { formatSummary } from '../ops/run-report.ts';
 import { openStore } from '../storage/client.ts';
 
-export { formatSummary };
-
 export const RUN_COMMANDS = ['start', 'do', 'stop', 'status', 'resume'] as const;
 
 export const RUN_HELP = `Usage: orch start [repo] | do <ticket-id> [--fast] | stop [next] | status | resume [--force]

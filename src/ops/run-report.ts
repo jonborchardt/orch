@@ -5,13 +5,14 @@
  */
 import { ticketKey } from '../core/tickets.ts';
 import type { MergedTicket, RunSummary } from './run.ts';
-import type { TokenTotals } from './token-usage.ts';
+import type { TokenCounts } from '../server/types.ts';
 
 const NEEDS_YOU = ['needs-human', 'blocked', 'refused'];
+const needsYou = (s: RunSummary) => s.tickets.filter((t) => NEEDS_YOU.includes(t.outcome));
 
 const duration = (s: number) => `${String(Math.floor(s / 60))} min ${String(s % 60)} s`;
 
-function tokens(t: TokenTotals | null): string {
+function tokens(t: TokenCounts | null): string {
   if (t === null) return 'tokens not recorded';
   const sum = t.input + t.output + t.cacheRead + t.cacheCreation;
   return (
@@ -44,7 +45,7 @@ export function formatSummary(s: RunSummary): string {
     `Merged (${String(s.merged.length)})`,
   ];
   lines.push(...(s.merged.length === 0 ? ['none'] : s.merged.flatMap(merged)));
-  const needs = s.tickets.filter((t) => NEEDS_YOU.includes(t.outcome));
+  const needs = needsYou(s);
   lines.push('', `Needs you (${String(needs.length)})`);
   if (needs.length === 0) lines.push('none');
   for (const t of needs) {
@@ -60,6 +61,5 @@ export function formatSummary(s: RunSummary): string {
 
 /** The session mail's subject; `sendReport` puts the configured prefix in front. */
 export function runSubject(s: RunSummary): string {
-  const needs = s.tickets.filter((t) => NEEDS_YOU.includes(t.outcome)).length;
-  return `session ended: ${String(s.merged.length)} merged, ${String(needs)} need you`;
+  return `session ended: ${String(s.merged.length)} merged, ${String(needsYou(s).length)} need you`;
 }

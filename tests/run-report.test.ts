@@ -9,11 +9,12 @@ import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { formatSummary, summaryExitCode } from '../src/cli/run.ts';
+import { summaryExitCode } from '../src/cli/run.ts';
 import { ticketKey } from '../src/core/tickets.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { buildReceipt } from '../src/ops/receipt.ts';
 import { RUNNER_SESSION, startSession } from '../src/ops/run.ts';
+import { formatSummary } from '../src/ops/run-report.ts';
 import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
 import type { Job } from '../src/storage/schema.ts';
 import { insertUsage } from '../src/storage/usage.ts';

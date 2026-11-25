@@ -10,7 +10,7 @@ import { join } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { formatSummary, summaryExitCode } from '../src/cli/run.ts';
+import { summaryExitCode } from '../src/cli/run.ts';
 import { ticketKey } from '../src/core/tickets.ts';
 import { runnerPaths } from '../src/core/paths.ts';
 import { cancelJob } from '../src/ops/actions.ts';
@@ -24,6 +24,7 @@ import {
   startSession,
   stopSession,
 } from '../src/ops/run.ts';
+import { formatSummary } from '../src/ops/run-report.ts';
 import {
   acquireRunnerLock,
   controllerPid,
