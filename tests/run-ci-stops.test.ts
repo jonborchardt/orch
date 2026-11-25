@@ -8,7 +8,12 @@ import { describe, expect, it } from 'vitest';
 import { jobArtifactDir } from '../src/core/paths.ts';
 import type { ClaudeChild, LaunchInput } from '../src/integrations/claude-session.ts';
 import { setMergeAuthorization } from '../src/ops/merge.ts';
-import { RUNNER_SESSION, startSession, TRANSIENT_ATTEMPTS } from '../src/ops/run.ts';
+import {
+  GITHUB_BACKOFF_SECONDS,
+  RUNNER_SESSION,
+  startSession,
+  TRANSIENT_ATTEMPTS,
+} from '../src/ops/run.ts';
 import { addTicket, showTicket } from '../src/ops/tickets.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { claimJob, getJob, releaseJob } from '../src/storage/jobs.ts';
@@ -119,6 +124,20 @@ describe('controller: giving up in the ci stage', () => {
     expect(kept(r.job)).toEqual(kept(r.left));
     expect(r.job).toMatchObject({ stage: 'ci', ownerSession: null, ownerToken: null });
     expect(r.ticket).toBe('in-progress');
+    expect(ghCalls('merge')).toHaveLength(0);
+  });
+
+  it('GitHub failing transiently every time: backs off on the schedule, then unreadable', async () => {
+    const r = await stopAtCi(() => {
+      shim.write({ fail: 'pr view', failMessage: 'HTTP 502: Bad Gateway' });
+    });
+
+    const attempts = GITHUB_BACKOFF_SECONDS.length + 1;
+    expect(r.result?.reason).toContain(`${String(attempts)} times in a row`);
+    expect(r.stops.map((e) => e.payload)).toMatchObject([
+      { outcome: 'blocked', code: 'github-unreadable', reason: r.result?.reason, stage: 'ci' },
+    ]);
+    expect(ghCalls('view').length).toBeGreaterThanOrEqual(attempts);
     expect(ghCalls('merge')).toHaveLength(0);
   });
 });

@@ -499,7 +499,10 @@ outcome that would hit every ticket ends the whole session there: `claude-failed
 (left unfinished, so `orch resume` continues the same ticket),
 `github-unreadable`, `merge-no-answer`, or `github-refused` (`RUN_ENDING_CODES` in
 `src/core/workflow.ts`; any other code continues, decision
-2026-11-23-queue-ends-only-on-run-wide-outcomes). For `ticket-open` (merged and verified, a box
+2026-11-23-queue-ends-only-on-run-wide-outcomes). Before a GitHub failure ends the run there,
+the controller retries one that `transientGitHubError` calls transient (5xx, GraphQL "Something
+went wrong", timeouts, network errors) after 1, 2, 4, 8, and 16 minutes, then ends with the same
+code and the attempt count (decision 2026-11-25-bounded-github-retry). For `ticket-open` (merged and verified, a box
 left unchecked) the next step is to tick or move the remaining boxes, then
 `orch ticket done <id>`. Exit status is 1 in every such case.
 The budgets are counted in the running controller only: `orch do` or `orch resume` starts them
