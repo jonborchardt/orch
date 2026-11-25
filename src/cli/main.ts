@@ -51,7 +51,7 @@ Commands:
   factory <subcommand>   The primary interface: start, plan, resume, dispatch, and list factory
                          jobs for the /factory skill (orch factory --help)
   ticket <subcommand>    The global ticket queue: add, list, ready, show, edit, start, done,
-                         dependencies, import (orch ticket --help)
+                         dependencies (orch ticket --help)
   doctor                 Check the local environment (Node, Git, Claude Code, paths)
   init                   Write a repository's factory.json verification policy, or --check its
                          readiness (orch init --help)
@@ -200,7 +200,6 @@ export async function main(argv: string[]): Promise<number> {
         offset: str,
         of: str,
         note: str,
-        dir: str,
         rank: str,
         up: bool,
         down: bool,

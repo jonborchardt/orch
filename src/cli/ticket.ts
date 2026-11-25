@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 
 import { UsageError } from '../core/errors.ts';
 import { EFFORTS, PRIORITIES, TICKET_STATUSES, TICKET_TYPES } from '../core/tickets.ts';
-import { importRegister } from '../ops/ticket-import.ts';
 import {
   addTicket,
   addTicketArea,
@@ -40,8 +39,6 @@ export interface TicketOptions {
   of?: string;
   note?: string;
   description?: string;
-  dir?: string;
-  'dry-run'?: boolean;
   session?: string;
   by?: string;
   rank?: string;
@@ -93,10 +90,6 @@ order are global. Ids are numbers (85, 0085, #85 all name the same ticket).
   related add|remove <id> <other-id>       informational; never affects readiness
   area list | area add <name> --description <d>
   asset add <id> <file>       Copy a screenshot or attachment into the ticket's private directory
-  import [--dir <register>] [--repo <path>] [--dry-run]
-                              One-shot import of a Markdown todo register (default: todo/ in the
-                              primary checkout of the cwd's repository). Atomic; the files are only
-                              read; a repeat for an imported register changes nothing
 
 Every writing command takes --revision <n> to refuse a concurrent change (exit 4), and records
 --session ($ORCH_SESSION) as the actor. Add --json for machine output.
@@ -220,14 +213,6 @@ export function runTicket(
     case 'asset':
       if (rest[0] !== 'add') throw new UsageError('Usage: orch ticket asset add <id> <file>');
       return addTicketAsset(store, id(1), need(rest[2], '<file>'), { revision: o.revision, actor });
-    case 'import':
-      return importRegister(store, {
-        dir: o.dir,
-        repo: o.repo,
-        cwd: process.cwd(),
-        dryRun: o['dry-run'],
-        actor,
-      });
     case undefined:
       throw new UsageError(TICKET_HELP);
     default:

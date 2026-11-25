@@ -47,8 +47,7 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   export, no dual write. A job is linked to a ticket only through `createJob`'s `ticketId` (the
   claim runs in the job's insert transaction; `jobs_active_ticket_idx` allows one unfinished job
   per ticket); nothing completes a ticket except `orch ticket done` and a verified merge recorded
-  by `recordMerge`. `core/todo-register.ts` and `ops/ticket-import.ts` exist only for the one-shot
-  `orch ticket import`. The skill `.claude/skills/log-todo` calls `orch` only; `orch install`
+  by `recordMerge`. The skill `.claude/skills/log-todo` calls `orch` only; `orch install`
   links it globally along with `skills/factory`. `orch do <ticket>` is the one autonomous way to
   run a ticket; the manual path is `/factory <job>` in a session, then `orch do <ticket>` or
   `orch job merge` (decision 2026-11-23-manual-and-autonomous-ticket-runs).

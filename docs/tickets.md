@@ -124,7 +124,7 @@ rest of the open tickets, each with `blockedBy`: a list of `{kind, detail}` wher
 `ticket.created`, `.edited` (title, body, repository), `.reclassified` (type, area, effort,
 classified), `.priority-changed`, `.rank-changed`, `.dependency-added` / `-removed`, `.related-added` / `-removed`,
 `.started`, `.completed`, `.dropped`, `.reopened`, `.duplicate-marked`, `.job-linked`, `.note`,
-`.asset-added`, `.imported`. Field changes carry `from` and `to`; a body change records only its
+`.asset-added`. Field changes carry `from` and `to`; a body change records only its
 size. `orch ticket note <id> <text>` adds a dated note; lifecycle commands take `--note`.
 
 ## Tickets and jobs
@@ -234,43 +234,6 @@ the platform default): the database, and `tickets/<NNNN>/assets/` for files.
 `orch ticket asset add <id> <file>` copies a file there. Nothing is written into a repository, and
 the HTTP API serves asset names only, never file contents or arbitrary paths. Global queries are
 intentional: this is one person's machine.
-
-## Importing the Markdown register
-
-Before tickets, this repository kept a private, gitignored `todo/` directory: one
-`NNNN-slug.md` per todo with thirteen frontmatter keys in a fixed order (`id, title, status, type,
-area, priority, effort, depends_on, related, duplicate_of, classified, created, updated`), a
-Markdown body with a dated `## Notes` list, an `areas.md`, and optional `assets/`.
-`orch ticket import` reads that format (`src/core/todo-register.ts`).
-
-```sh
-orch ticket import --dry-run --json    # from the primary checkout: the plan, nothing written
-orch ticket import --json              # the import, in one transaction
-```
-
-- Everything is parsed and cross-checked first (fields, references, cycles). Any problem stops the
-  import with the file and line; nothing is written and no number is consumed.
-- Ids: when none of the register's ids is taken, every todo keeps its id. Otherwise the whole
-  register gets new consecutive ids after the highest ticket, and `depends_on`, `related`, and
-  `duplicate_of` are rewritten through the map. The original id is kept as `importId`, and the
-  report's `idMap` lists old to new. Text inside bodies is not rewritten.
-- Bodies are stored whole, Notes included, so nothing a person wrote is lost. Created and updated
-  dates are kept as written. Each ticket gets one `ticket.imported` history row.
-- Jobs: a job of the same repository whose title names exactly one todo (`Todo 0074: ...`,
-  `0044 ...`, `... (todo 8)`, `... (0052)`) is linked to that ticket. A title naming several, a
-  second unfinished job for one ticket, and job ids merely mentioned in a body are reported under
-  `jobs.ambiguous` or `jobs.unresolved` and not linked.
-- Assets named `NNNN-*` are copied to the ticket's asset directory.
-- The report lists every todo under `tickets` (register id, ticket id, title, status, priority,
-  mapped `dependsOn`, `related`, `duplicateOf`) next to the counts, so a dry run can be reconciled
-  against the register before anything is written.
-- The register's files are only read. Each ticket's `ticket.imported` row stores a fingerprint of
-  its todo (every frontmatter value and the body). Running the import again for a register that is
-  exactly as it was imported changes nothing (`alreadyImported: true`); one with a changed, added,
-  or removed todo is refused, naming the ids.
-  After the import the database is the only source of truth: there is no export and no sync.
-
-Keep the `todo/` directory until the report has been checked; it is the backup.
 
 ## Skills
 
