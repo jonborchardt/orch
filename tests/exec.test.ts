@@ -4,20 +4,25 @@
  * per-test tag, started through the platform shell the way the npm shim is. Nothing here kills by
  * executable name; every pid asserted on or terminated was recorded by the tree itself.
  */
-import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { chmodSync, copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { ToolError } from '../src/core/errors.ts';
 import {
   descendantsOf,
   processStartMs,
   type ProcRow,
   spawnCommand,
+  spawnTool,
   sweepDescendants,
+  whichSync,
 } from '../src/core/exec.ts';
-import { tempDir } from './helpers.ts';
+import { findProjectRoot } from '../src/core/paths.ts';
+import { git } from '../src/git/run.ts';
+import { makeRepo, tempDir } from './helpers.ts';
 
 const WIN = process.platform === 'win32';
 
@@ -254,4 +259,106 @@ describe('processStartMs', () => {
     expect(processStartMs(2 ** 31 - 1)).toBeNull();
     expect(processStartMs(-1)).toBeNull();
   }, 150_000);
+});
+
+/** A copy of `env` without the named keys, matched case-insensitively (Windows env spelling). */
+function without(env: NodeJS.ProcessEnv, ...names: string[]): NodeJS.ProcessEnv {
+  const drop = names.map((n) => n.toUpperCase());
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !drop.includes(k.toUpperCase())));
+}
+
+const NO_CWD_SEARCH = 'NoDefaultCurrentDirectoryInExePath';
+
+/**
+ * Plant a fake `git` in `cwd` that writes `<cwd>/ran` when started. Windows: a copy of node.exe
+ * named git.exe, which runs the `rev-parse` script beside it; POSIX: an executable shell script.
+ */
+function plantGit(cwd: string): string {
+  if (WIN) {
+    copyFileSync(process.execPath, join(cwd, 'git.exe'));
+    writeFileSync(
+      join(cwd, 'rev-parse'),
+      "require('node:fs').writeFileSync(require('node:path').join(__dirname, 'ran'), '');\n",
+    );
+  } else {
+    writeFileSync(join(cwd, 'git'), '#!/bin/sh\ntouch "$(dirname "$0")/ran"\n');
+    chmodSync(join(cwd, 'git'), 0o755);
+  }
+  return join(cwd, 'ran');
+}
+
+describe('git is never started from the working directory', () => {
+  let repo: string;
+  let marker: string;
+  // libuv reads this from orch's own environment, so the control needs it gone from both.
+  const saved = process.env[NO_CWD_SEARCH];
+  const env = without(process.env, NO_CWD_SEARCH);
+  beforeAll(() => {
+    repo = makeRepo();
+    marker = plantGit(repo);
+    delete process.env['NoDefaultCurrentDirectoryInExePath'];
+  });
+  afterAll(() => {
+    if (saved !== undefined) process.env[NO_CWD_SEARCH] = saved;
+  });
+  afterEach(() => {
+    rmSync(marker, { force: true });
+  });
+
+  it.runIf(WIN)('control: a bare-name spawn in that directory runs the planted git.exe', () => {
+    spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: repo, env });
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it('spawnTool runs the real Git found on PATH', () => {
+    const r = spawnTool('git', ['rev-parse', '--show-toplevel'], { cwd: repo, env });
+    expect(existsSync(marker)).toBe(false);
+    expect(r.status).toBe(0);
+    expect(resolve(r.stdout.trim())).toBe(resolve(repo));
+  });
+
+  it('findProjectRoot runs the real Git found on PATH', () => {
+    expect(findProjectRoot(repo, env)).toBe(resolve(repo));
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('whichSync skips a relative PATH entry, even one that leads to a planted git', () => {
+    const rel = relative(process.cwd(), repo);
+    expect(isAbsolute(rel)).toBe(false);
+    const found = whichSync('git', { PATH: ['.', rel].join(delimiter), PATHEXT: '.EXE' });
+    expect(found).toBeUndefined();
+  });
+});
+
+describe('spawnTool resolution failures', () => {
+  it('reports Git missing from PATH, and git() and findProjectRoot follow', () => {
+    const empty = tempDir('orch-nopath-');
+    const env = { ...without(process.env, 'PATH'), PATH: empty };
+    const r = spawnTool('git', ['--version'], { env });
+    expect(r.status).toBeNull();
+    expect(r.stderr).toContain('git not found on PATH');
+    expect(findProjectRoot(empty, env)).toBeUndefined();
+    const saved = process.env['PATH'];
+    process.env['PATH'] = empty;
+    try {
+      expect(() => git(empty, 'status')).toThrow(ToolError);
+      expect(() => git(empty, 'status')).toThrow(/git not found on PATH/);
+    } finally {
+      process.env['PATH'] = saved;
+    }
+  });
+
+  it.runIf(WIN)('reads a copied env whose path key is spelled Path', () => {
+    const found = whichSync('git', { Path: process.env['PATH'], PATHEXT: process.env['PATHEXT'] });
+    expect(found && isAbsolute(found)).toBe(true);
+    expect(existsSync(found ?? '')).toBe(true);
+  });
+
+  it.runIf(WIN)('refuses a name that resolves only to a .cmd shim', () => {
+    const shims = tempDir('orch-shim-');
+    writeFileSync(join(shims, 'shimmed.cmd'), '@echo off\r\n');
+    const r = spawnTool('shimmed', [], { env: { PATH: shims, PATHEXT: '.CMD' } });
+    expect(r.status).toBeNull();
+    expect(r.stderr).toContain('cannot be started without a shell');
+  });
 });
