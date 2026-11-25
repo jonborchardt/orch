@@ -47,6 +47,7 @@ import { eventsOfTypes } from '../storage/events.ts';
 import {
   claimJob,
   createJob,
+  type CreateJobInput,
   getJob,
   jobDetail,
   predecessorsOf,
@@ -57,9 +58,9 @@ import type { Artifact, Event, Integration, Job, Review } from '../storage/schem
 import { getTicket } from '../storage/tickets.ts';
 import { latestRun, listIntegrations } from '../storage/verification.ts';
 import { isPreReview } from './gates.ts';
-import { issue as ghIssue } from './github.ts';
+import { issue as ghIssue, isObservation, rerunsFor } from './github.ts';
 import { jobRepository } from './repo.ts';
-import { ticketJobRequest } from './tickets.ts';
+import { type TicketJobRequest, ticketJobRequest } from './tickets.ts';
 import {
   currentFlakes,
   effectivePolicy,
@@ -452,8 +453,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const observations = detail.events.filter((e) => e.type === 'ci.observed');
   const lastObserved = observations.at(-1);
   const ciCurrent = job.ciHead !== null && job.ciHead === (worktree?.head ?? null);
-  const ofHead = (e: Event) =>
-    e.payload['head'] === job.ciHead && e.payload['outcome'] !== undefined;
+  const ofHead = (e: Event) => isObservation(e, job.ciHead);
   const polls = observations.filter(ofHead).length;
   const claimedAt = detail.events.filter((e) => e.type === 'job.claimed').at(-1)?.id ?? 0;
   const sessionPolls = observations.filter((e) => e.id > claimedAt && ofHead(e)).length;
@@ -501,10 +501,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       maxRepairs: job.maxCiRepairs,
       polls,
       sessionPolls,
-      reruns: detail.events.filter(
-        (e) =>
-          e.type === 'ci.rerun' && e.payload['head'] === job.ciHead && e.payload['ok'] === true,
-      ).length,
+      reruns: rerunsFor(detail.events, job.ciHead).requested,
       waitSeconds: waitSeconds(polls),
       release: job.ciStatus === 'pending' && sessionPolls >= CI_MAX_SESSION_POLLS,
       lastReason: (lastObserved?.payload['reason'] as string | undefined) ?? null,
@@ -598,7 +595,10 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const add = (p: string, replace = false) =>
     `orch job artifact add ${id} ${p}${replace ? ' --replace' : ''}${tok}`;
   const complete = `orch job transition ${id} complete${tok}`;
-  const role = (kind: Role['kind']) => roles.find((r) => r.kind === kind);
+  const taskFor = (kind: Role['kind'], artifact: string) => {
+    const r = roles.find((x) => x.kind === kind);
+    return r ? [{ role: r.name, agent: r.agent, model: r.model, artifact }] : [];
+  };
 
   switch (job.stage) {
     case 'spec': {
@@ -609,17 +609,13 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const n = challengeSlot(reviewed);
       const current = latest !== undefined && latest.specSha256 === spec?.sha256;
       const next = `orch factory next ${id}`;
-      const task = (kind: Role['kind'], artifact: string) => {
-        const r = role(kind);
-        if (r) plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact }];
-      };
       if (!spec) {
-        task('spec', 'spec.md');
+        plan.agents = taskFor('spec', 'spec.md');
         plan.reason = 'Write the specification from the request and the repository.';
         plan.commands = [...start, add('spec.md'), next];
       } else if (scopeGapSpecRefusal(detail.artifacts)) {
         // The approver found the spec less than the request (DECISION: REWORK-SPEC).
-        task('spec', 'spec.md');
+        plan.agents = taskFor('spec', 'spec.md');
         plan.reason =
           'Scope gap at approval: decision.md says REWORK-SPEC, the spec covers less than the request. ' +
           'Revise spec.md from the request and decision.md so it covers every requested case, then it is challenged again.';
@@ -628,13 +624,13 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         plan.reason = `${reviewed} passes the current spec.md; complete the stage.`;
         plan.commands = [...start, complete];
       } else if (current && n < 2) {
-        task('spec', 'spec.md');
+        plan.agents = taskFor('spec', 'spec.md');
         plan.reason = `Revise spec.md once to answer the material objections in ${reviewed}, then it is challenged again.`;
         plan.commands = [...start, add('spec.md', true), next];
       } else if (current && humanSpecEdit(detail.events, reviewed, plan.artifacts)) {
         // A human resumed to spec after the second CHANGES and edited spec.md: register it so
         // the next plan re-challenges it. An agent's own edit has no newer human resume.
-        task('spec', 'spec.md');
+        plan.agents = taskFor('spec', 'spec.md');
         plan.reason =
           `A human resumed the job to spec after ${reviewed} and edited spec.md; register the edit ` +
           'as it is (do not rewrite it), then it is challenged again.';
@@ -651,7 +647,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         // No challenge yet, or the latest one reviewed an earlier spec.md.
         const slot = n === 2 || (n === 1 && latest?.marker === 'changes') ? 2 : 1;
         const artifact = `spec-review-${String(slot)}.md`;
-        task('spec-challenge', artifact);
+        plan.agents = taskFor('spec-challenge', artifact);
         plan.reason = `Independent challenge of spec.md against the request and the repository's conventions: write ${artifact} with VERDICT: PASS or CHANGES.`;
         plan.commands = [...start, add(artifact, has(artifact)), next];
       }
@@ -659,8 +655,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     }
     case 'build': {
       const fast = job.mode === 'fast';
-      const r = role(fast ? 'fast-build' : 'build');
-      if (r) plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'build.md' }];
+      plan.agents = taskFor(fast ? 'fast-build' : 'build', 'build.md');
       // A fast job's round stays 0; any earlier build.md is replaced on rework.
       const rework = fast ? has('build.md') : job.round > 0;
       // A rework (CI failure, base-integration conflict or merge edits) is addressed by the next
@@ -702,11 +697,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     case 'simplify': {
       const findings = simplifyReviewArtifact(job.round);
       const record = simplifyArtifact(job.round);
-      const task = (kind: Role['kind'], artifact: string) => {
-        const r = role(kind);
-        return r ? [{ role: r.name, agent: r.agent, model: r.model, artifact }] : [];
-      };
-      plan.agents = [...task('simplify', findings), ...task('build', record)];
+      plan.agents = [...taskFor('simplify', findings), ...taskFor('build', record)];
       plan.reason =
         `Simplify round ${String(job.round)}: the simplifier reviews the job's diff for over-engineering and writes ` +
         `${findings} without touching code; the builder applies the findings that make sense (never widening ` +
@@ -752,9 +743,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       break;
     }
     case 'approve': {
-      const r = role('approve');
-      if (r)
-        plan.agents = [{ role: r.name, agent: r.agent, model: r.model, artifact: 'decision.md' }];
+      plan.agents = taskFor('approve', 'decision.md');
       const behind = worktree.behind ?? 0;
       const boxes = job.ticketId === null ? [] : openChecklist(getTicket(store.db, job.ticketId));
       const key = job.ticketId === null ? '' : ticketKey(job.ticketId);
@@ -898,6 +887,57 @@ export interface StartResult {
   job: Job;
 }
 
+export interface JobRequest {
+  title?: string | undefined;
+  description?: string | undefined;
+  /** As given, for `gh issue view`. */
+  issue?: string | undefined;
+  /** As recorded on the job. */
+  issueRef?: string | undefined;
+  forTicket: TicketJobRequest | undefined;
+  repo: { identity: string; root: string };
+  base: string;
+  maxRounds?: number | undefined;
+  session: string;
+  mode?: CreateJobInput['mode'];
+  supersedes?: CreateJobInput['supersedes'];
+}
+
+/**
+ * Create a job from what the caller asked for: title and description explicit, then from
+ * `--issue`, then from the ticket. Shared by `startJob` and `dispatchJob`.
+ */
+export function createRequestedJob(store: Store, req: JobRequest): Job {
+  let { title, description } = req;
+  if ((!title || description === undefined) && req.issue) {
+    const found = ghIssue(req.issue, req.repo.root);
+    if (!title) ({ title } = found); // also replaces an empty --title, as before
+    description ??= `${found.url}\n\n${found.body}`;
+  }
+  if (title === undefined || title === '') title = req.forTicket?.title;
+  description ??= req.forTicket?.description;
+  if (!title) {
+    throw new ValidationError(
+      'Provide --title (or --issue or --ticket so the title can be fetched).',
+    );
+  }
+  const config = loadConfig(store);
+  return createJob(store, {
+    title,
+    description,
+    ticketId: req.forTicket?.ticket.id,
+    mode: req.mode,
+    issueRef: req.issueRef,
+    repo: req.repo.identity,
+    repoPath: req.repo.root,
+    baseBranch: req.base,
+    maxRounds: req.maxRounds ?? config.maxRounds,
+    maxCiRepairs: config.maxCiRepairs,
+    actor: req.session,
+    supersedes: req.supersedes,
+  });
+}
+
 /** Create, claim, and give a worktree to a new job in one step; returns the first plan. */
 export function startJob(store: Store, input: StartInput): StartResult {
   // The session works where it stands, so the ticket must belong to that repository.
@@ -906,32 +946,12 @@ export function startJob(store: Store, input: StartInput): StartResult {
       ? undefined
       : ticketJobRequest(store, input.ticket, input.repo ?? input.cwd);
   const { repo, base } = jobRepository(input.repo ?? input.cwd, input.base);
-  let title = input.title;
-  let description = input.description;
-  if ((!title || description === undefined) && input.issue) {
-    const found = ghIssue(input.issue, repo.root);
-    if (!title) ({ title } = found); // also replaces an empty --title, as before
-    description ??= `${found.url}\n\n${found.body}`;
-  }
-  if (title === undefined || title === '') title = forTicket?.title;
-  description ??= forTicket?.description;
-  if (!title) {
-    throw new ValidationError(
-      'Provide --title (or --issue or --ticket so the title can be fetched).',
-    );
-  }
-  const config = loadConfig(store);
-  const job = createJob(store, {
-    title,
-    description,
-    ticketId: forTicket?.ticket.id,
+  const job = createRequestedJob(store, {
+    ...input,
     issueRef: input.issue,
-    repo: repo.identity,
-    repoPath: repo.root,
-    baseBranch: base,
-    maxRounds: input.maxRounds ?? config.maxRounds,
-    maxCiRepairs: config.maxCiRepairs,
-    actor: input.session,
+    forTicket,
+    repo,
+    base,
   });
   const { token } = claimJob(store, job.id, { session: input.session });
   const created = createWorktree(store, job.id, { token });

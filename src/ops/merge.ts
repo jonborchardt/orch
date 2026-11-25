@@ -28,7 +28,6 @@ import {
   type GhPrFile,
   listPrFiles,
   mergePr,
-  prWorkflowState,
   viewPr,
 } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
@@ -51,7 +50,7 @@ import type { TicketMergeOutcome } from '../storage/tickets.ts';
 import { ticketKey } from '../core/tickets.ts';
 import { dispatchJob } from './dispatch.ts';
 import { configPath, loadConfig } from './factory.ts';
-import { ghCwd } from './github.ts';
+import { ghCwd, observePr } from './github.ts';
 import { type LeaseMode, withLease } from './lease.ts';
 import { jobRepository } from './repo.ts';
 import { dropWorktree, integrateBase, type IntegrateResult } from './worktree.ts';
@@ -362,13 +361,7 @@ function reland(
   input: MergeInput,
   token: string,
 ): MergeResult {
-  const observed = {
-    event: 'pr.observed',
-    state: prWorkflowState(pr),
-    head: pr.headSha,
-    mergeable: pr.mergeable,
-  } as const;
-  recordPrState(store, job.id, { token }, observed);
+  observePr(store, job.id, pr, { token });
   try {
     const created = relandJob(store, job, token, input.session);
     return result(job, pr, {

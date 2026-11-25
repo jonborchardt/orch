@@ -4,6 +4,8 @@
  * and the view shown for the newest flag. A flag is a label for a human, never a verdict: it never
  * changes a run's status, its validity, or a gate.
  */
+import { stripVTControlCharacters } from 'node:util';
+
 import type { Event, Job } from '../storage/schema.ts';
 import { TERMINAL_STATUSES } from './workflow.ts';
 
@@ -29,25 +31,23 @@ export interface Flake {
   sharedWith: string[];
 }
 
-// OSC (`ESC ] ... BEL` or `ESC ] ... ESC \`), CSI, then every other control character except tab
+// Escape sequences (`stripVTControlCharacters`), then every other control character except tab
 // and newline, so a test name never carries terminal control into status output or mail.
 /* eslint-disable no-control-regex */
-const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g;
-const CSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 const ANY_CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
 /* eslint-enable no-control-regex */
 
 /** One line of untrusted text: escape sequences removed, other control characters (CR, LF, tab) as spaces. */
 export function stripControl(s: string): string {
-  return s.replace(OSC, '').replace(CSI, '').replace(ANY_CONTROL, ' ');
+  return stripVTControlCharacters(s).replace(ANY_CONTROL, ' ');
 }
 
 /** ` FAIL  <file> > <suite> > <test>` and ` FAIL  <file>` lines, de-duplicated, in log order. */
 export function parseFailures(log: string): FailedTest[] {
   const out: FailedTest[] = [];
   const seen = new Set<string>();
-  const clean = log.replace(/\r\n/g, '\n').replace(OSC, '').replace(CSI, '').replace(CONTROL, '');
+  const clean = stripVTControlCharacters(log.replace(/\r\n/g, '\n')).replace(CONTROL, '');
   for (const line of clean.split('\n')) {
     // trim/startsWith, not a regex: a long run of spaces must not backtrack quadratically.
     const t = line.trim();

@@ -46,16 +46,8 @@ export function latestEventsByJob(
   jobIds: readonly string[],
   types: readonly string[],
 ): Map<string, Map<string, Event>> {
-  const out = new Map<string, Map<string, Event>>(jobIds.map((id) => [id, new Map()]));
-  if (jobIds.length === 0 || types.length === 0) return out;
-  const rows = db
-    .select()
-    .from(events)
-    .where(and(inArray(events.jobId, [...jobIds]), inArray(events.type, [...types])))
-    .orderBy(events.id)
-    .all();
-  for (const e of rows) out.get(e.jobId)?.set(e.type, e);
-  return out;
+  const all = eventsByJob(db, jobIds, types);
+  return new Map([...all].map(([id, list]) => [id, new Map(list.map((e) => [e.type, e]))]));
 }
 
 /** Highest event id so far (0 for an empty log): the watermark a mail report starts after. */
