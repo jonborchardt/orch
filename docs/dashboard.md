@@ -2,8 +2,8 @@
 
 The optional local dashboard: what it shows, how its status is derived, its security model, and
 how it is tested. The dashboard manages and observes work; the CLI and Claude Code sessions remain
-where work is executed. It has no controller start, stop, or resume control, no analytics or usage
-view, and no chat with an agent. Operating the factory: [operations.md](operations.md).
+where work is executed. It has no controller start, stop, or resume control and no chat with an
+agent. Operating the factory: [operations.md](operations.md).
 
 ## Dashboard
 
@@ -21,12 +21,35 @@ started it with a piped stdin closes that pipe. A null or closed stdin is ignore
 scheduled task, or a background shell can launch it (`orch ui --port 0 < /dev/null &`, or `< NUL`
 on Windows) and it keeps serving; a pipe that closes at once (`echo | orch ui`) still stops it.
 
-**Sections.** The app bar has two: **Jobs** (`#/`, and `#/jobs/<id>` for one job) and **Tickets**
-(`#/tickets`, and `#/tickets/<id>` for one ticket). Each is a link, so every view can be opened,
-reloaded, and bookmarked by its URL. The job counts and the job filters show only in Jobs; a
-section polls only what it shows, so the ticket queue is not read while Jobs is open and the job
-board rests while Tickets is. A further section is one entry in `SECTIONS` in `web/src/App.tsx`
-and one branch where the page body is chosen.
+**Sections.** The app bar has four: **Jobs** (`#/`, and `#/jobs/<id>` for one job), **Tickets**
+(`#/tickets`, and `#/tickets/<id>` for one ticket), **Runs** (`#/runs`), and **Agents**
+(`#/agents`). Each is a link, so every view can be opened, reloaded, and bookmarked by its URL. The
+job counts, the job filters, and the board's error alert show only in Jobs; a section polls only
+what it shows, so the ticket queue is not read while Jobs is open and the job board rests while any
+other section is. A further section is one entry in `SECTIONS` in `web/src/App.tsx` and one branch
+where the page body is chosen.
+
+**Runs** (`GET /api/runs`, `runs` in `src/server/api.ts`) aggregates every job in every repository,
+archived ones included, from rows already stored; nothing is estimated, and a value that cannot be
+measured is null and reads "Unavailable". `total` is every job; `completed` and `cancelled` count
+those statuses; `active` counts `pending`, `running`, `blocked`, `interrupted`, and `failed`.
+`completionRate` is completed / (completed + cancelled). Average and median duration cover
+completed jobs only, from `createdAt` to the finish the board's Elapsed uses (`completedAt`, else
+the newest `job.completed` or `job.cancelled` event); completed jobs with no known finish are
+counted in `durationUnknown`. `completedPerHour` is completed jobs divided by the hours from the
+earliest `createdAt` of any job to the latest finish of a completed job, over the whole history.
+
+**Agents** (`GET /api/agents`, `agents` in `src/server/api.ts`) has one row per role in `ROLES`
+(`src/core/roles.ts`), in order. Every row satisfies invocations = success + failure + other +
+open; runtimes average and take the median of measured intervals only (an end and a duration above
+zero), and the rest are unmeasured. Reviewers (source `reviews`) count one invocation per `reviews`
+row: `pass` is success, `changes` is failure, no verdict is open, and the runtime is
+`completedAt - createdAt`. `spec-writer`, `builder` (full jobs), `fast-builder` (fast jobs),
+`simplifier`, and `approver` (source `stage`) count one invocation per `stage.started` of their
+stage, paired with its end by the same rule as `orch job usage`: `stage.completed` is success,
+`stage.failed` is failure, `job.blocked`, `job.reworked`, `job.cancelled`, or `job.interrupted` is
+other, and no end is open. Their runtime is labelled "stage time (includes coordinator work)".
+`spec-challenger` has no record of its own (source `none`) and reads "Not recorded".
 
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
 worktree, review round, reviews, elapsed time, start time, last update, PR link and CI rollup.
