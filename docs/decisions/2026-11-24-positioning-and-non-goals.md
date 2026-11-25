@@ -21,9 +21,6 @@ Non-goals, which a ticket or reviewer can cite to decline a feature:
 - **More LLM-judged reviewers**: another opinion is not evidence; prove it in code instead.
 - **Gate-skipping flags**: no option bypasses a gate, for speed or otherwise.
 
-**Why.** The 2026-11-24 study of about 45 tools ([landscape.md](../landscape.md)) found that other
-tools get autonomy by handing assurance to branch protection and human review; `orch`'s place is
-the combination of the two. A feature that adds breadth (more agents, more hosts, a team) without
-adding proof competes where others are already stronger, and one that weakens a gate gives up the
-position itself. Writing the test down lets a ticket or a review settle "does this fit" by citing
-it.
+**Why.** Per [landscape.md](../landscape.md), other tools are already stronger at breadth (more
+agents, hosts, or people), so a feature that adds breadth without proof competes where `orch` is
+weak, and one that weakens a gate gives up the position itself.

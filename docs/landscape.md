@@ -18,14 +18,10 @@ Every row and claim carries a date and a basis:
 
 Tools in every category change quickly; check a claim before relying on it.
 
-## The four axes
-
-1. **Who decides the steps**: code, an orchestrating agent, or a person.
-2. **Who runs the checks**: the tool itself, CI, the agent, or a person.
-3. **What stops a wrong merge**: an enforced rule, branch protection, or human review.
-4. **What runs unattended**: how far the tool goes without a person watching.
-
 ## By category
+
+The columns are the four axes the README uses: who decides the steps, who runs the checks, what
+stops a wrong merge, and what runs unattended.
 
 | category                   | who decides the steps                                       | who runs the checks                                        | what stops a wrong merge                                                                  | what runs unattended                                                  | basis                    |
 | -------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------ |
@@ -59,20 +55,13 @@ What that position does and does not cover is recorded in
 
 ## The merge-result gap
 
-Demonstrated, 2026-11-24, from this repository: `mergeDecision` merges only when GitHub's compare
-says the verified head contains the base's current tip
-([decisions/2026-11-24-merge-requires-current-base.md](decisions/2026-11-24-merge-requires-current-base.md));
-a base that moved since `ciHead` reopens the job instead of merging. What remains open is the race
-between that compare and `gh pr merge` (`--match-head-commit` pins only the head), and that nothing
-tests the merged result the way a merge queue does. GitHub's "require branches to be up to date"
-rule closes the window.
+Demonstrated, 2026-11-24, from this repository: `mergeDecision` refuses a base that moved since
+`ciHead` ([decisions/2026-11-24-merge-requires-current-base.md](decisions/2026-11-24-merge-requires-current-base.md)).
+What remains open is the race between that compare and `gh pr merge`, and that nothing tests the
+merged result the way a merge queue does.
 
 ## Name collisions
 
-Claimed, 2026-11-24, from the study's summary:
-
-- **agent-orchestrator**: the study attributes this name to Composio's AO. `overview.md` reads the
-  project at `github.com/OrchestratorInc/agent-orchestrator`; whether the two are the same project
-  is not verified here.
-- **factory**: used by factory.com and others. `orch`'s `/factory` skill and `factory.json` share
-  the word, not the product.
+Claimed, 2026-11-24, from the study's summary: "agent-orchestrator" is also attributed to Composio's
+AO (not verified to be the project `overview.md` reads), and "factory" is used by factory.com and
+others.
