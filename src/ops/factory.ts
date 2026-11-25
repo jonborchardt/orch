@@ -821,16 +821,14 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const budget = `Repairs used: ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}.`;
       // A stored verdict, even a passing one for HEAD, never completes the stage: orch gh ci
       // re-reads GitHub and completes in the same call when the checks still pass for this head.
-      if (plan.ci.release && controllerCi) {
+      if (plan.ci.release) {
+        const why = controllerCi
+          ? `CI is pending, and the factory controller that launched this session polls CI itself. ` +
+            `Release the job and stop; the controller waits for CI and carries the job on.`
+          : `CI is still pending after ${String(sessionPolls)} observations in this session. Release the job, ` +
+            `tell the user CI is running, and stop; orch factory resume re-reads GitHub later.`;
         plan.reason =
-          `CI is pending, and the factory controller that launched this session polls CI itself. ` +
-          `Release the job and stop; the controller waits for CI and carries the job on. ${budget}` +
-          (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
-        plan.commands = [`orch job release ${id}${tok}`];
-      } else if (plan.ci.release) {
-        plan.reason =
-          `CI is still pending after ${String(sessionPolls)} observations in this session. Release the job, ` +
-          `tell the user CI is running, and stop; orch factory resume re-reads GitHub later. ${budget}` +
+          `${why} ${budget}` +
           (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
         plan.commands = [`orch job release ${id}${tok}`];
       } else {
