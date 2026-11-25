@@ -77,16 +77,13 @@ describe('dashboard merge', () => {
       },
     ]);
     expect(detail(store, c.id).prPhase).toBe('merged');
-    // Once merged, the worktree can go.
-    expect(detail(store, c.id).actions).toEqual(['remove-worktree', 'archive']);
-    // The dashboard's episode released the job again.
-    expect(job(c)).toMatchObject({ ownerSession: null, ownerToken: null });
-    // Remove worktree deletes the directory, keeps the branch, and is offered no more.
-    const removed = dashboardAction(store, c.id, { action: 'remove-worktree', force: true });
-    expect(removed.job.worktreePath).toBeNull();
+    // The verified merge removed the clean worktree and kept the branch.
+    expect(job(c).worktreePath).toBeNull();
     expect(existsSync(c.wt)).toBe(false);
     expect(job(c).branch).not.toBeNull();
     expect(detail(store, c.id).actions).toEqual(['archive']);
+    // The dashboard's episode released the job again.
+    expect(job(c)).toMatchObject({ ownerSession: null, ownerToken: null });
   });
 
   it('refuses without merging when GitHub or the record does not back the verified head', () => {

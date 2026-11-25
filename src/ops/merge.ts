@@ -37,6 +37,7 @@ import {
   pendingMerge,
   predecessorsOf,
   recordMerge,
+  recordEvent,
   recordPrState,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
@@ -47,6 +48,7 @@ import { configPath, loadConfig } from './factory.ts';
 import { ghCwd } from './github.ts';
 import { type LeaseMode, withLease } from './lease.ts';
 import { jobRepository } from './repo.ts';
+import { dropWorktree } from './worktree.ts';
 
 /** gh may take up to two minutes per call; the episode makes three. */
 const MERGE_LEASE_MINUTES = 10;
@@ -320,6 +322,24 @@ function idle(store: Store, job: Job, seen: Seen, input: MergeInput): MergeResul
   return null;
 }
 
+/**
+ * After a verified merge is recorded, remove the job's worktree the way `orch worktree remove`
+ * does (refused when dirty; the branch is kept). The merge never fails because of it: any error
+ * is recorded as `worktree.kept`. One sentence (with a leading space); empty without a worktree.
+ */
+function cleanUp(store: Store, job: Job, token: string): string {
+  const path = job.worktreePath;
+  if (!path) return '';
+  try {
+    dropWorktree(store, job.id, { token });
+    return ` Removed the worktree ${path}.`;
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    recordEvent(store, job.id, { token }, 'worktree.kept', { path, reason: why });
+    return ` Kept the worktree ${path}: ${why.replace(/\.$/, '')}.`;
+  }
+}
+
 /** The steps that write, as the holder of `token`. */
 function act(store: Store, job: Job, seen: Seen, input: MergeInput, token: string): MergeResult {
   const { pr, step } = seen;
@@ -332,7 +352,7 @@ function act(store: Store, job: Job, seen: Seen, input: MergeInput, token: strin
       outcome,
       verified: m.verified,
       ticket,
-      reason: mergedText(job, now, m, ticket),
+      reason: mergedText(job, now, m, ticket) + (m.verified ? cleanUp(store, job, token) : ''),
     });
   };
 
