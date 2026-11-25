@@ -729,7 +729,7 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
     if (input.verdict) {
       const rel = reviewArtifact(job.round, input.reviewer);
       const checked = validateArtifact(jobArtifactDir(id, store.paths), rel);
-      assertStageOwns(checked.path, job.stage, job.round, job.returnStage);
+      assertStageOwns(checked.path, job.stage, job.round);
       if (checked.marker !== null && checked.marker !== input.verdict) {
         throw new ValidationError(
           `Verdict ${input.verdict} does not match ${checked.path}, which says VERDICT: ${checked.marker.toUpperCase()}.`,
