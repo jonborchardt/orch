@@ -12,7 +12,7 @@ import {
   resumeFactoryJob,
   startJob,
 } from '../ops/factory.ts';
-import { mergeAuthorization, setMergeAuthorization } from '../ops/merge.ts';
+import { mergeOptIn } from '../ops/merge.ts';
 import type { Store } from '../storage/client.ts';
 import { int, need, oneOf } from './args.ts';
 
@@ -74,7 +74,8 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
                               Whether orch job merge may merge PRs of that repository (default:
                               this one) without a human click. Off until enabled; stored per
                               repository identity in your own factory.json, never in a repository.
-                              It lifts no gate: every merge check still has to pass
+                              It lifts no gate: every merge check still has to pass. Also shows
+                              the repository's readiness grade (orch init --check), as advice
 
 --session defaults to $ORCH_SESSION, else to a newly generated unique id. start, dispatch, resume,
 and cancel print the session they ran as; pass it back as --session on later commands.
@@ -177,10 +178,7 @@ export function runFactory(
           'Usage: orch factory config [merge enable|disable|status [--repo <path>]]',
         );
       }
-      const path = o.repo ?? process.cwd();
-      return action === 'status'
-        ? mergeAuthorization(store, path)
-        : setMergeAuthorization(store, path, action === 'enable');
+      return mergeOptIn(store, o.repo ?? process.cwd(), action as 'enable' | 'disable' | 'status');
     }
     case undefined:
       throw new UsageError(FACTORY_HELP);

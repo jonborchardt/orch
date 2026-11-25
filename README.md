@@ -182,9 +182,16 @@ cd ~/code/my-app
 orch init --from-package-json      # proposes npm run check / build from package.json; or --command "test=cargo test"
 cat factory.json                   # executables on PATH, argument arrays, no shell strings
 git add factory.json && git commit -m "Add factory verification policy" && git push
-orch init --check                  # READY, or exactly what is missing
-orch factory config merge enable --repo ~/code/my-app   # let orch merge this repository's verified PRs
+orch init --check                  # READY, or exactly what is missing; plus a readiness grade A-D
+orch factory config merge enable --repo ~/code/my-app   # let orch merge this repository's verified PRs (shows the grade)
 ```
+
+The readiness grade counts four facts: the policy has a required check that runs tests (its id or
+arguments contain `test` or `check`), and, read with `gh` when origin is on github.com, the base
+branch requires status checks, requires branches to be up to date (or uses a merge queue), and is
+protected. A = 4, B = 3, C = 2, D = 0 or 1; a fact GitHub would not answer is unknown and never
+counts. `orch factory config merge` and the dashboard's Merge dialog show the same grade. It is
+advice only: it never changes an exit code, a gate, or a merge.
 
 ```json
 {

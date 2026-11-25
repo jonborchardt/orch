@@ -472,12 +472,13 @@ export interface ShimState {
   checkRuns?: Record<string, ShimCheckRun[]> | undefined;
   /** Commit statuses per sha (`*` = any sha). */
   statuses?: Record<string, { context: string; state: string; target_url?: string }[]> | undefined;
-  /** Classic branch protection required checks; null/absent = HTTP 404. */
-  protection?: { contexts?: string[]; checks?: { context: string }[] } | null | undefined;
+  /** Classic branch protection required checks (`strict`: up to date); null/absent = HTTP 404. */
+  protection?:
+    { strict?: boolean; contexts?: string[]; checks?: { context: string }[] } | null | undefined;
   rules?: Record<string, unknown>[] | undefined;
   /** Actions job logs by job id. */
   logs?: Record<string, string> | undefined;
-  /** Any other `gh api <path>` answer by path (query string stripped). */
+  /** Any other `gh api <path>` answer by path (query string stripped), e.g. `repos/o/n/branches/main`. */
   api?: Record<string, unknown> | undefined;
 }
 

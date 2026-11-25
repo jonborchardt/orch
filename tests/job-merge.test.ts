@@ -756,13 +756,19 @@ describe('orch job merge', () => {
     });
 
     const config = ['factory', 'config', 'merge'];
+    // The readiness grade sits next to the opt-in as advice: GitHub answers 404 here, so the
+    // branch facts are false, and enable still writes the opt-in whatever the grade.
+    const noRules = { requiredChecks: false, upToDate: false, protection: false };
     expect(json(cli(['--json', ...config, 'status', '--repo', clone]))).toMatchObject({
       enabled: false,
+      grade: { letter: 'D', facts: noRules },
     });
     expect(json(cli(['--json', ...config, 'enable', '--repo', clone]))).toMatchObject({
       repo: REPO,
       enabled: true,
+      grade: { letter: 'D' },
     });
+    expect(mergeAuthorized(store, REPO)).toBe(true);
     expect(cli([...config, 'nonsense']).code).toBe(2);
 
     const merged = cli(['job', 'merge', job.id]);
