@@ -122,6 +122,51 @@ describe('Usage section', () => {
     expect(within(jobs).getByText('Transcript x.jsonl was not found.')).toBeInTheDocument();
   });
 
+  it('shows the cost weight in the total, per job, and as the charted value (ticket 0145)', async () => {
+    mount('#/usage');
+    const table = await screen.findByRole('table', { name: 'Usage total' });
+    // 1234 + 5 x 1.25 + 100 x 0.1 + 8 x 5 = 1290.25, shown whole.
+    expect(
+      within(table).getByRole('rowheader', { name: 'Weight' }).nextElementSibling?.textContent,
+    ).toBe((1290).toLocaleString());
+    const jobs = screen.getByRole('table', { name: 'Usage per job' });
+    const cells = (title: string) =>
+      [...(within(jobs).getByRole('link', { name: title }).closest('tr')?.cells ?? [])].map(
+        (c) => c.textContent,
+      );
+    expect(within(jobs).getByRole('columnheader', { name: 'Weight' })).toBeInTheDocument();
+    expect(cells('Alpha')[6]).toBe((1290).toLocaleString());
+    expect(cells('Beta')[6]).toBe('0');
+    expect(
+      screen.getByText(/input-token equivalents.*approximate API price ratios, not a bill/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('group', { name: 'Estimated cost weight per hour' }),
+    ).toBeInTheDocument();
+    // 09:00: 10 + 5 x 1.25 + 100 x 0.1 + 8 x 5 = 66.25.
+    const hour = screen
+      .getAllByRole('img')
+      .find((g) => g.getAttribute('aria-label')?.includes('66'));
+    expect(hour?.getAttribute('aria-label')).toMatch(/weight 66 /);
+    expect(hour?.getAttribute('aria-label')).not.toContain('66.25');
+    if (!hour) throw new Error('no 09:00 bar');
+    fireEvent.focus(hour);
+    const readout = screen.getByRole('status');
+    expect(readout).toHaveTextContent('weight 66;');
+    expect(readout).toHaveTextContent('input 10, output 8, cache read 100, cache creation 5');
+    // Y axis 0..80 in steps of 20 (top at or above 66), units named.
+    expect(screen.getByText('Weight (input-token equivalents)')).toBeInTheDocument();
+    const yAxis = within(screen.getByLabelText('Weight axis'));
+    expect(yAxis.getAllByText(/./).map((e) => e.textContent)).toEqual([
+      '0',
+      '20',
+      '40',
+      '60',
+      '80',
+    ]);
+    expect(within(screen.getByLabelText('Time axis')).getAllByText(/\d/).length).toBeGreaterThan(0);
+  });
+
   it('requests hours=168 for 7 days, and again on Refresh (AC8)', async () => {
     mount('#/usage');
     await screen.findByRole('table', { name: 'Usage total' });

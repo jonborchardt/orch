@@ -56,7 +56,7 @@ the end `stage.completed`, `stage.failed`, `job.blocked`, `job.reworked`, `job.c
 `job.interrupted` picks the column. Stage time includes coordinator work.
 
 **Usage** (`GET /api/usage?hours=<24|168|720>`, `tokenUsage` in `src/server/api.ts`, read model
-in `src/server/token-usage.ts`) charts tokens per UTC hour (labelled in local time) over the last
+in `src/server/token-usage.ts`) charts token use per UTC hour (labelled in local time) over the last
 24 hours, 7 days, or 30 days, the current partial hour included; any other `hours` is a 400. It
 reads the Claude Code transcripts of every job, archived included, with a claude-code
 `session.attached` UUID: every such session, its main `<ref>.jsonl` and its
@@ -73,8 +73,13 @@ refused, a refused `subagents/` directory or file, a file over `USAGE_FILE_BYTES
 request's `USAGE_TOTAL_BYTES`, or beyond `USAGE_SUBAGENT_FILES`, makes the job _missing_: every
 bucket overlapping its span lists the job id in `missing` and is drawn hatched and outlined with
 its text label ("missing data for ..."), never as a plain zero; the job's row carries the reason
-and the total's `complete` is false. The page shows the total per kind and overall, the stacked
-bar chart (SVG, no chart library), and a per-job table linking each job. Sessions already
+and the total's `complete` is false. The page shows the total per kind and overall, a stacked
+bar chart (SVG, no chart library), and a per-job table linking each job. The client adds a cost
+weight in plain-input-token equivalents, `input x 1 + cache creation x 1.25 + cache read x 0.1 +
+output x 5` (`WEIGHTS` in `web/src/Usage.tsx`; approximate API price ratios, not a bill), shown
+whole beside the counts in the total and per job. The chart plots weight per hour, each kind at
+its weighted share, with a weight axis, local-time ticks, gridlines, and a readout of the hour's
+weight and four counts on hover or keyboard focus. Sessions already
 recorded in the `token_usage` table (one row per session ref, counts per UTC hour; decision
 2026-11-24-recorded-token-usage) are summed from the database by their own hours and never read or
 flagged; only unrecorded sessions are read live as above, and a stored job with no
