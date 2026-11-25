@@ -124,7 +124,7 @@ rest of the open tickets, each with `blockedBy`: a list of `{kind, detail}` wher
 `ticket.created`, `.edited` (title, body, repository), `.reclassified` (type, area, effort,
 classified), `.priority-changed`, `.rank-changed`, `.dependency-added` / `-removed`, `.related-added` / `-removed`,
 `.started`, `.completed`, `.dropped`, `.reopened`, `.duplicate-marked`, `.job-linked`, `.note`,
-`.asset-added`, `.imported`. Field changes carry `from` and `to`; a body change records only its
+`.asset-added`. Field changes carry `from` and `to`; a body change records only its
 size. `orch ticket note <id> <text>` adds a dated note; lifecycle commands take `--note`.
 
 ## Tickets and jobs
