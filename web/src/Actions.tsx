@@ -14,12 +14,13 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { type ReactElement, useState } from 'react';
+import { Fragment, type ReactElement, useState } from 'react';
 
 import type { DashboardAction } from '../../src/ops/actions.ts';
 import type { ActionResponse, JobDetailView } from '../../src/server/types.ts';
 import { ApiFailure, postAction } from './api.ts';
 import { PrLink } from './Links.tsx';
+import { resumeAt } from './Status.tsx';
 
 const LABEL: Record<DashboardAction, string> = {
   approve: 'Resume at stage',
@@ -38,10 +39,6 @@ const LABEL: Record<DashboardAction, string> = {
 };
 
 const STAGES = ['spec', 'build', 'simplify', 'review', 'approve', 'pr', 'ci'] as const;
-
-/** `approve` resumes the job at a stage; label it by that stage (`ci` and `pr` in capitals). */
-const resumeAt = (stage: string) =>
-  `Resume at ${stage === 'ci' || stage === 'pr' ? stage.toUpperCase() : stage}`;
 
 /**
  * The review round a rework, a review request, or a resume at review/simplify leads to. The human's
@@ -142,6 +139,30 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     detail.job.ownerSession !== 'dashboard' &&
     detail.job.leaseExpiresAt !== null &&
     Date.parse(detail.job.leaseExpiresAt) > Date.now();
+
+  // The controls after Merge and Refresh PR, in order: [action, label, variant, colour].
+  const buttons: [
+    DashboardAction,
+    string,
+    'contained' | 'outlined',
+    'success' | 'inherit' | 'warning' | 'error' | undefined,
+  ][] = [
+    [
+      'approve',
+      resumeAt(resumeStage),
+      approvalGate ? 'contained' : 'outlined',
+      approvalGate ? 'success' : 'inherit',
+    ],
+    ['fix-conflicts', 'Fix merge conflicts', 'outlined', 'warning'],
+    ['request-rework', 'Request rework', reworkPrimary ? 'contained' : 'outlined', undefined],
+    ['request-review', 'Request review round', 'outlined', undefined],
+    ['accept-policy', 'Accept verification policy', 'outlined', 'warning'],
+    ['accept-delivery', 'Accept delivery', 'outlined', 'warning'],
+    ['cancel', 'Cancel job', 'outlined', 'error'],
+    ['remove-worktree', 'Remove worktree', 'outlined', undefined],
+    ['archive', 'Archive', 'outlined', undefined],
+    ['unarchive', 'Unarchive', 'outlined', undefined],
+  ];
 
   // describeChild puts the effect in aria-describedby, so the button keeps its name. A disabled
   // button gets no tooltip (MUI cannot attach one).
@@ -270,131 +291,25 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
             Refresh PR
           </Button>
         )}
-        {allowed.has('approve') &&
-          tip(
-            'approve',
-            <Button
-              variant={approvalGate ? 'contained' : 'outlined'}
-              color={approvalGate ? 'success' : 'inherit'}
-              onClick={() => {
-                start('approve');
-              }}
-            >
-              {resumeAt(resumeStage)}
-            </Button>,
-          )}
-        {allowed.has('fix-conflicts') &&
-          tip(
-            'fix-conflicts',
-            <Button
-              variant="outlined"
-              color="warning"
-              onClick={() => {
-                start('fix-conflicts');
-              }}
-            >
-              Fix merge conflicts
-            </Button>,
-          )}
-        {allowed.has('request-rework') &&
-          tip(
-            'request-rework',
-            <Button
-              variant={reworkPrimary ? 'contained' : 'outlined'}
-              onClick={() => {
-                start('request-rework');
-              }}
-            >
-              Request rework
-            </Button>,
-          )}
-        {allowed.has('request-review') &&
-          tip(
-            'request-review',
-            <Button
-              variant="outlined"
-              onClick={() => {
-                start('request-review');
-              }}
-            >
-              Request review round
-            </Button>,
-          )}
-        {allowed.has('accept-policy') &&
-          tip(
-            'accept-policy',
-            <Button
-              variant="outlined"
-              color="warning"
-              onClick={() => {
-                start('accept-policy');
-              }}
-            >
-              Accept verification policy
-            </Button>,
-          )}
-        {closeOut &&
-          tip(
-            'accept-delivery',
-            <Button
-              variant="outlined"
-              color="warning"
-              onClick={() => {
-                start('accept-delivery');
-              }}
-            >
-              Accept delivery
-            </Button>,
-          )}
-        {allowed.has('cancel') &&
-          tip(
-            'cancel',
-            <Button
-              variant="outlined"
-              color="error"
-              onClick={() => {
-                start('cancel');
-              }}
-            >
-              Cancel job
-            </Button>,
-          )}
-        {allowed.has('remove-worktree') &&
-          tip(
-            'remove-worktree',
-            <Button
-              variant="outlined"
-              onClick={() => {
-                start('remove-worktree');
-              }}
-            >
-              Remove worktree
-            </Button>,
-          )}
-        {allowed.has('archive') &&
-          tip(
-            'archive',
-            <Button
-              variant="outlined"
-              onClick={() => {
-                start('archive');
-              }}
-            >
-              Archive
-            </Button>,
-          )}
-        {allowed.has('unarchive') &&
-          tip(
-            'unarchive',
-            <Button
-              variant="outlined"
-              onClick={() => {
-                start('unarchive');
-              }}
-            >
-              Unarchive
-            </Button>,
-          )}
+        {buttons.map(
+          ([a, label, variant, color]) =>
+            allowed.has(a) && (
+              <Fragment key={a}>
+                {tip(
+                  a,
+                  <Button
+                    variant={variant}
+                    color={color}
+                    onClick={() => {
+                      start(a);
+                    }}
+                  >
+                    {label}
+                  </Button>,
+                )}
+              </Fragment>
+            ),
+        )}
       </Stack>
 
       {open === null && error && <Alert severity="error">{error}</Alert>}

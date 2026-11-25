@@ -2,7 +2,7 @@ import { Link } from '@mui/material';
 import { Fragment, type ReactNode } from 'react';
 
 import type { JobDetailView } from '../../src/server/types.ts';
-import { commitHref, knownCommits, logHref, prParts } from './format.ts';
+import { commitHref, knownCommits, prParts } from './format.ts';
 
 /** Every link out of the detail view opens a new tab and leaks no referrer or opener. */
 const external = { target: '_blank', rel: 'noreferrer noopener' } as const;
@@ -27,24 +27,26 @@ export function commitRef(detail: JobDetailView): (sha: string, len?: number) =>
   };
 }
 
-/** A recorded log on the artifact route, or its path as plain text when it is not log-shaped. */
+/**
+ * A recorded log on the artifact route (`links.logs`, computed by the server), or its path as
+ * plain text when the server gave it no href.
+ */
 export function LogRef({
-  jobId,
   path,
+  href,
   label = '',
 }: {
-  jobId: string;
-  path: unknown;
+  path: string;
+  href: string | undefined;
   label?: string;
 }) {
-  const href = logHref(jobId, path);
   return href ? (
     <Link href={href} {...external}>
       {label}
-      {String(path)}
+      {path}
     </Link>
   ) : (
-    <>{String(path)}</>
+    <>{path}</>
   );
 }
 

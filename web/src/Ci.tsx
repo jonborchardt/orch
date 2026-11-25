@@ -1,7 +1,7 @@
 import { Alert, Chip, Link, Stack, Typography } from '@mui/material';
 
 import type { CiView, JobDetailView } from '../../src/server/types.ts';
-import { ago, type ChipColor, ciColor, httpsHref, logHref, sha7 } from './format.ts';
+import { ago, type ChipColor, ciColor, httpsHref, sha7 } from './format.ts';
 import { LogRef, PrText, commitRef } from './Links.tsx';
 
 type PrPhase = JobDetailView['prPhase'];
@@ -147,6 +147,7 @@ export function CiPanel({ detail }: { detail: JobDetailView }) {
         <ul style={{ margin: 0 }}>
           {ci.failures.map((f) => {
             const url = httpsHref(f.url);
+            const log = f.log ? detail.links.logs[f.log] : undefined;
             return (
               <li key={f.name}>
                 <b>{f.name}</b> {f.conclusion}
@@ -158,10 +159,10 @@ export function CiPanel({ detail }: { detail: JobDetailView }) {
                     </Link>
                   </>
                 ) : null}
-                {logHref(job.id, f.log) ? (
+                {f.log && log ? (
                   <>
                     {' '}
-                    · <LogRef jobId={job.id} path={f.log} label="Saved log " />
+                    · <LogRef path={f.log} href={log} label="Saved log " />
                   </>
                 ) : f.log ? (
                   <>

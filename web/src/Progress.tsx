@@ -130,7 +130,7 @@ export function RoundIndicator({
 }
 
 /** Relative time like the rest of the dashboard, with the exact timestamp kept in the markup. */
-function When({ iso }: { iso: string }) {
+export function When({ iso }: { iso: string }) {
   return (
     <time dateTime={iso} title={iso}>
       {ago(iso)}

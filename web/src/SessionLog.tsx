@@ -10,6 +10,7 @@ import type {
 } from '../../src/server/types.ts';
 import { ApiFailure, fetchSessionLog } from './api.ts';
 import { ago } from './format.ts';
+import { When } from './Progress.tsx';
 
 /** Collapsed text shows its first line, cut here. */
 const PREVIEW = 200;
@@ -34,14 +35,6 @@ export function subagentState(s: SubagentSummary, now = Date.now()): string {
 }
 
 const UNKNOWN_WHY = ' (its meta file has no readable finished field)';
-
-function When({ iso }: { iso: string }) {
-  return (
-    <time dateTime={iso} title={iso}>
-      {ago(iso)}
-    </time>
-  );
-}
 
 function kib(bytes: number): string {
   return bytes < 1024 ? `${String(bytes)} B` : `${(bytes / 1024).toFixed(1)} KB`;
