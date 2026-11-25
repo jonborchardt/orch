@@ -1,8 +1,15 @@
 /** The Usage section's read model: parsing, read order, gaps, bounds, and confinement (ticket 0127). */
-import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { recordSession } from '../src/ops/token-usage.ts';
+import { tokenUsage } from '../src/server/api.ts';
+import { attachSession, createJob } from '../src/storage/jobs.ts';
+import { events, jobs } from '../src/storage/schema.ts';
+import { recordedRefs } from '../src/storage/usage.ts';
 
 import {
   HOUR_MS,
@@ -12,7 +19,7 @@ import {
   type UsageJob,
 } from '../src/server/token-usage.ts';
 import type { UsageView } from '../src/server/types.ts';
-import { tempDir } from './helpers.ts';
+import { tempDir, type TempStore, tempStore } from './helpers.ts';
 import { at, U, usage, user, writeAgent, writeSession } from './transcript-fixture.ts';
 
 const U2 = '22222222-3333-4444-8555-666666666666';
@@ -222,5 +229,146 @@ describe('readTokenUsage', () => {
     const w = readTokenUsage(claude, [job('job-00000001', [U])], 24, NOW);
     expect(w.total).toMatchObject({ input: 0, complete: true });
     expect(w.jobs[0]?.missing).toBeNull();
+  });
+});
+
+describe('recorded usage in the read model (ticket 0144)', () => {
+  let store: TempStore;
+  let claude: string;
+  const saved = process.env['CLAUDE_CONFIG_DIR'];
+  beforeEach(() => {
+    store = tempStore();
+    claude = tempDir('claude-');
+    process.env['CLAUDE_CONFIG_DIR'] = claude;
+  });
+  afterEach(() => {
+    process.env['CLAUDE_CONFIG_DIR'] = saved;
+    store.cleanup();
+  });
+  /** A job attached to `refs` at 09:00, finished at 12:00 when `done`. */
+  const mkJob = (refs: string[], done: boolean): string => {
+    const j = createJob(store, {
+      title: `job ${refs.join(',')}`,
+      description: 'usage',
+      repo: 'github.com/acme/alpha',
+      repoPath: claude,
+      baseBranch: 'main',
+    });
+    for (const ref of refs) {
+      attachSession(store, j.id, { session: { provider: 'claude-code', ref, cwd: null } });
+    }
+    store.db
+      .update(events)
+      .set({ createdAt: at(0) })
+      .where(eq(events.jobId, j.id))
+      .run();
+    if (done) {
+      const end = at(3 * 3600);
+      store.db
+        .update(jobs)
+        .set({ stage: 'completed', status: 'completed', updatedAt: end, completedAt: end })
+        .where(eq(jobs.id, j.id))
+        .run();
+    }
+    return j.id;
+  };
+  const file = (ref: string) => join(claude, 'projects', 'p', `${ref}.jsonl`);
+
+  it('sums a stored ref whose transcript is gone, unflagged (AC4)', () => {
+    writeSession(
+      claude,
+      'p',
+      [usage(0, 'm1', { i: 4, o: 1 }), usage(3600, 'm2', { r: 9 })].join('\n'),
+    );
+    const id = mkJob([U], true);
+    expect(recordSession(store, id, U, 'runner')).toBeNull();
+    rmSync(file(U));
+    const v = tokenUsage(store, '24', NOW);
+    expect(bucket(v, H(0))).toMatchObject({ input: 4, output: 1, missing: [] });
+    expect(bucket(v, H(1))).toMatchObject({ cacheRead: 9, missing: [] });
+    expect(v.jobs).toMatchObject([{ id, input: 4, cacheRead: 9, missing: null }]);
+    expect(v.total.complete).toBe(true);
+  });
+
+  it('reads an unfinished job live without storing; a finished job is stored on read (AC5)', () => {
+    writeSession(claude, 'p', usage(0, 'm1', { i: 3 }), U);
+    writeSession(claude, 'p', usage(60, 'm2', { i: 5 }), U2);
+    mkJob([U], false);
+    const done = mkJob([U2], true);
+    expect(tokenUsage(store, '24', NOW).total.input).toBe(8);
+    expect(recordedRefs(store.db)).toEqual(new Set([U2]));
+    rmSync(file(U2));
+    const v = tokenUsage(store, '24', NOW);
+    expect(v.total).toMatchObject({ input: 8, complete: true });
+    expect(v.jobs.find((j) => j.id === done)).toMatchObject({ input: 5, missing: null });
+    expect(recordedRefs(store.db)).toEqual(new Set([U2]));
+  });
+
+  it('sums stored and live refs of one job like the live-only read, by stored hours (AC6)', () => {
+    writeSession(
+      claude,
+      'p',
+      [usage(0, 'm1', { i: 2 }), usage(-30 * 3600, 'm0', { o: 7 })].join('\n'),
+      U,
+    );
+    writeSession(claude, 'p', usage(7200, 'm2', { i: 10, c: 1 }), U2);
+    const id = mkJob([U, U2], false);
+    const live = readTokenUsage(claude, [job(id, [U, U2], { title: `job ${U},${U2}` })], 24, NOW);
+    expect(recordSession(store, id, U, 'backfill')).toBeNull();
+    const v = tokenUsage(store, '24', NOW);
+    expect(v.total).toEqual(live.total);
+    expect(v.buckets).toEqual(live.buckets);
+    expect(v.jobs).toEqual(live.jobs);
+    expect(v.total).toMatchObject({ input: 12, output: 0, cacheCreation: 1 });
+    // The stored 30-hours-ago record falls in the 168- and 720-hour views only.
+    expect(tokenUsage(store, '168', NOW).total).toMatchObject({ input: 12, output: 7 });
+    expect(tokenUsage(store, '720', NOW).total).toMatchObject({ input: 12, output: 7 });
+  });
+
+  it('lists a job with stored rows and no attached session only where a stored hour falls (AC10)', () => {
+    writeSession(claude, 'p', usage(0, 'm1', { i: 6 }), U);
+    const id = mkJob([], true);
+    expect(recordSession(store, id, U, 'backfill')).toBeNull();
+    for (const h of ['24', '168', '720']) {
+      const v = tokenUsage(store, h, NOW);
+      expect(v.jobs).toMatchObject([{ id, input: 6, missing: null }]);
+      expect(v.buckets.every((b) => b.missing.length === 0)).toBe(true);
+    }
+    const later = NOW + 10 * 24 * HOUR_MS;
+    expect(tokenUsage(store, '24', later).jobs).toEqual([]);
+    expect(tokenUsage(store, '168', later).jobs).toEqual([]);
+    expect(tokenUsage(store, '720', later).jobs).toMatchObject([{ id, input: 6 }]);
+  });
+
+  it('stores nothing for a session with a file over a cap or unreadable, and reads it live (AC11)', () => {
+    const small = usage(0, 'm1', { i: 1 });
+    const p = writeSession(claude, 'p', small, U);
+    writeAgent(
+      p,
+      'big',
+      usage(10, 'm2', { i: 5 }, { isSidechain: true }).padEnd(small.length + 100),
+    );
+    const id = mkJob([U], true);
+    const cap = { USAGE_FILE_BYTES: small.length + 10 };
+    expect(recordSession(store, id, U, 'runner', claude, cap)).toContain('agent-big.jsonl');
+    expect(recordedRefs(store.db).size).toBe(0);
+    // An unreadable subagent entry (a junction out of subagents/) blocks the read-path recording.
+    symlinkSync(tempDir('outside-'), join(p, U, 'subagents', 'agent-z9.jsonl'), 'junction');
+    const v = tokenUsage(store, '24', NOW);
+    expect(recordedRefs(store.db).size).toBe(0);
+    expect(v.total).toMatchObject({ input: 6, complete: false });
+    expect(v.jobs[0]?.missing).toContain('agent-z9.jsonl');
+    expect(bucket(v, H(0))?.missing).toEqual([id]);
+  });
+
+  it('stores a session whose files predate the range in full (AC11)', () => {
+    writeSession(claude, 'p', usage(0, 'm1', { i: 3 }), U);
+    const old = H(-30) / 1000;
+    utimesSync(file(U), old, old);
+    const id = mkJob([U], false);
+    // Live, the file is skipped by its mtime; recorded, it is read whole.
+    expect(tokenUsage(store, '24', NOW).total.input).toBe(0);
+    expect(recordSession(store, id, U, 'runner')).toBeNull();
+    expect(tokenUsage(store, '24', NOW).total.input).toBe(3);
   });
 });

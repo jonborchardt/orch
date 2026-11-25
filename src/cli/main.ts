@@ -25,6 +25,7 @@ import { RECOVER_HELP, runRecover } from './recover.ts';
 import { formatTicketList, runTicket, TICKET_HELP } from './ticket.ts';
 import { RUN_COMMANDS, RUN_HELP, runRunner } from './run.ts';
 import { runUi, UI_HELP } from './ui.ts';
+import { formatBackfill, runUsage, USAGE_HELP } from './usage.ts';
 import { runVerify, VERIFY_HELP } from './verify.ts';
 import { runWorktree, WORKTREE_HELP } from './worktree.ts';
 
@@ -64,6 +65,8 @@ Commands:
   backup create <file> | restore <file> [--data-dir <dir>]
                          Archive the database, artifacts, and ticket assets, or restore one
                          into an empty data directory (orch backup --help)
+  usage backfill         Record finished jobs' token usage from their transcripts, matched by
+                         worktree path (orch usage --help)
 
 Low-level commands (used internally and by generated plans):
   job <subcommand>       Create, inspect, claim, and advance factory jobs (orch job --help)
@@ -100,6 +103,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   mail: MAIL_HELP,
   ticket: TICKET_HELP,
   backup: BACKUP_HELP,
+  usage: USAGE_HELP,
   ...Object.fromEntries(RUN_COMMANDS.map((c) => [c, RUN_HELP])),
 };
 
@@ -330,6 +334,11 @@ export async function main(argv: string[]): Promise<number> {
         // restore must not create a database in the destination before it checks it is empty.
         const { data, text } = runBackup(rest, o);
         print(json ? data : text, json);
+        return 0;
+      }
+      case 'usage': {
+        const report = await withStore(json, (store) => runUsage(store, rest));
+        print(json ? report : formatBackfill(report), json);
         return 0;
       }
       case 'mail': {
