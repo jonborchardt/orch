@@ -151,6 +151,8 @@ export function UsagePage() {
   }, [hours, nonce]);
 
   const missingHours = data?.buckets.filter((b) => b.missing.length > 0).length ?? 0;
+  const first = data?.buckets[0];
+  const last = data?.buckets.at(-1);
   return (
     <Polled label="Usage" error={error} loaded={data !== null}>
       <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: 'center' }}>
@@ -223,13 +225,13 @@ export function UsagePage() {
           <Chart buckets={data.buckets} fills={fills} hatch={palette.error.main} />
           <Stack direction="row" sx={{ justifyContent: 'space-between', mb: 2 }}>
             <Typography variant="caption" color="text.secondary">
-              {data.buckets[0] ? hourLabel(data.buckets[0].hour) : ''}
+              {first ? hourLabel(first.hour) : ''}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               Hourly, local time. Hatched: a job&apos;s transcript could not be read.
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              {data.buckets.at(-1) ? hourLabel(data.buckets.at(-1)?.hour ?? '') : ''}
+              {last ? hourLabel(last.hour) : ''}
             </Typography>
           </Stack>
           <TableContainer>
