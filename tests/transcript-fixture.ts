@@ -85,3 +85,31 @@ export function writeAgent(project: string, id: string, body: string, meta?: obj
   writeFileSync(join(sub, `agent-${id}.jsonl`), body);
   if (meta) writeFileSync(join(sub, `agent-${id}.meta.json`), JSON.stringify(meta));
 }
+
+/** Token counts for `usage`: input, output, cache read, cache creation; a missing one is omitted. */
+export interface Tokens {
+  i?: number;
+  o?: number;
+  r?: number;
+  c?: number;
+}
+
+/** An assistant record `s` seconds after 09:00 UTC carrying message `id` and its `usage`. */
+export const usage = (s: number, id: string, t: Tokens, extra: object = {}) =>
+  line({
+    type: 'assistant',
+    timestamp: at(s),
+    sessionId: U,
+    message: {
+      id,
+      role: 'assistant',
+      content: [{ type: 'text', text: 'ok' }],
+      usage: {
+        ...(t.i === undefined ? {} : { input_tokens: t.i }),
+        ...(t.o === undefined ? {} : { output_tokens: t.o }),
+        ...(t.r === undefined ? {} : { cache_read_input_tokens: t.r }),
+        ...(t.c === undefined ? {} : { cache_creation_input_tokens: t.c }),
+      },
+    },
+    ...extra,
+  });

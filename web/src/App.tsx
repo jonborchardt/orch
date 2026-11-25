@@ -22,6 +22,7 @@ import { JobBoard } from './JobBoard.tsx';
 import { type DetailActivity, JobDetail } from './JobDetail.tsx';
 import { RunsPage } from './Runs.tsx';
 import { NO_FILTERS, type TicketFilters, TicketsPage } from './Tickets.tsx';
+import { UsagePage } from './Usage.tsx';
 import { ApiFailure, fetchBoard, fetchRepos } from './api.ts';
 
 function useHashRoute(): string {
@@ -44,6 +45,7 @@ const SECTIONS = [
   { label: 'Tickets', href: '#/tickets' },
   { label: 'Runs', href: '#/runs' },
   { label: 'Agents', href: '#/agents' },
+  { label: 'Usage', href: '#/usage' },
 ] as const;
 
 const STATUS_FILTERS = [
@@ -117,8 +119,18 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const ticketMatch = /^#\/tickets(?:\/(\d{1,9}))?\/?$/.exec(hash);
   const runsMatch = /^#\/runs\/?$/.test(hash);
   const agentsMatch = /^#\/agents\/?$/.test(hash);
-  const section = ticketMatch ? 'Tickets' : runsMatch ? 'Runs' : agentsMatch ? 'Agents' : 'Jobs';
-  // Tickets, Runs, and Agents poll what they show; the board, its alert, and filters rest.
+  const usageMatch = /^#\/usage\/?$/.test(hash);
+  const section = ticketMatch
+    ? 'Tickets'
+    : runsMatch
+      ? 'Runs'
+      : agentsMatch
+        ? 'Agents'
+        : usageMatch
+          ? 'Usage'
+          : 'Jobs';
+  // Tickets, Runs, and Agents poll what they show and Usage loads on demand; the board, its
+  // alert, and filters rest.
   const other = section !== 'Jobs';
 
   const load = useCallback(() => {
@@ -312,6 +324,8 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           <RunsPage refreshMs={refreshMs} />
         ) : agentsMatch ? (
           <AgentsPage refreshMs={refreshMs} />
+        ) : usageMatch ? (
+          <UsagePage />
         ) : jobMatch ? (
           <JobDetail id={jobMatch[1] ?? ''} refreshMs={refreshMs} onActivity={setDetailActivity} />
         ) : rows === null ? (

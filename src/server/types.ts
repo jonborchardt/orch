@@ -422,3 +422,39 @@ export interface AgentRow {
   averageMs: number | null;
   medianMs: number | null;
 }
+
+/** Token counts of the four kinds Claude Code reports per assistant message. */
+export interface TokenCounts {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+/** One UTC hour; `missing` names the jobs whose transcripts could not be read for it. */
+export interface UsageBucket extends TokenCounts {
+  /** ISO start of the UTC hour. */
+  hour: string;
+  missing: string[];
+}
+
+/** One job's tokens in the range; `missing` says why its transcripts are incomplete, else null. */
+export interface UsageJobRow extends TokenCounts {
+  id: string;
+  title: string;
+  missing: string | null;
+}
+
+/** The ranges the Usage section offers, in hours. */
+export type UsageRange = 24 | 168 | 720;
+
+/** `GET /api/usage?hours=<24|168|720>`: tokens per UTC hour from the jobs' Claude Code transcripts. */
+export interface UsageView {
+  hours: UsageRange;
+  /** Oldest bucket first; the last is the current, partial hour. */
+  buckets: UsageBucket[];
+  /** `complete` is false when any job in the range has a missing source. */
+  total: TokenCounts & { complete: boolean };
+  /** Jobs whose span overlaps the range and that have a claude-code session, by id. */
+  jobs: UsageJobRow[];
+}

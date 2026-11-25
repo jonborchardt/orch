@@ -1,5 +1,6 @@
 /** Dashboard API: read models, security guards, actions through the domain layer. */
 import { spawn } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -24,6 +25,7 @@ import type {
   JobDetailView,
   SessionInfo,
   SessionLogView,
+  UsageView,
 } from '../src/server/types.ts';
 import { listEvents } from '../src/storage/events.ts';
 import {
@@ -1667,5 +1669,87 @@ describe('session log route (todo 0074)', () => {
     expect((await get(path, sameOrigin)).status).toBe(200);
     expect((await get('/api/jobs/job-00000000/session-log')).status).toBe(404);
     expect((await get('/api/jobs/not-an-id/session-log')).status).toBe(422);
+  });
+});
+
+describe('usage route (ticket 0127)', () => {
+  const claude = process.env['CLAUDE_CONFIG_DIR'] ?? '';
+  const REF = '44444444-5555-4666-8777-888888888888';
+  let own: TempStore;
+  let srv: RunningServer;
+  const get = (path: string, headers: Record<string, string> = {}) =>
+    fetch(new URL(path, srv.url), { headers: { ...headers, Connection: 'close' } });
+  /** Every row of every table, to prove a request writes nothing. */
+  const dump = () => {
+    const db = new DatabaseSync(own.file, { readOnly: true });
+    try {
+      const tables = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .all() as { name: string }[];
+      return JSON.stringify(
+        tables.map((t) => [t.name, db.prepare(`SELECT * FROM "${t.name}"`).all()]),
+      );
+    } finally {
+      db.close();
+    }
+  };
+
+  beforeAll(async () => {
+    expect(claude).not.toBe('');
+    own = tempStore();
+    srv = await startServer({ store: own, port: 0, webRoot });
+    const job = createJob(own, {
+      title: 'usage job',
+      description: 'usage job',
+      repo: 'github.com/acme/alpha',
+      repoPath: claude,
+      baseBranch: 'main',
+    });
+    attachSession(own, job.id, { session: { provider: 'claude-code', ref: REF, cwd: null } });
+    const now = new Date().toISOString();
+    writeSession(
+      claude,
+      'E--usage',
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: now,
+        message: { id: 'msg-1', usage: { input_tokens: 3, output_tokens: 4 } },
+      }),
+      REF,
+    );
+  });
+  afterAll(async () => {
+    await srv.close();
+    own.cleanup();
+  });
+
+  it('returns the typed view for hours=24 and writes nothing (AC6)', async () => {
+    const before = dump();
+    const r = await get('/api/usage?hours=24');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('x-content-type-options')).toBe('nosniff');
+    const v = (await r.json()) as UsageView;
+    expect(v.hours).toBe(24);
+    expect(v.buckets).toHaveLength(24);
+    expect(v.buckets.at(-1)).toMatchObject({ input: 3, output: 4, missing: [] });
+    expect(v.total).toEqual({
+      input: 3,
+      output: 4,
+      cacheRead: 0,
+      cacheCreation: 0,
+      complete: true,
+    });
+    expect(v.jobs).toMatchObject([{ title: 'usage job', input: 3, missing: null }]);
+    expect(dump()).toBe(before);
+  });
+
+  it('refuses other ranges, suffixes, and foreign requests (AC6)', async () => {
+    for (const q of ['hours=5', 'hours=abc', '']) {
+      expect((await get(`/api/usage?${q}`)).status).toBe(400);
+    }
+    expect((await get('/api/usage/x')).status).toBe(404);
+    expect((await get('/api/usage?hours=24', { 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403);
+    expect((await get('/api/usage?hours=24', { Origin: 'http://evil.example' })).status).toBe(403);
+    expect((await get('/api/usage?hours=168')).status).toBe(200);
   });
 });
