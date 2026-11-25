@@ -256,9 +256,7 @@ export const reviews = sqliteTable(
 );
 
 export type Job = typeof jobs.$inferSelect;
-export type NewJob = typeof jobs.$inferInsert;
 export type Event = typeof events.$inferSelect;
-export type NewEvent = typeof events.$inferInsert;
 export type Artifact = typeof artifacts.$inferSelect;
 export type Review = typeof reviews.$inferSelect;
 

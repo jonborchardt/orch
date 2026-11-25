@@ -100,9 +100,7 @@ describe('ticket API', () => {
       baseBranch: 'main',
       ticketId: 1,
     });
-    const jobs = await body<Record<string, unknown>[]>(get('/api/tickets/1/jobs'));
-    expect(jobs).toMatchObject([{ id: job.id, status: 'pending' }]);
-    expect(jobs[0]).not.toHaveProperty('ownerToken');
+    await body<ApiError>(get('/api/tickets/1/jobs'), 404);
     const history = await body<{ type: string }[]>(get('/api/tickets/1/history'));
     expect(history.map((e) => e.type)).toEqual([
       'ticket.created',
@@ -144,11 +142,7 @@ describe('ticket API', () => {
       status: 'duplicate',
       duplicateOf: 2,
     });
-    const areas = await body<{ name: string }[]>(
-      post('/api/tickets/areas', { name: 'infra', description: 'd' }),
-      201,
-    );
-    expect(areas.at(-1)?.name).toBe('infra');
+    await body<ApiError>(post('/api/tickets/areas', { name: 'infra', description: 'd' }), 404);
     const last = (await body<{ type: string; actor: string }[]>(get('/api/tickets/2/history'))).at(
       -1,
     );
@@ -213,7 +207,7 @@ describe('ticket API', () => {
     });
     // The install-build check rides along; null when this checkout has no build stamp.
     expect(runner).toHaveProperty('build');
-    const [job] = await body<{ id: string }[]>(get('/api/tickets/1/jobs'));
+    const [job] = (await body<TicketDetail>(get('/api/tickets/1'))).jobs;
     // One request ties every job to its ticket: the Tickets view never asks per row.
     const rows = await body<BoardRow[]>(get('/api/jobs'));
     expect(rows.map((r) => [r.id, r.ticketId])).toEqual([[job?.id, 1]]);
