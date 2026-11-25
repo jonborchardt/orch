@@ -418,6 +418,77 @@ export function requiredChecksFor(
   return [...names];
 }
 
+export interface BranchRuleFacts {
+  requiredChecks: boolean | null;
+  upToDate: boolean | null;
+  protection: boolean | null;
+}
+
+interface Rule {
+  type: string;
+  parameters?: {
+    required_status_checks?: unknown[];
+    strict_required_status_checks_policy?: boolean;
+  };
+}
+
+/** true when any source says so; else null when a source did not answer; else false. */
+function anyOf(answers: (boolean | null)[]): boolean | null {
+  if (answers.includes(true)) return true;
+  return answers.includes(null) ? null : false;
+}
+
+/**
+ * The readiness facts GitHub holds for `base`, read-only, from the endpoints `requiredChecksFor`
+ * reads plus `branches/<base>`. A 404 is an answer (nothing configured); any other failure,
+ * including no `gh` at all, leaves the fact null. Never throws a ToolError.
+ */
+export function branchRuleFacts(nameWithOwner: string, base: string, cwd: string): BranchRuleFacts {
+  try {
+    const repo = `repos/${nameWithOwner}`;
+    // `{}` stands for 404 (no classic protection); null for "could not tell".
+    const classic = optionalJson<{ strict?: boolean; contexts?: string[]; checks?: unknown[] }>(
+      ['api', `${repo}/branches/${base}/protection/required_status_checks`],
+      cwd,
+      {},
+    );
+    const rules = optionalJson<Rule[]>(['api', `${repo}/rules/branches/${base}`], cwd, []);
+    const branch = optionalJson<{ protected?: boolean }>(
+      ['api', `${repo}/branches/${base}`],
+      cwd,
+      {},
+    );
+    const known = <T>(v: T | null, f: (x: T) => boolean) => (v === null ? null : f(v));
+    const checksRule = (r: Rule) =>
+      r.type === 'required_status_checks' &&
+      (r.parameters?.required_status_checks ?? []).length > 0;
+    return {
+      requiredChecks: anyOf([
+        known(classic, (c) => (c.contexts ?? []).length + (c.checks ?? []).length > 0),
+        known(rules, (rs) => rs.some(checksRule)),
+      ]),
+      upToDate: anyOf([
+        known(classic, (c) => c.strict === true),
+        known(rules, (rs) =>
+          rs.some(
+            (r) =>
+              r.type === 'merge_queue' ||
+              (r.type === 'required_status_checks' &&
+                r.parameters?.strict_required_status_checks_policy === true),
+          ),
+        ),
+      ]),
+      protection: anyOf([
+        known(branch, (b) => b.protected === true),
+        known(rules, (rs) => rs.length > 0),
+      ]),
+    };
+  } catch (err) {
+    if (err instanceof ToolError) return { requiredChecks: null, upToDate: null, protection: null };
+    throw err;
+  }
+}
+
 /** Plain-text log of a GitHub Actions job, or null when it is not retrievable. */
 export function actionsJobLog(nameWithOwner: string, jobId: number, cwd: string): string | null {
   const r = ghResult(['api', `repos/${nameWithOwner}/actions/jobs/${String(jobId)}/logs`], cwd);

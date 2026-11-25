@@ -31,6 +31,7 @@ import {
   withoutToken,
 } from '../ops/actions.ts';
 import { planJob } from '../ops/factory.ts';
+import { gradedReadiness } from '../ops/init.ts';
 import { mergeView } from '../ops/merge-view.ts';
 import { storedUsage } from '../ops/token-usage.ts';
 import { ENDS, visits } from '../ops/usage.ts';
@@ -70,6 +71,7 @@ import type {
   BoardRow,
   ClaudeSession,
   JobDetailView,
+  ReadinessView,
   RoundView,
   RunsView,
   SafeJob,
@@ -503,6 +505,12 @@ export function sessionLog(store: Store, id: string): SessionLogView {
   // What the job's own session runs (the /factory skill); never an instruction to the dashboard user.
   const attach = `orch job session attach ${id} --provider claude-code`;
   return readSessionLog(claudeHome(), claudeSessions(store, id)[0]?.ref ?? null, attach);
+}
+
+/** The readiness grade for the job's repository and base branch. Reads Git and GitHub; writes nothing. */
+export function readiness(store: Store, id: string): ReadinessView {
+  const job = getJob(store.db, id);
+  return { grade: gradedReadiness(job.repoPath, undefined, job.baseBranch).grade };
 }
 
 export function detail(store: Store, id: string): JobDetailView {

@@ -30,6 +30,7 @@ import {
   mergePr,
   viewPr,
 } from '../integrations/github.ts';
+import type { ReadinessGrade } from '../core/readiness.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob } from '../storage/events.ts';
 import {
@@ -50,6 +51,7 @@ import type { TicketMergeOutcome } from '../storage/tickets.ts';
 import { ticketKey } from '../core/tickets.ts';
 import { dispatchJob } from './dispatch.ts';
 import { configPath, loadConfig } from './factory.ts';
+import { gradedReadiness } from './init.ts';
 import { ghCwd, observePr } from './github.ts';
 import { type LeaseMode, withLease } from './lease.ts';
 import { jobRepository } from './repo.ts';
@@ -124,6 +126,11 @@ export interface MergeAuthorization {
   file: string;
 }
 
+/** The opt-in with the repository's readiness grade beside it, as advice; nothing that merges reads it. */
+export interface MergeOptIn extends MergeAuthorization {
+  grade: ReadinessGrade | null;
+}
+
 /** Whether `orch job merge` may merge in the repository with this identity. Off unless opted in. */
 export function mergeAuthorized(store: Store, repo: string): boolean {
   return loadConfig(store).mergeRepos.includes(repo);
@@ -159,6 +166,19 @@ export function setMergeAuthorization(
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify({ ...raw, mergeRepos: [...repos].sort() }, null, 2)}\n`);
   return { repo, enabled, file };
+}
+
+/** `orch factory config merge <action>`: the opt-in, with the readiness grade beside it. */
+export function mergeOptIn(
+  store: Store,
+  path: string,
+  action: 'enable' | 'disable' | 'status',
+): MergeOptIn {
+  const auth =
+    action === 'status'
+      ? mergeAuthorization(store, path)
+      : setMergeAuthorization(store, path, action === 'enable');
+  return { ...auth, grade: gradedReadiness(path).grade };
 }
 
 // ---------------------------------------------------------------------------------------------

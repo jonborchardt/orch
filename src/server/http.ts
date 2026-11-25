@@ -37,6 +37,7 @@ import {
   assertJobId,
   board,
   detail,
+  readiness,
   repos,
   runs,
   sessionLog,
@@ -283,6 +284,11 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
       }
       if (root === 'jobs' && id && !sub) {
         send(res, 200, detail(store, assertJobId(id)));
+        return;
+      }
+      // Advice for the Merge dialog, fetched when it opens; never part of the polled detail.
+      if (root === 'jobs' && id && sub === 'readiness' && rest.length === 0) {
+        send(res, 200, readiness(store, assertJobId(id)));
         return;
       }
       // No query or suffix selects a file: the job's own attached session decides what is read.

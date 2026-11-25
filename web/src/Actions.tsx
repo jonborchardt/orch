@@ -18,7 +18,7 @@ import { type ReactElement, useState } from 'react';
 
 import type { DashboardAction } from '../../src/ops/actions.ts';
 import type { ActionResponse, JobDetailView } from '../../src/server/types.ts';
-import { ApiFailure, postAction } from './api.ts';
+import { ApiFailure, fetchReadiness, postAction } from './api.ts';
 import { PrLink } from './Links.tsx';
 import { resumeAt } from './Status.tsx';
 
@@ -127,6 +127,8 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   // Only offered with the registered text to prefill; a spec above the detail's inline cap is
   // edited on disk instead (it would exceed the request body limit anyway).
   const specText = detail.contents['spec.md'];
+  // The repository's readiness grade, fetched when the Merge dialog opens: advice, never a gate.
+  const [readiness, setReadiness] = useState<string | null>(null);
   const picked = open === 'answer' && choice !== null ? detail.choices?.[choice] : undefined;
   const shown = picked ? picked.action : open;
 
@@ -188,7 +190,22 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     setTo(resumeStage);
     setContent(specText ?? '');
     setError(null);
+    setReadiness(null);
     setOpen(a);
+    if (a === 'merge') {
+      void fetchReadiness(detail.job.id).then(
+        ({ grade: g }) => {
+          setReadiness(
+            g
+              ? `Repository readiness ${g.letter} (${String(g.met)}/4), advice only. ${g.advice.join(' ')}`
+              : 'Repository readiness unknown.',
+          );
+        },
+        () => {
+          setReadiness('Repository readiness unavailable.');
+        },
+      );
+    }
   };
 
   // Archive, unarchive, merge, and remove-worktree are a plain confirm: only finished jobs qualify,
@@ -414,6 +431,11 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
                   <Typography data-testid="merge-confirm">
                     PR <PrLink url={detail.job.prUrl ?? ''} pr={detail.links.pr} /> at{' '}
                     <code>{detail.ci.head?.slice(0, 7)}</code>; GitHub is checked first.
+                  </Typography>
+                )}
+                {open === 'merge' && readiness && (
+                  <Typography data-testid="merge-readiness" variant="body2" color="text.secondary">
+                    {readiness}
                   </Typography>
                 )}
               </>

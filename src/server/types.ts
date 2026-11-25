@@ -1,5 +1,6 @@
 /** Shapes shared by the API (src/server/api.ts) and the web client (web/src). Types only. */
 import type { Flake } from '../core/flake.ts';
+import type { ReadinessGrade } from '../core/readiness.ts';
 import type { SessionLinks, SessionRef } from '../core/session.ts';
 import type { Choice, Completion, PrPhase } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
@@ -335,6 +336,12 @@ export interface SubagentSummary extends SessionAgent {
   /** The meta file's `finished`; null when absent or not a boolean. */
   finished: boolean | null;
   modifiedAt: string;
+}
+
+/** `GET /api/jobs/:id/readiness`: the job repository's readiness grade, advice beside Merge. */
+export interface ReadinessView {
+  /** null when the job's repository path is no longer a Git repository. */
+  grade: ReadinessGrade | null;
 }
 
 /**
