@@ -13,4 +13,4 @@ const root = installRoot();
 const file = join(root, BUILD_INFO);
 const commit = tryGit(root, 'rev-parse', 'HEAD');
 if (commit === undefined) rmSync(file, { force: true });
-else writeFileSync(file, JSON.stringify({ commit, builtAt: new Date().toISOString() }) + '\n');
+else writeFileSync(file, JSON.stringify({ commit }) + '\n');
