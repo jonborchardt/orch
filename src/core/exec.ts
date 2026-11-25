@@ -14,12 +14,23 @@ const CMD_SAFE_ARG = /^[\w.=:/-]+$/;
 const CMD_META = /["&|<>^%!\r\n]/;
 const WIN = process.platform === 'win32';
 
-/** Locate an executable on PATH (honouring PATHEXT on Windows). */
+/** An env value by name; case-insensitive on Windows, where a copied env may spell it `Path`. */
+function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  if (!WIN) return env[key];
+  const found = Object.keys(env).find((k) => k.toUpperCase() === key);
+  return found === undefined ? undefined : env[found];
+}
+
+/**
+ * Locate an executable on PATH (honouring PATHEXT on Windows). Only absolute PATH entries are
+ * searched: a relative entry (`.`, `bin`) would resolve against the working directory, which may
+ * be a repository that planted the executable.
+ */
 export function whichSync(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (!TOOL_NAME.test(name)) throw new Error(`Invalid tool name: ${name}`);
-  const exts = WIN ? (env['PATHEXT'] ?? '.EXE;.CMD;.BAT;.COM').split(';') : [''];
-  for (const dir of (env['PATH'] ?? '').split(delimiter)) {
-    if (!dir) continue;
+  const exts = WIN ? (envValue(env, 'PATHEXT') ?? '.EXE;.CMD;.BAT;.COM').split(';') : [''];
+  for (const dir of (envValue(env, 'PATH') ?? '').split(delimiter)) {
+    if (!dir || !isAbsolute(dir)) continue;
     for (const ext of exts) {
       const candidate = join(dir, name + ext.toLowerCase());
       if (existsSync(candidate)) return candidate;
@@ -195,18 +206,32 @@ export function sweepDescendants(
  * Run a native executable with an argument array and return its exit status and output.
  * Unlike `runTool` this never goes through cmd.exe, so arbitrary arguments (titles, bodies,
  * paths with spaces) are safe. Returns status null with the error text when it cannot start.
+ * A bare name is resolved with `whichSync` and spawned by absolute path, so the OS never searches
+ * `cwd` (Windows does, before PATH): an executable planted in a repository never runs.
  */
 export function spawnTool(
   exe: string,
   args: readonly string[],
   opts: { cwd?: string | undefined; timeout?: number | undefined; env?: NodeJS.ProcessEnv } = {},
 ): ToolResult {
-  const r = spawnSync(exe, args, {
+  const env = opts.env ?? process.env;
+  let path = exe;
+  if (!isAbsolute(exe)) {
+    if (!TOOL_NAME.test(exe)) return spawnFailure(`Invalid tool name: ${exe}`);
+    const found = whichSync(exe, env);
+    if (!found) return spawnFailure(`${exe} not found on PATH`);
+    const ext = extname(found).toLowerCase();
+    if (WIN && ext !== '.exe' && ext !== '.com') {
+      return spawnFailure(`${exe} resolves to ${found}, which cannot be started without a shell`);
+    }
+    path = found;
+  }
+  const r = spawnSync(path, args, {
     cwd: opts.cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: opts.timeout ?? 120_000,
-    env: opts.env ?? process.env,
+    env,
     maxBuffer: 64 * 1024 * 1024,
   });
   if (r.error) {
@@ -214,6 +239,11 @@ export function spawnTool(
     return { status: null, stdout: '', stderr: r.error.message, timedOut };
   }
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+/** A `spawnTool` launch failure: the message is in `stderr`, where `git()` reads it. */
+function spawnFailure(message: string): ToolResult {
+  return { status: null, stdout: '', stderr: message };
 }
 
 export interface CommandOptions {
