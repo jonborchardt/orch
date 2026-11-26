@@ -80,9 +80,36 @@ export function changesBetween(
   path: string,
   from: string,
   to: string,
+  renames = true,
 ): WorktreeInfo['changes'] | null {
-  const out = tryGit(path, 'diff', '--name-status', `${from}...${to}`, '--');
+  const flags = renames ? [] : ['--no-renames'];
+  const out = tryGit(path, 'diff', '--name-status', ...flags, `${from}...${to}`, '--');
   return out === undefined ? null : parseNameStatus(out);
+}
+
+type Change = WorktreeInfo['changes'][number];
+
+// ponytail: every path goes on one command line; batch them if a diff ever nears Windows' 32k limit.
+/**
+ * Put `changes` (listed without rename detection, from `base` to HEAD) back to `base` in the
+ * index and working tree: modified and deleted files are checked out from `base`, added ones
+ * removed. `restoreHead` undoes it. Nothing else in the worktree is touched.
+ */
+export function revertToBase(path: string, base: string, changes: readonly Change[]): void {
+  const present = changes.filter((c) => c.status !== 'added').map((c) => c.path);
+  const added = changes.filter((c) => c.status === 'added').map((c) => c.path);
+  if (present.length) git(path, '--literal-pathspecs', 'checkout', base, '--', ...present);
+  if (added.length) git(path, '--literal-pathspecs', 'rm', '-q', '-f', '--', ...added);
+}
+
+/** Return the paths `revertToBase` touched to HEAD; safe after a partial revert. */
+export function restoreHead(path: string, changes: readonly Change[]): void {
+  const atHead = changes.filter((c) => c.status !== 'deleted').map((c) => c.path);
+  const deleted = changes.filter((c) => c.status === 'deleted').map((c) => c.path);
+  if (atHead.length) git(path, '--literal-pathspecs', 'checkout', 'HEAD', '--', ...atHead);
+  if (deleted.length) {
+    git(path, '--literal-pathspecs', 'rm', '-q', '-f', '--ignore-unmatch', '--', ...deleted);
+  }
 }
 
 /** Read-only description of `path` as a candidate worktree of `repoRoot`. */

@@ -18,6 +18,7 @@ import type {
   CheckStatus,
   IntegrationStatus,
   PolicySource,
+  RegressionStatus,
   RunStatus,
   VerificationPolicy,
 } from '../core/verification.ts';
@@ -348,9 +349,42 @@ export const integrations = sqliteTable(
   (t) => [index('integrations_job_idx').on(t.jobId, t.id)],
 );
 
+/**
+ * One bug-fix regression attempt inside a passed `orch verify` run: the job's changed tests run
+ * with its other changes reverted to the merge base (red), then at HEAD (green). Evidence only;
+ * no gate reads it yet.
+ */
+export const regressionRuns = sqliteTable(
+  'regression_runs',
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    jobId: text()
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    runId: integer()
+      .notNull()
+      .references(() => verificationRuns.id, { onDelete: 'cascade' }),
+    mergeBase: text().notNull(),
+    head: text().notNull(),
+    tree: text().notNull(),
+    configFingerprint: text().notNull(),
+    testFiles: text({ mode: 'json' }).$type<string[]>().notNull(),
+    redExit: integer(),
+    greenExit: integer(),
+    /** Logs relative to the job artifact directory. */
+    redLog: text(),
+    greenLog: text(),
+    status: text().$type<RegressionStatus>().notNull(),
+    startedAt: text().notNull(),
+    completedAt: text().notNull(),
+  },
+  (t) => [index('regression_runs_job_idx').on(t.jobId, t.id)],
+);
+
 export type VerificationRun = typeof verificationRuns.$inferSelect;
 export type VerificationCheck = typeof verificationChecks.$inferSelect;
 export type Integration = typeof integrations.$inferSelect;
+export type RegressionRun = typeof regressionRuns.$inferSelect;
 
 /** One UTC hour's token counts of a recorded session; `hour` is the hour's start in epoch ms. */
 export interface HourUsage {

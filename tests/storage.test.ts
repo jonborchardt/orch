@@ -76,6 +76,7 @@ describe('openStore', () => {
         'events',
         'integrations',
         'jobs',
+        'regression_runs',
         'reviews',
         'ticket_areas',
         'ticket_events',

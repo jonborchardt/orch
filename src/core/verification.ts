@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 
 import { ValidationError } from './errors.ts';
 import { TOOL_NAME } from './exec.ts';
+import { type ChangeStatus, classifyChanges } from './sensitive.ts';
 
 /** Name of the repository-level policy file (at the worktree root). */
 export const POLICY_FILE = 'factory.json';
@@ -36,10 +37,18 @@ export interface VerificationCheckSpec {
 export const AUTHORITIES = ['local', 'ci'] as const;
 export type Authority = (typeof AUTHORITIES)[number];
 
+/**
+ * The opt-in bug-fix regression command: run with the job's changed test files appended, once
+ * with the non-test changes reverted to the merge base (must fail) and once at HEAD (must pass).
+ */
+export type RegressionSpec = Omit<VerificationCheckSpec, 'id' | 'required'>;
+
 export interface VerificationPolicy {
   commands: VerificationCheckSpec[];
   /** Absent means `local`. */
   authority?: Authority | undefined;
+  /** Absent means no regression evidence is recorded. */
+  regression?: RegressionSpec | undefined;
 }
 
 /** The policy's authority, `local` when it names none. */
@@ -70,11 +79,13 @@ export function parsePolicy(raw: unknown): VerificationPolicy {
   }
   const section = v as Record<string, unknown>;
   for (const key of Object.keys(section)) {
-    if (key !== 'commands' && key !== 'authority') fail(`verification: unknown key "${key}"`);
+    if (key !== 'commands' && key !== 'authority' && key !== 'regression') {
+      fail(`verification: unknown key "${key}"`);
+    }
   }
   const list = section['commands'];
   if (!Array.isArray(list)) fail('verification.commands must be an array');
-  const commands = list.map((item, i) => parseCheck(item, i));
+  const commands = list.map((item, i) => parseCheck(item, `verification.commands[${String(i)}]`));
   const ids = new Set<string>();
   for (const c of commands) {
     if (ids.has(c.id)) fail(`duplicate check id "${c.id}"`);
@@ -85,7 +96,24 @@ export function parsePolicy(raw: unknown): VerificationPolicy {
     fail(`verification.authority must be one of ${AUTHORITIES.map((a) => `"${a}"`).join(', ')}`);
   }
   // `local` is the default, so it is not stored: every existing policy keeps its exact shape.
-  return authority === 'ci' ? { commands, authority: 'ci' } : { commands };
+  const out: VerificationPolicy = { commands };
+  if (authority === 'ci') out.authority = 'ci';
+  if (section['regression'] !== undefined) out.regression = parseRegression(section['regression']);
+  return out;
+}
+
+function parseRegression(item: unknown): RegressionSpec {
+  const where = 'verification.regression';
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+    fail(`${where} must be an object`);
+  }
+  for (const key of Object.keys(item)) {
+    if (!['command', 'args', 'cwd', 'timeoutMs'].includes(key)) {
+      fail(`${where}: unknown key "${key}"`);
+    }
+  }
+  const { command, args, cwd, timeoutMs } = parseCheck({ ...item, id: 'regression' }, where);
+  return { command, args, cwd, timeoutMs };
 }
 
 /** Parse the text of a factory.json (`where` names the source in the error, e.g. a commit). */
@@ -113,8 +141,7 @@ export function formatPolicy(policy: VerificationPolicy): string {
   return JSON.stringify({ verification: { ...ci, commands } }, null, 2) + '\n';
 }
 
-function parseCheck(item: unknown, i: number): VerificationCheckSpec {
-  const where = `verification.commands[${String(i)}]`;
+function parseCheck(item: unknown, where: string): VerificationCheckSpec {
   if (typeof item !== 'object' || item === null || Array.isArray(item)) {
     fail(`${where} must be an object`);
   }
@@ -165,7 +192,8 @@ function parseCheck(item: unknown, i: number): VerificationCheckSpec {
 
 /**
  * Canonical form: the parsed checks in order with sorted keys, so formatting changes do not count.
- * The authority joins only when it is `ci`, so every `local` policy keeps its fingerprint.
+ * The authority joins only when it is `ci`, and the regression command only when set, so every
+ * policy without them keeps its fingerprint.
  */
 export function canonicalPolicy(policy: VerificationPolicy): string {
   const checks = policy.commands.map((c) => ({
@@ -176,9 +204,18 @@ export function canonicalPolicy(policy: VerificationPolicy): string {
     required: c.required,
     timeoutMs: c.timeoutMs,
   }));
-  return JSON.stringify(
-    authorityOf(policy) === 'ci' ? { authority: 'ci', commands: checks } : checks,
-  );
+  const ci = authorityOf(policy) === 'ci';
+  const r = policy.regression;
+  if (!ci && !r) return JSON.stringify(checks);
+  return JSON.stringify({
+    ...(ci ? { authority: 'ci' } : {}),
+    commands: checks,
+    ...(r ? { regression: canonicalRegression(r) } : {}),
+  });
+}
+
+function canonicalRegression(r: RegressionSpec | undefined): RegressionSpec | undefined {
+  return r && { args: r.args, command: r.command, cwd: r.cwd, timeoutMs: r.timeoutMs };
 }
 
 export function policyFingerprint(policy: VerificationPolicy): string {
@@ -225,8 +262,11 @@ export function diffPolicy(
   const from = authorityOf(effective);
   const to = authorityOf(candidate);
   if (from === 'local' && to === 'ci') weakened.push('authority');
+  const regression =
+    JSON.stringify(canonicalRegression(effective.regression)) !==
+    JSON.stringify(canonicalRegression(candidate.regression));
   return {
-    changed: added.length + removed.length + modified.length > 0 || from !== to,
+    changed: added.length + removed.length + modified.length > 0 || from !== to || regression,
     added,
     removed,
     modified,
@@ -264,4 +304,23 @@ export function runInvalidReason(run: RunEvidence, now: Snapshot): string | null
   if (run.configFingerprint !== now.configFingerprint) return 'the verification policy changed';
   // A run is `passed` only when every check the policy of that fingerprint required passed.
   return null;
+}
+
+export type RegressionStatus = 'passed' | 'not-red' | 'not-green' | 'no-tests' | 'exempt';
+
+/**
+ * What a bug job's regression attempt runs, from the job's diff alone (no agent input): `exempt`
+ * when every changed path is Markdown, else the added or modified files `classifyChanges` labels
+ * `tests` (renamed ones do not count), `no-tests` when there are none.
+ */
+export function regressionPlan(
+  changes: readonly { path: string; status: ChangeStatus }[],
+): { status: 'exempt' | 'no-tests'; files: [] } | { status: 'run'; files: string[] } {
+  if (changes.length > 0 && changes.every((c) => c.path.endsWith('.md'))) {
+    return { status: 'exempt', files: [] };
+  }
+  const files = classifyChanges(changes)
+    .filter((c) => c.kind === 'tests' && (c.status === 'added' || c.status === 'modified'))
+    .map((c) => c.path.split('\\').join('/'));
+  return files.length > 0 ? { status: 'run', files } : { status: 'no-tests', files: [] };
 }

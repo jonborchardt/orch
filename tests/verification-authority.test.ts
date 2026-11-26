@@ -87,6 +87,59 @@ describe('parsing authority', () => {
     });
   });
 
+  it('verification.regression parses with defaults; bad shapes and unknown keys fail', () => {
+    const r = local({ regression: { command: 'npx', args: ['vitest', 'run'] } });
+    expect(r.regression).toEqual({
+      command: 'npx',
+      args: ['vitest', 'run'],
+      cwd: '.',
+      timeoutMs: 600_000,
+    });
+    expect(local({ regression: { command: 'node', cwd: './web' } }).regression).toMatchObject({
+      args: [],
+      cwd: 'web',
+    });
+    const bad: unknown[] = [
+      { command: 'node', id: 'x' },
+      { command: 'node', required: true },
+      { command: 'node', shell: true },
+      { command: 1 },
+      { command: './bin/test' },
+      { command: 'npm run test' },
+      { command: 'node', args: '--test' },
+      { command: 'node', cwd: '/abs' },
+      { command: 'node', cwd: 'C:/x' },
+      { command: 'node', cwd: 'a/../..' },
+      { command: 'node', timeoutMs: 10 },
+      { command: 'node', timeoutMs: 1.5 },
+      { command: 'node', timeoutMs: 4 * 60 * 60_000 },
+      'node --test',
+      [],
+      null,
+    ];
+    for (const regression of bad) {
+      expect(() => local({ regression }), JSON.stringify(regression)).toThrow(ValidationError);
+    }
+    expect(() => local({ regression: { command: 'node', shell: true } })).toThrow(
+      /verification.regression: unknown key "shell"/,
+    );
+    expect(() => local({ regressions: {} })).toThrow(/verification: unknown key "regressions"/);
+  });
+
+  it('regression joins the fingerprint only when set, and changing it is a policy change', () => {
+    const before =
+      '[{"args":["check.js"],"command":"node","cwd":".","id":"check","required":true,"timeoutMs":600000}]';
+    expect(canonicalPolicy(local())).toBe(before);
+    const r = local({ regression: { command: 'node', args: ['--test'] } });
+    expect(policyFingerprint(r)).not.toBe(policyFingerprint(local()));
+    const ci = local({ authority: 'ci' });
+    const ciR = local({ authority: 'ci', regression: { command: 'node', args: ['--test'] } });
+    expect(policyFingerprint(ciR)).not.toBe(policyFingerprint(ci));
+    expect(policyFingerprint(ciR)).not.toBe(policyFingerprint(r));
+    expect(diffPolicy(local(), r)).toMatchObject({ changed: true, weakened: [] });
+    expect(diffPolicy(r, r).changed).toBe(false);
+  });
+
   it('the decision records the ORCH opt-in as a factory.json that parses', () => {
     const file = join(
       installRoot(),
