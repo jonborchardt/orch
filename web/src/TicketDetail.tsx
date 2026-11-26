@@ -24,7 +24,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { Fragment, type ReactNode, useCallback, useState } from 'react';
+import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
   Area,
@@ -296,6 +296,21 @@ export function TicketDetail({
   const [duplicateOf, setDuplicateOf] = useState('');
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState(false);
+  // The remove button being used. Once its link is gone, focus stays in its row instead of
+  // falling to the page: the button that took its place, else the last one, else the row's "none".
+  const removing = useRef<{ button: HTMLElement; row: HTMLElement; index: number } | null>(null);
+  useEffect(() => {
+    const r = removing.current;
+    if (!r || r.button.isConnected) return;
+    removing.current = null;
+    // Focus that the user has since moved somewhere else is theirs.
+    if (document.activeElement !== document.body) return;
+    const buttons = r.row.querySelectorAll('button');
+    (
+      buttons[Math.min(r.index, buttons.length - 1)] ??
+      r.row.querySelector<HTMLElement>('span[tabindex]')
+    )?.focus();
+  });
 
   const back = (
     <Link href="#/tickets" underline="hover">
@@ -411,9 +426,11 @@ export function TicketDetail({
 
   const link = (kind: 'dep' | 'related', add: boolean, n: number | string) =>
     act({ action: `${kind}-${add ? 'add' : 'remove'}`, target: n });
-  const chips = (ids: readonly number[], remove?: 'dep' | 'related') =>
-    ids.length === 0 ? (
-      <Typography component="span" color="text.secondary">
+  const chips = (ids: readonly number[], remove?: 'dep' | 'related') => {
+    const removes = remove === 'dep' ? 'dependency on' : 'related ticket';
+    return ids.length === 0 ? (
+      // Focusable from code only: where focus lands when the row's last link is removed.
+      <Typography component="span" color="text.secondary" tabIndex={remove && -1}>
         none
       </Typography>
     ) : (
@@ -431,10 +448,19 @@ export function TicketDetail({
             // A sibling of the link, never inside it: a native button with its own name.
             <IconButton
               size="small"
-              aria-label={`Remove ${remove === 'dep' ? 'dependency on' : 'related ticket'} ${ticketKey(n)}`}
+              aria-label={`Remove ${removes} ${ticketKey(n)}`}
               disabled={busy}
-              onClick={() => {
-                void link(remove, false, n);
+              onClick={(e) => {
+                const button = e.currentTarget;
+                const row = button.parentElement;
+                if (row) {
+                  const index = [...row.querySelectorAll('button')].indexOf(button);
+                  removing.current = { button, row, index };
+                }
+                void link(remove, false, n).then((ok) => {
+                  // A refused removal moves nothing.
+                  if (!ok) removing.current = null;
+                });
               }}
               sx={{ ml: -0.5 }}
             >
@@ -444,6 +470,7 @@ export function TicketDetail({
         </Fragment>
       ))
     );
+  };
   const linkRow = (label: string, body: ReactNode) => (
     <Stack
       direction="row"

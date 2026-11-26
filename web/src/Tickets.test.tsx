@@ -1061,6 +1061,50 @@ describe('ticket detail', () => {
     expect(links.getByRole('button', { name: 'Remove related ticket 0004' })).toBeEnabled();
   });
 
+  it('keeps focus in the row after a removal, and where it was after a refused one', async () => {
+    const two = db.tickets.find((x) => x.id === 2);
+    if (!two) throw new Error('fixture has no ticket 2');
+    two.dependsOn = [1, 3];
+    mount('#/tickets/2');
+    await header();
+    const links = within(screen.getByRole('region', { name: 'Links' }));
+    // jsdom does not turn Enter into a click; a focused native button's activation is one.
+    const press = (name: string) => {
+      const button = links.getByRole('button', { name });
+      button.focus();
+      expect(button).toHaveFocus();
+      fireEvent.keyDown(button, { key: 'Enter' });
+      fireEvent.click(button);
+      return button;
+    };
+
+    db.refuse = { status: 422, type: 'ValidationError', message: 'Nothing was changed.' };
+    const refused = press('Remove dependency on 0001');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Nothing was changed.');
+    await waitFor(() => {
+      expect(refused).toBeEnabled();
+    });
+    expect(refused).toHaveFocus();
+
+    // The button that takes the removed one's place gets the focus.
+    press('Remove dependency on 0001');
+    await waitFor(() => {
+      expect(links.queryByRole('link', { name: /0001/ })).toBeNull();
+    });
+    expect(document.activeElement).not.toBe(document.body);
+    expect(links.getByRole('button', { name: 'Remove dependency on 0003' })).toHaveFocus();
+
+    // The last link of the row: its "none", which is not a Tab stop.
+    press('Remove dependency on 0003');
+    await waitFor(() => {
+      expect(links.queryByRole('link', { name: /0003/ })).toBeNull();
+    });
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toHaveTextContent(/^none$/);
+    expect(document.activeElement).toHaveAttribute('tabindex', '-1');
+    expect(document.activeElement?.parentElement).toHaveTextContent(/^Depends on/);
+  });
+
   it('offers the lifecycle actions of the status, confirms the consequential ones, and shows a refusal', async () => {
     mount('#/tickets/1');
     await header();
