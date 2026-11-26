@@ -7,6 +7,7 @@
  * again after any interruption continues from wherever the durable state is.
  */
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import {
@@ -18,7 +19,8 @@ import {
   ValidationError,
 } from '../core/errors.ts';
 import { claudeLimit } from '../core/claude-limit.ts';
-import { jobArtifactDir } from '../core/paths.ts';
+import { runForeground } from '../core/exec.ts';
+import { installRoot, jobArtifactDir } from '../core/paths.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { orderTickets, ticketKey } from '../core/tickets.ts';
 import {
@@ -163,6 +165,11 @@ export interface RunSummary {
   merged: MergedTicket[];
   /** Tickets whose job still waits in needs-human, with its choices: display only, like `merged`. */
   waiting: WaitingJob[];
+  /**
+   * Set only when the run halted on `orch-rebuilt`: the session is handed to the new build's
+   * `orch resume` (`handOff`). `repo` names the slot to resume (`--repo`); null is the unscoped one.
+   */
+  handoff?: { repo: string | null };
 }
 
 /** A job waiting in needs-human as the terminal shows it (`needsHuman`), derived when rendered. */
@@ -1120,7 +1127,10 @@ async function drive(
     // before a ticket has none in flight, so the reason comes from here, not from a result.
     if (halted !== null) {
       run.save();
-      return { ...summarize(store, session, halted.reason, false), interrupted: true };
+      const s = { ...summarize(store, session, halted.reason, false), interrupted: true };
+      return halted.code === 'orch-rebuilt'
+        ? { ...s, handoff: { repo: slotRepo(store, session, slot) } }
+        : s;
     }
     if (stopped || reason === null) {
       run.save(); // first: a lost lock leaves the stop request to the controller that has it
@@ -1151,6 +1161,60 @@ async function drive(
   } finally {
     clearInterval(beat);
   }
+}
+
+/**
+ * A path inside the repository of a scoped slot, for `orch resume --repo`: the queue's own, or
+ * `orch do`'s ticket checkout. Null for the unscoped slot, which a bare `orch resume` finds.
+ */
+function slotRepo(store: Store, session: RunnerSession, slot: string | undefined): string | null {
+  if (slot === undefined) return null;
+  if (session.mode === 'ticket' && session.ticket !== null) {
+    return showTicket(store, session.ticket).ticket.repoPath;
+  }
+  return session.repo;
+}
+
+/** A handoff child that exits non-zero within this long refused the session: reported, not retried. */
+export const HANDOFF_REFUSAL_MS = 10_000;
+
+/** Runs the handoff child in the foreground and resolves with its exit code; tests replace it. */
+export type HandoffLaunch = (exe: string, args: readonly string[]) => Promise<number | null>;
+
+/**
+ * Hand a session that halted on `orch-rebuilt` to the new build (decision
+ * 2026-11-26-rebuilt-controller-hands-off): the installed `dist/` entry's `orch resume` for the
+ * same slot, run as a foreground child of this process in this terminal, once. Called after the
+ * session returned, so its lock is released and the session left resumable; the child takes both.
+ * Resolves with the exit code this process should end with: the child's, and 1 when a signal
+ * ended it. Nothing here retries: a refusal leaves the session for a person's `orch resume`.
+ */
+export async function handOff(
+  handoff: NonNullable<RunSummary['handoff']>,
+  o: {
+    json?: boolean | undefined;
+    log: (line: string) => void;
+    launch?: HandoffLaunch | undefined;
+    clock?: (() => number) | undefined;
+  },
+): Promise<number> {
+  const clock = o.clock ?? Date.now;
+  const args = [
+    join(installRoot(), 'dist', 'cli', 'main.js'),
+    'resume',
+    ...(handoff.repo === null ? [] : ['--repo', handoff.repo]),
+    ...(o.json ? ['--json'] : []),
+  ];
+  o.log('Handing this session to the new build: orch resume');
+  const started = clock();
+  const code = await (o.launch ?? runForeground)(process.execPath, args);
+  if (code !== 0 && clock() - started < HANDOFF_REFUSAL_MS) {
+    o.log(
+      `Handoff refused: the new build's orch resume exited ${code === null ? 'on a signal' : String(code)} ` +
+        'at once. The session is left as it was; run orch resume.',
+    );
+  }
+  return code ?? 1;
 }
 
 /** The session's end: mail its report when mail is configured (never throws), then return it. */
