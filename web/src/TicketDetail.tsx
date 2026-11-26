@@ -24,7 +24,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { Fragment, type ReactNode, useCallback, useState } from 'react';
+import { Fragment, type ReactNode, useCallback, useId, useState } from 'react';
 
 import type {
   Area,
@@ -296,6 +296,7 @@ export function TicketDetail({
   const [duplicateOf, setDuplicateOf] = useState('');
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState(false);
+  const linkRowId = useId();
 
   const back = (
     <Link href="#/tickets" underline="hover">
@@ -453,21 +454,27 @@ export function TicketDetail({
       ))
     );
   };
-  const linkRow = (label: string, body: ReactNode) => (
-    // Focusable from code only: where focus lands when one of the row's links is removed.
-    <Stack
-      tabIndex={-1}
-      direction="row"
-      spacing={0.75}
-      useFlexGap
-      sx={{ alignItems: 'center', flexWrap: 'wrap', my: 0.5 }}
-    >
-      <Typography sx={{ minWidth: 90 }} color="text.secondary">
-        {label}
-      </Typography>
-      {body}
-    </Stack>
-  );
+  const linkRow = (label: string, body: ReactNode) => {
+    const labelId = `${linkRowId}-${label.replace(/\s/g, '-')}`;
+    return (
+      // Focusable from code only: where focus lands when one of the row's links is removed. A
+      // group named by its label, so that focus has something to announce.
+      <Stack
+        tabIndex={-1}
+        role="group"
+        aria-labelledby={labelId}
+        direction="row"
+        spacing={0.75}
+        useFlexGap
+        sx={{ alignItems: 'center', flexWrap: 'wrap', my: 0.5 }}
+      >
+        <Typography id={labelId} sx={{ minWidth: 90 }} color="text.secondary">
+          {label}
+        </Typography>
+        {body}
+      </Stack>
+    );
+  };
 
   return (
     <Box sx={{ p: 2, maxWidth: 1100, overflowWrap: 'anywhere' }}>

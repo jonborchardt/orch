@@ -1093,6 +1093,8 @@ describe('ticket detail', () => {
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toHaveTextContent(/^Depends on.*0003/);
     expect(document.activeElement).toHaveAttribute('tabindex', '-1');
+    // Named, so a screen reader has something to announce where focus landed.
+    expect(links.getByRole('group', { name: 'Depends on' })).toHaveFocus();
   });
 
   it('offers the lifecycle actions of the status, confirms the consequential ones, and shows a refusal', async () => {
