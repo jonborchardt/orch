@@ -33,6 +33,7 @@ import {
   type Action,
   approvalEvidence,
   approvalName,
+  ciCarriesThroughIntegration,
   requiredArtifact,
   type ReviewedHeadFacts,
   reviewedHeadRefusal,
@@ -52,6 +53,7 @@ import {
 } from '../storage/jobs.ts';
 import type { Artifact, Job, Review, Ticket } from '../storage/schema.ts';
 import { getTicket, listTicketEvents } from '../storage/tickets.ts';
+import { listIntegrations } from '../storage/verification.ts';
 
 import { effectivePolicy, sensitiveReport, verificationStatus } from './verify.ts';
 import { requireClean, type Tree, worktreeOf } from './tree.ts';
@@ -419,8 +421,10 @@ export function isPreReview(store: Store, job: Job, tree: Tree): boolean {
 }
 
 /** Under `ci`, review and approval judge only a commit GitHub CI passed. */
-function requireCiPassed(job: Job, tree: Tree, what: string): void {
+function requireCiPassed(store: Store, job: Job, tree: Tree, what: string): void {
   if (job.ciStatus === 'passing' && job.ciHead === tree.head) return;
+  // One recorded clean base merge since the CI-passed head: the pr/ci pass after approval checks it.
+  if (ciCarriesThroughIntegration(job, tree.head, listIntegrations(store.db, job.id))) return;
   throw new ValidationError(
     `${what} is refused: the repository makes GitHub CI the test gate (verification.authority "ci"), ` +
       `and CI is ${job.ciStatus ?? 'not observed'} for ${job.ciHead?.slice(0, 7) ?? 'no commit'}, ` +
@@ -635,7 +639,7 @@ export function transitionGuarded(
         if (!(err instanceof ValidationError)) throw err;
       }
       if (info && authority === 'ci' && job.stage !== 'simplify') {
-        requireCiPassed(job, info, `completing ${job.stage}`);
+        requireCiPassed(store, job, info, `completing ${job.stage}`);
       }
       return transitionJob(store, id, action, { ...opts, authority });
     }
