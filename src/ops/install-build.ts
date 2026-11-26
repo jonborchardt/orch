@@ -20,6 +20,9 @@ export interface InstallBuild {
 
 export const BUILD_INFO = join('dist', 'build-info.json');
 
+/** The advice that ends a stale build's message. */
+export const REBUILD_STEPS = 'pull, `npm run build`, `orch install`';
+
 /**
  * The installed build's identity: the stamp's commit and the file's modification time, so a
  * rebuild from the same commit differs too. Null when there is no stamp; never throws, runs no Git.
@@ -69,7 +72,6 @@ export function installBuild(root: string = installRoot()): InstallBuild | null 
     message:
       ahead === null
         ? `built from ${short(builtFrom)}, current with ${branch}`
-        : `built from ${short(builtFrom)}, ${ahead.name} is at ${short(ahead.sha)}: ` +
-          'pull, `npm run build`, `orch install`',
+        : `built from ${short(builtFrom)}, ${ahead.name} is at ${short(ahead.sha)}: ${REBUILD_STEPS}`,
   };
 }

@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { formatStatus } from '../src/cli/run.ts';
 import { BUILD_INFO, installBuild } from '../src/ops/install-build.ts';
-import type { RunnerStatus } from '../src/ops/run.ts';
+import { buildForStatus, type RunnerStatus } from '../src/ops/run.ts';
 import { commitFile, gitIn, makeRepo, makeRepoWithOrigin, tempDir } from './helpers.ts';
 
 function stamp(root: string, commit: string): void {
@@ -84,5 +84,53 @@ describe('formatStatus build line', () => {
     );
     expect(formatStatus(status({ ...build, stale: false }))).not.toContain('build ');
     expect(formatStatus(status(null))).not.toContain('build ');
+  });
+
+  it('prints the stop-first advice while a controller runs', () => {
+    const stale = {
+      ...build,
+      stale: true,
+      message: 'built from a, main is at b: pull, `npm run build`, `orch install`',
+    };
+    expect(formatStatus(status(buildForStatus(stale, true)))).toContain(
+      'build       built from a, main is at b: run `orch stop next`; when the controller exits: ' +
+        'pull, `npm run build`, `orch install`, `orch start`',
+    );
+  });
+});
+
+describe('buildForStatus', () => {
+  const staleBuild = () => {
+    const repo = makeRepo();
+    const built = head(repo);
+    stamp(repo, built);
+    const now = commitFile(repo, 'a.txt', 'a');
+    const b = installBuild(repo);
+    if (b === null) throw new Error('no build');
+    return { b, prefix: `built from ${short(built)}, main is at ${short(now)}: ` };
+  };
+
+  it('says to stop the controller first while one runs', () => {
+    const { b, prefix } = staleBuild();
+    expect(buildForStatus(b, true)).toEqual({
+      ...b,
+      message:
+        prefix +
+        'run `orch stop next`; when the controller exits: pull, `npm run build`, `orch install`, `orch start`',
+    });
+  });
+
+  it("keeps installBuild's message with no live controller", () => {
+    const { b } = staleBuild();
+    expect(buildForStatus(b, false)).toBe(b);
+  });
+
+  it('passes a current build and no build through unchanged', () => {
+    const repo = makeRepo();
+    stamp(repo, head(repo));
+    const current = installBuild(repo);
+    expect(current?.stale).toBe(false);
+    expect(buildForStatus(current, true)).toBe(current);
+    expect(buildForStatus(null, true)).toBeNull();
   });
 });
