@@ -1536,11 +1536,12 @@ export function buildForStatus(
   controllerRunning: boolean,
 ): InstallBuild | null {
   if (build === null || !build.stale || !controllerRunning) return build;
-  // A stale build's message always ends with REBUILD_STEPS (`installBuild`).
-  const prefix = build.message.slice(0, -REBUILD_STEPS.length);
   return {
     ...build,
-    message: `${prefix}run \`orch stop next\`; when the controller exits: ${REBUILD_STEPS}, \`orch start\``,
+    message: build.message.replace(
+      REBUILD_STEPS,
+      `run \`orch stop next\`; when the controller exits: ${REBUILD_STEPS}, \`orch start\``,
+    ),
   };
 }
 
