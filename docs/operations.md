@@ -120,7 +120,11 @@ one, and `orch resume` continues the same ticket and job once the limit has rese
 controller started (`orch-rebuilt`) or `factory.json` fails validation (`bad-config`), both
 checked before each ticket and each Claude launch; a stop before a ticket leaves none in flight,
 and `orch resume` then takes a stranded in-progress ticket first (decision
-2026-11-25-environment-stops-are-resumable).
+2026-11-25-environment-stops-are-resumable). On `orch-rebuilt` the controller then hands the
+session to the new build itself: it runs the installed `orch resume` for the same slot in the
+same terminal, waits for it, and exits with its code; a handoff refused at once (non-zero within
+10 s) is reported and leaves the session for your `orch resume` (decision
+2026-11-26-rebuilt-controller-hands-off).
 Those codes are `RUN_ENDING_CODES` in `src/core/workflow.ts`; a code not named there continues
 the queue (decision 2026-11-23-queue-ends-only-on-run-wide-outcomes). It exits 0 unless a ticket
 ended blocked, refused, or waiting for a person, or the run stopped on a rebuild or a bad

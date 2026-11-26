@@ -15,6 +15,7 @@ import {
   descendantsOf,
   processStartMs,
   type ProcRow,
+  runForeground,
   spawnCommand,
   spawnTool,
   sweepDescendants,
@@ -368,5 +369,30 @@ describe('spawnTool resolution failures', () => {
     const r = spawnTool('shimmed', [], { env: { PATH: shims, PATHEXT: '.CMD' } });
     expect(r.status).toBeNull();
     expect(r.stderr).toContain('cannot be started without a shell');
+  });
+});
+
+describe('runForeground', () => {
+  it("resolves with the child's exit code; a child that cannot start is null", async () => {
+    expect(await runForeground(process.execPath, ['-e', 'process.exit(7)'])).toBe(7);
+    expect(await runForeground(join(dir, 'missing.exe'), [])).toBeNull();
+  });
+
+  it('holds a SIGINT until the child exits, forwarding it on POSIX only', async () => {
+    const ready = join(dir, 'ready');
+    // Exits 5 on SIGINT; on its own after a while with 6 (Windows: the console delivers Ctrl-C).
+    const body = `process.on('SIGINT', () => process.exit(5));
+require('node:fs').writeFileSync(process.argv[1], '');
+setTimeout(() => process.exit(6), ${WIN ? '1500' : '30000'});`;
+    const before = process.listeners('SIGINT');
+    const ran = runForeground(process.execPath, ['-e', body, ready]);
+    const added = process.listeners('SIGINT').filter((l) => !before.includes(l));
+    expect(added).toHaveLength(1);
+    while (!existsSync(ready)) await new Promise((r) => setTimeout(r, 20));
+
+    added[0]?.('SIGINT');
+
+    expect(await ran).toBe(WIN ? 6 : 5);
+    expect(process.listeners('SIGINT')).toEqual(before);
   });
 });
