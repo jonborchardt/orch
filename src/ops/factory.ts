@@ -27,6 +27,7 @@ import {
   completionOf,
   describeNext,
   challengeSlot,
+  ciCarriesThroughIntegration,
   latestChallenge,
   now,
   prPhase,
@@ -459,7 +460,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
     }
   }
   const ciFirst = verification?.policy.authority === 'ci';
-  const integration = listIntegrations(store.db, id)[0] ?? null;
+  const integrations = listIntegrations(store.db, id);
+  const integration = integrations[0] ?? null;
   const required = requiredArtifact(job.stage, job.round);
   const observations = detail.events.filter((e) => e.type === 'ci.observed');
   const lastObserved = observations.at(-1);
@@ -760,11 +762,15 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const behind = worktree.behind ?? 0;
       const boxes = job.ticketId === null ? [] : openChecklist(getTicket(store.db, job.ticketId));
       const key = job.ticketId === null ? '' : ticketKey(job.ticketId);
+      const carried =
+        !!worktree.head && ciCarriesThroughIntegration(job, worktree.head, integrations);
       plan.reason =
         'Independent final approval: spec, build.md, git diff, review artifacts, outstanding findings.' +
         // Under `ci` approval needs CI passing for HEAD, so base integration waits for the next pr pass.
         (ciFirst
-          ? ' GitHub CI passed for this exact HEAD; approval binds to it. Base integration, if needed, happens in the pr pass after approval.'
+          ? carried
+            ? ' GitHub CI passed for the head before one clean base merge; HEAD is that merge commit and approval binds to it. The pr/ci pass after approval checks the merge commit itself.'
+            : ' GitHub CI passed for this exact HEAD; approval binds to it. Base integration, if needed, happens in the pr pass after approval.'
           : '') +
         (behind > 0 && !ciFirst
           ? ` Base advanced by ${String(behind)} commit(s): if the approver escalates for that, run orch worktree integrate ${id} instead; a conflict sends the job back to build as rework.`

@@ -8,7 +8,7 @@
 import { UsageError, WorkflowError } from './errors.ts';
 import { ROLES } from './roles.ts';
 import type { Authority } from './verification.ts';
-import type { Artifact, Job, Review } from '../storage/schema.ts';
+import type { Artifact, Integration, Job, Review } from '../storage/schema.ts';
 
 export const STAGES = [
   'spec',
@@ -996,6 +996,36 @@ export type MergeStep =
 
 /** How many times one job is reopened for a moved base before a person takes over. */
 export const MAX_BASE_REOPENS = 2;
+
+/**
+ * Under `ci` authority: whether the CI pass for `ciHead` carries to `head` for completing review
+ * and approve. True only when `head` is the result of exactly one recorded clean base integration
+ * (status `merged`, no edits inside the merge commit) that started from the CI-passed head, and
+ * nothing but `up-to-date` rows followed it. A second integration, an edited merge, or a merge
+ * `integrateBase` did not record leaves the gate refusing as before, so a busy base gets one carry
+ * per CI pass. Delivery never uses this: it needs CI passing on the exact head
+ * (decision 2026-11-26-clean-integration-carries-ci-to-approval).
+ */
+export function ciCarriesThroughIntegration(
+  job: Pick<Job, 'ciStatus' | 'ciHead'>,
+  head: string,
+  integrations: readonly Pick<
+    Integration,
+    'id' | 'status' | 'fromHead' | 'resultHead' | 'material'
+  >[],
+): boolean {
+  if (job.ciStatus !== 'passing' || job.ciHead === null || job.ciHead === head) return false;
+  const carried = integrations.filter(
+    (i) =>
+      i.status === 'merged' &&
+      i.fromHead === job.ciHead &&
+      i.resultHead === head &&
+      i.material?.length === 0,
+  );
+  const [one] = carried;
+  if (carried.length !== 1 || !one) return false;
+  return integrations.every((i) => i.id <= one.id || i.status === 'up-to-date');
+}
 
 export interface MergeFacts {
   completion: Completion;
