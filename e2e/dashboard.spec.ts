@@ -690,8 +690,10 @@ test('tickets: the queue lists the seeded tickets, one opens, and the list comes
     .getByText('Depends on', { exact: true })
     .locator('..');
   await expect(dependsOn).toContainText('0001');
-  await page.getByRole('button', { name: 'Remove dependency on 0001' }).click();
+  // From the keyboard: Enter on the focused native button, and focus then stays in the row.
+  await page.getByRole('button', { name: 'Remove dependency on 0001' }).press('Enter');
   await expect(dependsOn).toHaveText('Depends onnone');
+  await expect(dependsOn.getByText('none', { exact: true })).toBeFocused();
   await expect(page).toHaveURL(/#\/tickets\/2$/);
   // The existing section is one click away and unchanged.
   await page
