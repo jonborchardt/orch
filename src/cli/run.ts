@@ -95,9 +95,12 @@ export function formatStatus(s: RunnerStatus): string {
   return lines.join('\n');
 }
 
-/** Exit 1 when the session left a ticket that needs a person; a requested stop is not a failure. */
+/**
+ * Exit 1 when the session left a ticket that needs a person or was interrupted run-wide; a
+ * requested stop is not a failure.
+ */
 export function summaryExitCode(s: RunSummary): number {
-  return s.blocked > 0 ? 1 : 0;
+  return s.blocked > 0 || s.interrupted ? 1 : 0;
 }
 
 export async function runRunner(
