@@ -20,7 +20,7 @@ import {
   verdict,
   verify,
 } from './drive.ts';
-import { commitFile, fixture, gitIn } from './helpers.ts';
+import { answeredBuild, commitFile, fixture, gitIn } from './helpers.ts';
 import { store, clone, run, checks, reconcile, job } from './ci-fixture.ts';
 
 describe('review budget: only review-driven rounds spend maxRounds', () => {
@@ -36,7 +36,8 @@ describe('review budget: only review-driven rounds spend maxRounds', () => {
     go(store, c, 'start');
     commitFile(c.wt, file, `// ${file}\n`, file);
     verify(store, c);
-    add(store, c, 'build.md', fixture('build.md'), true);
+    // Answers round N's one blocking finding; after a CI repair (BLOCKING: 0) nothing checks them.
+    add(store, c, 'build.md', answeredBuild(`${String(job(c).round)}.1`), true);
     go(store, c, 'complete');
     simplify(store, c);
   }

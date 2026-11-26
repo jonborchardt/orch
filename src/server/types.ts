@@ -448,10 +448,73 @@ export interface StageRow extends AgentTiming {
   interrupted: number;
 }
 
+/** A per-model row's key: `model` null = not recorded (legacy); `sameAsAuthor` null = no author. */
+export interface ModelKey {
+  role: string;
+  model: string | null;
+  sameAsAuthor: boolean | null;
+}
+
+/** Objections of a judging role's group; `objectionRate` null when it has no reviews. */
+export interface RateRow {
+  reviews: number;
+  objections: number;
+  objectionRate: number | null;
+}
+
+/** The spec challenger per model: verdicts of its registered spec reviews. */
+export type ChallengerModelRow = ModelKey & RateRow;
+
+/**
+ * A reviewer per model. Findings counts cover attributed blocking findings it raised (open ones
+ * excluded); `fixed` are fixed findings it asked changes for again in the next round.
+ */
+export interface ReviewerModelRow extends ModelKey, RateRow {
+  onlyObjector: number;
+  realCatches: number;
+  fixed: number;
+  unresolved: number;
+  falseAlarms: { total: number; declined: number; overruled: number; vanished: number };
+  /** (job, reviewer) pairs with an escape; each cause counted once per pair. */
+  escapes: { total: number; ciRepair: number; bug: number; revert: number };
+  medianMs: number | null;
+}
+
+/** A building role (builder, fast-builder, spec-writer) per drawn model, over its jobs. */
+export interface BuilderModelRow extends ModelKey {
+  jobs: number;
+  /** Jobs whose first finished verification run passed, over jobs with one; null when none. */
+  firstPassRate: number | null;
+  meanRounds: number | null;
+  meanCiRepairs: number | null;
+  escalationsPerJob: number | null;
+  /** Jobs with recorded sessions, and their mean whole-job tokens (all four kinds); null when none. */
+  tokenJobs: number;
+  meanTokens: number | null;
+}
+
+/** A role's totals split by whether its model matched its author's. */
+export type AuthorTotalRow = { role: string; sameAsAuthor: boolean | null } & RateRow;
+
+export interface ModelNoteView {
+  role: string;
+  text: string;
+  n: number;
+  confidence: 'low' | 'medium' | 'high';
+}
+
 /** `GET /api/agents`: every role in `ROLES` in exactly one list, in `ROLES` order. */
 export interface AgentsView {
   reviewers: ReviewerRow[];
   stages: StageRow[];
+  /** Per role, per model, per same-as-author value, in `ROLES` order. */
+  byModel: {
+    challengers: ChallengerModelRow[];
+    reviewers: ReviewerModelRow[];
+    builders: BuilderModelRow[];
+    authorTotals: AuthorTotalRow[];
+  };
+  notes: ModelNoteView[];
 }
 
 /** Token counts of the four kinds Claude Code reports per assistant message. */

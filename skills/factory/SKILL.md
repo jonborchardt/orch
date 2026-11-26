@@ -286,9 +286,14 @@ Follow `plan.commands`; the coordinator adds:
   across reviewers, drop anything out of scope for the spec, and count `BLOCKING: <n>` honestly.
   Never drop or downgrade a scope gap (something the spec puts in scope that the diff does not
   implement): it is BLOCKING whichever reviewer found it;
-  `n > 0` sends the job back to build even when every verdict is PASS. Register it with
+  `n > 0` sends the job back to build even when every verdict is PASS. End every `[BLOCKING]`
+  line with `(reviewers: <name>[, <name>...])` naming the reviewers of this round who raised it;
+  orch refuses an untagged line, a name with no review this round, or a count of `[BLOCKING]` lines
+  that differs from `BLOCKING`. Register it with
   `orch job artifact add <id> round-N/consolidated.md --token <t>`. The next builder gets this file
-  and must address every blocking finding without expanding scope.
+  and must address every blocking finding without expanding scope, answering each id `N.k` (the
+  k-th `[BLOCKING]` line) once in build.md's `Findings addressed` as `- N.k: fixed` or
+  `- N.k: declined — <reason>`; orch refuses build.md while an id is unanswered or unknown.
 
 ### Approval and delivery
 

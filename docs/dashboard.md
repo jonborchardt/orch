@@ -62,6 +62,23 @@ run per `stage.started` of their stage paired with its end by the same rule as `
 the end `stage.completed`, `stage.failed`, `job.blocked`, `job.reworked`, `job.cancelled`, or
 `job.interrupted` picks the column. Stage time includes coordinator work.
 
+Below them the Agents tab compares models within each role (`byModel` and `notes`, decision
+[2026-11-25-attributed-findings](decisions/2026-11-25-attributed-findings.md)); rows are keyed by
+role, model (`not recorded` for a job without a `models.drawn` event), and whether the model matched
+its author's. **Reviewers by model** counts reviews, objections (CHANGES) and their rate, rounds
+where the reviewer was the only objector, and its attributed blocking findings: real catches
+(fixed, and it passed the next round), fixed but changes again, unresolved (fixed, no next-round
+verdict), false alarms (declined, overruled by an APPROVE, vanished), and escapes (it passed, then a
+CI repair, a bug ticket naming the job or its PR, or a revert ticket did), with the median review
+time. Captions say open findings and unattributed rounds are left out, that a revert counts only
+through a ticket, and that tokens per review are not measured. **Spec challenger by model** and
+**Same or different model as the author** give reviews and objections. **Builders by model**
+(builder, fast-builder, spec-writer by the job's draw) gives jobs, first-pass verification, mean
+review rounds, CI repairs, escalations, and whole-job tokens per job over jobs with recorded
+sessions (Unavailable when none has). **Notes** come from `src/core/model-notes.ts`: counts only
+below 20 reviews or jobs, else a two-proportion z-test (|z| >= 1.96 states the direction) or a token
+ratio, each with its n and a confidence label (low < 50, medium < 200, high). Nothing acts on them.
+
 **Usage** (`GET /api/usage?hours=<24|168|720>`, `tokenUsage` in `src/server/api.ts`, read model
 in `src/server/token-usage.ts`) charts token use per UTC hour (labelled in local time) over the last
 24 hours, 7 days, or 30 days, the current partial hour included; any other `hours` is a 400. It

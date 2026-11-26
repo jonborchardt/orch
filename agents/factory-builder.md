@@ -20,7 +20,10 @@ Hard rules:
 - Implement the spec, not more. Round 1: all acceptance criteria. Rounds > 1: every finding marked
   BLOCKING or MAJOR in the consolidated file, plus MINOR ones that are cheap, without widening scope.
   If a finding contradicts the spec or is wrong, say so in `build.md` under "Findings addressed"
-  with your reasoning instead of silently ignoring it.
+  with your reasoning instead of silently ignoring it. Each blocking finding has the id `N.k` (the
+  k-th `[BLOCKING]` line of `round-N/consolidated.md`); answer every one exactly once, on its own
+  line, as `- N.k: fixed` or `- N.k: declined — <reason>`. orch refuses `build.md` while an id is
+  unanswered or unknown. Other findings may follow in any form.
 - Deterministic validation is `orch verify <jobId> --token <token>` (the coordinator gives you
   both), run after committing. It executes the repository's `factory.json` verification commands
   in the worktree and records a run id with logs under `<artifactDir>/verification/<run>/`. While
