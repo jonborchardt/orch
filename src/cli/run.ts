@@ -148,6 +148,7 @@ interface RunnerResult {
   exitCode: number;
   /** Already written to the terminal (a handoff): the caller prints nothing more. */
   printed?: boolean;
+  handoff?: RunSummary['handoff'];
 }
 
 /**
@@ -162,7 +163,7 @@ export async function runRunner(
   launch?: HandoffLaunch,
 ): Promise<RunnerResult> {
   const r = await runOnce(command, args, o);
-  const handoff = r.summary?.handoff;
+  const handoff = r.handoff;
   if (handoff === undefined) return r;
   if (o.json) console.error(JSON.stringify(r.data, null, 2));
   else console.log(r.text);
@@ -182,7 +183,7 @@ async function runOnce(
   command: (typeof RUN_COMMANDS)[number],
   args: string[],
   o: RunCliOptions,
-): Promise<RunnerResult & { summary?: RunSummary }> {
+): Promise<RunnerResult> {
   const [arg, extra] = args;
   const noMore = (unexpected: string | undefined) => {
     if (unexpected !== undefined) {
@@ -260,7 +261,7 @@ async function runOnce(
         text: formatSummary(summary),
         data: summary,
         exitCode: summaryExitCode(summary),
-        summary,
+        handoff: summary.handoff,
       };
     } finally {
       process.off('SIGINT', abort);

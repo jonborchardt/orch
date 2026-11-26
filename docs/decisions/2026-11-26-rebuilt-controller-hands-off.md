@@ -4,12 +4,10 @@
 [2026-11-25-environment-stops-are-resumable](2026-11-25-environment-stops-are-resumable.md)), it
 first ends its session exactly as before: unfinished, ticket and job in flight, the job untouched
 and unowned, the slot lock released. Then `orch start`, `orch do`, or `orch resume` runs the
-installed build's `orch resume` for the same slot as a foreground child in the same terminal
-(`handOff` in `src/ops/run.ts`, `runForeground` in `src/core/exec.ts`): `process.execPath` with
-`dist/cli/main.js` under `installRoot()`, an argument array, inherited stdio, never detached, no
-shell. `--repo <path>` names a scoped slot (the queue's path, or `orch do`'s ticket checkout);
-`--json` is passed on, and the parent's own summary then goes to stderr so stdout is the child's
-one object. The parent waits and exits with the child's code (1 when a signal ended it). A SIGINT
+installed build's `orch resume` (`dist/cli/main.js` under `installRoot()`) for the same slot as a
+foreground child in the same terminal (`handOff` in `src/ops/run.ts`, `runForeground` in
+`src/core/exec.ts`). `--repo` and `--json` are passed on; under `--json` the parent's summary goes
+to stderr. The parent waits and exits with the child's code (1 when a signal ended it). A SIGINT
 reaching the parent keeps it alive until the child exits and is forwarded on POSIX; on Windows the
 console already delivers Ctrl-C to the child, and `kill('SIGINT')` there would end it without its
 resumable stop, so nothing is sent.

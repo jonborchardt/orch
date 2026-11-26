@@ -71,6 +71,18 @@ const resumeAs = (args: readonly string[], opts: Parameters<typeof resumeSession
   return resumeSession(store, at < 0 ? {} : { repo: args[at + 1] }, opts);
 };
 
+/** A fake child running `resumeAs`; `r` is its summary once it ran. */
+function resuming(opts: Parameters<typeof resumeSession>[2]) {
+  const out: { r: RunSummary | null } & ReturnType<typeof child> = {
+    r: null,
+    ...child(async (args) => {
+      out.r = await resumeAs(args, opts);
+      return summaryExitCode(out.r);
+    }),
+  };
+  return out;
+}
+
 describe('a rebuilt controller hands its session to the new build', () => {
   it('leaves the session resumable and unlocked, then launches exactly one orch resume', async () => {
     const id = ticket('In flight');
@@ -133,14 +145,7 @@ describe('a rebuilt controller hands its session to the new build', () => {
   it('a child whose own run halts on a rebuild is its own decision: the parent hands off once', async () => {
     const id = ticket('In flight');
     const s = await rebuilt();
-    const c = child(async (args) => {
-      const r = await resumeAs(args, {
-        launch: launcher(done).launch,
-        ...quick,
-        build: rebuiltAfter(1),
-      });
-      return summaryExitCode(r);
-    });
+    const c = resuming({ launch: launcher(done).launch, ...quick, build: rebuiltAfter(1) });
 
     const code = await handOff(handoffOf(s), { log: () => undefined, launch: c.launch });
 
@@ -155,18 +160,14 @@ describe('after the handoff the child owns the slot', () => {
     ticket('Hangs until stopped');
     const s = await rebuilt(clone);
     const l = hanging(); // its launch asks the live controller, the child, to stop now
-    let r: RunSummary | null = null;
-    const c = child(async (args) => {
-      r = await resumeAs(args, { launch: l.launch, ...quick });
-      return summaryExitCode(r);
-    });
+    const c = resuming({ launch: l.launch, ...quick });
 
     expect(s.handoff).toEqual({ repo: clone });
     const code = await handOff(handoffOf(s), { log: () => undefined, launch: c.launch });
 
     expect(c.calls[0]?.args.slice(1)).toEqual(['resume', '--repo', clone]);
     expect(l.killed).toBe(1);
-    expect(r).toMatchObject({ stopped: true });
+    expect(c.r).toMatchObject({ stopped: true });
     expect(code).toBe(0);
     expect(lastSession()).toMatchObject({ finished: null, pid: process.pid });
   });
@@ -180,17 +181,11 @@ describe('after the handoff the child owns the slot', () => {
       requestStop(store.paths, 'next', key);
       done(job, input);
     };
-    let r: RunSummary | null = null;
-    const c = child(async (args) => {
-      r = await resumeAs(args, { launch: launcher(stopNext).launch, ...quick });
-      return summaryExitCode(r);
-    });
+    const c = resuming({ launch: launcher(stopNext).launch, ...quick });
 
     await handOff(handoffOf(s), { log: () => undefined, launch: c.launch });
 
-    expect((r as RunSummary | null)?.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([
-      [first, 'done'],
-    ]);
+    expect(c.r?.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([[first, 'done']]);
     expect(jobsOf(second)).toHaveLength(0);
   });
 
@@ -217,18 +212,12 @@ describe('after the handoff the child owns the slot', () => {
       },
       betaKey,
     );
-    let r: RunSummary | null = null;
-    const c = child(async (args) => {
-      r = await resumeAs(args, { launch: launcher(done).launch, ...quick });
-      return summaryExitCode(r);
-    });
+    const c = resuming({ launch: launcher(done).launch, ...quick });
 
     const code = await handOff(handoffOf(s), { log: () => undefined, launch: c.launch });
 
     expect(code).toBe(0);
-    expect((r as RunSummary | null)?.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([
-      [id, 'done'],
-    ]);
+    expect(c.r?.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([[id, 'done']]);
     const other = runnerSlots(store.paths).find((x) => x.key === betaKey);
     expect(other?.session?.finished).toBeNull();
   });
