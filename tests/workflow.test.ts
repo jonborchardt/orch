@@ -9,6 +9,7 @@ import {
   cannotAcceptDelivery,
   challengeSlot,
   challengeSpecHash,
+  ciCarriesThroughIntegration,
   completionOf,
   describeNext,
   endsRun,
@@ -1482,5 +1483,53 @@ describe('escalations record the default choices (ticket 0132)', () => {
     ],
   ])('%s', (_what, reason, expected) => {
     expect(labels(reason)).toEqual(expected);
+  });
+});
+
+describe('ciCarriesThroughIntegration: one clean base merge carries the CI pass (ticket 0173)', () => {
+  const passing = { ciStatus: 'passing', ciHead: 'aaa' } as const;
+  const row = (
+    id: number,
+    extra: Partial<Parameters<typeof ciCarriesThroughIntegration>[2][0]>,
+  ) => ({
+    id,
+    status: 'merged' as const,
+    fromHead: 'aaa',
+    resultHead: 'bbb',
+    material: [] as string[],
+    ...extra,
+  });
+
+  it('one merged, material-free row from ciHead to HEAD carries', () => {
+    expect(ciCarriesThroughIntegration(passing, 'bbb', [row(1, {})])).toBe(true);
+  });
+
+  it('up-to-date rows after it do not break the carry', () => {
+    const later = row(2, { status: 'up-to-date', fromHead: 'bbb' });
+    expect(ciCarriesThroughIntegration(passing, 'bbb', [later, row(1, {})])).toBe(true);
+  });
+
+  it.each([
+    ['CI is not passing', { ciStatus: 'failing', ciHead: 'aaa' } as const, 'bbb', [row(1, {})]],
+    ['CI was never observed', { ciStatus: null, ciHead: null }, 'bbb', [row(1, {})]],
+    ['no integration is recorded', passing, 'bbb', []],
+    ['the merge has edits inside it', passing, 'bbb', [row(1, { material: ['src/app.ts'] })]],
+    ['fromHead is not ciHead', passing, 'bbb', [row(1, { fromHead: 'zzz' })]],
+    ['resultHead is not HEAD', passing, 'ccc', [row(1, {})]],
+    ['the row is not merged', passing, 'bbb', [row(1, { status: 'interrupted' })]],
+    [
+      'two merged rows follow ciHead',
+      passing,
+      'ccc',
+      [row(2, { fromHead: 'bbb', resultHead: 'ccc' }), row(1, {})],
+    ],
+    [
+      'a conflict followed the merge',
+      passing,
+      'bbb',
+      [row(2, { status: 'conflict', fromHead: 'bbb', resultHead: null }), row(1, {})],
+    ],
+  ])('does not carry when %s', (_what, j, head, rows) => {
+    expect(ciCarriesThroughIntegration(j, head, rows)).toBe(false);
   });
 });

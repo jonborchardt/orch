@@ -1072,10 +1072,16 @@ proposed one is accepted. Nothing is invented.
   and marks the PR ready. The pre-review pr pass and approve never integrate the base. Use it only
   where required checks on the base branch run the full suite.
 
+One exception carries the CI pass forward: when HEAD is the result of exactly one clean
+`orch worktree integrate` recorded from `ciHead`, review and approve complete for that merge
+commit, and the pr/ci pass after approval checks it. The bound is one integration per CI pass; a
+second one, an edited merge, or a merge made by hand is refused as before (decision
+[2026-11-26-clean-integration-carries-ci-to-approval](decisions/2026-11-26-clean-integration-carries-ci-to-approval.md)).
+
 Any commit moves HEAD, so a repair, a commit during review, or a commit after approval makes the
 verdict, the verdicts, and `decision.md` stale; under `ci` review and approval are refused until a
-new pr/ci pass passes for the new HEAD, and a commit after approval sends the job through review
-again instead of completing it. A token-bearing `orch gh pr status` records a rollup without a head,
+new pr/ci pass passes for the new HEAD (the one clean integration above aside), and a commit after
+approval sends the job through review again instead of completing it. A token-bearing `orch gh pr status` records a rollup without a head,
 which clears `ciHead`: review then fails closed and a human runs `resume --to ci`. Changing the
 authority in the worktree is a policy change (`authority: local -> ci` in the refusal; local → ci
 counts as weakening) and needs **Accept verification policy**; the next transition follows the

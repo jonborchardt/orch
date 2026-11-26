@@ -13,6 +13,7 @@ import {
   commitFile,
   fixture,
   type GhShim,
+  gitIn,
   type ShimCheckRun,
   type TempStore,
   useJobRepo,
@@ -56,6 +57,13 @@ export const reconcile = (c: Ctx) => reconcileCi(store, c.id, { token: c.token }
 export const job = (c: Ctx) => getJob(store.db, c.id);
 export const observed = (c: Ctx) =>
   listEvents(store.db, c.id, 1000).filter((e) => e.type === 'ci.observed');
+export const eventTypes = (c: Ctx) => listEvents(store.db, c.id, 1000).map((e) => e.type);
+
+/** The base branch moves on origin: one commit on the clone's main, pushed. */
+export function advanceBase(file = 'docs/notes.md', body = 'upstream\n'): void {
+  commitFile(clone, file, body, `base: ${file}`);
+  gitIn(clone, 'push', '-q', 'origin', 'main');
+}
 export const ghCalls = (sub: string) =>
   shim.read().calls.filter((x) => x[0] === 'pr' && x[1] === sub);
 
