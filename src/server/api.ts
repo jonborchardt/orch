@@ -922,6 +922,8 @@ export function detail(store: Store, id: string): JobDetailView {
     currentChoices(store, job) !== null,
   );
   const human = needsHuman(store, job, actions);
+  // Uncapped: on a long job the push falls out of the timeline window (ticket 0079).
+  const pushes = eventsOfTypes(store.db, id, ['branch.pushed']);
   return {
     job: safeJob(job),
     models: drawnModelsOf(eventsOfTypes(store.db, id, ['models.drawn'])),
@@ -949,11 +951,11 @@ export function detail(store: Store, id: string): JobDetailView {
       checkout: vscodeLink(job.repoPath),
       pr: httpUrl(job.prUrl),
       repo: githubRepo(job.repo),
-      branch: branchLink(job, events),
-      branchUnpushed:
-        !job.prUrl &&
-        !events.some((e) => e.type === 'branch.pushed') &&
-        githubRepo(job.repo) !== null,
+      branch: branchLink(job, pushes.length > 0),
+      branchUnpushed: !job.prUrl && pushes.length === 0 && githubRepo(job.repo) !== null,
+      pushedHeads: pushes.flatMap((e) =>
+        typeof e.payload['head'] === 'string' ? [e.payload['head']] : [],
+      ),
       logs: logLinks(id, [
         ...(plan?.verification?.run?.checks.map((c) => c.outputPath) ?? []),
         ...ci.failures.map((f) => f.log),
@@ -973,8 +975,8 @@ export function detail(store: Store, id: string): JobDetailView {
  * call). Only once the branch is known to be on the remote: a recorded PR or a `branch.pushed`
  * event (the only push orch makes); before that the link would be a 404.
  */
-function branchLink(job: Job, events: Event[]): string | null {
-  if (!job.branch || (!job.prUrl && !events.some((e) => e.type === 'branch.pushed'))) return null;
+function branchLink(job: Job, pushed: boolean): string | null {
+  if (!job.branch || (!job.prUrl && !pushed)) return null;
   const base =
     githubRepo(job.repo) ??
     /^(https?:\/\/[^/]+\/[^/]+\/[^/]+)\/pull\/\d+/.exec(job.prUrl ?? '')?.[1] ??
