@@ -4,7 +4,14 @@ import { ThemeProvider } from '@mui/material';
 import { cleanup, configure, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentsView, ReviewerRow, RunsView, StageRow } from '../../src/server/types.ts';
+import type {
+  AgentsView,
+  BuilderModelRow,
+  ReviewerModelRow,
+  ReviewerRow,
+  RunsView,
+  StageRow,
+} from '../../src/server/types.ts';
 import { App } from './App.tsx';
 import { theme } from './main.tsx';
 
@@ -40,8 +47,13 @@ const reviewer = (over: Partial<ReviewerRow> & { role: string }): ReviewerRow =>
   ...timed,
   ...over,
 });
+const NO_MODELS = {
+  byModel: { challengers: [], reviewers: [], builders: [], authorTotals: [] },
+  notes: [],
+};
 let AGENTS: AgentsView;
 const SOME_UNMEASURED: AgentsView = {
+  ...NO_MODELS,
   reviewers: [
     reviewer({ role: 'spec-challenger', runs: 3, pass: 2, changes: 1, unmeasured: 3 }),
     reviewer({ role: 'security' }),
@@ -168,11 +180,97 @@ describe('Runs and Agents sections', () => {
 
   it('shows no unmeasured caption when every run has a duration', async () => {
     AGENTS = {
+      ...NO_MODELS,
       reviewers: [reviewer({ role: 'security', runs: 1, pass: 1, averageMs: 1, medianMs: 1 })],
       stages: SOME_UNMEASURED.stages,
     };
     mount('#/agents');
     await screen.findByRole('table', { name: 'Reviewers' });
     expect(screen.queryByText(/Runs without a duration/)).toBeNull();
+  });
+
+  it('renders per-model tables, notes, and their captions', async () => {
+    const reviewerModel: ReviewerModelRow = {
+      role: 'security',
+      model: 'opus',
+      sameAsAuthor: true,
+      reviews: 41,
+      objections: 2,
+      objectionRate: 2 / 41,
+      onlyObjector: 1,
+      realCatches: 1,
+      fixed: 0,
+      unresolved: 1,
+      falseAlarms: { total: 1, declined: 0, overruled: 1, vanished: 0 },
+      escapes: { total: 1, ciRepair: 0, bug: 0, revert: 1 },
+      medianMs: 60_000,
+    };
+    const builderModel = (model: string, meanTokens: number | null): BuilderModelRow => ({
+      role: 'builder',
+      model,
+      sameAsAuthor: null,
+      jobs: 4,
+      firstPassRate: 0.5,
+      meanRounds: 1.5,
+      meanCiRepairs: 0.25,
+      escalationsPerJob: 0,
+      tokenJobs: meanTokens === null ? 0 : 2,
+      meanTokens,
+    });
+    AGENTS = {
+      ...SOME_UNMEASURED,
+      byModel: {
+        challengers: [],
+        reviewers: [reviewerModel, { ...reviewerModel, model: null, sameAsAuthor: null }],
+        builders: [builderModel('opus', 1500), builderModel('fable', null)],
+        authorTotals: [],
+      },
+      notes: [
+        {
+          role: 'security',
+          text: 'security on sonnet vs opus: 0 objections in 41 reviews vs 2 in 40; too few reviews to tell.',
+          n: 40,
+          confidence: 'low',
+        },
+      ],
+    };
+    mount('#/agents');
+    const table = await screen.findByRole('table', { name: 'Reviewers by model' });
+    const rows = within(table).getAllByRole('row');
+    expect(rows[0]?.textContent).toContain('Real catches');
+    expect([...(rows[1]?.querySelectorAll('th, td') ?? [])].map((c) => c.textContent)).toEqual([
+      'security',
+      'opus',
+      'same',
+      '41',
+      '2 (5%)',
+      '1',
+      '1',
+      '0',
+      '1',
+      '1 (declined 0, overruled 1, vanished 0)',
+      '1 (CI repair 0, bug 0, revert 1)',
+      '1m',
+    ]);
+    expect(within(table).getAllByText('not recorded')).toHaveLength(1);
+    expect(
+      screen.getByText(
+        'security on sonnet vs opus: 0 objections in 41 reviews vs 2 in 40; too few reviews to tell. (n=40, low confidence)',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Tokens per review are not measured: a session's tokens are recorded per job, not per agent.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/orch records no Git revert/)).toBeInTheDocument();
+    const builders = screen.getByRole('table', { name: 'Builders by model' });
+    const tokens = (m: string) =>
+      within(builders)
+        .getAllByRole('row')
+        .find((r) => r.textContent.includes(m))
+        ?.querySelectorAll('td');
+    expect(tokens('opus')?.[6]?.textContent).toBe('1,500 (2 of 4 jobs)');
+    expect(tokens('fable')?.[6]?.textContent).toBe('Unavailable');
   });
 });

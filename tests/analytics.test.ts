@@ -1,16 +1,23 @@
 /** Runs and Agents read models: aggregates over persisted jobs, events, and reviews. */
-import { eq } from 'drizzle-orm';
+import { rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ROLES } from '../src/core/roles.ts';
+import { cancelJob } from '../src/ops/actions.ts';
 import { jobUsage } from '../src/ops/usage.ts';
 import { median, timing } from '../src/server/api.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
 import type { AgentsView, RunsView } from '../src/server/types.ts';
 import { appendEvent } from '../src/storage/events.ts';
-import { claimJob, createJob, listJobs } from '../src/storage/jobs.ts';
-import { artifacts, jobs, reviews } from '../src/storage/schema.ts';
-import { tempDir, type TempStore, tempStore } from './helpers.ts';
+import { claimJob, createJob, getJob, listJobs } from '../src/storage/jobs.ts';
+import { artifacts, events, jobs, reviews } from '../src/storage/schema.ts';
+import { createTicket } from '../src/storage/tickets.ts';
+import { insertUsage } from '../src/storage/usage.ts';
+import * as drive from './drive.ts';
+import { commitFile, fixture, tempDir, type TempStore, tempStore } from './helpers.ts';
 
 let store: TempStore;
 let server: RunningServer;
@@ -254,5 +261,240 @@ describe('analytics reads are safe (AC5)', () => {
       expect(await res.text()).not.toContain('ownerToken');
     }
     expect(listJobs(store.db)).toEqual(before);
+  });
+});
+
+describe('GET /api/agents per model (ticket 0169, AC4)', () => {
+  let repo: { clone: string; bare: string };
+  beforeEach(() => {
+    repo = drive.makePolicyRepo();
+  });
+  afterEach(() => {
+    for (const d of [repo.clone, repo.bare]) rmSync(d, { recursive: true, force: true });
+  });
+  const config = (models: Record<string, unknown>) => {
+    writeFileSync(join(store.paths.config, 'factory.json'), JSON.stringify({ models }));
+  };
+  /** One review round: `changes` ask for changes; `findings[k]` raised blocking finding k+1. */
+  function round(c: drive.Ctx, changes: string[], findings: string[]): void {
+    drive.go(store, c, 'start');
+    for (const r of ['security', 'correctness', 'code-quality']) {
+      drive.verdict(store, c, r, changes.includes(r) ? 'CHANGES' : 'PASS');
+    }
+    const n = String(getJob(store.db, c.id).round);
+    const lines = findings.map(
+      (who, i) => `${String(i + 1)}. [BLOCKING] f — p → q (reviewers: ${who})`,
+    );
+    const body = drive
+      .consolidated(store, c, String(findings.length))
+      .replace(/^## Findings\n[\s\S]*?\n\n/m, `## Findings\n${lines.join('\n')}\n\n`);
+    drive.add(store, c, `round-${n}/consolidated.md`, body);
+    drive.go(store, c, 'complete');
+  }
+  function rebuild(c: drive.Ctx, answers: string): void {
+    drive.go(store, c, 'start');
+    commitFile(c.wt, 'src/r2.ts', '// r2\n', 'r2');
+    drive.verify(store, c);
+    drive.add(
+      store,
+      c,
+      'build.md',
+      `${fixture('build.md')}\n## Findings addressed\n\n${answers}\n`,
+      true,
+    );
+    drive.go(store, c, 'complete');
+  }
+
+  it('reports reviewer, challenger, and builder rows per model with findings and escapes', async () => {
+    // A (default pools): security's 1.1 fixed and passed next round; correctness's 1.2 declined
+    // and then approved over; a CI repair after the passing round 2.
+    const a = drive.start(store, repo.clone);
+    drive.toReview(store, a);
+    round(a, ['security'], ['security', 'correctness']);
+    rebuild(a, '- 1.1: fixed\n- 1.2: declined — out of scope');
+    drive.simplify(store, a);
+    drive.passRound(store, a);
+    drive.approve(store, a);
+    // The event a CI rework writes (core/workflow.ts), after round 2: reaching ci needs a gh shim.
+    appendEvent(
+      store.db,
+      a.id,
+      'job.reworked',
+      { from: 'ci', reason: 'test failed', ciRepairs: 0 },
+      null,
+      new Date().toISOString(),
+    );
+    store.db.update(jobs).set({ ciRepairs: 1 }).where(eq(jobs.id, a.id)).run();
+    store.db
+      .update(reviews)
+      .set({ createdAt: at(0), completedAt: at(10 * MIN) })
+      .where(and(eq(reviews.jobId, a.id), eq(reviews.reviewer, 'security')))
+      .run();
+    insertUsage(store, {
+      ref: 'r-a',
+      jobId: a.id,
+      source: 'backfill',
+      hours: [{ hour: T0, input: 100, output: 20, cacheRead: 5, cacheCreation: 3 }],
+    });
+
+    // B (legacy: no draw): code-quality's fixed 1.1 has no next round yet; correctness's 1.2 is
+    // declined on an active job. A bug ticket names B.
+    const b = drive.start(store, repo.clone);
+    store.db
+      .delete(events)
+      .where(and(eq(events.jobId, b.id), eq(events.type, 'models.drawn')))
+      .run();
+    drive.toReview(store, b);
+    round(b, ['code-quality'], ['code-quality', 'correctness']);
+    rebuild(b, '- 1.1: fixed\n- 1.2: declined — not a defect');
+    createTicket(store, {
+      title: 'Export breaks',
+      type: 'bug',
+      body: `After ${b.id}.`,
+      repo: 'r',
+      repoPath: '/r',
+    });
+
+    // C (security on sonnet): correctness's 1.1 never answered, the job escalated and cancelled.
+    // A revert ticket names C's PR.
+    config({ security: 'sonnet' });
+    const c = drive.start(store, repo.clone);
+    config({});
+    drive.toReview(store, c);
+    round(c, ['correctness'], ['correctness']);
+    drive.go(store, c, 'escalate', 'stuck');
+    cancelJob(store, c.id, { session: drive.SESSION, reason: 'dropped' });
+    store.db
+      .update(jobs)
+      .set({ prUrl: 'https://github.com/acme/alpha/pull/7' })
+      .where(eq(jobs.id, c.id))
+      .run();
+    createTicket(store, {
+      title: 'Revert CSV export',
+      type: 'chore',
+      body: 'Undo https://github.com/acme/alpha/pull/7',
+      repo: 'r',
+      repoPath: '/r',
+    });
+
+    const view = await json<AgentsView>('/api/agents');
+    const zero = {
+      onlyObjector: 0,
+      realCatches: 0,
+      fixed: 0,
+      unresolved: 0,
+      falseAlarms: { total: 0, declined: 0, overruled: 0, vanished: 0 },
+      escapes: { total: 0, ciRepair: 0, bug: 0, revert: 0 },
+      medianMs: null,
+    };
+    const esc = (ciRepair: number, bug: number, revert: number) => ({
+      total: Math.max(ciRepair, bug, revert),
+      ciRepair,
+      bug,
+      revert,
+    });
+    const fa = (declined: number, overruled: number, vanished: number) => ({
+      total: declined + overruled + vanished,
+      declined,
+      overruled,
+      vanished,
+    });
+    const row = (
+      role: string,
+      model: string | null,
+      same: boolean | null,
+      n: number,
+      x: number,
+    ) => ({
+      role,
+      model,
+      sameAsAuthor: same,
+      reviews: n,
+      objections: x,
+      objectionRate: x / n,
+    });
+    expect(view.byModel.reviewers).toEqual([
+      { ...row('security', null, null, 1, 0), ...zero, escapes: esc(0, 1, 0) },
+      {
+        ...row('security', 'opus', true, 2, 1),
+        ...zero,
+        onlyObjector: 1,
+        realCatches: 1,
+        escapes: esc(1, 0, 0),
+        medianMs: 10 * MIN,
+      },
+      { ...row('security', 'sonnet', false, 1, 0), ...zero, escapes: esc(0, 0, 1) },
+      {
+        ...row('correctness', null, null, 1, 0),
+        ...zero,
+        falseAlarms: fa(1, 0, 0),
+        escapes: esc(0, 1, 0),
+      },
+      {
+        ...row('correctness', 'sonnet', false, 3, 1),
+        ...zero,
+        onlyObjector: 1,
+        falseAlarms: fa(0, 1, 1),
+        escapes: esc(1, 0, 0),
+      },
+      { ...row('code-quality', null, null, 1, 1), ...zero, onlyObjector: 1, unresolved: 1 },
+      {
+        ...row('code-quality', 'sonnet', false, 3, 0),
+        ...zero,
+        escapes: { total: 2, ciRepair: 1, bug: 0, revert: 1 },
+      },
+    ]);
+    expect(view.byModel.challengers).toEqual([
+      row('spec-challenger', null, null, 1, 0),
+      row('spec-challenger', 'sonnet', false, 2, 0),
+    ]);
+    const builder = (model: string | null, over: Record<string, unknown>) => ({
+      role: 'builder',
+      model,
+      sameAsAuthor: null,
+      firstPassRate: 1,
+      ...over,
+    });
+    expect(view.byModel.builders.filter((r) => r.role === 'builder')).toEqual([
+      builder(null, {
+        jobs: 1,
+        meanRounds: 1,
+        meanCiRepairs: 0,
+        escalationsPerJob: 0,
+        tokenJobs: 0,
+        meanTokens: null,
+      }),
+      builder('opus', {
+        jobs: 2,
+        meanRounds: 1.5,
+        meanCiRepairs: 0.5,
+        escalationsPerJob: 0.5,
+        tokenJobs: 1,
+        meanTokens: 128,
+      }),
+    ]);
+    expect(
+      view.byModel.builders.filter((r) => r.role === 'spec-writer').map((r) => r.jobs),
+    ).toEqual([1, 2]);
+    expect(
+      view.byModel.authorTotals.find((r) => r.role === 'security' && r.sameAsAuthor === false),
+    ).toEqual({
+      role: 'security',
+      sameAsAuthor: false,
+      reviews: 1,
+      objections: 0,
+      objectionRate: 0,
+    });
+    expect(view.notes.map((n) => n.text)).toContain(
+      'security on opus: 1 objections in 2 reviews; not enough data.',
+    );
+    expect(view.notes.find((n) => n.text.startsWith('builder on opus'))).toEqual({
+      role: 'builder',
+      text: 'builder on opus: 2 jobs; not enough data.',
+      n: 2,
+      confidence: 'low',
+    });
+    // Legacy rows never appear in a note.
+    expect(view.notes.some((n) => n.text.includes('null'))).toBe(false);
   });
 });

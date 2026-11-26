@@ -259,7 +259,13 @@ Headings match case-insensitively at any level. The marker is stored on the arti
 workflow reads it: `review record --verdict pass` is refused if the file says `CHANGES`, and
 `approve` cannot complete unless `decision.md` says `APPROVE` (use `escalate`, or `rework` for a
 `REWORK-*` decision, instead). Files with
-other names (evidence, notes) are accepted without structure checks. A file on disk is not evidence
+other names (evidence, notes) are accepted without structure checks. Blocking findings are
+attributed (`src/core/findings.ts`, decision 2026-11-25-attributed-findings): each `[BLOCKING]`
+line of `round-N/consolidated.md` ends with `(reviewers: <names>)` naming reviewers with a review
+row that round, and their count equals `BLOCKING`; the build.md that follows a round with blocking
+findings answers each id `N.k` once as `- N.k: fixed` or `- N.k: declined — <reason>` under
+`Findings addressed`. Both are checked at registration only, so an untagged consolidation
+registered earlier needs no answers. A file on disk is not evidence
 of completion until it is registered.
 
 **Replacement is explicit.** Registering the same path with identical content is a no-op.

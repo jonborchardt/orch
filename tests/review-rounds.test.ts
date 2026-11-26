@@ -20,7 +20,7 @@ import {
   verdict,
   verify,
 } from './drive.ts';
-import { commitFile, fixture, type TempStore, tempStore } from './helpers.ts';
+import { answeredBuild, commitFile, type TempStore, tempStore } from './helpers.ts';
 
 let store: TempStore;
 let clone: string;
@@ -56,7 +56,7 @@ describe('review rounds on the dashboard', () => {
     go(store, c, 'start');
     commitFile(c.wt, 'src/r2.ts', '// r2\n', 'r2');
     verify(store, c);
-    add(store, c, 'build.md', fixture('build.md'), true);
+    add(store, c, 'build.md', answeredBuild('1.1', '1.2'), true);
     go(store, c, 'complete');
     simplify(store, c);
 

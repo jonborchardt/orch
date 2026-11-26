@@ -8,6 +8,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { NotFoundError, ValidationError } from '../core/errors.ts';
+import {
+  attributedFindings,
+  checkAnswers,
+  checkConsolidated,
+  type FindingAnswer,
+} from '../core/findings.ts';
 import { jobArtifactDir } from '../core/paths.ts';
 import { baseRef } from '../git/repo.ts';
 import { tryGit } from '../git/run.ts';
@@ -32,7 +38,7 @@ import {
   reviewedHeadRefusal,
   simplifyArtifact,
 } from '../core/workflow.ts';
-import { findArtifact, listArtifacts } from '../storage/artifacts.ts';
+import { findArtifact, listArtifacts, validateArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import {
   authorize,
@@ -194,7 +200,47 @@ export function addArtifact(
       info = null;
     }
   }
-  return registerArtifact(store, id, relPath, { ...opts, head: info?.head ?? null });
+  const answers = requireAttribution(store, job, rel);
+  return registerArtifact(store, id, relPath, {
+    ...opts,
+    head: info?.head ?? null,
+    ...(answers ? { answers } : {}),
+  });
+}
+
+/**
+ * Blocking findings are attributed (decision 2026-11-25-attributed-findings): the current round's
+ * consolidated.md tags each `[BLOCKING]` line with reviewers that recorded a review this round, and
+ * the next build.md answers each of them once. Applies at registration only; a build after a
+ * BLOCKING: 0, legacy (untagged), or missing consolidation needs no answers. Returns build.md's
+ * checked answers when the rule applied.
+ */
+function requireAttribution(store: Store, job: Job, rel: string): FindingAnswer[] | undefined {
+  const consolidated = `round-${String(job.round)}/consolidated.md`;
+  const dir = jobArtifactDir(job.id, store.paths);
+  // validateArtifact first: structure, marker, and confinement before the text is read.
+  if (rel === consolidated && job.stage === 'review') {
+    validateArtifact(dir, rel);
+    const reviewed = listReviews(store.db, job.id)
+      .filter((r) => r.round === job.round)
+      .map((r) => r.reviewer);
+    checkConsolidated(job.round, readFileSync(join(dir, ...rel.split('/')), 'utf8'), reviewed);
+    return undefined;
+  }
+  if (rel !== 'build.md' || job.stage !== 'build') return undefined;
+  const registered = findArtifact(store.db, job.id, consolidated);
+  if (!registered || registered.marker === '0') return undefined;
+  // The findings are the registered ones: a consolidation edited since cannot change the answers due.
+  if (validateArtifact(dir, consolidated).sha256 !== registered.sha256) {
+    throw new ValidationError(
+      `${consolidated} changed on disk since it was registered; restore it before registering build.md.`,
+    );
+  }
+  const text = readFileSync(join(dir, ...consolidated.split('/')), 'utf8');
+  const findings = attributedFindings(job.round, text);
+  if (!findings || findings.length === 0) return undefined;
+  validateArtifact(dir, rel);
+  return checkAnswers(findings, readFileSync(join(dir, 'build.md'), 'utf8'));
 }
 
 /** `orch job review record`: a verdict is recorded against a clean worktree's HEAD. */
