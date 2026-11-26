@@ -15,7 +15,14 @@ import { startServer } from '../src/server/http.ts';
 import type { SessionInfo } from '../src/server/types.ts';
 import { openStore } from '../src/storage/client.ts';
 import { listEvents, maxEventId } from '../src/storage/events.ts';
-import { claimMailCursor, createJob, getJob, recordMailOutcome } from '../src/storage/jobs.ts';
+import {
+  claimJob,
+  claimMailCursor,
+  createJob,
+  getJob,
+  recordMailOutcome,
+  transitionJob,
+} from '../src/storage/jobs.ts';
 import { homePaths, makeRepo, orchAsync, tempDir, tempStore, writeArtifact } from './helpers.ts';
 import { CERT, type FakeSmtp, fakeSmtp, FIXTURE_CERT, PASSWORD } from './mail-server.ts';
 
@@ -81,53 +88,69 @@ describe('job status mail through the CLI', () => {
     expect(smtp.messages.length).toBe(before);
   });
 
+  it('mails nothing for creation, stage changes, or resume', async () => {
+    const home = tempDir('orch-mail-home-');
+    const base = smtp.messages.length;
+    const id = await created(home, makeRepo(), mailEnv());
+    const env = await claimed(home, id, mailEnv());
+    await cli(home, ['job', 'transition', id, 'start'], env);
+    for (const rel of ['spec.md', 'spec-review-1.md']) {
+      writeArtifact(jobArtifactDir(id, homePaths(home)), rel);
+      await cli(home, ['job', 'artifact', 'add', id, rel], env);
+    }
+    await cli(home, ['job', 'transition', id, 'complete'], env);
+    await cli(home, ['job', 'transition', id, 'start'], env);
+    await cli(home, ['job', 'transition', id, 'fail', '--reason', 'tests broke in CI'], env);
+    await cli(home, ['job', 'transition', id, 'resume'], env);
+    const { job, events } = inspect(home, id);
+    for (const t of [
+      'job.created',
+      'stage.started',
+      'stage.completed',
+      'stage.failed',
+      'job.resumed',
+    ])
+      expect(events.some((e) => e.type === t)).toBe(true);
+    expect(events.some((e) => e.type.startsWith('mail.'))).toBe(false);
+    expect(job).toMatchObject({ mailCursor: null, mailThreadId: null, mailLastId: null });
+    expect(smtp.messages.length).toBe(base);
+  });
+
   it('mails each reported change once, in one thread per job', async () => {
     const home = tempDir('orch-mail-home-');
     const base = smtp.messages.length;
     const sent = () => smtp.messages.slice(base);
 
     const id = await created(home, makeRepo(), mailEnv());
-    expect(sent()).toHaveLength(1);
-    const env = await claimed(home, id, mailEnv()); // job.claimed is not reported
-    expect(sent()).toHaveLength(1);
+    const env = await claimed(home, id, mailEnv());
     await cli(home, ['job', 'transition', id, 'start'], env);
-    expect(sent()).toHaveLength(2);
-    for (const rel of ['spec.md', 'spec-review-1.md']) {
-      writeArtifact(jobArtifactDir(id, homePaths(home)), rel);
-      await cli(home, ['job', 'artifact', 'add', id, rel], env); // not reported
-    }
-    expect(sent()).toHaveLength(2);
-    await cli(home, ['job', 'transition', id, 'complete'], env);
-    expect(sent()).toHaveLength(3);
-    await cli(home, ['job', 'transition', id, 'start'], env);
-    const failed = await cli(
-      home,
-      ['job', 'transition', id, 'fail', '--reason', 'tests broke in CI'],
-      env,
-    );
-    expect(failed.err).toBe('');
+    expect(sent()).toHaveLength(0);
+    await cli(home, ['job', 'transition', id, 'escalate', '--reason', 'needs a decision'], env);
+    expect(sent()).toHaveLength(1);
+    await cli(home, ['job', 'transition', id, 'cancel', '--reason', 'not needed'], env);
     const mails = sent();
-    expect(mails).toHaveLength(5);
+    expect(mails).toHaveLength(2);
 
     const [first, ...later] = mails;
     const firstId = first?.headers['message-id'] ?? '';
     expect(first?.headers['subject']).toBe(`[orch] ${id}: Mail me`);
     expect(first?.headers['in-reply-to']).toBeUndefined();
-    expect(first?.body).toContain('job.created');
+    expect(first?.body).toContain('job.blocked');
+    expect(first?.body).toContain('reason: needs a decision');
     later.forEach((m, i) => {
       expect(m.headers['subject']).toBe(first?.headers['subject']);
       expect(m.headers['in-reply-to']).toBe(mails[i]?.headers['message-id']);
       expect(m.headers['references']?.split(' ')[0]).toBe(firstId);
     });
 
-    // The failure mail says where the job is now and why.
-    const fail = mails[4]?.body ?? '';
-    expect(fail).toContain(`Job:    ${id}`);
-    expect(fail.split(/\r?\n/)[0]).toBe('❌ failed at build');
-    expect(fail).toContain('❌ build  current');
-    expect(fail).toContain('stage.failed (build)');
-    expect(fail).toContain('reason: tests broke in CI');
-    expect(fail).toContain(`orch factory status ${id}`);
+    // The cancel mail says where the job is now and why.
+    const cancel = mails[1]?.body ?? '';
+    expect(cancel).toContain(`Job:    ${id}`);
+    expect(cancel.split(/\r?\n/)[0]).toBe('\u{1F6AB} cancelled at needs-human');
+    expect(cancel).toContain('job.cancelled');
+    expect(cancel).toContain('reason: not needed');
+    expect(cancel).not.toContain('Merged:');
+    expect(cancel).toContain(`orch factory status ${id}`);
 
     const { job, events } = inspect(home, id);
     const sentEvents = events.filter((e) => e.type === 'mail.sent');
@@ -135,10 +158,10 @@ describe('job status mail through the CLI', () => {
       mails.map((m) => m.headers['message-id']),
     );
     expect(job.mailThreadId).toBe(firstId);
-    expect(job.mailLastId).toBe(mails[4]?.headers['message-id']);
+    expect(job.mailLastId).toBe(mails[1]?.headers['message-id']);
     expect(job.mailSubject).toBe(`${id}: Mail me`);
     expect(job.mailCursor).toBe(
-      Math.max(...events.filter((e) => e.type === 'stage.failed').map((e) => e.id)),
+      Math.max(...events.filter((e) => e.type === 'job.cancelled').map((e) => e.id)),
     );
   });
 
@@ -150,15 +173,20 @@ describe('job status mail through the CLI', () => {
     const id = await created(home, makeRepo(), {});
     const env = await claimed(home, id, downEnv);
 
-    const r = await cli(home, ['job', 'transition', id, 'start'], env);
+    await cli(home, ['job', 'transition', id, 'start'], env); // not mailed
+    const r = await cli(home, ['job', 'transition', id, 'escalate', '--reason', 'decide'], env);
     // stdout is the command's own output (the job's mail columns are part of every job print).
     expect(r.out).not.toMatch(/mail report|Mail to/);
-    expect(r.out).toMatch(/^status\s+running$/m);
+    expect(r.out).toMatch(/^status\s+blocked$/m);
     const lines = r.err.trim().split('\n');
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(new RegExp(`^orch: mail report for ${id} failed: Mail to 127`));
     const after = inspect(home, id);
-    expect(after.job).toMatchObject({ stage: 'spec', status: 'running', mailThreadId: null });
+    expect(after.job).toMatchObject({
+      stage: 'needs-human',
+      status: 'blocked',
+      mailThreadId: null,
+    });
     const failures = () => inspect(home, id).events.filter((e) => e.type === 'mail.failed');
     expect(failures()).toHaveLength(1);
     expect(String(failures()[0]?.payload['error'])).toContain('Mail to 127.0.0.1');
@@ -166,12 +194,12 @@ describe('job status mail through the CLI', () => {
     // AUTH refused: --json prints nothing extra; the password is never stored or printed.
     const refusing = await fakeSmtp({ rejectAuth: true });
     try {
-      const fail = await cli(home, ['--json', 'job', 'transition', id, 'fail', '--reason', 'x'], {
+      const fail = await cli(home, ['--json', 'job', 'transition', id, 'cancel', '--reason', 'x'], {
         ...env,
         ...mailEnv(refusing),
       });
       expect(fail.err).toBe('');
-      expect(JSON.parse(fail.out)).toMatchObject({ jobId: id, status: 'failed' });
+      expect(JSON.parse(fail.out)).toMatchObject({ jobId: id, status: 'cancelled' });
       expect(fail.out).not.toContain(PASSWORD);
       expect(failures()).toHaveLength(2);
       expect(String(failures()[1]?.payload['error'])).toContain('AUTH refused: 535');
@@ -235,6 +263,8 @@ describe('mail state is metadata, claimed at most once', () => {
         repoPath: tempDir(),
         baseBranch: 'main',
       });
+      const { token } = claimJob(store, job.id, { session: 'race' });
+      transitionJob(store, job.id, 'cancel', { token, reason: 'race' });
       const before = smtp.messages.length;
       const env = smtp.env();
       const [a, b] = await Promise.all([
@@ -263,7 +293,7 @@ describe('dashboard actions', () => {
         repoPath: tempDir(),
         baseBranch: 'main',
       });
-      const [opened] = await reportJobMail(store, 0);
+      expect(await reportJobMail(store, 0)).toEqual([]); // job.created is not mailed
       const before = smtp.messages.length;
       const headers = {
         Origin: `http://127.0.0.1:${String(server.port)}`,
@@ -280,7 +310,7 @@ describe('dashboard actions', () => {
       });
       expect(res.status).toBe(200);
       const mail = (await smtp.waitFor(before + 1))[before];
-      expect(mail?.headers['in-reply-to']).toBe(opened?.messageId);
+      expect(mail?.headers['in-reply-to']).toBeUndefined(); // the thread starts here
       expect(mail?.body).toContain('job.cancelled');
       expect(mail?.body).toContain('reason: dashboard: not needed');
     } finally {

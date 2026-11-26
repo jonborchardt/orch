@@ -39,6 +39,7 @@ const EVENT_EMOJI: Record<string, string> = {
   'runner.stopped': EMOJI.waiting,
   'stage.completed': EMOJI.success,
   'job.completed': EMOJI.success,
+  'pr.merged': EMOJI.success,
   'job.cancelled': EMOJI.cancelled,
 };
 
@@ -59,24 +60,20 @@ export function stageLines(job: { stage: Stage; status: Status }): string[] {
 }
 
 /**
- * State changes, errors, likely-flaky verification failures, and the factory controller giving a
- * ticket up (`runner.stopped`). Anything else (CI polls, pushes, verification runs, the
- * controller's Claude sessions) is not mailed.
+ * Mail only when a person must act or a job's outcome is final: a block, cancel, interruption,
+ * failed recovery attempt, likely-flaky verification failure, the factory controller giving a
+ * ticket up (`runner.stopped`), and the confirmed merge (`pr.merged`; `ops/mail.ts` drops a
+ * refused one). Stage starts and completions, creation, resume, rework, completion, CI polls,
+ * pushes, verification runs, and the controller's Claude sessions are not mailed.
  */
 export const REPORTED_EVENTS: readonly string[] = [
-  'job.created',
-  'stage.started',
-  'stage.completed',
-  'stage.failed',
   'job.blocked',
-  'job.resumed',
-  'job.reworked',
   'job.cancelled',
-  'job.completed',
   'job.interrupted',
   'recovery.failed',
   'verification.flaky',
   'runner.stopped',
+  'pr.merged',
 ];
 
 /** The thread's subject without the configured prefix, which `sendReport` adds. */
@@ -121,14 +118,22 @@ function neededLines(n: Needed): string[] {
   ];
 }
 
+/** A confirmed merge's receipt, derived by the caller: the merge commit and the run summary's cost line. */
+export interface Receipt {
+  mergeCommit: string | null;
+  cost: string;
+}
+
 /**
  * Body of one status mail: an outcome headline, what the job needs (when it needs anything),
- * every stage, then each reported event in order.
+ * the receipt (when the batch holds a confirmed merge), every stage, then each reported event in
+ * order.
  */
 export function reportBody(
   job: Pick<Job, 'id' | 'title' | 'repo' | 'stage' | 'status' | 'prUrl'>,
   events: readonly Event[],
   needed: Needed | null = null,
+  receipt: Receipt | null = null,
 ): string {
   return [
     `${outcomeEmoji(job)} ${job.status} at ${job.stage}`,
@@ -138,6 +143,9 @@ export function reportBody(
     `Title:  ${job.title}`,
     `Repo:   ${job.repo}`,
     ...(job.prUrl ? [`PR:     ${job.prUrl}`] : []),
+    ...(receipt
+      ? [`Merged: ${receipt.mergeCommit ?? 'merge commit not recorded'}`, receipt.cost]
+      : []),
     '',
     'Stages:',
     ...stageLines(job),

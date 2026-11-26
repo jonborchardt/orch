@@ -724,7 +724,14 @@ part, no retry). `orch mail report` exposes it without opening the database.
 Job reporting lives in `src/ops/mail.ts`. The CLI (`job`, `factory`, `worktree`, `gh`, `verify`),
 the dashboard action route, and each recovery-worker pass take a watermark (the highest event id)
 before the operation and call `reportJobMail` after it, also when it threw. For every job with
-`REPORTED_EVENTS` (`src/core/mail-report.ts`) after `max(job.mailCursor, watermark)`:
+`REPORTED_EVENTS` (`src/core/mail-report.ts`) after `max(job.mailCursor, watermark)`. Those are
+only the events where a person must act or the outcome is final: `job.blocked`, `job.cancelled`,
+`job.interrupted`, `recovery.failed`, `verification.flaky`, `runner.stopped`, and `pr.merged`; a
+refused merge (`pr.merged` with `ok: false`) is dropped from the batch, so only the confirmed merge
+is mailed. Job creation, stage starts, completions, and failures, resume, rework, and job
+completion are not mailed (a failed stage that matters ends in `job.blocked` or `runner.stopped`).
+A batch with the confirmed merge adds the receipt under the PR line: `Merged: <merge commit>` and
+the cost line `costLine` in `src/ops/run-report.ts` prints for the end-of-session summary.
 
 1. claim: one immediate transaction moves `jobs.mailCursor` to the batch's last event id only if
    it still holds the value read, so concurrent processes send a batch at most once;
@@ -743,8 +750,8 @@ are untouched, so an owner's `--revision` guard never sees them. A failure is ne
 claim already moved the cursor) and never changes the command's output or exit code; text mode
 adds one stderr line `orch: mail report for <id> failed: <message>`. Without configuration the hook
 only reads the watermark. Events written outside these hooks are not caught up later: the next
-report starts after its own watermark. A job created before mail was configured starts its thread
-at its first reported change afterwards.
+report starts after its own watermark. A job's thread starts at its first mailed event, which for
+a job that never needed a person is its merged receipt.
 
 ## Worktrees
 

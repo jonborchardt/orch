@@ -9,6 +9,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { currentChoices, needsHuman } from '../src/ops/actions.ts';
 import { reportJobMail } from '../src/ops/mail.ts';
+import { now } from '../src/core/workflow.ts';
+import { appendEvent, maxEventId } from '../src/storage/events.ts';
 import { getJob } from '../src/storage/jobs.ts';
 import { seedDashboard, type SeededJobs } from './fixtures/dashboard.ts';
 import { tempDir, type TempStore, tempStore } from './helpers.ts';
@@ -18,6 +20,8 @@ let smtp: FakeSmtp;
 let store: TempStore;
 let ids: SeededJobs;
 const bodies = new Map<string, string>();
+const counts = new Map<string, number>();
+let mailedFirst: string[] = [];
 
 beforeAll(async () => {
   smtp = await fakeSmtp();
@@ -30,9 +34,20 @@ beforeAll(async () => {
   });
   const out = await reportJobMail(store, 0, smtp.env());
   expect(out.every((o) => o.error === null)).toBe(true);
+  mailedFirst = out.map((o) => o.jobId);
+  // Jobs with no mailed event of their own get one (a likely-flaky label fits any state), so the
+  // block each state derives can still be read.
+  const mark = maxEventId(store.db);
+  for (const id of [ids.failed, ids.reviewing, ids.completed])
+    appendEvent(store.db, id, 'verification.flaky', { reason: 'flaky' }, null, now());
+  const more = await reportJobMail(store, mark, smtp.env());
+  expect(more.every((o) => o.error === null)).toBe(true);
   for (const m of smtp.messages) {
     const id = /(job-[0-9a-f]+):/.exec(m.headers['subject'] ?? '')?.[1];
-    if (id) bodies.set(id, m.body.replace(/\r\n/g, '\n'));
+    if (id) {
+      bodies.set(id, m.body.replace(/\r\n/g, '\n'));
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
   }
 }, 120_000);
 afterAll(async () => {
@@ -64,6 +79,16 @@ function options(id: string): string[] {
         : '(not available now)'),
   );
 }
+
+describe('only jobs that need a person are mailed', () => {
+  it('mails the escalated and cancelled jobs, once each, and nothing else', () => {
+    expect(new Set(mailedFirst)).toEqual(
+      new Set([ids.blocked, ids.ciNone, ids.ciExhausted, ids.cancelled]),
+    );
+    expect(mailedFirst).toHaveLength(4);
+    expect(counts.get(ids.blocked)).toBe(1);
+  });
+});
 
 describe('status mail says what each state needs', () => {
   it('a needs-human job from approve: what is needed, each choice with its link, then the detail', () => {

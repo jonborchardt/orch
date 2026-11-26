@@ -706,15 +706,20 @@ MAIL_SUBJECT_PREFIX=[orch]    # default [orch]
 ```
 
 The file holds a password in plain text: keep it out of every repository and readable only by
-you. With it set, every `orch` command that changes a job's state (and each dashboard action and
-recovery pass) sends one mail summarising those changes: the job's stage, status, PR, each event
-with its reason, and `orch factory status <id>`. When the job needs something, the mail leads with
-it: why it stopped, the recorded reason, and the next command or dashboard decision. Reported
-events are job creation, stage start, completion, and failure, blocking, resume, rework,
-cancellation, completion, interruption, and failed recovery attempts, and likely flaky
-verification failures (naming the test); CI polls, pushes, and verification runs themselves are
-not mailed. All mails of a job share one subject (`[orch] <id>: <title>`) and reply to the
-previous one, so a mail client shows them as one conversation.
+you. With it set, mail goes out only when a person must act or a job's outcome is final: an
+`orch` command (or dashboard action, recovery pass, or controller step) that records one of these
+events sends one mail summarising them: the job's stage, status, PR, each event with its reason,
+and `orch factory status <id>`. The mailed events are `job.blocked` (needs-human), `job.cancelled`,
+`job.interrupted`, `recovery.failed`, `verification.flaky` (naming the test), `runner.stopped`
+(the controller gave the ticket up), and `pr.merged` for a merge GitHub confirmed. When the job
+needs something, the mail leads with it: what is needed and each choice with its link, why it
+stopped, the recorded reason, and the next command or dashboard decision. The merged mail is the
+receipt: the PR link, a `Merged: <merge commit>` line, and the job's cost line as the end-of-session
+summary prints it (`cost of job <id> only: <time>, <tokens>`). Job creation, stage starts,
+completions, and failures, resume, rework, job completion, a merge GitHub refused, CI polls, pushes,
+and verification runs are not mailed; there is no option to mail them. All mails of a job share one
+subject (`[orch] <id>: <title>`) and reply to the previous one, so a mail client shows them as one
+conversation.
 `orch mail report "<subject>" (--text "<body>" | --text-file <file>) [--reply-to <message-id>]` sends any
 text the same way and prints `SENT <message-id>`.
 
