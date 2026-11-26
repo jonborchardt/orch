@@ -1073,7 +1073,6 @@ describe('ticket detail', () => {
       const button = links.getByRole('button', { name });
       button.focus();
       expect(button).toHaveFocus();
-      fireEvent.keyDown(button, { key: 'Enter' });
       fireEvent.click(button);
       return button;
     };
@@ -1086,23 +1085,14 @@ describe('ticket detail', () => {
     });
     expect(refused).toHaveFocus();
 
-    // The button that takes the removed one's place gets the focus.
+    // The row itself, which outlives the button and is not a Tab stop, gets the focus.
     press('Remove dependency on 0001');
     await waitFor(() => {
       expect(links.queryByRole('link', { name: /0001/ })).toBeNull();
     });
     expect(document.activeElement).not.toBe(document.body);
-    expect(links.getByRole('button', { name: 'Remove dependency on 0003' })).toHaveFocus();
-
-    // The last link of the row: its "none", which is not a Tab stop.
-    press('Remove dependency on 0003');
-    await waitFor(() => {
-      expect(links.queryByRole('link', { name: /0003/ })).toBeNull();
-    });
-    expect(document.activeElement).not.toBe(document.body);
-    expect(document.activeElement).toHaveTextContent(/^none$/);
+    expect(document.activeElement).toHaveTextContent(/^Depends on.*0003/);
     expect(document.activeElement).toHaveAttribute('tabindex', '-1');
-    expect(document.activeElement?.parentElement).toHaveTextContent(/^Depends on/);
   });
 
   it('offers the lifecycle actions of the status, confirms the consequential ones, and shows a refusal', async () => {

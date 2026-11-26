@@ -24,7 +24,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, type ReactNode, useCallback, useState } from 'react';
 
 import type {
   Area,
@@ -296,21 +296,6 @@ export function TicketDetail({
   const [duplicateOf, setDuplicateOf] = useState('');
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState(false);
-  // The remove button being used. Once its link is gone, focus stays in its row instead of
-  // falling to the page: the button that took its place, else the last one, else the row's "none".
-  const removing = useRef<{ button: HTMLElement; row: HTMLElement; index: number } | null>(null);
-  useEffect(() => {
-    const r = removing.current;
-    if (!r || r.button.isConnected) return;
-    removing.current = null;
-    // Focus that the user has since moved somewhere else is theirs.
-    if (document.activeElement !== document.body) return;
-    const buttons = r.row.querySelectorAll('button');
-    (
-      buttons[Math.min(r.index, buttons.length - 1)] ??
-      r.row.querySelector<HTMLElement>('span[tabindex]')
-    )?.focus();
-  });
 
   const back = (
     <Link href="#/tickets" underline="hover">
@@ -429,8 +414,7 @@ export function TicketDetail({
   const chips = (ids: readonly number[], remove?: 'dep' | 'related') => {
     const removes = remove === 'dep' ? 'dependency on' : 'related ticket';
     return ids.length === 0 ? (
-      // Focusable from code only: where focus lands when the row's last link is removed.
-      <Typography component="span" color="text.secondary" tabIndex={remove && -1}>
+      <Typography component="span" color="text.secondary">
         none
       </Typography>
     ) : (
@@ -453,13 +437,11 @@ export function TicketDetail({
               onClick={(e) => {
                 const button = e.currentTarget;
                 const row = button.parentElement;
-                if (row) {
-                  const index = [...row.querySelectorAll('button')].indexOf(button);
-                  removing.current = { button, row, index };
-                }
                 void link(remove, false, n).then((ok) => {
-                  // A refused removal moves nothing.
-                  if (!ok) removing.current = null;
+                  // The button is about to go with its link: focus stays in its row instead of
+                  // falling to the page. A refused removal, or focus the user has moved, is left.
+                  const at = document.activeElement;
+                  if (ok && (at === button || at === document.body)) row?.focus();
                 });
               }}
               sx={{ ml: -0.5 }}
@@ -472,7 +454,9 @@ export function TicketDetail({
     );
   };
   const linkRow = (label: string, body: ReactNode) => (
+    // Focusable from code only: where focus lands when one of the row's links is removed.
     <Stack
+      tabIndex={-1}
       direction="row"
       spacing={0.75}
       useFlexGap
