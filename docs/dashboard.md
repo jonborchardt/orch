@@ -34,7 +34,8 @@ where the page body is chosen.
 `GET /api/runner` when the installed build is older than the install checkout or its upstream
 ("built from X, main is at Y: pull, `npm run build`, `orch install`"; `installBuild` in
 `src/ops/install-build.ts`, reading the stamp `npm run build` writes to `dist/build-info.json`).
-It is read on load and on each section change. Local refs only, nothing is fetched; no stamp, or a
+While a controller runs, the advice says to run `orch stop next` first (`buildForStatus` in
+`src/ops/run.ts`), since rebuilding mid-run halts it. It is read on load and on each section change. Local refs only, nothing is fetched; no stamp, or a
 failed request, shows nothing.
 
 **Runs** (`GET /api/runs`, `runs` in `src/server/api.ts`) aggregates every job in every repository,

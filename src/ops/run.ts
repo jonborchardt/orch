@@ -54,7 +54,7 @@ import { dispatchJob } from './dispatch.ts';
 import { loadConfig, resumeFactoryJob, specResumeSteps } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
 import { reconcileCi } from './github.ts';
-import { buildStamp, type InstallBuild, installBuild } from './install-build.ts';
+import { buildStamp, type InstallBuild, installBuild, REBUILD_STEPS } from './install-build.ts';
 import { mailWatermark, reportJobMail, reportRunMail } from './mail.ts';
 import { mergeAuthorized, mergeJob } from './merge.ts';
 import { mergedHead } from './merge-view.ts';
@@ -1528,6 +1528,23 @@ function controllerStatus(store: Store, slot: RunnerSlot): ControllerStatus {
 }
 
 /**
+ * The build line as `orch status` and the dashboard show it: while a controller runs, rebuilding
+ * would halt it (`orch-rebuilt`), so a stale build's advice says to stop it first.
+ */
+export function buildForStatus(
+  build: InstallBuild | null,
+  controllerRunning: boolean,
+): InstallBuild | null {
+  if (build === null || !build.stale || !controllerRunning) return build;
+  // A stale build's message always ends with REBUILD_STEPS (`installBuild`).
+  const prefix = build.message.slice(0, -REBUILD_STEPS.length);
+  return {
+    ...build,
+    message: `${prefix}run \`orch stop next\`; when the controller exits: ${REBUILD_STEPS}, \`orch start\``,
+  };
+}
+
+/**
  * `orch status`: every open controller slot with the job row of its ticket in flight, the
  * session that ended last, and what waits for a person. Read-only.
  */
@@ -1535,14 +1552,15 @@ export function runnerStatus(store: Store): RunnerStatus {
   const slots = runnerSlots(store.paths);
   const last = lastFinished(slots);
   const started = (c: ControllerStatus) => c.startedAt ?? '';
+  const controllers = slots
+    .filter(slotOpen)
+    .map((s) => controllerStatus(store, s))
+    .sort(
+      (a, b) =>
+        Number(b.pid !== null) - Number(a.pid !== null) || started(a).localeCompare(started(b)),
+    );
   return {
-    controllers: slots
-      .filter(slotOpen)
-      .map((s) => controllerStatus(store, s))
-      .sort(
-        (a, b) =>
-          Number(b.pid !== null) - Number(a.pid !== null) || started(a).localeCompare(started(b)),
-      ),
+    controllers,
     last:
       last?.session?.finished == null
         ? null
@@ -1553,7 +1571,10 @@ export function runnerStatus(store: Store): RunnerStatus {
             completed: last.session.results.filter((r) => r.outcome === 'done').length,
             attempted: last.session.results.length,
           },
-    build: installBuild(),
+    build: buildForStatus(
+      installBuild(),
+      controllers.some((c) => c.state === 'running'),
+    ),
     waiting: waitingOf(
       store,
       slots.flatMap(({ session }) =>
