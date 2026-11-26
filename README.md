@@ -244,7 +244,7 @@ orch start                # every repository's ready tickets, best first, one at
 orch start repo           # only the repository containing the current directory
 orch do 85                # one ticket: start its job, continue it, or merge it
 orch do 85 --fast         # the same, but a new job is a fast job (see below)
-orch status               # controller, ticket, job, what it waits on, what happens next
+orch status               # what needs you (a link per choice), controller, ticket, job, what happens next
 orch stop next            # finish the current ticket, start no other, exit
 orch stop                 # end the current session now; the job is kept, never cancelled
 orch resume               # continue an interrupted session: same scope, ticket, job, stop request

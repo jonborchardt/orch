@@ -714,3 +714,42 @@ test('a needs-human job without recorded choices offers the default ones, primar
   };
   expect(job.job).toMatchObject({ stage: 'build', status: 'pending' });
 });
+
+// After the one above: it adds a job too.
+test('a ?choose= link opens that choice to confirm and performs nothing until Confirm', async ({
+  page,
+}) => {
+  const id = seedOlderEscalation(state().home);
+  const stage = async () =>
+    ((await (await page.request.get(`/api/jobs/${id}`)).json()) as { job: { stage: string } }).job
+      .stage;
+  const posts: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() !== 'GET') posts.push(r.url());
+  });
+
+  // What is needed and one button per choice lead the page, above the fold and the Escalation.
+  await page.goto(`/#/jobs/${id}`);
+  const block = page.getByTestId('choices');
+  await expect(page.getByTestId('needed')).toContainText('The approver asks a person to decide');
+  await expect(page.getByTestId('needed')).toBeInViewport();
+  for (const name of ['Send back to build', 'Retry approve', 'Cancel']) {
+    await expect(block.getByRole('button', { name })).toBeInViewport();
+  }
+  const top = await block.boundingBox();
+  const escalation = await page.getByRole('region', { name: 'Escalation' }).boundingBox();
+  expect(top && escalation && top.y < escalation.y).toBe(true);
+
+  await page.goto(`/#/jobs/${id}?choose=1`);
+  const dialog = page.getByRole('dialog', { name: 'Retry approve' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Confirm' })).toHaveCount(1);
+  // Opening the link did nothing: the job still waits and no request but GETs was sent.
+  expect(await stage()).toBe('needs-human');
+  expect(posts).toEqual([]);
+
+  await dialog.getByRole('button', { name: 'Confirm' }).click();
+  await expect(page.getByRole('status')).toContainText('Answered "Retry approve"');
+  expect(posts).toHaveLength(1);
+  expect(await stage()).toBe('approve');
+});

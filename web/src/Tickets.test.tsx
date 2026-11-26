@@ -86,6 +86,7 @@ const idle = (over: Partial<RunnerStatus> = {}): RunnerStatus => ({
   next: 'Nothing is running. orch start takes the next ready ticket.',
   last: null,
   build: null,
+  waiting: [],
   ...over,
 });
 

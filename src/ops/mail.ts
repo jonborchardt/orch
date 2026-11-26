@@ -19,7 +19,7 @@ import {
 import { claimMailCursor, getJob, type MailOutcome, recordMailOutcome } from '../storage/jobs.ts';
 import type { Event, Job } from '../storage/schema.ts';
 import { latestRun } from '../storage/verification.ts';
-import { allowedActions, type DashboardAction } from './actions.ts';
+import { allowedActions, choiceLine, choiceLinks, needsHuman } from './actions.ts';
 import { planJob } from './factory.ts';
 import type { RunSummary } from './run.ts';
 import { formatSummary, runSubject } from './run-report.ts';
@@ -38,19 +38,10 @@ export function mailWatermark(store: Store): number {
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** Dashboard actions that decide a stopped job; housekeeping (merge, archive, ...) is left out. */
-const DECISIONS: readonly DashboardAction[] = [
-  'approve',
-  'request-review',
-  'request-rework',
-  'accept-policy',
-  'accept-delivery',
-  'cancel',
-];
-
 /**
  * What the job needs now, from the dashboard's own derivations (as `jobDetail` in server/api.ts
- * calls them), or null when it needs nothing (running, completed).
+ * calls them), or null when it needs nothing (running, completed). A needs-human job leads with
+ * `needsHuman`: what is needed, then each choice with its `?choose=` link.
  */
 function neededOf(store: Store, job: Job): Needed | null {
   let plan = null;
@@ -70,14 +61,21 @@ function neededOf(store: Store, job: Job): Needed | null {
   const blocker = blockerOf(job, state, evidence);
   if (!blocker) return null;
   const next: string[] = [];
+  let lead: string[] | undefined;
   if (state === 'blocked') {
     const actions = allowedActions(
       job,
       plan?.verification?.policy.authorization === 'required',
       ci.completion,
-    ).filter((a) => DECISIONS.includes(a));
+      null,
+      true,
+    );
+    const view = needsHuman(store, job, actions);
+    if (view) {
+      const options = choiceLinks(job.id, view).map((c) => `  ${choiceLine(c)}`);
+      lead = [view.needed, 'Options:', ...options];
+    }
     next.push(
-      `Decide on the dashboard: ${actions.join(', ')}`,
       `Dashboard: run orch ui, then open http://127.0.0.1:${String(DEFAULT_PORT)}/#/jobs/${job.id}`,
     );
   } else if (state !== 'cancelled') {
@@ -89,7 +87,7 @@ function neededOf(store: Store, job: Job): Needed | null {
     }
   }
   if (blocker.kind === 'ci') next.push(ci.guidance);
-  return { summary: blocker.summary, detail: blocker.detail, next };
+  return { summary: blocker.summary, detail: blocker.detail, next, lead };
 }
 
 /** The block is help, not a requirement: a failure to derive it never stops the mail. */

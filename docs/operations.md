@@ -126,7 +126,10 @@ ended blocked, refused, or waiting for a person, or the run stopped on a rebuild
 The end-of-session summary (also `--json`, as `merged`) is the report to read after an
 unattended run, in four parts: **Merged**, each done ticket with its job, merged head, merge
 commit, and its PR as the receipt (the PR body carries the merge receipt); **Needs you**, each
-ticket that ended `needs-human`, `blocked`, or `refused`, with its reason and `next:` command;
+ticket that ended `needs-human`, `blocked`, or `refused`, with its reason and `next:` command (a
+job still waiting in needs-human leads with what is needed and one line per choice with its
+`?choose=<n>` dashboard link, as the stop line, `orch status`, and the status mail do; `waiting`
+in the JSON);
 **Passed over**, each skipped ticket and other unfinished result, with why; and the cost of each
 merged ticket's result job only (after a re-land, the re-land job): the summed `runner.session`
 seconds and recorded token counts, or "not recorded". Nothing estimates it, and nothing decides
@@ -212,9 +215,9 @@ orch status                               # in another terminal: 0085, job at re
 orch stop next                            # finish 0085, then exit
 # ... 0085 merges and closes; the controller exits 0
 orch start                                # later: takes 0091, whose job escalates, then the rest
-# the summary lists: 0091 needs-human: job ... waits for a person at build: ...
+# the summary lists: 0091 needs-human: <what is needed>, a ?choose= link per choice, then the reason
 orch job events <job-id> --limit 20       # runner.stopped says why and what to run next
-orch ui                                   # decide it on the dashboard (Resume at build, Request rework, ...)
+orch ui                                   # open a choice's link (or the job page) and confirm it
 orch do 91                                # continues the same job
 orch start                                # back to the queue
 ```

@@ -52,10 +52,13 @@ export type DetailActivity = 'loading' | 'refreshing' | 'idle';
 
 export function JobDetail({
   id,
+  choose = null,
   refreshMs = 4000,
   onActivity,
 }: {
   id: string;
+  /** `#/jobs/<id>?choose=<n>`: open choice n's confirm dialog (it acts only on Confirm). */
+  choose?: number | null;
   refreshMs?: number;
   onActivity?: (a: DetailActivity) => void;
 }) {
@@ -116,6 +119,16 @@ export function JobDetail({
     <Box sx={{ p: 2 }}>
       <JobHeader detail={detail} error={error} />
       <Supersession supersededBy={job.supersededBy} supersedes={detail.supersedes} />
+      {/* What a waiting job needs, and one button per choice, before anything else. */}
+      <Actions
+        key={`${job.id}:${String(choose)}`}
+        detail={detail}
+        part="choices"
+        choose={choose}
+        onDone={() => {
+          void polled.reload();
+        }}
+      />
       <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap' }}>
         {detail.links.vscode && (
           <Button variant="outlined" href={detail.links.vscode} component="a">
