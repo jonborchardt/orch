@@ -263,8 +263,9 @@ ORCH_HOME=C:\tmp\orch-test orch ticket list                                     
 ```
 
 A job can also run without the controller. In a Claude Code session in the repository,
-`/factory Add CSV export` starts a job and `/factory job-1a2b3c4d` continues one; from VS Code's
-Agents window, `/factory dispatch ...` starts several jobs in independent sessions. To run a ticket
+`/factory Add CSV export` starts a job and `/factory job-1a2b3c4d` continues one, in one
+interactive session per job; for unattended work use `orch start` or `orch do <ticket>` (the skill
+no longer launches sessions for other jobs). To run a ticket
 by hand, start its job with `orch factory start ... --ticket <id>` (or take one `orch do` created
 or stopped), continue it with `/factory <job>` in a session you can talk to, and once it is
 `completed` merge with `orch do <ticket>` or `orch job merge <job>`; `orch do` is the autonomous
@@ -312,7 +313,8 @@ Optional email reports of every job change and of each controller session's end:
   directly) are labelled and must be named in the consolidated review and the PR body. Labelling is
   not prevention: the policy fixes which commands run, not what the job's scripts do.
 - Isolation: worktrees outside every checkout (under the data directory for jobs `orch` starts;
-  VS Code's `<repo>.worktrees/<slug>` beside the repository for dispatched jobs); two jobs never
+  VS Code's `<repo>.worktrees/<slug>` beside the repository for a job that adopted a session's
+  worktree with `--adopt`); two jobs never
   share a worktree or branch; the primary checkout is never written to.
 
 ## What still needs a human
@@ -333,7 +335,7 @@ Optional email reports of every job change and of each controller session's end:
   and rerun, or use `orch resume --force` only if it is another program. A PID reused by another
   program is recognised by its start time and does not block.
 - Anything cooperative: subagents staying inside the worktree, reviewers reading the logs they are
-  given, the parent recording the child session before the child claims the job. These are stated in
+  given, a session recording itself on its job. These are stated in
   prose and verified after the fact (fingerprints, dirty-file lists), not prevented.
 
 ## Limitations
@@ -350,7 +352,7 @@ pins only the head), and no merge queue tests the merged result; GitHub's "requi
 up to date" rule closes that window. GitHub's free plan hides a private repository's required
 checks (HTTP 403), so every reported check must pass there. Ownership is advisory on the
 filesystem: a write outside the worktree is not counted as progress, but it is not prevented.
-Dispatch outside VS Code's Agents window prints the command for a human. No cost accounting: token
+No cost accounting: token
 counts come from Claude Code's undocumented transcript format (the dashboard's Usage section).
 
 ## Where things live
@@ -391,8 +393,8 @@ Details: [docs/operations.md](docs/operations.md#backup-and-restore).
 - [docs/development.md](docs/development.md): stack, layout, build, tests, migrations, install
   mechanics, Windows notes, CLI reference. `CLAUDE.md` has the rules for changing the code.
 - [docs/decisions/](docs/decisions/): one file per architectural decision.
-- [docs/session-launch.md](docs/session-launch.md): what VS Code can and cannot do about
-  independent sessions.
+- [docs/session-launch.md](docs/session-launch.md): historical; what VS Code can and cannot do
+  about independent sessions (the dispatch launch it supported is retired).
 
 ## License
 

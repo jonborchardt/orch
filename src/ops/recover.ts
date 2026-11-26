@@ -36,7 +36,6 @@ import {
   sessionsByJob,
 } from '../storage/jobs.ts';
 import type { Event, Job } from '../storage/schema.ts';
-import { launchFor } from './dispatch.ts';
 import { resumeFactoryJob } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
 import { isObservation, reconcileCi } from './github.ts';
@@ -173,7 +172,7 @@ export function recoverPass(store: Store, owned?: () => boolean): RecoveryPass {
       detail: null,
       resume:
         c.class === 'needs-session' || c.class === 'exhausted'
-          ? ((ref ? sessionLinks(ref).resume : null) ?? launchFor(job).fallback[0] ?? null)
+          ? ((ref ? sessionLinks(ref).resume : null) ?? `/factory ${job.id}`)
           : null,
       waitSeconds:
         job.stage === 'ci' && job.ciStatus === 'pending' ? waitSeconds(pollsOf(job, events)) : null,

@@ -15,6 +15,8 @@ A new feature fits if it does at least one of these, with no daemon, server, or 
 Non-goals, which a ticket or reviewer can cite to decline a feature:
 
 - **Parallel throughput**: one ticket at a time keeps evidence pinned to one head.
+  `/factory dispatch`'s parallel session launch is retired
+  ([2026-11-25-retire-dispatch-launch](2026-11-25-retire-dispatch-launch.md)).
 - **Live steering**: `orch` never messages a running session.
 - **Cloud or daemon**: nothing runs after the command exits, nothing is hosted.
 - **Team sync**: the queue is one person's, local and single-user.

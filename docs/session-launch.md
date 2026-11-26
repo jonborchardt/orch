@@ -1,5 +1,10 @@
 # Independent session launch: capability assessment and evidence
 
+> **Superseded (2026-11-25).** The `/factory dispatch` session launch this document supports is
+> retired: see [decisions/2026-11-25-retire-dispatch-launch.md](decisions/2026-11-25-retire-dispatch-launch.md).
+> Use `orch start` / `orch do <ticket>`, or `/factory <job>` in one interactive session. Kept as
+> the evidence earlier decisions cite; `orch factory dispatch` no longer returns a `launch` block.
+
 What the installed VS Code and Claude Code can and cannot do about starting an independent agent
 session for a factory job, established from the official documentation and from experiments run on
 2026-11-14 in this environment:
