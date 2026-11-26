@@ -172,7 +172,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       updatedAt: job.updatedAt,
       elapsedMs: span(job.createdAt, end),
       pr: {
-        url: job.prUrl,
+        url: httpUrl(job.prUrl),
         state: job.prState,
         phase: prPhase(job, ci.completion),
         refreshable: cannotRefreshPr(job) === null,

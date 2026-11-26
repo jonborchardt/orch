@@ -1532,6 +1532,18 @@ describe('recorded logs on the artifact route (todo 0019)', () => {
     expect(withPr('github.com/acme/alpha', 'not a url').pr).toBeNull();
   });
 
+  it('board pr.url is the same http(s)-checked URL, so a javascript: PR URL is no link', () => {
+    const boardPr = (prUrl: string) => {
+      const { id } = mk(`board pr ${prUrl}`, 'github.com/acme/alpha');
+      own.db.update(jobs).set({ prUrl }).where(eq(jobs.id, id)).run();
+      return board(own).find((r) => r.id === id)?.pr.url;
+    };
+    expect(boardPr('javascript:alert(1)')).toBeNull();
+    expect(boardPr('https://github.com/acme/alpha/pull/9')).toBe(
+      'https://github.com/acme/alpha/pull/9',
+    );
+  });
+
   it('accepts only the log shapes orch writes (isLogPath)', () => {
     for (const ok of ['verification/3/check.log', 'ci/abcdef0/test.log', 'ci/abcdef0/a_b-c.d.log'])
       expect(isLogPath(ok)).toBe(true);
