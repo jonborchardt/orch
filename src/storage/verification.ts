@@ -23,6 +23,8 @@ import {
   type Integration,
   integrations,
   type Job,
+  type RegressionRun,
+  regressionRuns,
   type VerificationCheck,
   type VerificationRun,
   verificationChecks,
@@ -362,4 +364,53 @@ export function listIntegrations(db: Db, jobId: string): Integration[] {
     .where(eq(integrations.jobId, jobId))
     .orderBy(desc(integrations.id))
     .all();
+}
+
+export type RegressionInput = Omit<RegressionRun, 'id' | 'jobId' | 'completedAt'>;
+
+/** One bug-fix regression attempt, recorded once it finished. Evidence only; no gate reads it. */
+export function recordRegression(
+  store: Store,
+  id: string,
+  auth: Auth,
+  input: RegressionInput,
+): RegressionRun {
+  return mutateReturning(store, id, auth, (_job, tx, ts) => {
+    const row = tx
+      .insert(regressionRuns)
+      .values({ ...input, jobId: id, completedAt: ts })
+      .returning()
+      .get();
+    return {
+      patch: {},
+      events: [
+        {
+          type: 'verification.regression',
+          payload: { regressionId: row.id, runId: row.runId, status: row.status },
+        },
+      ],
+      value: row,
+    };
+  });
+}
+
+/** The newest regression attempt recorded for this job at `head` under policy `fingerprint`. */
+export function latestRegression(
+  db: Db,
+  jobId: string,
+  head: string,
+  fingerprint: string,
+): RegressionRun | undefined {
+  return db
+    .select()
+    .from(regressionRuns)
+    .where(
+      and(
+        eq(regressionRuns.jobId, jobId),
+        eq(regressionRuns.head, head),
+        eq(regressionRuns.configFingerprint, fingerprint),
+      ),
+    )
+    .orderBy(desc(regressionRuns.id))
+    .get();
 }

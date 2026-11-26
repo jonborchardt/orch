@@ -43,25 +43,32 @@ import {
   type PolicyDiff,
   policyFingerprint,
   type PolicySource,
+  regressionPlan,
+  type RegressionStatus,
   runInvalidReason,
   type VerificationCheckSpec,
   type VerificationPolicy,
 } from '../core/verification.ts';
 import { now, TERMINAL_STATUSES } from '../core/workflow.ts';
+import { dirtyFiles } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
+import { changesBetween, restoreHead, revertToBase } from '../git/worktree.ts';
 import type { Store } from '../storage/client.ts';
 import { latestEventsByJob } from '../storage/events.ts';
 import { type Auth, authorize, getJob, listJobs, renewLease } from '../storage/jobs.ts';
-import type { Job, VerificationCheck, VerificationRun } from '../storage/schema.ts';
+import type { Job, RegressionRun, VerificationCheck, VerificationRun } from '../storage/schema.ts';
+import { getTicket } from '../storage/tickets.ts';
 import {
   type CheckResult,
   finishRun,
+  latestRegression,
   latestRun,
   latestRunsByJob,
   listChecks,
   listRuns,
   markFlaky,
   recordCheck,
+  recordRegression,
   type RunDetail,
   startRun,
 } from '../storage/verification.ts';
@@ -232,6 +239,32 @@ export interface VerifyResult {
   hint: string | null;
   /** The latest run was still valid for this clean HEAD and policy, so nothing ran. */
   reused: boolean;
+  /**
+   * The bug-fix regression attempt of this run (on reuse, the latest one recorded for this HEAD
+   * and policy); null when none applies. Evidence only: it never changes `status`.
+   */
+  regression: RegressionView | null;
+}
+
+export interface RegressionView {
+  status: RegressionStatus;
+  files: string[];
+  base: string;
+  head: string;
+  /** Exit codes at the base (red) and at HEAD (green); null when that side did not run. */
+  red: number | null;
+  green: number | null;
+}
+
+function regressionView(r: RegressionRun): RegressionView {
+  return {
+    status: r.status,
+    files: r.testFiles,
+    base: r.mergeBase,
+    head: r.head,
+    red: r.redExit,
+    green: r.greenExit,
+  };
 }
 
 /** Keep the head and tail of a long stream; the middle is replaced by a marker. */
@@ -373,6 +406,7 @@ export function verifyJob(
           : `No verification policy: add a ${POLICY_FILE} to the repository base branch (orch init, ` +
             'review, commit, push), or propose one in the worktree for a human to accept.',
       reused: false,
+      regression: null,
     };
   }
   // Nothing changed since a passed run (same clean HEAD, tree, and policy): it is still the
@@ -387,6 +421,9 @@ export function verifyJob(
       checks: status.run.checks,
       hint: null,
       reused: true,
+      regression: ((r) => (r ? regressionView(r) : null))(
+        latestRegression(store.db, id, wt.head, eff.fingerprint),
+      ),
     };
   }
   // A renewal bumps the revision; a caller pinning one follows it.
@@ -457,6 +494,10 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
   }
   const finished = finishRun(store, id, auth, run.run.id, failed ? 'failed' : 'passed');
   const unchanged = flagFlakes(store, id, auth, wt, finished, checks);
+  const regression =
+    finished.status === 'passed'
+      ? runRegression(store, job, auth, wt, eff, run.run.id, tree)
+      : null;
   const first = checks.find((c) => c.required && c.status !== 'passed' && c.status !== 'pending');
   const behind = wt.behind ?? 0;
   const next =
@@ -474,7 +515,81 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
       ? `Required check ${first.checkId} ${first.status} (exit ${String(first.exitCode)}); see ${first.outputPath ?? ''}. ${next}`
       : null,
     reused: false,
+    regression,
   };
+}
+
+/**
+ * A bug job's red-then-green evidence, after its policy passed and under the same lock: the job's
+ * changed tests run with every other change reverted to the merge base (they must fail), then at
+ * HEAD (they must pass). Recorded only; nothing decides from it (the gate is ticket 0162).
+ */
+function runRegression(
+  store: Store,
+  job: Job,
+  auth: Auth,
+  wt: Tree,
+  eff: EffectivePolicy,
+  runId: number,
+  tree: string,
+): RegressionView | null {
+  const spec = eff.policy.regression;
+  const base = eff.mergeBase;
+  if (!spec || !base || job.ticketId === null) return null;
+  if (getTicket(store.db, job.ticketId).type !== 'bug') return null;
+  const startedAt = now();
+  const changes = changesBetween(wt.path, base, wt.head);
+  if (!changes) throw new ValidationError(`Cannot list the changes since ${base.slice(0, 7)}.`);
+  const plan = regressionPlan(changes);
+  const artifactDir = jobArtifactDir(job.id, store.paths);
+  const logOf = (side: string) => `verification/${String(runId)}/regression-${side}.log`;
+  const record = (status: RegressionStatus, red?: CheckResult, green?: CheckResult) =>
+    regressionView(
+      recordRegression(store, job.id, auth, {
+        runId,
+        mergeBase: base,
+        head: wt.head,
+        tree,
+        configFingerprint: eff.fingerprint,
+        testFiles: plan.files,
+        redExit: red ? red.exitCode : null,
+        greenExit: green ? green.exitCode : null,
+        redLog: red ? logOf('red') : null,
+        greenLog: green ? logOf('green') : null,
+        status,
+        startedAt,
+      }),
+    );
+  if (plan.status !== 'run') return record(plan.status);
+  const files = plan.files.map((f) => path.posix.relative(spec.cwd, f));
+  const exec = (side: string) =>
+    runCheck(
+      { ...spec, id: `regression-${side}`, args: [...spec.args, ...files], required: true },
+      wt.path,
+      path.join(artifactDir, ...logOf(side).split('/')),
+    );
+  // Without rename detection, so a renamed source file is reverted under both of its paths.
+  const revert = (changesBetween(wt.path, base, wt.head, false) ?? []).filter(
+    (c) => classifyPath(c.path)?.kind !== 'tests',
+  );
+  let red: CheckResult;
+  try {
+    revertToBase(wt.path, base, revert);
+    red = exec('red');
+  } finally {
+    restoreHead(wt.path, revert);
+  }
+  const dirty = dirtyFiles(wt.path);
+  if (dirty.length > 0 || git(wt.path, 'rev-parse', 'HEAD') !== wt.head) {
+    throw new ValidationError(
+      `The regression run did not leave ${wt.path} clean at ${wt.head.slice(0, 7)} ` +
+        `(${dirty.slice(0, 5).join(', ')}); restore it with git checkout HEAD -- . and remove ` +
+        'the files the job deleted, then run orch verify again.',
+    );
+  }
+  if (red.status === 'passed') return record('not-red', red);
+  const green = exec('green');
+  return record(green.status === 'passed' ? 'passed' : 'not-green', red, green);
 }
 
 /**
