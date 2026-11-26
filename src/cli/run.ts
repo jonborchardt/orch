@@ -3,11 +3,15 @@
  * 2026-11-21-foreground-factory-runner). start, do, and resume run until the session ends;
  * stop and status are one-shot.
  */
+import { resolve } from 'node:path';
+
 import { UsageError } from '../core/errors.ts';
 import { findProjectRoot } from '../core/paths.ts';
 import { parseTicketId, ticketKey } from '../core/tickets.ts';
 import { choiceLine } from '../ops/actions.ts';
 import {
+  type ControllerStatus,
+  IDLE_NEXT,
   resumeSession,
   type RunnerStatus,
   runnerStatus,
@@ -20,12 +24,15 @@ import { openStore } from '../storage/client.ts';
 
 export const RUN_COMMANDS = ['start', 'do', 'stop', 'status', 'resume'] as const;
 
-export const RUN_HELP = `Usage: orch start [repo] | do <ticket-id> [--fast] | stop [next] | status | resume [--force]
+export const RUN_HELP = `Usage: orch start [repo | --repo <path>] | do <ticket-id> [--fast] | stop [next] [--repo <path>]
+     | status | resume [--force] [--repo <path>]
 
 The factory controller: a foreground process that takes ready tickets from the global queue, runs
 each one's job with the /factory skill in a headless Claude Code session (claude -p), reads CI,
 merges through orch job merge's operation, and goes on to the next ticket. It runs only while this
-command runs; nothing is left behind when it exits.
+command runs; nothing is left behind when it exits. One controller per repository may run at a
+time, each in its own terminal and each one ticket at a time; a controller for the whole queue
+runs alone.
 
   start           Work the whole queue, best ready ticket first, one at a time. A ticket whose job
                   needs a person, or whose merge only a person can unblock, is released, passed
@@ -33,8 +40,12 @@ command runs; nothing is left behind when it exits.
                   not be finished (blocked, a retry budget spent): it reports that ticket and
                   stops rather than start unrelated work
   start repo      The same, only for the repository containing the current directory
+  start --repo <path>
+                  The same, only for the repository containing <path>. Run one per repository,
+                  in two terminals, to work two repositories at once
   do <ticket-id>  One ticket, to its outcome: start its job, or continue the unfinished one, or
-                  merge the completed one. A cancelled job is never replaced
+                  merge the completed one. A cancelled job is never replaced. Refused while a
+                  controller covers the ticket's repository
   do <ticket-id> --fast
                   The same, but a job it creates is a fast job: one agent builds, then PR, CI,
                   merge; no spec, simplify, review, or approval. For small, low-risk tickets you
@@ -45,12 +56,17 @@ command runs; nothing is left behind when it exits.
   stop            End the current execution now: the Claude session is terminated and the job is
                   kept as it is (never cancelled) for orch resume. With no controller alive,
                   discards an interrupted session instead
-  status          Whether a controller is running or was interrupted, its ticket and job, what it
+  stop [next] --repo <path>
+                  The same for that repository's controller. Without --repo, stop acts on the
+                  one live controller, else on the one interrupted session; with several it
+                  lists them and exits 2
+  status          Each controller that is running or was interrupted, its ticket and job, what it
                   waits on, pending stop requests, and what happens next; first, each of the
                   session's jobs waiting for a person, with a dashboard link per choice
   resume          Continue an interrupted session: same scope, same ticket and job, same stop
                   request. Refused while the Claude process of the dead controller may still be
-                  running (--force: that PID is another program now)
+                  running (--force: that PID is another program now). With several interrupted
+                  sessions, --repo <path> names the one
 
 A ticket is started only when merging is enabled for its repository
 (orch factory config merge enable --repo <path>); tickets of other repositories are reported and
@@ -63,10 +79,14 @@ export interface RunCliOptions {
   force?: boolean | undefined;
   /** `orch do --fast` only. */
   fast?: boolean | undefined;
+  /** `--repo <path>` of start, stop, and resume: the controller of that repository. */
+  repo?: string | undefined;
 }
 
-export function formatStatus(s: RunnerStatus): string {
-  const lines = [`controller  ${s.state}${s.pid === null ? '' : ` (PID ${String(s.pid)})`}`];
+function controllerLines(s: ControllerStatus): string[] {
+  const lines = [
+    `controller  ${s.state}${s.pid === null ? '' : ` (PID ${String(s.pid)})`}, ${s.scope}`,
+  ];
   if (s.mode !== null) {
     lines.push(
       `session     ${s.mode === 'ticket' ? 'one ticket' : `queue, ${s.repo ?? 'every repository'}`}, ` +
@@ -86,13 +106,22 @@ export function formatStatus(s: RunnerStatus): string {
   }
   const stops = [s.stop.next ? 'after the current ticket' : '', s.stop.now ? 'now' : ''];
   lines.push(`stop        ${stops.filter(Boolean).join(', ') || 'not requested'}`);
+  lines.push(`next        ${s.next}`);
+  return lines;
+}
+
+export function formatStatus(s: RunnerStatus): string {
+  // One block per controller, headed by its scope; with none, the idle one.
+  const lines =
+    s.controllers.length === 0
+      ? ['controller  idle', `next        ${IDLE_NEXT}`]
+      : s.controllers.flatMap(controllerLines);
   if (s.last !== null) {
     lines.push(
       `last ended  ${s.last.at}: ${s.last.reason} ` +
-        `(${String(s.last.completed)} of ${String(s.last.attempted)} completed)`,
+        `(${String(s.last.completed)} of ${String(s.last.attempted)} completed, ${s.last.scope})`,
     );
   }
-  lines.push(`next        ${s.next}`);
   if (s.build?.stale) lines.push(`build       ${s.build.message}`);
   // What waits for a person comes first, with a link per choice; the internal detail follows.
   const waiting = s.waiting.flatMap((w) => [
@@ -125,6 +154,9 @@ export async function runRunner(
   if (o.fast && command !== 'do') {
     throw new UsageError(`--fast belongs to orch do <ticket-id> only\n\n${RUN_HELP}`);
   }
+  if (o.repo !== undefined && (command === 'do' || command === 'status')) {
+    throw new UsageError(`--repo belongs to orch start, stop, and resume\n\n${RUN_HELP}`);
+  }
   const store = openStore();
   try {
     if (command === 'status') {
@@ -137,7 +169,8 @@ export async function runRunner(
       if (arg !== undefined && arg !== 'next') {
         throw new UsageError(`Usage: orch stop [next]\n\n${RUN_HELP}`);
       }
-      const stopped = stopSession(store, arg === 'next' ? 'next' : 'now');
+      const which = arg === 'next' ? 'next' : 'now';
+      const stopped = stopSession(store, which, undefined, undefined, o.repo);
       return { text: stopped.message, data: stopped, exitCode: 0 };
     }
 
@@ -157,7 +190,7 @@ export async function runRunner(
       let summary: RunSummary;
       if (command === 'resume') {
         noMore(arg);
-        summary = await resumeSession(store, { force: o.force }, opts);
+        summary = await resumeSession(store, { force: o.force, repo: o.repo }, opts);
       } else if (command === 'do') {
         noMore(extra);
         if (arg === undefined) {
@@ -173,7 +206,16 @@ export async function runRunner(
         if (arg !== undefined && arg !== 'repo') {
           throw new UsageError(`Usage: orch start [repo]\n\n${RUN_HELP}`);
         }
-        const repo = arg === 'repo' ? findProjectRoot(process.cwd()) : null;
+        if (arg === 'repo' && o.repo !== undefined) {
+          throw new UsageError(`Give orch start repo or --repo <path>, not both\n\n${RUN_HELP}`);
+        }
+        // `startSession` resolves the path to its repository's controller slot (`runnerScope`).
+        const repo =
+          o.repo !== undefined
+            ? resolve(o.repo)
+            : arg === 'repo'
+              ? findProjectRoot(process.cwd())
+              : null;
         if (repo === undefined) {
           throw new UsageError('orch start repo must be run inside a Git repository.');
         }

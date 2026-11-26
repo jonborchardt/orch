@@ -43,10 +43,12 @@ Commands:
   start [repo]           Run the factory controller in the foreground: take ready tickets (of
                          every repository, or only this one), run each job with /factory in a
                          headless Claude Code session, merge verified work, continue
+  start --repo <path>    The same for the repository at <path>; one controller per repository
+                         may run at a time, each in its own terminal
   do <ticket-id>         The same for exactly one ticket
   stop [next]            Stop the controller now (the job is kept, never cancelled), or with
-                         next: after the current ticket
-  status                 The controller, its ticket and job, and what happens next
+                         next: after the current ticket (--repo <path>: that repository's)
+  status                 Each controller, its ticket and job, and what happens next
   resume                 Continue an interrupted controller session (orch start --help)
   factory <subcommand>   The primary interface: start, plan, resume, dispatch, and list factory
                          jobs for the /factory skill (orch factory --help)
@@ -321,6 +323,7 @@ export async function main(argv: string[]): Promise<number> {
           json,
           force: o.force,
           fast: o.fast,
+          repo: o.repo,
         });
         print(json ? data : text, json);
         return exitCode;

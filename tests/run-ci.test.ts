@@ -59,7 +59,9 @@ describe('controller: pending CI', () => {
     const sleep = () => {
       sleeps += 1;
       if (sleeps === 1) {
-        expect(runnerStatus(store)).toMatchObject({ state: 'running', current: { waiting: 'ci' } });
+        expect(runnerStatus(store).controllers).toMatchObject([
+          { state: 'running', current: { waiting: 'ci' } },
+        ]);
         checks(sha, [run('test', 'success')]);
       }
       return Promise.resolve();

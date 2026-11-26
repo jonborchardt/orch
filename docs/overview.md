@@ -182,7 +182,10 @@ transaction; Claude sessions do the creative work and call the CLI.
 The controller keeps exactly what it needs to continue after an interruption, outside the
 database and with one writer per file (`src/ops/runner-state.ts`):
 
-- **The lock**, `<data>/runner-lock/<n>`: a sequence of generations taken by exclusive file
+- **A slot per scope**: these files live in `<data>/` for the whole-queue controller and in
+  `<data>/runners/<key>/` (with a `scope.json`) for one repository's, so one controller per
+  repository can run at once (decision 2026-11-25-one-controller-per-repository).
+- **The lock**, `runner-lock/<n>`: a sequence of generations taken by exclusive file
   creation. The holder of the highest generation is the controller while its process is alive,
   started since the last boot, and its session record keeps beating. A starter that finds it
   stale creates the next generation, so of several starters exactly one wins.

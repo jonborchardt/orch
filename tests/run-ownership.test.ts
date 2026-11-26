@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { LostLockError } from '../src/core/errors.ts';
 import { runnerPaths } from '../src/core/paths.ts';
 import type { ClaudeChild } from '../src/integrations/claude-session.ts';
+import { runnerScope } from '../src/ops/repo.ts';
 import { RUNNER_SESSION, startSession } from '../src/ops/run.ts';
 import {
   acquireRunnerLock,
@@ -20,13 +21,16 @@ import {
 } from '../src/ops/runner-state.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { getJob } from '../src/storage/jobs.ts';
-import { done, jobsOf, launcher, merges, quick, store, ticket } from './run-fixture.ts';
+import { clone, done, jobsOf, launcher, merges, quick, store, ticket } from './run-fixture.ts';
 
 const HOURS_AGO = () => new Date(Date.now() - 3 * 3600_000).toISOString();
 
+/** The slot `orch do` runs in for a ticket of the fixture's repository. */
+const ticketSlot = () => runnerScope(clone).key;
+
 /** The session record as the sleeping controller last wrote it, hours before the wake. */
-function slept(): void {
-  const base: RunnerSession = readSession(store.paths) ?? {
+function slept(slot?: string): void {
+  const base: RunnerSession = readSession(store.paths, slot) ?? {
     pid: process.pid,
     startedAt: HOURS_AGO(),
     beatAt: HOURS_AGO(),
@@ -40,17 +44,17 @@ function slept(): void {
     skipped: [],
     finished: null,
   };
-  writeSession(store.paths, { ...base, beatAt: HOURS_AGO() });
+  writeSession(store.paths, { ...base, beatAt: HOURS_AGO() }, slot);
 }
 
 /** A starter on wake: it finds the live controller stale and takes the next generation. */
-function takeOver() {
-  slept();
-  acquireRunnerLock(store.paths); // held for good, as by a starter that is still running
-  const dir = runnerPaths(store.paths).lock;
+function takeOver(slot: string | undefined) {
+  slept(slot);
+  acquireRunnerLock(store.paths, slot); // held for good, as by a starter that is still running
+  const dir = runnerPaths(store.paths, slot).lock;
   const top = String(Math.max(...readdirSync(dir).map(Number).filter(Number.isInteger)));
   return {
-    runner: readFileSync(runnerPaths(store.paths).state),
+    runner: readFileSync(runnerPaths(store.paths, slot).state),
     lock: readFileSync(join(dir, top)),
     lockFile: join(dir, top),
   };
@@ -95,7 +99,7 @@ describe('controller: a lost lock', () => {
       if (pauses === 3) {
         jobId = jobsOf(id)[0]?.id ?? '';
         at.snap = {
-          ...takeOver(),
+          ...takeOver(ticketSlot()),
           events: listEvents(store.db, jobId, 1000),
           job: getJob(store.db, jobId),
         };
@@ -114,14 +118,14 @@ describe('controller: a lost lock', () => {
     expect(listEvents(store.db, jobId, 1000)).toEqual(s.events);
     expect(getJob(store.db, jobId)).toEqual(s.job);
     expect(getJob(store.db, jobId).ownerSession).toBe(RUNNER_SESSION);
-    expect(readFileSync(runnerPaths(store.paths).state)).toEqual(s.runner);
+    expect(readFileSync(runnerPaths(store.paths, ticketSlot()).state)).toEqual(s.runner);
     expect(readFileSync(s.lockFile)).toEqual(s.lock);
   });
 
   it('lost before the merge: nothing is merged (AC5)', async () => {
     const id = ticket('Lost after the child');
     const take = (line: string) => {
-      if (line.startsWith('  claude: exited')) takeOver();
+      if (line.startsWith('  claude: exited')) takeOver(ticketSlot());
     };
     await expect(
       startSession(
@@ -137,7 +141,7 @@ describe('controller: a lost lock', () => {
     const first = ticket('First');
     const second = ticket('Second');
     const take = (line: string) => {
-      if (line.includes(': done: merged')) takeOver();
+      if (line.includes(': done: merged')) takeOver(undefined); // the whole queue's slot
     };
     await expect(
       startSession(

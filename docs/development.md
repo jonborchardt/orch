@@ -218,8 +218,9 @@ orch ticket dep|related add|remove <id> <other>
 orch ticket area list|add, asset add <id> <file>   # docs/tickets.md
 orch factory start|dispatch --ticket <id>   # a job for a ticket, claimed in one transaction
 
-orch start [repo] | do <ticket> | resume [--force]   # the foreground factory controller
-orch stop [next] | status [--json]                   # ask it to stop; what it is doing
+orch start [repo | --repo <path>] | do <ticket> | resume [--force] [--repo <path>]
+                                                     # the foreground factory controller, one per repository
+orch stop [next] [--repo <path>] | status [--json]   # ask it to stop; what each is doing
 orch ui [--port <n>] [--open]          # long-running, optional; loopback only
 orch recover start|stop|status [--json] # opt-in recovery worker (detached, PID file in the data dir)
 orch recover run [--once]              # the worker in the foreground, or one pass

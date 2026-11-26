@@ -472,8 +472,10 @@ more (decision 2026-11-24-recovery-worker-checks-its-pid-file).
 
 Opt-in, foreground, and gone when its command exits (decision
 2026-11-21-foreground-factory-runner). `orch start` works the ready queue, `orch start repo` only
-the repository of the current directory, `orch do <ticket>` one ticket, `orch resume` an
-interrupted session. One controller per installation; a second start is refused.
+the repository of the current directory, `orch start --repo <path>` only the repository at that
+path, `orch do <ticket>` one ticket, `orch resume` an interrupted session. One controller per
+repository; a second start for the same repository is refused (see
+[Two repositories at once](#two-repositories-at-once)).
 
 For each ticket, `runTicket` (`src/ops/run.ts`) reads the ticket's jobs and takes the first row
 that applies:
@@ -576,8 +578,10 @@ process the controller started, releases the job in the state it was in, and lea
 for `orch resume`; with no controller alive it discards an interrupted session instead. Neither
 cancels anything.
 
-State lives in `<data>/runner-lock/` (one small file per session; the highest number is the
-current lock), `runner.json`, `runner.stop-next`, and `runner.stop-now`.
+State lives in a slot per scope: `runner-lock/` (one small file per session; the highest number
+is the current lock), `runner.json`, `runner.stop-next`, and `runner.stop-now`. The whole-queue
+controller's slot is those files in `<data>/`; a repository's is the same files plus `scope.json`
+in `<data>/runners/<key>/`.
 `runner.json` holds what the session was asked to do and which ticket, job, and child PID are in
 flight; everything else `orch status` prints is read from the job row. After a crash,
 `orch resume` re-runs `runTicket` for the ticket in flight, which continues the same job or
@@ -607,6 +611,42 @@ Tickets passed over for a missing merge opt-in are part of the saved session: `o
 continues that session and keeps skipping them, also after
 `orch factory config merge enable` for their repository. A new session reconsiders them: let the
 session end (or discard an interrupted one with `orch stop`), then `orch start` again.
+
+### Two repositories at once
+
+One controller per repository may run at a time (decision
+2026-11-25-one-controller-per-repository): `orch start --repo A` in one terminal and
+`orch start --repo B` in another, each one ticket at a time. `orch do <ticket>` takes the slot of
+its ticket's repository, so it is refused while a controller covers that repository and allowed
+while only another repository's runs.
+
+A scope is the repository's remote identity, or its Git common directory when it has no `origin`
+(`runnerScope` in `src/ops/repo.ts`), so another clone of the same remote and a linked worktree
+are the same scope. Two slots overlap when either is the whole-queue one or both recorded the same
+common directory (`scopesOverlap`); the latter keeps one checkout one scope when its `origin`
+changes under an open session. A starter claims its own slot's next generation, records its
+scope, then looks at every overlapping slot and gives the generation back when one has a live
+controller or an unfinished session. Two overlapping starters racing may both be refused; both
+are never admitted. A root `runner.json` left by an older `orch` is the whole-queue slot's
+session, whatever its `repo`.
+
+`orch stop`, `orch stop next`, and `orch resume` take `--repo <path>`. Without it, stop acts on
+the one live controller, else on the one interrupted session, and resume on the one interrupted
+session; with several they exit 2 and list them. Naming a repository with no open session exits 1
+and lists the open ones. `orch status` prints one block per controller.
+
+What two controllers cost:
+
+- They share one Claude account's usage limit, so a long run reaches it sooner; each controller
+  then ends its own run resumably.
+- Ticket priority is per repository: a lower-priority ticket in one repository can run while a
+  higher one waits in the other.
+- Every controller's gates run the installed build. Rebuilding `dist/` (from `main` only) while
+  any controller runs changes the gates under it and halts every one of them (`orch-rebuilt`);
+  this matters most when one controller works on the `orch` repository itself.
+- Machine load grows: builder and reviewer runs of the two repositories overlap, while
+  verifications still run one at a time, machine-wide.
+- `orch backup restore` refuses while any controller lives.
 
 ### Claude Code configuration
 

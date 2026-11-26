@@ -98,10 +98,15 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   continue only `ci`-stage jobs no live session owns and never launches or messages a Claude
   session (decision 2026-11-16-opt-in-recovery-worker); and the factory controller
   (`orch start`, `orch do`, `orch resume`), a foreground process that exists only while its
-  command runs.
+  command runs; one per repository may run at a time, each in its own terminal (decision
+  2026-11-25-one-controller-per-repository).
 - Only the factory controller starts a Claude process, and only through `launchClaude` in
   `src/integrations/claude-session.ts`: one headless `/factory <job>` child at a time, for the
-  ticket it is working on (decision 2026-11-21-foreground-factory-runner). `src/ops/run.ts`
+  ticket it is working on (decision 2026-11-21-foreground-factory-runner). There is at most one
+  controller per repository, each in its own slot of `src/ops/runner-state.ts`, and a controller
+  for the whole queue runs alone (decision 2026-11-25-one-controller-per-repository).
+  `runnerScope` and `scopesOverlap` in `src/ops/repo.ts` are the only place that decides a
+  controller's scope or compares two. `src/ops/run.ts`
   sequences existing operations (`listTickets`, `dispatchJob`, `resumeFactoryJob`, `reconcileCi`,
   `mergeJob`) and re-reads the job row at every step; it implements no stage, skips no gate, and
   never calls `gh` or `orch ticket done` itself. Its own state is the single-writer files of
@@ -109,8 +114,8 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   a job it records on that job as `runner.session` and `runner.stopped` events (decision
   2026-11-21-runner-evidence-on-the-job), from the one exit of `runTicket`, only on a job it holds
   or nobody holds; they are evidence, and nothing may decide from them. Do not detach
-  it, start it from the dashboard or another command, message a session, run two tickets at once,
-  or signal a PID read from a file.
+  it, start it from the dashboard or another command, message a session, run two tickets at once
+  within one controller or two controllers on one repository, or signal a PID read from a file.
 
 ## Schema changes
 

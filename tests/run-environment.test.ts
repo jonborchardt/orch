@@ -12,7 +12,7 @@ import { endsRun } from '../src/core/workflow.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { configPath } from '../src/ops/factory.ts';
 import { REBUILT_REASON, resumeSession, startSession } from '../src/ops/run.ts';
-import { readSession, writeSession } from '../src/ops/runner-state.ts';
+import { writeSession } from '../src/ops/runner-state.ts';
 import { getJob } from '../src/storage/jobs.ts';
 import { jobs } from '../src/storage/schema.ts';
 import {
@@ -27,6 +27,7 @@ import {
   status,
   store,
   ticket,
+  lastSession,
 } from './run-fixture.ts';
 
 const BAD = 'factory.json: model for "spec-writer" must be one of';
@@ -68,7 +69,7 @@ describe('a rebuilt orch stops the session resumably', () => {
     expect(summaryExitCode(s)).toBe(1);
     const [job] = jobsOf(first);
     const jobId = job?.id ?? '';
-    expect(readSession(store.paths)).toMatchObject({ finished: null, ticketId: first, jobId });
+    expect(lastSession()).toMatchObject({ finished: null, ticketId: first, jobId });
     const after = getJob(store.db, jobId);
     expect([after.stage, after.status, after.round, after.ownerSession]).toEqual([
       job?.stage,
@@ -101,7 +102,7 @@ describe('a rebuilt orch stops the session resumably', () => {
     expect(s.reason).toBe(REBUILT_REASON);
     expect(s.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([[first, 'done']]);
     expect(jobsOf(second)).toHaveLength(0);
-    expect(readSession(store.paths)).toMatchObject({ finished: null, ticketId: null });
+    expect(lastSession()).toMatchObject({ finished: null, ticketId: null });
     expect(s).toMatchObject({ stopped: false, interrupted: true, blocked: 0 });
     expect(summaryExitCode(s)).toBe(1);
   });
@@ -111,7 +112,7 @@ describe('a rebuilt orch stops the session resumably', () => {
     let reads = 0;
     const s = await run(launcher(done), () => (reads++ === 0 ? null : 'v2'));
     expect(s.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([[id, 'done']]);
-    expect(readSession(store.paths)?.finished).not.toBeNull();
+    expect(lastSession()?.finished).not.toBeNull();
   });
 });
 
@@ -134,7 +135,7 @@ describe('a bad factory.json stops the session resumably', () => {
     expect(s.tickets).toMatchObject([
       { ticketId: first, outcome: 'blocked', code: 'bad-config', next: 'orch resume' },
     ]);
-    expect(readSession(store.paths)).toMatchObject({ finished: null, ticketId: first });
+    expect(lastSession()).toMatchObject({ finished: null, ticketId: first });
     expect(jobsOf(second)).toHaveLength(0);
 
     undo();
@@ -163,12 +164,12 @@ describe('a bad factory.json stops the session resumably', () => {
     expect(s.reason).toContain(BAD);
     expect(s.tickets).toHaveLength(0);
     expect(l.calls).toHaveLength(0);
-    expect(readSession(store.paths)).toMatchObject({ finished: null, ticketId: null });
+    expect(lastSession()).toMatchObject({ finished: null, ticketId: null });
     expect(s).toMatchObject({ stopped: false, interrupted: true });
     expect(summaryExitCode(s)).toBe(1);
 
     // A run-wide result on record does not pass the ticket over either.
-    const session = readSession(store.paths);
+    const session = lastSession();
     if (session === null) throw new Error('no session');
     const ts = new Date().toISOString();
     writeSession(store.paths, {

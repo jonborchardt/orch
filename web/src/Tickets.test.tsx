@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   BoardRow,
+  ControllerStatus,
   RunnerStatus,
   TicketEvent,
   TicketJob,
@@ -76,17 +77,22 @@ function job(n: number, over: Partial<BoardRow> = {}): BoardRow {
 }
 
 const idle = (over: Partial<RunnerStatus> = {}): RunnerStatus => ({
-  state: 'idle',
-  pid: null,
-  mode: null,
-  repo: null,
-  startedAt: null,
-  stop: { next: false, now: false },
-  current: null,
-  next: 'Nothing is running. orch start takes the next ready ticket.',
+  controllers: [],
   last: null,
   build: null,
   waiting: [],
+  ...over,
+});
+const controller = (over: Partial<ControllerStatus> = {}): ControllerStatus => ({
+  scope: 'every repository',
+  state: 'running',
+  pid: 4242,
+  mode: 'queue',
+  repo: null,
+  startedAt: '2026-11-20T09:00:00.000Z',
+  stop: { next: false, now: false },
+  current: null,
+  next: 'Resume a stranded in-progress ticket, else select the next ready one.',
   ...over,
 });
 
@@ -708,6 +714,7 @@ describe('factory status', () => {
   it('shows idle, running, a stop request, and an interrupted session, with no control', async () => {
     db.runner = idle({
       last: {
+        scope: ALPHA,
         at: '2026-11-20T07:00:00.000Z',
         reason: 'no ready ticket is left',
         completed: 2,
@@ -716,31 +723,35 @@ describe('factory status', () => {
     });
     mount('#/tickets');
     let r = await stateIs('idle');
-    expect(r).toHaveTextContent('Nothing is running. orch start takes the next ready ticket.');
-    expect(r).toHaveTextContent('no ready ticket is left (2 of 3 attempted tickets done)');
+    expect(r).toHaveTextContent('Nothing is running. orch start resumes a stranded');
+    expect(r.querySelectorAll('[data-runner]')).toHaveLength(1);
+    expect(r).toHaveTextContent(
+      `no ready ticket is left (2 of 3 attempted tickets done, ${ALPHA})`,
+    );
     // The first ready ticket of the queue, never promised as what runs next.
     expect(r).toHaveTextContent('Highest-priority ready ticket: 0009 Urgent and newest (2 ready)');
     expect(r).not.toHaveTextContent(/next ticket/i);
     expect(within(r).getByRole('link', { name: '0009' })).toHaveAttribute('href', '#/tickets/9');
 
+    const building: ControllerStatus['current'] = {
+      ticket: '0003',
+      pick: 'ready',
+      job: 'job-00000003',
+      repo: ALPHA,
+      stage: 'build',
+      status: 'running',
+      waiting: 'agent',
+      childPid: 5,
+      childAlive: true,
+    };
     db.runner = idle({
-      state: 'running',
-      pid: 4242,
-      mode: 'queue',
-      startedAt: '2026-11-20T09:00:00.000Z',
-      stop: { next: true, now: false },
-      current: {
-        ticket: '0003',
-        pick: 'ready',
-        job: 'job-00000003',
-        repo: ALPHA,
-        stage: 'build',
-        status: 'running',
-        waiting: 'agent',
-        childPid: 5,
-        childAlive: true,
-      },
-      next: 'Run the job through the factory, then exit.',
+      controllers: [
+        controller({
+          stop: { next: true, now: false },
+          current: building,
+          next: 'Run the job through the factory, then exit.',
+        }),
+      ],
     });
     r = await stateIs('running');
     expect(r).toHaveTextContent('queue of every repository');
@@ -756,30 +767,66 @@ describe('factory status', () => {
     expect(r).toHaveTextContent('Run the job through the factory, then exit.');
 
     db.runner = idle({
-      state: 'interrupted',
-      mode: 'ticket',
-      stop: { next: false, now: true },
-      current: {
-        ticket: '0005',
-        pick: null,
-        job: 'job-00000005',
-        repo: ALPHA,
-        stage: 'needs-human',
-        status: 'blocked',
-        waiting: 'human',
-        childPid: null,
-        childAlive: false,
-      },
-      next: 'The controller is gone. orch resume continues the session; orch stop discards it.',
+      controllers: [
+        controller({
+          scope: ALPHA,
+          state: 'interrupted',
+          pid: null,
+          mode: 'ticket',
+          stop: { next: false, now: true },
+          current: {
+            ticket: '0005',
+            pick: null,
+            job: 'job-00000005',
+            repo: ALPHA,
+            stage: 'needs-human',
+            status: 'blocked',
+            waiting: 'human',
+            childPid: null,
+            childAlive: false,
+          },
+          next: 'The controller is gone. orch resume continues the session; orch stop discards it.',
+        }),
+      ],
     });
     r = await stateIs('interrupted');
-    expect(r).toHaveTextContent('one ticket (orch do)');
+    expect(r).toHaveTextContent(`one ticket (orch do) in ${ALPHA}`);
     expect(r).toHaveTextContent('waiting for a person');
     expect(r).toHaveTextContent('stop requested: now');
     expect(r).toHaveTextContent('orch resume continues the session');
     // Visibility only: the CLI starts, stops, and resumes.
     expect(within(r).queryAllByRole('button')).toHaveLength(0);
     expect(db.posts).toEqual([]);
+  });
+
+  it('shows one line per controller when two repositories run at once', async () => {
+    db.runner = idle({
+      controllers: [
+        controller({ scope: ALPHA, repo: 'E:/alpha', stop: { next: true, now: false } }),
+        controller({
+          scope: BETA,
+          state: 'interrupted',
+          pid: null,
+          repo: 'E:/beta',
+          next: 'The controller is gone. orch resume continues the session; orch stop discards it.',
+        }),
+      ],
+    });
+    mount('#/tickets');
+    const r = await region();
+    await waitFor(() => {
+      expect(r.querySelectorAll('[data-controller]')).toHaveLength(2);
+    });
+    const [a, b] = [...r.querySelectorAll<HTMLElement>('[data-controller]')];
+    expect(a).toHaveAttribute('data-controller', ALPHA);
+    expect(a).toHaveTextContent(`running`);
+    expect(a).toHaveTextContent(`queue of ${ALPHA}`);
+    expect(a).toHaveTextContent('stop requested: after this ticket');
+    expect(b).toHaveTextContent('interrupted');
+    expect(b).toHaveTextContent(`queue of ${BETA}`);
+    expect(b).not.toHaveTextContent('stop requested');
+    expect(b).toHaveTextContent('orch resume continues the session');
+    expect(within(r).queryAllByRole('button')).toHaveLength(0);
   });
 });
 

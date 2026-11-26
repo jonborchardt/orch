@@ -34,6 +34,7 @@ import {
   stopRequests,
   writeSession,
 } from '../src/ops/runner-state.ts';
+import { runnerScope } from '../src/ops/repo.ts';
 import { addTicket, ticketAction } from '../src/ops/tickets.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
@@ -112,7 +113,7 @@ describe('orch start: the queue', () => {
     // Nothing is left running or holding the controller.
     expect(controllerPid(store.paths)).toBeNull();
     expect(readSession(store.paths)?.finished?.reason).toBe(s.reason);
-    expect(runnerStatus(store)).toMatchObject({ state: 'idle', last: { completed: 2 } });
+    expect(runnerStatus(store)).toMatchObject({ controllers: [], last: { completed: 2 } });
   });
 
   it('start repo takes only that repository; a ticket runs in its own repository wherever orch stands', async () => {
@@ -137,7 +138,7 @@ describe('orch start: the queue', () => {
     let next = '';
     const l = launcher((job) => {
       escalate(job);
-      next = runnerStatus(store).next;
+      next = runnerStatus(store).controllers[0]?.next ?? '';
     }, done);
 
     const s = await queue(l);
@@ -225,7 +226,7 @@ describe('orch do: one ticket, from wherever it is', () => {
     let next = '';
     const l = launcher((job) => {
       escalate(job);
-      next = runnerStatus(store).next;
+      next = runnerStatus(store).controllers[0]?.next ?? '';
     }, done);
 
     const s = await one(l, id);
@@ -405,13 +406,11 @@ describe('stop and resume', () => {
     const first = ticket('First', { priority: 'P1' });
     const second = ticket('Second', { priority: 'P2' });
     const l = launcher((job) => {
-      expect(runnerStatus(store)).toMatchObject({
-        state: 'running',
-        pid: process.pid,
-        current: { job: job.id, waiting: 'agent' },
-      });
+      expect(runnerStatus(store).controllers).toMatchObject([
+        { state: 'running', pid: process.pid, current: { job: job.id, waiting: 'agent' } },
+      ]);
       expect(stopSession(store, 'next').pid).toBe(process.pid);
-      expect(runnerStatus(store).next).toContain('then exit');
+      expect(runnerStatus(store).controllers[0]?.next).toContain('then exit');
       finish(job);
     });
 
@@ -438,15 +437,21 @@ describe('stop and resume', () => {
     expect(job?.status).not.toBe('cancelled');
     expect(job).toMatchObject({ stage: 'spec', ownerSession: null });
     expect(job?.worktreePath).not.toBeNull();
-    expect(readSession(store.paths)).toMatchObject({
+    // A repository queue keeps its record and its stop requests in that repository's slot.
+    const slot = runnerScope(clone).key;
+    expect(readSession(store.paths)).toBeNull();
+    expect(readSession(store.paths, slot)).toMatchObject({
       finished: null,
       ticketId: first,
       jobId: job?.id,
       repo: clone,
+      scope: 'github.com/acme/alpha',
       child: null,
     });
-    expect(stopRequests(store.paths).now).toBe(false);
-    expect(runnerStatus(store)).toMatchObject({ state: 'interrupted', pid: null });
+    expect(stopRequests(store.paths, slot).now).toBe(false);
+    expect(runnerStatus(store).controllers).toMatchObject([
+      { state: 'interrupted', pid: null, scope: 'github.com/acme/alpha' },
+    ]);
 
     // A new session is refused while the interrupted one is there.
     await expect(queue(launcher(done))).rejects.toThrow(/interrupted.*orch resume/s);
@@ -458,7 +463,7 @@ describe('stop and resume', () => {
     expect(jobsOf(first)).toHaveLength(1);
     expect(r).toMatchObject({ stopped: false, completed: 2 });
     expect([status(first), status(second)]).toEqual(['done', 'done']);
-    expect(readSession(store.paths)?.repo).toBe(clone);
+    expect(readSession(store.paths, slot)?.repo).toBe(clone);
 
     // It ended on its own: nothing to resume, and a new start is allowed.
     await expect(resumeSession(store, {}, quick)).rejects.toThrow(/nothing to resume/);
@@ -470,7 +475,7 @@ describe('stop and resume', () => {
     const second = ticket('Second', { priority: 'P2' });
     await queue(hanging());
     stopSession(store, 'next');
-    expect(runnerStatus(store).stop.next).toBe(true);
+    expect(runnerStatus(store).controllers[0]?.stop.next).toBe(true);
 
     const l = launcher(done);
     const r = await resumeSession(store, {}, { launch: l.launch, ...quick });
@@ -547,10 +552,9 @@ describe('stop and resume', () => {
     expect(() => stopSession(store, 'now')).toThrow(/does not signal a PID/);
     expect(() => stopSession(store, 'now')).toThrow(startedAt);
     expect(l.calls).toHaveLength(0);
-    expect(runnerStatus(store)).toMatchObject({
-      state: 'interrupted',
-      current: { childPid: process.pid, childAlive: true },
-    });
+    expect(runnerStatus(store).controllers).toMatchObject([
+      { state: 'interrupted', current: { childPid: process.pid, childAlive: true } },
+    ]);
     expect(controllerPid(store.paths)).toBeNull();
 
     // The person says that PID is something else now.
@@ -643,7 +647,7 @@ describe('stop and resume', () => {
     expect(getJob(store.db, job.id).status).not.toBe('cancelled');
     expect(readSession(store.paths)?.finished?.reason).toContain('discarded');
     expect(stopRequests(store.paths)).toEqual({ next: false, now: false });
-    expect(runnerStatus(store).state).toBe('idle');
+    expect(runnerStatus(store).controllers).toEqual([]);
     expect(() => stopSession(store, 'next')).toThrow(/nothing to stop/);
 
     // orch do picks the same job up again.

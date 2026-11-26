@@ -49,8 +49,8 @@ Dated, sourced, and per category: [docs/landscape.md](docs/landscape.md).
   types, areas, efforts, dependencies that may cross repositories, history, and computed
   readiness ([docs/tickets.md](docs/tickets.md)).
 - **Autonomous ticket execution.** `orch start` works the ready queue in the foreground, one
-  ticket at a time, continuing a stranded in-progress ticket (its job released) before a new
-  one, launching `claude -p "/factory <job>"` for each job.
+  ticket at a time (one controller per repository may run at once), continuing a stranded
+  in-progress ticket (its job released) before a new one, launching `claude -p "/factory <job>"` for each job.
 - **Independent review and rework.** A spec challenger, a simplifier, three always-on reviewers
   (security, correctness, code quality) plus three UI reviewers when the diff renders UI, and an
   approver; findings send the job back to build, within a budget.
@@ -133,9 +133,11 @@ flowchart TD
 
 What the code guarantees (`drive` and `runQueue` in `src/ops/run.ts`):
 
-- one controller per installation, enforced by a lock; a second `orch start` is refused;
-- one ticket at a time;
-- a global queue across repositories, or one repository with `orch start repo`;
+- one controller per repository, enforced by a lock per repository; a second one for the same
+  repository is refused, and a controller for the whole queue (`orch start`) runs alone;
+- one ticket at a time in each controller;
+- a global queue across repositories, or one repository with `orch start --repo <path>` (or
+  `orch start repo` for the current directory's);
 - dependencies decide readiness: the queue is `orch ticket ready`;
 - in queue mode a ticket whose repository lacks the merge opt-in is passed over and recorded as
   skipped, never started, and the queue continues; it stays skipped for the whole of that
@@ -242,11 +244,13 @@ orch ticket show 85
 # the controller
 orch start                # every repository's ready tickets, best first, one at a time
 orch start repo           # only the repository containing the current directory
+orch start --repo ../api  # only that repository; one such controller per repository at a time
 orch do 85                # one ticket: start its job, continue it, or merge it
 orch do 85 --fast         # the same, but a new job is a fast job (see below)
 orch status               # what needs you (a link per choice), controller, ticket, job, what happens next
 orch stop next            # finish the current ticket, start no other, exit
 orch stop                 # end the current session now; the job is kept, never cancelled
+orch stop --repo ../api   # with several controllers: that repository's (also stop next, resume)
 orch resume               # continue an interrupted session: same scope, ticket, job, stop request
 
 # jobs
@@ -338,11 +342,37 @@ Optional email reports of every job change and of each controller session's end:
   given, a session recording itself on its job. These are stated in
   prose and verified after the fact (fingerprints, dirty-file lists), not prevented.
 
+## Two repositories at once
+
+Run one controller per repository, each in its own terminal:
+
+```sh
+orch start --repo ~/src/api     # terminal 1
+orch start --repo ~/src/web     # terminal 2
+orch status                     # one block per controller
+orch stop --repo ~/src/api      # stop, stop next, and resume take --repo when several exist
+```
+
+Each still works one ticket at a time, and a second controller for the same repository (another
+clone or a worktree included) is refused, as is `orch start` for the whole queue while any other
+runs. What changes when two run (decision
+[2026-11-25-one-controller-per-repository](docs/decisions/2026-11-25-one-controller-per-repository.md)):
+
+- Both use one Claude account, so a long run reaches its usage limit sooner; each controller then
+  ends its own run, and `orch resume --repo <path>` continues it.
+- Ticket priority is per repository: a lower-priority ticket in one can run while a higher one
+  waits in the other.
+- Every controller's gates run the installed build. Rebuilding `dist/` (from `main` only) while
+  any controller runs changes the gates under it and halts it; that matters most when one
+  controller works on the `orch` repository itself.
+- Machine load grows: builder and reviewer runs overlap, while verifications still run one at a
+  time.
+
 ## Limitations
 
 Each limit is the price of a guarantee ([why](docs/operations.md#intentional-limitations)): one
-ticket and one headless `claude -p` session at a time, never steered, keeps evidence pinned to a
-single head; no daemon means no hidden state outlives a command; bounded retries and no adoption of
+ticket and one headless `claude -p` session at a time per repository, never steered, keeps
+evidence pinned to a single head; no daemon means no hidden state outlives a command; bounded retries and no adoption of
 surviving processes make every stop explicit; GitHub only, through `gh`, gives one source for
 checks and the merge (one automatic re-run per commit, so a run Actions never started costs a repair
 cycle); a loopback-only, single-user dashboard needs no login and cannot start the controller.
