@@ -966,7 +966,7 @@ async function drive(
     writeSession(paths, session);
   };
   // The build this process's code came from; null (no stamp) turns the check off.
-  const build = opts.build ?? (() => buildStamp());
+  const build = opts.build ?? buildStamp;
   const builtAt = build();
   // The run-wide stop an `environment` check found; it ends the session unfinished.
   let halted = null as Blocked | null; // set from a closure: no narrowing to null
