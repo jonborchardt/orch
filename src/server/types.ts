@@ -13,7 +13,7 @@ export type SafeJob = Omit<Job, 'ownerToken'>;
 export type { Flake };
 // The ticket and controller views the dashboard reads; web/ imports them from here only.
 export type { Area, BlockReason, Priority, TicketStatus, TicketType } from '../core/tickets.ts';
-export type { RunnerStatus } from '../ops/run.ts';
+export type { ControllerStatus, RunnerStatus } from '../ops/run.ts';
 export type {
   TicketDetail,
   TicketJob,

@@ -235,14 +235,17 @@ describe('restore refusals', () => {
   it('refuses a destination with a live factory controller or recovery worker (AC11)', () => {
     seedJob(store);
     const file = backup();
-    const dest = tempDir();
-    const release = acquireRunnerLock(homePaths(dest));
-    try {
-      const before = listing(dest);
-      expect(() => restoreBackup(file, homePaths(dest))).toThrow(/a factory controller runs/);
-      expect(listing(dest)).toEqual(before);
-    } finally {
-      release();
+    // The whole-queue controller, then one repository's (ticket 0163).
+    for (const slot of [undefined, '0123456789abcdef']) {
+      const dest = tempDir();
+      const release = acquireRunnerLock(homePaths(dest), slot);
+      try {
+        const before = listing(dest);
+        expect(() => restoreBackup(file, homePaths(dest))).toThrow(/a factory controller runs/);
+        expect(listing(dest)).toEqual(before);
+      } finally {
+        release();
+      }
     }
     const dest2 = tempDir();
     const worker = holdPidFile(homePaths(dest2));

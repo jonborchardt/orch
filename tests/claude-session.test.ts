@@ -198,11 +198,7 @@ describe('controller commands through the CLI', () => {
 
   it('status, stop, and start with nothing to do', () => {
     const status = json(orch(home, outside, ['status', '--json']));
-    expect(status).toMatchObject({
-      state: 'idle',
-      current: null,
-      stop: { next: false, now: false },
-    });
+    expect(status).toMatchObject({ controllers: [], last: null, waiting: [] });
     expect(status).toHaveProperty('build');
     expect(orch(home, outside, ['status']).out).toContain('controller  idle');
     const stop = orch(home, outside, ['stop', 'next']);
@@ -252,7 +248,7 @@ describe('controller commands through the CLI', () => {
     expect(started[0]?.args.at(-1)).toContain(`/factory ${jobId}`);
     expect(job.status).not.toBe('cancelled');
     expect(job.ownerSession).toBeNull();
-    expect(json(orch(home, outside, ['status', '--json']))).toMatchObject({ state: 'idle' });
+    expect(json(orch(home, outside, ['status', '--json']))).toMatchObject({ controllers: [] });
   });
 
   it('orch do shows the child live on stderr and records what it left on the job', () => {

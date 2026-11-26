@@ -12,7 +12,7 @@ import { afterAll, beforeAll, beforeEach } from 'vitest';
 import type { ClaudeChild, LaunchInput } from '../src/integrations/claude-session.ts';
 import { setMergeAuthorization } from '../src/ops/merge.ts';
 import { type RunSummary, startSession } from '../src/ops/run.ts';
-import { requestStop } from '../src/ops/runner-state.ts';
+import { requestStop, type RunnerSession, runnerSlots } from '../src/ops/runner-state.ts';
 import { addTicket, showTicket } from '../src/ops/tickets.ts';
 import { appendEvent, listEvents } from '../src/storage/events.ts';
 import { getJob } from '../src/storage/jobs.ts';
@@ -107,6 +107,15 @@ export function finish(job: Job, pr: Record<string, unknown> = {}, head = SHA): 
   return getJob(store.db, job.id);
 }
 
+/**
+ * The session record written last, over every controller slot: `orch do` and a repository queue
+ * keep theirs in the repository's slot, the whole queue at the data root.
+ */
+export function lastSession(): RunnerSession | null {
+  const all = runnerSlots(store.paths).flatMap((s) => (s.session === null ? [] : [s.session]));
+  return all.sort((a, b) => b.beatAt.localeCompare(a.beatAt))[0] ?? null;
+}
+
 export type Act = (job: Job, input: LaunchInput) => void;
 export const idle: Act = () => undefined;
 export const done: Act = (job) => {
@@ -152,7 +161,10 @@ export function hanging(...before: Act[]): Launcher & { killed: number } {
     l.calls.push({ ...input, jobId: jobIdOf(input) });
     let end: (e: { code: null; signal: string; error: null }) => void = () => undefined;
     const exited = new Promise<{ code: null; signal: string; error: null }>((r) => (end = r));
-    requestStop(store.paths, 'now');
+    // To the live controller, in whichever slot it runs (orch do lives in its ticket's).
+    for (const s of runnerSlots(store.paths)) {
+      if (s.pid !== null) requestStop(store.paths, 'now', s.key);
+    }
     return {
       pid: DEAD_PID,
       startedAt: new Date().toISOString(),

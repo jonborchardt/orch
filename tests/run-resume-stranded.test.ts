@@ -144,9 +144,9 @@ describe('the queue resumes stranded in-progress tickets first', () => {
 
     const st = runnerStatus(store);
 
-    expect(st.current?.pick).toBe('resume');
+    expect(st.controllers[0]?.current?.pick).toBe('resume');
     expect(formatStatus(st)).toContain('ticket      0042 (pick resume)');
     writeSession(store.paths, session({ ticketId: 42 })); // an older record has no pick
-    expect(runnerStatus(store).current?.pick).toBeNull();
+    expect(runnerStatus(store).controllers[0]?.current?.pick).toBeNull();
   });
 });

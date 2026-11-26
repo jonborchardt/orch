@@ -66,14 +66,7 @@ describe('installBuild', () => {
 
 describe('formatStatus build line', () => {
   const status = (build: RunnerStatus['build']): RunnerStatus => ({
-    state: 'idle',
-    pid: null,
-    mode: null,
-    repo: null,
-    startedAt: null,
-    stop: { next: false, now: false },
-    current: null,
-    next: 'Nothing is running.',
+    controllers: [],
     last: null,
     build,
     waiting: [],

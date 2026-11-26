@@ -3,9 +3,12 @@
  * controller, what the session was asked to do, and whether a stop was requested. Job stage,
  * ticket status, CI, and merge evidence stay where they are; nothing here repeats them.
  *
- * Kept under the data directory (`runnerPaths`), each with one writer: the lock (generations
- * taken by exclusive creation, see `acquireRunnerLock`), the session record (that controller, replaced atomically),
- * and the two stop requests (`orch stop`). A heartbeat can therefore never overwrite a stop.
+ * There is one controller per repository at most (decision
+ * 2026-11-25-one-controller-per-repository), each in its own slot (`runnerSlots`). A slot's files
+ * are kept under the data directory (`runnerPaths`), each with one writer: the lock (generations
+ * taken by exclusive creation, see `acquireRunnerLock`), the session record (that controller,
+ * replaced atomically), and the two stop requests (`orch stop`). A heartbeat can therefore never
+ * overwrite a stop.
  */
 import { randomBytes } from 'node:crypto';
 import {
@@ -24,8 +27,9 @@ import { dirname, join } from 'node:path';
 import { ValidationError } from '../core/errors.ts';
 import { processStartMs } from '../core/exec.ts';
 import { runnerPaths, type RuntimePaths } from '../core/paths.ts';
+import { ticketKey } from '../core/tickets.ts';
 import { freshRecord } from './recover.ts';
-import { inRepositoryAt } from './repo.ts';
+import { inRepositoryAt, type RunnerScope, scopesOverlap } from './repo.ts';
 import { alive, sleep } from './verify-lock.ts';
 
 export const TICKET_OUTCOMES = [
@@ -71,6 +75,11 @@ export interface RunnerSession {
   mode: 'queue' | 'ticket';
   /** Queue scope: the root of the one repository, or null for every repository. */
   repo: string | null;
+  /**
+   * The repository the session's slot belongs to, as shown (`RunnerScope.name`). Absent in the
+   * unscoped slot and in records written before slots.
+   */
+  scope?: string | undefined;
   /** The ticket `orch do` was given. */
   ticket: number | null;
   /**
@@ -97,21 +106,21 @@ export interface RunnerSession {
 
 const bootMs = (nowMs: number) => nowMs - uptime() * 1000;
 
-export function readSession(paths: RuntimePaths): RunnerSession | null {
+/** The session record of one slot (`key`; none is the unscoped slot). */
+export function readSession(paths: RuntimePaths, key?: string): RunnerSession | null {
   try {
-    const s = JSON.parse(readFileSync(runnerPaths(paths).state, 'utf8')) as RunnerSession;
+    const s = JSON.parse(readFileSync(runnerPaths(paths, key).state, 'utf8')) as RunnerSession;
     return typeof s.pid === 'number' && typeof s.startedAt === 'string' ? s : null;
   } catch {
     return null;
   }
 }
 
-/** Replace the session record in one step: a reader sees the old record or the new one. */
-export function writeSession(paths: RuntimePaths, session: RunnerSession): void {
-  const file = runnerPaths(paths).state;
+/** Replace a file in one step: a reader sees the old content or the new. */
+function replaceFile(file: string, text: string): void {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${String(process.pid)}.tmp`;
-  writeFileSync(tmp, JSON.stringify(session, null, 2) + '\n');
+  writeFileSync(tmp, text);
   // Windows refuses the rename while a reader has the target open; that lasts milliseconds.
   for (let attempt = 0; ; attempt++) {
     try {
@@ -124,6 +133,23 @@ export function writeSession(paths: RuntimePaths, session: RunnerSession): void 
   }
 }
 
+/** Replace the slot's session record in one step. */
+export function writeSession(paths: RuntimePaths, session: RunnerSession, key?: string): void {
+  replaceFile(runnerPaths(paths, key).state, JSON.stringify(session, null, 2) + '\n');
+}
+
+/** The common directory a repository slot's starter recorded (`scope.json`); null when none. */
+function recordedCommonDir(paths: RuntimePaths, key: string): string | null {
+  try {
+    const rec = JSON.parse(readFileSync(runnerPaths(paths, key).scope, 'utf8')) as {
+      commonDir?: unknown;
+    };
+    return typeof rec.commonDir === 'string' ? rec.commonDir : null;
+  } catch {
+    return null;
+  }
+}
+
 interface LockRecord {
   pid: number;
   startedAt: string;
@@ -131,14 +157,14 @@ interface LockRecord {
   released?: boolean;
 }
 
-const lockFile = (paths: RuntimePaths, generation: number) =>
-  join(runnerPaths(paths).lock, String(generation));
+const lockFile = (paths: RuntimePaths, key: string | undefined, generation: number) =>
+  join(runnerPaths(paths, key).lock, String(generation));
 
-/** The highest lock generation taken so far; 0 when there is none. */
-function topGeneration(paths: RuntimePaths): number {
+/** The highest lock generation taken so far in the slot; 0 when there is none. */
+function topGeneration(paths: RuntimePaths, key: string | undefined): number {
   let names: string[];
   try {
-    names = readdirSync(runnerPaths(paths).lock);
+    names = readdirSync(runnerPaths(paths, key).lock);
   } catch {
     return 0;
   }
@@ -146,10 +172,14 @@ function topGeneration(paths: RuntimePaths): number {
 }
 
 /** The live controller holding `generation`, or null when its holder is gone or gave it up. */
-function holderOf(paths: RuntimePaths, generation: number): LockRecord | null {
+function holderOf(
+  paths: RuntimePaths,
+  key: string | undefined,
+  generation: number,
+): LockRecord | null {
   let rec: Partial<LockRecord>;
   try {
-    rec = JSON.parse(readFileSync(lockFile(paths, generation), 'utf8')) as Partial<LockRecord>;
+    rec = JSON.parse(readFileSync(lockFile(paths, key, generation), 'utf8')) as Partial<LockRecord>;
   } catch {
     return null; // generations appear whole (linked into place), so this one is damaged
   }
@@ -157,41 +187,109 @@ function holderOf(paths: RuntimePaths, generation: number): LockRecord | null {
   if (typeof pid !== 'number' || typeof startedAt !== 'string' || rec.released === true)
     return null;
   if (!alive(pid)) return null;
-  const session = readSession(paths);
+  // The heartbeat is the slot's own: another slot's session says nothing about this holder.
+  const session = readSession(paths, key);
   const beatAt = session?.pid === pid ? session.beatAt : undefined;
   const nowMs = Date.now();
   return freshRecord({ pid, startedAt, beatAt }, nowMs, bootMs(nowMs)) ? { pid, startedAt } : null;
 }
 
 /**
- * The PID of the live controller, or null. The holder of the highest generation is the only
- * candidate; it is stale when its process is gone, it predates the last boot, it released the
- * lock, or its session has not beaten for HEARTBEAT_STALE_SECONDS (a reused PID).
+ * The PID of the slot's live controller, or null. The holder of the highest generation is the
+ * only candidate; it is stale when its process is gone, it predates the last boot, it released
+ * the lock, or its session has not beaten for HEARTBEAT_STALE_SECONDS (a reused PID).
  */
+export function slotPid(paths: RuntimePaths, key?: string): number | null {
+  const top = topGeneration(paths, key);
+  return top === 0 ? null : (holderOf(paths, key, top)?.pid ?? null);
+}
+
+/**
+ * One controller slot (decision 2026-11-25-one-controller-per-repository): the unscoped one
+ * ("every repository", no key, the files at the data root, whatever an older orch left there) or
+ * a repository's, under `<data>/runners/<key>/`.
+ */
+export interface RunnerSlot {
+  key: string | undefined;
+  /** What the slot's starter recorded; null for the unscoped slot and a remote-only scope. */
+  commonDir: string | null;
+  session: RunnerSession | null;
+  /** The slot's live controller. */
+  pid: number | null;
+}
+
+/** Every slot there is: the unscoped one first, then each repository's that was ever used. */
+export function runnerSlots(paths: RuntimePaths): RunnerSlot[] {
+  let keys: string[] = [];
+  try {
+    keys = readdirSync(runnerPaths(paths).root).sort();
+  } catch {
+    /* no repository slot yet */
+  }
+  return [undefined, ...keys].map((key) => ({
+    key,
+    commonDir: key === undefined ? null : recordedCommonDir(paths, key),
+    session: readSession(paths, key),
+    pid: slotPid(paths, key),
+  }));
+}
+
+/** A slot somebody has to deal with: a live controller, or a session left unfinished. */
+export const slotOpen = (s: RunnerSlot): boolean =>
+  s.pid !== null || (s.session !== null && s.session.finished === null);
+
+/** How a slot is shown; a legacy record (no `scope`) reads as its queue filter. */
+export const slotName = (s: Pick<RunnerSlot, 'key' | 'session'>): string =>
+  s.session?.scope ?? s.session?.repo ?? s.key ?? 'every repository';
+
+/** The PID of a live controller of any slot, or null. */
 export function controllerPid(paths: RuntimePaths): number | null {
-  const top = topGeneration(paths);
-  return top === 0 ? null : (holderOf(paths, top)?.pid ?? null);
+  return runnerSlots(paths).find((s) => s.pid !== null)?.pid ?? null;
+}
+
+const runningRefusal = (pid: number, name: string): string =>
+  `A factory controller is already running (PID ${String(pid)}) for ${name}. ` +
+  'See orch status; stop it with orch stop next or orch stop.';
+
+/** Why nothing overlapping starts while the slot's `session` is left unfinished. */
+export function interruptedRefusal(key: string | undefined, session: RunnerSession): string {
+  return (
+    `A factory session for ${slotName({ key, session })} started ${session.startedAt} was interrupted` +
+    (session.ticketId === null ? '' : ` at ticket ${ticketKey(session.ticketId)}`) +
+    '. Continue it with orch resume, or discard it with orch stop; then start again.'
+  );
 }
 
 /** The release function of a held lock; `owned()` says whether its generation is still the top. */
 export type RunnerLock = (() => void) & { owned(): boolean };
 
 /**
- * Become the one controller, or throw while a live one exists. Returns the release function,
- * with `owned()`: false once a higher generation exists, which is for good (numbers only grow).
+ * Become the one controller of a slot, or throw while a live one exists there or in a slot that
+ * overlaps it (`scopesOverlap`), or while an overlapping slot's session is left unfinished.
+ * Returns the release function, with `owned()`: false once a higher generation exists, which is
+ * for good (numbers only grow). `start` is given by a new session (`orch start`, `orch do`):
+ * what to record as the slot's scope. Resume and discard leave the record as it is.
  *
- * The lock is a sequence of generations, `<data>/runner-lock/<n>`. A starter that finds
+ * The lock is a sequence of generations, `runner-lock/<n>` in the slot. A starter that finds
  * generation n stale takes over by creating n + 1, and creating a file that already exists
  * fails: of any number of starters judging the same stale lock, exactly one gets the next
  * generation, and the others find a live holder when they look again. Nothing is ever removed
  * or overwritten by a competitor, so there is no moment at which a fresh lock can be taken away.
  *
+ * Across slots there is no shared file to create. A starter holds its own generation, and has
+ * recorded its scope, before it looks at the others, so of two overlapping starters at least one
+ * sees the other and gives its generation back. Both may: neither then runs.
+ *
  * ponytail: one small file per controller session is kept for good. Removing old generations
  * would free their numbers for a starter still acting on an earlier look; prune only with a
  * rule that cannot do that.
  */
-export function acquireRunnerLock(paths: RuntimePaths): RunnerLock {
-  const dir = runnerPaths(paths).lock;
+export function acquireRunnerLock(
+  paths: RuntimePaths,
+  key?: string,
+  start?: Pick<RunnerScope, 'name' | 'commonDir'>,
+): RunnerLock {
+  const dir = runnerPaths(paths, key).lock;
   mkdirSync(dir, { recursive: true });
   const mine: LockRecord = { pid: process.pid, startedAt: new Date().toISOString() };
   // Written in full first and linked into place, so a generation is never seen half written.
@@ -199,16 +297,15 @@ export function acquireRunnerLock(paths: RuntimePaths): RunnerLock {
   writeFileSync(tmp, JSON.stringify(mine));
   try {
     for (;;) {
-      const top = topGeneration(paths);
-      const holder = top === 0 ? null : holderOf(paths, top);
+      const top = topGeneration(paths, key);
+      const holder = top === 0 ? null : holderOf(paths, key, top);
       if (holder !== null) {
         throw new ValidationError(
-          `A factory controller is already running (PID ${String(holder.pid)}). ` +
-            'See orch status; stop it with orch stop next or orch stop.',
+          runningRefusal(holder.pid, slotName({ key, session: readSession(paths, key) })),
         );
       }
       const generation = top + 1;
-      const file = lockFile(paths, generation);
+      const file = lockFile(paths, key, generation);
       try {
         linkSync(tmp, file);
       } catch (err) {
@@ -221,10 +318,40 @@ export function acquireRunnerLock(paths: RuntimePaths): RunnerLock {
         writeFileSync(done, JSON.stringify({ ...mine, released: true }));
         renameSync(done, file);
       };
-      return Object.assign(release, { owned: () => topGeneration(paths) === generation });
+      try {
+        admit(paths, key, start);
+      } catch (err) {
+        release();
+        throw err;
+      }
+      return Object.assign(release, { owned: () => topGeneration(paths, key) === generation });
     }
   } finally {
     rmSync(tmp, { force: true });
+  }
+}
+
+/** The second half of `acquireRunnerLock`, as the holder of the slot's top generation. */
+function admit(
+  paths: RuntimePaths,
+  key: string | undefined,
+  start: Pick<RunnerScope, 'name' | 'commonDir'> | undefined,
+): void {
+  // An unfinished session keeps the scope it was started with; `startSession` refuses over it.
+  const unfinished = readSession(paths, key)?.finished === null;
+  if (key !== undefined && start !== undefined && !unfinished) {
+    const { name, commonDir } = start;
+    replaceFile(runnerPaths(paths, key).scope, JSON.stringify({ name, commonDir }) + '\n');
+  }
+  const mine = key === undefined ? null : { key, commonDir: recordedCommonDir(paths, key) };
+  for (const other of runnerSlots(paths)) {
+    if (other.key === key) continue;
+    const theirs = other.key === undefined ? null : { key: other.key, commonDir: other.commonDir };
+    if (!scopesOverlap(mine, theirs)) continue;
+    if (other.pid !== null) throw new ValidationError(runningRefusal(other.pid, slotName(other)));
+    if (other.session?.finished === null) {
+      throw new ValidationError(interruptedRefusal(other.key, other.session));
+    }
   }
 }
 
@@ -235,20 +362,21 @@ export interface StopRequests {
   now: boolean;
 }
 
-export function stopRequests(paths: RuntimePaths): StopRequests {
-  const files = runnerPaths(paths);
+/** The stop requests left for one slot's controller. */
+export function stopRequests(paths: RuntimePaths, key?: string): StopRequests {
+  const files = runnerPaths(paths, key);
   return { next: existsSync(files.stopNext), now: existsSync(files.stopNow) };
 }
 
-export function requestStop(paths: RuntimePaths, which: keyof StopRequests): void {
-  const files = runnerPaths(paths);
+export function requestStop(paths: RuntimePaths, which: keyof StopRequests, key?: string): void {
+  const files = runnerPaths(paths, key);
   const file = which === 'next' ? files.stopNext : files.stopNow;
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, new Date().toISOString() + '\n');
 }
 
-export function clearStop(paths: RuntimePaths, which: keyof StopRequests): void {
-  const files = runnerPaths(paths);
+export function clearStop(paths: RuntimePaths, which: keyof StopRequests, key?: string): void {
+  const files = runnerPaths(paths, key);
   rmSync(which === 'next' ? files.stopNext : files.stopNow, { force: true });
 }
 
@@ -312,33 +440,36 @@ export function awaitsPerson(r: TicketResult): boolean {
 }
 
 /**
- * Whether the running queue controller takes the job's ticket again once a person acts on it:
- * a live controller in queue mode, whose repository filter covers the job, whose session passed
- * the ticket over as `awaitsPerson`. Read-only; the dashboard's after-action line asks this.
+ * Whether a running queue controller takes the job's ticket again once a person acts on it: a
+ * live controller of any slot, in queue mode, whose repository filter covers the job, whose
+ * session passed the ticket over as `awaitsPerson`. Read-only; the dashboard's after-action line
+ * asks this.
  */
 export function controllerContinues(
   paths: RuntimePaths,
   job: { ticketId: number | null; repo: string; repoPath: string },
 ): boolean {
-  if (job.ticketId === null || controllerPid(paths) === null) return false;
-  const s = readSession(paths);
-  if (s?.finished !== null || s.mode === 'ticket') return false;
-  if (!s.results.some((r) => r.ticketId === job.ticketId && awaitsPerson(r))) return false;
-  try {
-    return s.repo === null || inRepositoryAt(s.repo)(job);
-  } catch {
-    return false; // the filtered checkout is gone: nothing can say it covers the job
-  }
+  if (job.ticketId === null) return false;
+  return runnerSlots(paths).some(({ pid, session: s }) => {
+    if (pid === null || s?.finished !== null || s.mode === 'ticket') return false;
+    if (!s.results.some((r) => r.ticketId === job.ticketId && awaitsPerson(r))) return false;
+    try {
+      return s.repo === null || inRepositoryAt(s.repo)(job);
+    } catch {
+      return false; // the filtered checkout is gone: nothing can say it covers the job
+    }
+  });
 }
 
 /**
- * Whether a live controller takes the job's `ci` stage: its unfinished session is on this job,
- * has started a child for it, and the live lock holder is that session's controller. Read-only;
- * `planJob` asks this so the child releases at the first pending observation and the
+ * Whether a live controller takes the job's `ci` stage: some slot's unfinished session is on this
+ * job, has started a child for it, and that slot's live lock holder is the session's controller.
+ * Read-only; `planJob` asks this so the child releases at the first pending observation and the
  * controller's `pollCi` waits for CI without spending a Claude turn.
  */
 export function controllerTakesCi(paths: RuntimePaths, job: { id: string }): boolean {
-  const s = readSession(paths);
-  if (s?.finished !== null || s.jobId !== job.id || s.child === null) return false;
-  return controllerPid(paths) === s.pid;
+  return runnerSlots(paths).some(
+    ({ pid, session: s }) =>
+      s?.finished === null && s.jobId === job.id && s.child !== null && pid === s.pid,
+  );
 }

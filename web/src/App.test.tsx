@@ -827,6 +827,9 @@ describe('App board', () => {
 describe('Installed build warning', () => {
   const message = 'built from aaaaaaa, main is at bbbbbbb: pull, `npm run build`, `orch install`';
   const runner = (stale: boolean) => ({
+    controllers: [],
+    last: null,
+    waiting: [],
     build: { builtFrom: 'a', head: 'b', upstream: null, stale, message },
   });
 

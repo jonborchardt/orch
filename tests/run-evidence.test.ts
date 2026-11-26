@@ -12,7 +12,6 @@ import type { LaunchInput } from '../src/integrations/claude-session.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { resumeSession, RUNNER_SESSION, startSession } from '../src/ops/run.ts';
-import { readSession } from '../src/ops/runner-state.ts';
 import { sessionLog } from '../src/server/api.ts';
 import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
 import {
@@ -35,6 +34,7 @@ import {
   status,
   store,
   ticket,
+  lastSession,
 } from './run-fixture.ts';
 
 // Lets one test make every event the controller records fail, as a full disk would.
@@ -110,7 +110,7 @@ describe('runner.session: one Claude child, from start to exit', () => {
     // The new session replaces runner.json; the job's events are untouched.
     const s = await one(launcher(done), id);
 
-    expect(readSession(store.paths)?.results.map((r) => r.outcome)).toEqual(['done']);
+    expect(lastSession()?.results.map((r) => r.outcome)).toEqual(['done']);
     expect(s.tickets[0]).toMatchObject({ outcome: 'done', jobId });
     expect([...sessions(jobId), ...stops(jobId)].map((e) => e.id)).toEqual(
       expect.arrayContaining(before),
@@ -195,7 +195,7 @@ describe('runner.session: one Claude child, from start to exit', () => {
     ]);
     expect(stops(job?.id ?? '')).toHaveLength(0);
     expect(job).toMatchObject({ stage: 'spec', ownerSession: null });
-    expect(readSession(store.paths)).toMatchObject({ finished: null, jobId: job?.id });
+    expect(lastSession()).toMatchObject({ finished: null, jobId: job?.id });
   });
 });
 
@@ -443,7 +443,7 @@ describe('resume in the middle of a re-land', () => {
     const [first, second] = jobsOf(id).map((j) => j.id);
     expect(s.stopped).toBe(true);
     expect(h.calls.map((c) => c.jobId)).toEqual([first, second]);
-    expect(readSession(store.paths)).toMatchObject({ finished: null, ticketId: id, jobId: second });
+    expect(lastSession()).toMatchObject({ finished: null, ticketId: id, jobId: second });
     expect(getJob(store.db, first ?? '').supersededBy).toBe(second);
     expect(getJob(store.db, second ?? '')).toMatchObject({ ticketId: id, ownerSession: null });
     return { id, first: first ?? '', second: second ?? '' };

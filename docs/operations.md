@@ -67,8 +67,11 @@ the opt-in is passed over; `orch do` refuses to start a job for it.
 orch start
 ```
 
-The controller takes the controller lock (one per installation; a second `orch start` is refused
-while it is alive), writes its intent to `<data>/runner.json`, and loops:
+The controller takes the controller lock of its scope (one per repository, or the whole queue's,
+which runs alone; a second start that overlaps a live one is refused, see
+[workflow.md](workflow.md#two-repositories-at-once)), writes its intent to its slot's
+`runner.json` (`<data>/` for the whole queue, `<data>/runners/<key>/` for a repository), and
+loops:
 
 1. First take again a ticket passed over in this session for a person whose job a person has
    since moved on (decision 2026-11-24-default-needs-human-choices). Else look for a stranded
@@ -574,8 +577,9 @@ failures understandable:
 
 - **No permanent daemon.** `orch start` is a foreground command and everything ends with it.
   Nothing can keep an agent working unnoticed after you close the terminal.
-- **One ticket at a time.** Serial work needs no merge queue, causes few conflicts, and runs one
-  verification at a time on one machine.
+- **One ticket at a time per repository.** Serial work on one base branch needs no merge queue
+  and causes few conflicts. One controller per repository may run at once, since repositories
+  share no head; verifications still run one at a time on one machine.
 - **No unlimited retries.** Every automatic recovery has a budget (above). An endless loop becomes
   a ticket that waits for a person, with the reason recorded.
 - **No bypass of required CI or merge verification.** No flag skips a gate; the merge is pinned
@@ -661,7 +665,7 @@ then renamed into place. `<file>` is required, and it may not be inside the data
 orch installation, the Claude Code directory, or a Git working tree.
 
 Not in the archive: `worktrees/` and `checkouts/` (Git repositories and branches live in your
-repositories and on GitHub), runner state (`runner.json`, `runner-lock/`, `runner.stop-*`),
+repositories and on GitHub), runner state (`runner.json`, `runner-lock/`, `runner.stop-*`, `runners/`),
 `verify.lock` and `verify-queue/`, the recovery worker's files, `logs/`, `tmp/`, the `-wal` and
 `-shm` files (folded into the snapshot), any other file in the data directory, and user
 configuration (`<config>/factory.json`, `mail.env`).
