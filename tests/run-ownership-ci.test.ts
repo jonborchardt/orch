@@ -11,6 +11,7 @@ import { LostLockError } from '../src/core/errors.ts';
 import { jobArtifactDir, runnerPaths } from '../src/core/paths.ts';
 import type { ClaudeChild, LaunchInput } from '../src/integrations/claude-session.ts';
 import { setMergeAuthorization } from '../src/ops/merge.ts';
+import { runnerScope } from '../src/ops/repo.ts';
 import { RUNNER_SESSION, startSession } from '../src/ops/run.ts';
 import { acquireRunnerLock, readSession, writeSession } from '../src/ops/runner-state.ts';
 import { addTicket } from '../src/ops/tickets.ts';
@@ -21,7 +22,9 @@ import { checks, clone, run, shim, store } from './ci-fixture.ts';
 import { type Ctx, head, toCi } from './drive.ts';
 
 /** The generation the starter on wake took; the controller under test holds 1. */
-const lockTwo = () => join(runnerPaths(store.paths).lock, '2');
+const lockTwo = () => join(runnerPaths(store.paths, slot()).lock, '2');
+/** The slot `orch do` runs in: its ticket's repository. */
+const slot = () => runnerScope(clone).key;
 
 describe('controller: a lost lock in the ci stage', () => {
   it('stops in the CI wait without another read or a release (AC4)', async () => {
@@ -52,16 +55,17 @@ describe('controller: a lost lock in the ci stage', () => {
       const job = polled();
       if (job !== undefined && at.snap === undefined) {
         // The machine slept past the stale threshold; a starter on wake takes the next generation.
-        const s = readSession(store.paths);
+        const s = readSession(store.paths, slot());
         if (s === null) throw new Error('no session record');
-        writeSession(store.paths, {
-          ...s,
-          beatAt: new Date(Date.now() - 3 * 3600_000).toISOString(),
-        });
-        acquireRunnerLock(store.paths);
+        writeSession(
+          store.paths,
+          { ...s, beatAt: new Date(Date.now() - 3 * 3600_000).toISOString() },
+          slot(),
+        );
+        acquireRunnerLock(store.paths, slot());
         at.snap = {
           events: listEvents(store.db, job.id, 1000),
-          runner: readFileSync(runnerPaths(store.paths).state),
+          runner: readFileSync(runnerPaths(store.paths, slot()).state),
           lock: readFileSync(lockTwo()),
           calls: shim.read().calls.length,
         };
@@ -78,7 +82,7 @@ describe('controller: a lost lock in the ci stage', () => {
     if (s === undefined || job === undefined) throw new Error('the takeover never happened');
     expect(listEvents(store.db, job.id, 1000)).toEqual(s.events);
     expect(job).toMatchObject({ stage: 'ci', ownerSession: RUNNER_SESSION });
-    expect(readFileSync(runnerPaths(store.paths).state)).toEqual(s.runner);
+    expect(readFileSync(runnerPaths(store.paths, slot()).state)).toEqual(s.runner);
     expect(readFileSync(lockTwo())).toEqual(s.lock);
     expect(shim.read().calls).toHaveLength(s.calls);
   });

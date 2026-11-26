@@ -541,9 +541,16 @@ lifecycle, or dependency cycles is decided in the browser: the page shows the `r
 server validates.
 
 - **Factory status** heads the page: what `orch status` prints, from `GET /api/runner`
-  (`runnerStatus`, read-only). It says whether a controller is `running`, `interrupted`, or
-  `idle`; its mode (one ticket for `orch do`, or the queue of one repository or of every
-  repository); the ticket, job, stage, status, and repository in flight (links to both); what it
+  (`runnerStatus`, read-only). The body is
+  `{ controllers: ControllerStatus[], last, build, waiting }`: `controllers` has one entry per
+  open controller slot (one per repository, or the whole-queue one), live ones first, then by
+  `startedAt`, each with `scope` (the repository as shown), `state` (`running` or
+  `interrupted`), `pid`, `mode`, `repo`, `startedAt`, `stop`, `current`, and `next`; `last` is
+  the session that ended last over every slot, with its `scope`; `build` appears once; `waiting`
+  is the union over every slot's session, once per job. With no open slot `controllers` is `[]`
+  and the strip shows one `idle` line. The strip shows one line per controller: whether it is
+  `running` or `interrupted`; its mode (one ticket for `orch do`, or the queue of one repository
+  or of every repository); the ticket, job, stage, status, and repository in flight (links to both); what it
   waits for (`agent`, `ci`, `merge`, or a person); a requested stop (`now`, or after this ticket);
   what happens next, in one sentence; and how the last finished session ended, with its reason and
   its done-of-attempted counts. Under it is the highest-priority ready ticket and the number

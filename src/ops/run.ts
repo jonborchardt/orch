@@ -14,6 +14,7 @@ import {
   OrchError,
   OwnershipError,
   ToolError,
+  UsageError,
   ValidationError,
 } from '../core/errors.ts';
 import { claudeLimit } from '../core/claude-limit.ts';
@@ -57,17 +58,23 @@ import { buildStamp, type InstallBuild, installBuild } from './install-build.ts'
 import { mailWatermark, reportJobMail, reportRunMail } from './mail.ts';
 import { mergeAuthorized, mergeJob } from './merge.ts';
 import { mergedHead } from './merge-view.ts';
+import { runnerScope, scopesOverlap, ticketRunnerScope } from './repo.ts';
 import {
   acquireRunnerLock,
   awaitsPerson,
   childIdentity,
   childMayBeAlive,
   clearStop,
-  controllerPid,
+  interruptedRefusal,
   readSession,
   requestStop,
   type RunnerLock,
   type RunnerSession,
+  type RunnerSlot,
+  runnerSlots,
+  slotName,
+  slotOpen,
+  slotPid,
   type StopRequests,
   stopRequests,
   type TicketOutcome,
@@ -195,6 +202,8 @@ export interface MergedTicket {
 interface Run {
   store: Store;
   session: RunnerSession;
+  /** The key of the controller slot this run holds; none is the unscoped slot. */
+  slot: string | undefined;
   launch: (input: LaunchInput) => ClaudeChild;
   log: (line: string) => void;
   pollMs: number;
@@ -881,7 +890,8 @@ async function runQueue(
   ]);
   for (;;) {
     if (run.stopNow()) return null;
-    if (stopRequests(store.paths).next) return 'stopped after the current ticket (orch stop next)';
+    if (stopRequests(store.paths, run.slot).next)
+      return 'stopped after the current ticket (orch stop next)';
     // Before any ticket is taken, and before `mergeNotEnabled` reads the config.
     const env = run.environment();
     if (env !== null) return env.reason;
@@ -1010,12 +1020,13 @@ async function drive(
   session: RunnerSession,
   resuming: boolean,
   opts: RunOptions,
+  slot: string | undefined,
 ): Promise<RunSummary> {
   const paths = store.paths;
   const pause = opts.sleep ?? ((ms: number) => delay(ms, undefined, { ref: true }));
   const write = () => {
     session.beatAt = now();
-    writeSession(paths, session);
+    writeSession(paths, session, slot);
   };
   // The build this process's code came from; null (no stamp) turns the check off.
   const build = opts.build ?? buildStamp;
@@ -1027,6 +1038,7 @@ async function drive(
   const run: Run = {
     store,
     session,
+    slot,
     launch: opts.launch ?? launchClaude,
     log: opts.log ?? (() => undefined),
     pollMs: opts.pollMs ?? POLL_MS,
@@ -1034,7 +1046,7 @@ async function drive(
     githubBackoff: opts.githubBackoff ?? GITHUB_BACKOFF_SECONDS,
     owned: () => lock.owned(),
     assertOwned: () => {
-      if (!lock.owned()) throw new LostLockError(controllerPid(paths));
+      if (!lock.owned()) throw new LostLockError(slotPid(paths, slot));
     },
     save: () => {
       run.assertOwned();
@@ -1042,7 +1054,7 @@ async function drive(
     },
     stopNow: () => {
       run.assertOwned();
-      return opts.signal?.aborted === true || stopRequests(paths).now;
+      return opts.signal?.aborted === true || stopRequests(paths, slot).now;
     },
     pause,
     wait: async (seconds) => {
@@ -1061,7 +1073,7 @@ async function drive(
     },
   };
   // A stop-now request was for the controller alive when it was made.
-  clearStop(paths, 'now');
+  clearStop(paths, 'now', slot);
   session.pid = process.pid;
   session.child = null;
   run.save();
@@ -1115,7 +1127,7 @@ async function drive(
     }
     if (stopped || reason === null) {
       run.save(); // first: a lost lock leaves the stop request to the controller that has it
-      clearStop(paths, 'now');
+      clearStop(paths, 'now', slot);
       return summarize(
         store,
         session,
@@ -1137,7 +1149,7 @@ async function drive(
     session.pick = null;
     session.jobId = null;
     run.save();
-    clearStop(paths, 'next');
+    clearStop(paths, 'next', slot);
     return summarize(store, session, reason, false);
   } finally {
     clearInterval(beat);
@@ -1160,24 +1172,30 @@ export interface StartInput {
   fast?: boolean | undefined;
 }
 
-/** `orch start` and `orch do`: a new session. Refused while one is running or left interrupted. */
+/**
+ * `orch start` and `orch do`: a new session in the slot of its repository (`runnerScope`; the
+ * ticket's repository for `orch do`), or in the unscoped slot for the whole queue. Refused while
+ * a controller is running or a session is left interrupted there or in an overlapping slot.
+ */
 export async function startSession(
   store: Store,
   input: StartInput,
   opts: RunOptions = {},
 ): Promise<RunSummary> {
-  if (input.ticket !== undefined) showTicket(store, input.ticket); // exit 3 before anything is taken
-  const release = acquireRunnerLock(store.paths);
+  const scope =
+    input.ticket !== undefined
+      ? ticketRunnerScope(showTicket(store, input.ticket).ticket) // exit 3 before anything is taken
+      : input.repo == null
+        ? undefined
+        : runnerScope(input.repo);
+  const slot = scope?.key;
+  const release = acquireRunnerLock(store.paths, slot, scope);
   try {
-    const previous = readSession(store.paths);
+    const previous = readSession(store.paths, slot);
     if (previous !== null && previous.finished === null) {
-      throw new ValidationError(
-        `A factory session started ${previous.startedAt} was interrupted` +
-          (previous.ticketId === null ? '' : ` at ticket ${ticketKey(previous.ticketId)}`) +
-          '. Continue it with orch resume, or discard it with orch stop; then start again.',
-      );
+      throw new ValidationError(interruptedRefusal(slot, previous));
     }
-    clearStop(store.paths, 'next');
+    clearStop(store.paths, 'next', slot);
     const ts = now();
     const session: RunnerSession = {
       pid: process.pid,
@@ -1185,6 +1203,7 @@ export async function startSession(
       beatAt: ts,
       mode: input.mode,
       repo: input.repo ?? null,
+      ...(scope === undefined ? {} : { scope: scope.name }),
       ticket: input.ticket ?? null,
       ...(input.fast === true && input.mode === 'ticket' ? { fast: true } : {}),
       ticketId: null,
@@ -1194,25 +1213,64 @@ export async function startSession(
       skipped: [],
       finished: null,
     };
-    return await ended(store, await drive(store, release, session, false, opts), opts);
+    return await ended(store, await drive(store, release, session, false, opts, slot), opts);
   } finally {
     release();
   }
 }
 
+const interruptedSlot = (s: RunnerSlot): boolean => s.pid === null && slotOpen(s);
+
+/** The open slot `--repo <path>` names: the repository's own, under whichever key it was started. */
+function namedSlot(open: RunnerSlot[], repo: string): RunnerSlot {
+  const scope = runnerScope(repo);
+  const found = open.find(
+    (s) => s.key !== undefined && scopesOverlap(scope, { key: s.key, commonDir: s.commonDir }),
+  );
+  if (found !== undefined) return found;
+  throw new ValidationError(
+    `No factory session is running or interrupted for ${scope.name}` +
+      (open.length === 0 ? '.' : `; there is one for: ${open.map(slotName).join(', ')}.`),
+  );
+}
+
+const several = (what: string, slots: RunnerSlot[]): UsageError =>
+  new UsageError(
+    `Several factory ${what}: ${slots.map(slotName).join(', ')}. ` +
+      'Name one with --repo <path> (a path inside its repository).',
+  );
+
+/** The slot whose session ended last, over every slot. */
+function lastFinished(slots: RunnerSlot[]): RunnerSlot | undefined {
+  const at = (s: RunnerSlot) => s.session?.finished?.at ?? '';
+  return slots.filter((s) => at(s) !== '').sort((a, b) => at(b).localeCompare(at(a)))[0];
+}
+
 /**
- * `orch resume`: continue the interrupted session with its own scope, ticket, and stop request.
+ * `orch resume`: continue an interrupted session with its own scope, ticket, and stop request,
+ * under the lock of the slot that holds it: the one `repo` names, else the only one interrupted.
  * Refused when nothing was interrupted, and while the Claude process the dead controller started
  * may still be running: two agents must never work one job.
  */
 export async function resumeSession(
   store: Store,
-  input: { force?: boolean | undefined } = {},
+  input: { force?: boolean | undefined; repo?: string | undefined } = {},
   opts: RunOptions = {},
 ): Promise<RunSummary> {
-  const release = acquireRunnerLock(store.paths);
+  const all = runnerSlots(store.paths);
+  const interrupted = all.filter(interruptedSlot);
+  if (input.repo === undefined && interrupted.length > 1) {
+    throw several('sessions were interrupted', interrupted);
+  }
+  // With nothing interrupted the slot only decides which refusal is given below.
+  const target =
+    input.repo !== undefined
+      ? namedSlot(all.filter(slotOpen), input.repo)
+      : (interrupted[0] ?? all.find((s) => s.pid !== null) ?? lastFinished(all));
+  const slot = target?.key;
+  const release = acquireRunnerLock(store.paths, slot);
   try {
-    const session = readSession(store.paths);
+    const session = readSession(store.paths, slot);
     if (session === null) {
       throw new ValidationError(
         'There is no factory session to resume. Start one with orch start.',
@@ -1229,7 +1287,7 @@ export async function resumeSession(
       if (identity === 'original' || identity === 'unknown')
         throw new ValidationError(orphanRefusal(session, identity, 'orch resume'));
     }
-    return await ended(store, await drive(store, release, session, true, opts), opts);
+    return await ended(store, await drive(store, release, session, true, opts, slot), opts);
   } finally {
     release();
   }
@@ -1267,26 +1325,40 @@ export interface StopResult {
 }
 
 /**
- * `orch stop next` and `orch stop`. Against a live controller both only leave a request, which
- * the controller honours; `now` then waits briefly for it. Against an interrupted session `next`
- * is kept for `orch resume`, and `now` discards the session, handing its job back as it is.
- * Nothing is cancelled, and a PID read from a file is never signalled.
+ * `orch stop next` and `orch stop`, for one controller: the one `repo` names, else the only live
+ * one, else the only interrupted session. Against a live controller both only leave a request,
+ * which the controller honours; `now` then waits briefly for it. Against an interrupted session
+ * `next` is kept for `orch resume`, and `now` discards the session, handing its job back as it
+ * is. Nothing is cancelled, and a PID read from a file is never signalled.
  */
 export function stopSession(
   store: Store,
   which: keyof StopRequests,
   waitMs = 30_000,
   startTime?: (pid: number) => number | null,
+  repo?: string,
 ): StopResult {
   const paths = store.paths;
-  const pid = controllerPid(paths);
-  const session = readSession(paths);
-  const open = session !== null && session.finished === null;
-  if (pid === null && !open) {
+  const open = runnerSlots(paths).filter(slotOpen);
+  let target: RunnerSlot | undefined;
+  if (repo !== undefined) target = namedSlot(open, repo);
+  else {
+    const live = open.filter((s) => s.pid !== null);
+    const candidates = live.length > 0 ? live : open;
+    if (candidates.length > 1) {
+      throw several(
+        live.length > 0 ? 'controllers are running' : 'sessions were interrupted',
+        candidates,
+      );
+    }
+    target = candidates[0];
+  }
+  if (target === undefined) {
     throw new ValidationError('No factory session is running or interrupted; nothing to stop.');
   }
+  const { key: slot, pid, session } = target;
   if (which === 'next') {
-    requestStop(paths, 'next');
+    requestStop(paths, 'next', slot);
     return {
       requested: 'next',
       pid,
@@ -1297,14 +1369,14 @@ export function stopSession(
     };
   }
   if (pid !== null) {
-    requestStop(paths, 'now');
-    for (let waited = 0; waited < waitMs && controllerPid(paths) !== null; waited += 250)
+    requestStop(paths, 'now', slot);
+    for (let waited = 0; waited < waitMs && slotPid(paths, slot) !== null; waited += 250)
       sleep(250);
     return {
       requested: 'now',
       pid,
       message:
-        controllerPid(paths) === null
+        slotPid(paths, slot) === null
           ? 'The controller stopped. Its job is kept as it was; orch resume continues the session.'
           : 'Stop requested; the controller has not exited yet (see orch status).',
     };
@@ -1313,18 +1385,22 @@ export function stopSession(
   const identity = childIdentity(session, startTime);
   if (identity === 'original' || identity === 'unknown')
     throw new ValidationError(orphanRefusal(session, identity, 'orch stop'));
-  const release = acquireRunnerLock(paths);
+  const release = acquireRunnerLock(paths, slot);
   let kept: string | null = null;
   try {
-    if (!release.owned()) throw new LostLockError(controllerPid(paths));
+    if (!release.owned()) throw new LostLockError(slotPid(paths, slot));
     if (session.jobId !== null) kept = leave(store, session.jobId);
-    writeSession(paths, {
-      ...session,
-      child: null,
-      finished: { at: now(), reason: 'discarded by orch stop after an interruption' },
-    });
-    clearStop(paths, 'next');
-    clearStop(paths, 'now');
+    writeSession(
+      paths,
+      {
+        ...session,
+        child: null,
+        finished: { at: now(), reason: 'discarded by orch stop after an interruption' },
+      },
+      slot,
+    );
+    clearStop(paths, 'next', slot);
+    clearStop(paths, 'now', slot);
   } finally {
     release();
   }
@@ -1338,9 +1414,12 @@ export function stopSession(
   };
 }
 
-export interface RunnerStatus {
+/** One open controller slot: a live controller, or a session nobody is running. */
+export interface ControllerStatus {
+  /** The repository it works on, as shown; `every repository` for the whole queue. */
+  scope: string;
   /** `running`: a live controller. `interrupted`: a session nobody is running; resumable. */
-  state: 'running' | 'interrupted' | 'idle';
+  state: 'running' | 'interrupted';
   pid: number | null;
   mode: RunnerSession['mode'] | null;
   /** The repository the queue is restricted to. */
@@ -1362,27 +1441,32 @@ export interface RunnerStatus {
   } | null;
   /** What happens next, in one sentence. */
   next: string;
-  /** How the last session that ran to its end finished. */
-  last: { at: string; reason: string; completed: number; attempted: number } | null;
+}
+
+export interface RunnerStatus {
+  /** One per open slot, live ones first, then by start; empty when nothing runs or waits. */
+  controllers: ControllerStatus[];
+  /** How the session that ended last, over every slot, finished. */
+  last: { scope: string; at: string; reason: string; completed: number; attempted: number } | null;
   /** The installed build against its checkout; null without a build stamp. */
   build: InstallBuild | null;
   /**
-   * The recorded session's tickets (current or in its results) whose job waits in needs-human now,
-   * with their choices and links: display only, never decided from.
+   * The recorded sessions' tickets (current or in their results) whose job waits in needs-human
+   * now, with their choices and links: display only, never decided from.
    */
   waiting: WaitingJob[];
 }
 
-/** `orch status`: the controller's own state plus the job row of the ticket in flight. Read-only. */
-export function runnerStatus(store: Store): RunnerStatus {
-  const paths = store.paths;
-  const session = readSession(paths);
-  const pid = controllerPid(paths);
-  const stop = stopRequests(paths);
-  const open = session !== null && session.finished === null;
-  const state = pid !== null ? 'running' : open ? 'interrupted' : 'idle';
-  let current: RunnerStatus['current'] = null;
-  if (session !== null && open && session.ticketId !== null) {
+/** What `orch status` says next when no controller is open. */
+export const IDLE_NEXT =
+  'Nothing is running. orch start resumes a stranded in-progress ticket first, then takes the next ready one.';
+
+function controllerStatus(store: Store, slot: RunnerSlot): ControllerStatus {
+  const { pid } = slot;
+  const stop = stopRequests(store.paths, slot.key);
+  const session = slot.session?.finished === null ? slot.session : null;
+  let current: ControllerStatus['current'] = null;
+  if (session !== null && session.ticketId !== null) {
     let job: Job | null = null;
     try {
       if (session.jobId !== null) job = getJob(store.db, session.jobId);
@@ -1413,10 +1497,7 @@ export function runnerStatus(store: Store): RunnerStatus {
   const after =
     stop.next || session?.mode === 'ticket' ? 'then exit' : 'then take the next ready ticket';
   let next: string;
-  if (state === 'idle') {
-    next =
-      'Nothing is running. orch start resumes a stranded in-progress ticket first, then takes the next ready one.';
-  } else if (state === 'interrupted') {
+  if (pid === null) {
     next = current?.childAlive
       ? `The controller is gone but its Claude process (PID ${String(current.childPid)}) may still be running; ` +
         'orch resume checks whether that PID is still the same process, and continues once it is not.'
@@ -1434,32 +1515,57 @@ export function runnerStatus(store: Store): RunnerStatus {
     next = `${doing}, ${after}.`;
   }
   return {
-    state,
+    scope: slotName(slot),
+    state: pid !== null ? 'running' : 'interrupted',
     pid,
-    mode: open ? session.mode : null,
-    repo: open ? session.repo : null,
-    startedAt: open ? session.startedAt : null,
+    mode: session?.mode ?? null,
+    repo: session?.repo ?? null,
+    startedAt: session?.startedAt ?? null,
     stop,
     current,
     next,
+  };
+}
+
+/**
+ * `orch status`: every open controller slot with the job row of its ticket in flight, the
+ * session that ended last, and what waits for a person. Read-only.
+ */
+export function runnerStatus(store: Store): RunnerStatus {
+  const slots = runnerSlots(store.paths);
+  const last = lastFinished(slots);
+  const started = (c: ControllerStatus) => c.startedAt ?? '';
+  return {
+    controllers: slots
+      .filter(slotOpen)
+      .map((s) => controllerStatus(store, s))
+      .sort(
+        (a, b) =>
+          Number(b.pid !== null) - Number(a.pid !== null) || started(a).localeCompare(started(b)),
+      ),
     last:
-      session?.finished == null
+      last?.session?.finished == null
         ? null
         : {
-            at: session.finished.at,
-            reason: session.finished.reason,
-            completed: session.results.filter((r) => r.outcome === 'done').length,
-            attempted: session.results.length,
+            scope: slotName(last),
+            at: last.session.finished.at,
+            reason: last.session.finished.reason,
+            completed: last.session.results.filter((r) => r.outcome === 'done').length,
+            attempted: last.session.results.length,
           },
     build: installBuild(),
-    waiting:
-      session === null
-        ? []
-        : waitingOf(store, [
-            ...(session.ticketId === null
-              ? []
-              : [{ ticketId: session.ticketId, jobId: session.jobId }]),
-            ...session.results,
-          ]),
+    waiting: waitingOf(
+      store,
+      slots.flatMap(({ session }) =>
+        session === null
+          ? []
+          : [
+              ...(session.ticketId === null
+                ? []
+                : [{ ticketId: session.ticketId, jobId: session.jobId }]),
+              ...session.results,
+            ],
+      ),
+    ),
   };
 }

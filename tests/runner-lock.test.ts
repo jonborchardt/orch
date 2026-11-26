@@ -2,7 +2,8 @@
  * The controller lock's exclusive takeover, with the race forced rather than hoped for: this
  * starter judges a dead controller's lock stale, and before it claims the next generation a
  * competitor claims it. The competitor is a real `acquireRunnerLock`, run from inside this
- * starter's liveness check (the one moment between its look and its claim).
+ * starter's liveness check (the one moment between its look and its claim). The same holds in a
+ * repository's slot (ticket 0163).
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,8 +14,12 @@ import { acquireRunnerLock, type RunnerLock } from '../src/ops/runner-state.ts';
 import { homePaths, tempDir } from './helpers.ts';
 
 const DEAD = 2 ** 31 - 1;
-const race: { paths: RuntimePaths | null; competitor: RunnerLock | null; claimed: Buffer | null } =
-  { paths: null, competitor: null, claimed: null };
+const race: {
+  paths: RuntimePaths | null;
+  key: string | undefined;
+  competitor: RunnerLock | null;
+  claimed: Buffer | null;
+} = { paths: null, key: undefined, competitor: null, claimed: null };
 
 vi.mock('../src/ops/verify-lock.ts', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/ops/verify-lock.ts')>();
@@ -24,8 +29,8 @@ vi.mock('../src/ops/verify-lock.ts', async (importOriginal) => {
       if (pid === DEAD && race.paths) {
         const paths = race.paths;
         race.paths = null; // the competitor's own look finds the dead pid dead, and claims
-        race.competitor = acquireRunnerLock(paths);
-        race.claimed = readFileSync(join(runnerPaths(paths).lock, '2'));
+        race.competitor = acquireRunnerLock(paths, race.key);
+        race.claimed = readFileSync(join(runnerPaths(paths, race.key).lock, '2'));
       }
       return real.alive(pid);
     },
@@ -33,9 +38,12 @@ vi.mock('../src/ops/verify-lock.ts', async (importOriginal) => {
 });
 
 describe('controller lock: a competitor claims between the look and the claim', () => {
-  it('refuses the late starter and leaves the competitor holding its generation', () => {
+  it.each([
+    ['the unscoped slot', undefined],
+    ['a repository slot', '0123456789abcdef'],
+  ])('refuses the late starter and leaves the competitor holding its generation: %s', (_, key) => {
     const paths = homePaths(tempDir('orch-runner-lock-'));
-    const dir = runnerPaths(paths).lock;
+    const dir = runnerPaths(paths, key).lock;
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, '1'),
@@ -43,7 +51,8 @@ describe('controller lock: a competitor claims between the look and the claim', 
     );
 
     race.paths = paths;
-    expect(() => acquireRunnerLock(paths)).toThrow(/already running/);
+    race.key = key;
+    expect(() => acquireRunnerLock(paths, key)).toThrow(/already running/);
     // The competitor took generation 2 while the late starter was judging generation 1.
     expect(race.competitor?.owned()).toBe(true);
     expect(JSON.parse(String(race.claimed))).toMatchObject({ pid: process.pid });

@@ -134,22 +134,35 @@ export function recoveryPaths(paths: RuntimePaths = runtimePaths()): {
 }
 
 /**
- * The foreground factory controller's files (`orch start`): the directory of lock generations
- * (the live controller holds the highest),
- * the session record only that controller writes, and the two stop requests only `orch stop`
- * creates. One writer per file, so no update is ever lost to another process.
+ * The foreground factory controller's files (`orch start`) for one slot: the directory of lock
+ * generations (the live controller holds the highest), the session record only that controller
+ * writes, the two stop requests only `orch stop` creates, and the scope record its starter
+ * writes. One writer per file, so no update is ever lost to another process.
+ *
+ * Without `key` this is the unscoped slot ("every repository"), the files at the data root. A
+ * repository's slot (`runnerScope` in ops/repo.ts gives its key) keeps the same files under
+ * `<data>/runners/<key>/`; `root` is the directory whose entries are those keys.
  */
-export function runnerPaths(paths: RuntimePaths = runtimePaths()): {
+export function runnerPaths(
+  paths: RuntimePaths = runtimePaths(),
+  key?: string,
+): {
+  root: string;
   lock: string;
   state: string;
   stopNext: string;
   stopNow: string;
+  scope: string;
 } {
+  const root = join(paths.data, 'runners');
+  const dir = key === undefined ? paths.data : join(root, key);
   return {
-    lock: join(paths.data, 'runner-lock'),
-    state: join(paths.data, 'runner.json'),
-    stopNext: join(paths.data, 'runner.stop-next'),
-    stopNow: join(paths.data, 'runner.stop-now'),
+    root,
+    lock: join(dir, 'runner-lock'),
+    state: join(dir, 'runner.json'),
+    stopNext: join(dir, 'runner.stop-next'),
+    stopNow: join(dir, 'runner.stop-now'),
+    scope: join(dir, 'scope.json'),
   };
 }
 

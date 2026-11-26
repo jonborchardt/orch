@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   Area,
   BoardRow,
+  ControllerStatus,
   RunnerStatus,
   TicketSummary,
   TicketView,
@@ -123,40 +124,31 @@ const NATIVE_SX = {
   borderRadius: 1,
 } as const;
 
-const RUNNER_COLOR = { running: 'primary', interrupted: 'warning', idle: 'default' } as const;
+const RUNNER_COLOR = { running: 'primary', interrupted: 'warning' } as const;
+const ROW_SX = { alignItems: 'center', flexWrap: 'wrap', overflowWrap: 'anywhere' } as const;
 
-/** What `orch status` prints, read-only. The controller is started and stopped from the CLI. */
-function RunnerStrip({
-  runner,
-  tickets,
-  order,
+/** One controller: its state, scope, ticket and job, stop requests, and what it does next. */
+function ControllerLine({
+  c,
+  byId,
 }: {
-  runner: RunnerStatus;
-  tickets: readonly TicketSummary[];
-  order: readonly number[];
+  c: ControllerStatus;
+  byId: ReadonlyMap<number, TicketSummary>;
 }) {
-  const byId = new Map(tickets.map((t) => [t.id, t]));
-  const cur = runner.current;
+  const cur = c.current;
   const curId = cur ? Number(cur.ticket) : null;
-  const ready = order.flatMap((id) => (byId.get(id)?.ready ? [id] : []));
-  const first = ready[0];
   return (
-    <Paper component="section" aria-label="Factory status" variant="outlined" sx={{ m: 1, p: 1 }}>
-      <Stack
-        direction="row"
-        spacing={1}
-        useFlexGap
-        sx={{ alignItems: 'center', flexWrap: 'wrap', overflowWrap: 'anywhere' }}
-      >
+    <Box role="group" aria-label={`Controller for ${c.scope}`} data-controller={c.scope}>
+      <Stack direction="row" spacing={1} useFlexGap sx={ROW_SX}>
         <Typography sx={{ fontWeight: 700 }}>Factory</Typography>
-        <Chip label={runner.state} color={RUNNER_COLOR[runner.state]} data-runner={runner.state} />
-        {runner.mode && (
-          <Typography color="text.secondary">
-            {runner.mode === 'ticket'
-              ? 'one ticket (orch do)'
-              : `queue of ${runner.repo ?? 'every repository'}`}
-          </Typography>
-        )}
+        <Chip label={c.state} color={RUNNER_COLOR[c.state]} data-runner={c.state} />
+        <Typography color="text.secondary">
+          {c.mode === 'ticket'
+            ? `one ticket (orch do) in ${c.scope}`
+            : c.mode === 'queue'
+              ? `queue of ${c.scope}`
+              : c.scope}
+        </Typography>
         {cur && curId !== null && (
           <Typography>
             ticket <Link href={ticketHref(curId)}>{cur.ticket}</Link>
@@ -173,17 +165,53 @@ function RunnerStrip({
             {cur.waiting && ` · waiting for ${cur.waiting === 'human' ? 'a person' : cur.waiting}`}
           </Typography>
         )}
-        {runner.stop.now && <Chip color="warning" label="stop requested: now" />}
-        {runner.stop.next && <Chip color="warning" label="stop requested: after this ticket" />}
+        {c.stop.now && <Chip color="warning" label="stop requested: now" />}
+        {c.stop.next && <Chip color="warning" label="stop requested: after this ticket" />}
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-        {runner.next}
+        {c.next}
       </Typography>
+    </Box>
+  );
+}
+
+/** What `orch status` prints, read-only. Controllers are started and stopped from the CLI. */
+function RunnerStrip({
+  runner,
+  tickets,
+  order,
+}: {
+  runner: RunnerStatus;
+  tickets: readonly TicketSummary[];
+  order: readonly number[];
+}) {
+  const byId = new Map(tickets.map((t) => [t.id, t]));
+  const ready = order.flatMap((id) => (byId.get(id)?.ready ? [id] : []));
+  const first = ready[0];
+  return (
+    <Paper component="section" aria-label="Factory status" variant="outlined" sx={{ m: 1, p: 1 }}>
+      {runner.controllers.length === 0 ? (
+        <Stack direction="row" spacing={1} useFlexGap sx={ROW_SX}>
+          <Typography sx={{ fontWeight: 700 }}>Factory</Typography>
+          <Chip label="idle" data-runner="idle" />
+          <Typography variant="body2" color="text.secondary">
+            {/* The same sentence as IDLE_NEXT in src/ops/run.ts; web/ imports only types. */}
+            Nothing is running. orch start resumes a stranded in-progress ticket first, then takes
+            the next ready one.
+          </Typography>
+        </Stack>
+      ) : (
+        <Stack spacing={1} sx={{ mb: 0.5 }}>
+          {runner.controllers.map((c) => (
+            <ControllerLine key={c.scope} c={c} byId={byId} />
+          ))}
+        </Stack>
+      )}
       {runner.last && (
         <Typography variant="body2" color="text.secondary">
           Last session ended <time dateTime={runner.last.at}>{ago(runner.last.at)}</time>:{' '}
           {runner.last.reason} ({String(runner.last.completed)} of {String(runner.last.attempted)}{' '}
-          attempted tickets done).
+          attempted tickets done, {runner.last.scope}).
         </Typography>
       )}
       <Typography variant="body2" color="text.secondary">

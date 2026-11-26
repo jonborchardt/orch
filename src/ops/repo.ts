@@ -9,6 +9,7 @@
  * another clone of the same remote is recognised. The remote identity follows the remote; the
  * local identity never moves.
  */
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 
 import { ValidationError } from '../core/errors.ts';
@@ -141,6 +142,73 @@ function mismatch(job: Job, info: RepoInfo): string {
     `worktrees through remote changes; ${why}. Restore the recorded checkout, or pass --repo ` +
     `<path> inside it.`
   );
+}
+
+/**
+ * The scope of one factory controller (decision 2026-11-25-one-controller-per-repository): which
+ * repository it works on, and so which controller slot it takes. This file is the only place
+ * that decides it, and the only place that compares two scopes.
+ */
+export interface RunnerScope {
+  /** Names the slot's directory: a short hash of `name`. */
+  key: string;
+  /** The remote identity when the repository has one, else its canonical Git common directory. */
+  name: string;
+  /** The canonical Git common directory; null when only a remote identity is known. */
+  commonDir: string | null;
+}
+
+const scopeOf = (name: string, commonDir: string | null): RunnerScope => ({
+  key: createHash('sha256').update(name).digest('hex').slice(0, 16),
+  name,
+  commonDir,
+});
+
+/**
+ * The controller scope of the repository containing `path`. Two clones of one remote, and a
+ * checkout and its linked worktrees, share a key. A clone without `origin` next to a separate
+ * clone with one are two scopes (different keys, different common directories): the queue filter
+ * (`inRepositoryAt`) gives them different tickets, so their controllers never meet. One checkout
+ * whose remote changed is still one scope, by its common directory (`scopesOverlap`).
+ */
+export function runnerScope(path: string): RunnerScope {
+  const commonDir = localRepoKey(path);
+  if (commonDir === undefined) {
+    throw new ValidationError(`${path} is not inside a Git repository.`);
+  }
+  return scopeOf(describeRepo(path).remote ?? commonDir, commonDir);
+}
+
+/**
+ * The controller scope of a ticket's repository (`orch do`): its recorded checkout when that
+ * still is a repository, else its remote identity, which gives the key a clone with that origin
+ * would. A ticket recorded under a directory name has nothing else to be found by.
+ */
+export function ticketRunnerScope(ticket: {
+  key: string;
+  repo: string;
+  repoPath: string;
+}): RunnerScope {
+  if (localRepoKey(ticket.repoPath) !== undefined) return runnerScope(ticket.repoPath);
+  if (ticket.repo.includes('/')) return scopeOf(ticket.repo, null);
+  throw new ValidationError(
+    `Ticket ${ticket.key} belongs to ${ticket.repo}, whose checkout ${ticket.repoPath} is ` +
+      'missing or no longer a repository, and it has no remote identity to find another clone ' +
+      'by. Restore the checkout, then run orch do again.',
+  );
+}
+
+/**
+ * Whether two controller slots could work on the same repository; null is the unscoped slot
+ * ("every repository"), which overlaps everything. Equal keys are one slot. Equal common
+ * directories are one checkout under two keys: its `origin` was added, removed, or re-pointed.
+ */
+export function scopesOverlap(
+  a: Pick<RunnerScope, 'key' | 'commonDir'> | null,
+  b: Pick<RunnerScope, 'key' | 'commonDir'> | null,
+): boolean {
+  if (a === null || b === null || a.key === b.key) return true;
+  return a.commonDir !== null && a.commonDir === b.commonDir;
 }
 
 export interface JobFilter {

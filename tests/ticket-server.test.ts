@@ -201,12 +201,7 @@ describe('ticket API', () => {
 
   it('serves the controller status read-only, and names the ticket of each job on the board', async () => {
     const runner = await body<RunnerStatus>(get('/api/runner'));
-    expect(runner).toMatchObject({
-      state: 'idle',
-      current: null,
-      stop: { next: false, now: false },
-      last: null,
-    });
+    expect(runner).toMatchObject({ controllers: [], last: null, waiting: [] });
     // The install-build check rides along; null when this checkout has no build stamp.
     expect(runner).toHaveProperty('build');
     const [job] = (await body<TicketDetail>(get('/api/tickets/1'))).jobs;
@@ -231,18 +226,24 @@ describe('ticket API', () => {
       finished: null,
     });
     requestStop(store.paths, 'next');
-    expect(await body<RunnerStatus>(get('/api/runner'))).toMatchObject({
-      state: 'interrupted',
-      pid: null,
-      mode: 'queue',
-      stop: { next: true, now: false },
-      current: { ticket: '0001', job: job?.id, stage: 'spec', waiting: 'agent' },
-    });
+    expect((await body<RunnerStatus>(get('/api/runner'))).controllers).toMatchObject([
+      {
+        scope: 'every repository',
+        state: 'interrupted',
+        pid: null,
+        mode: 'queue',
+        stop: { next: true, now: false },
+        current: { ticket: '0001', job: job?.id, stage: 'spec', waiting: 'agent' },
+      },
+    ]);
     // Visibility only: nothing under /api/runner starts, stops, or resumes anything.
     expect((await post('/api/runner', {})).status).toBe(404);
     expect((await post('/api/runner/stop', {})).status).toBe(404);
     expect((await get('/api/runner/stop')).status).toBe(404);
-    expect((await body<RunnerStatus>(get('/api/runner'))).stop).toEqual({ next: true, now: false });
+    expect((await body<RunnerStatus>(get('/api/runner'))).controllers[0]?.stop).toEqual({
+      next: true,
+      now: false,
+    });
   });
 
   it('moves a ticket in the order through the move action, behind the same guards', async () => {

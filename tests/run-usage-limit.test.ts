@@ -12,7 +12,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { summaryExitCode } from '../src/cli/run.ts';
 import { CLAUDE_SHIM_ENV } from '../src/integrations/claude-session.ts';
 import { resumeSession, startSession } from '../src/ops/run.ts';
-import { readSession } from '../src/ops/runner-state.ts';
 import { usageInRange } from '../src/storage/usage.ts';
 import {
   type Act,
@@ -26,6 +25,7 @@ import {
   status,
   store,
   ticket,
+  lastSession,
 } from './run-fixture.ts';
 import { tempDir } from './helpers.ts';
 import { usage, writeSession } from './transcript-fixture.ts';
@@ -79,7 +79,7 @@ describe('a usage limit ends the run resumably', () => {
       next: 'orch resume',
     });
     expect(jobsOf(second)).toHaveLength(0);
-    expect(readSession(store.paths)).toMatchObject({ finished: null, ticketId: first, jobId });
+    expect(lastSession()).toMatchObject({ finished: null, ticketId: first, jobId });
     expect(status(first)).toBe('in-progress');
 
     const l = launcher(done);
@@ -91,7 +91,7 @@ describe('a usage limit ends the run resumably', () => {
       [first, 'done'],
       [second, 'done'],
     ]);
-    expect(readSession(store.paths)?.finished).not.toBeNull();
+    expect(lastSession()?.finished).not.toBeNull();
   });
 
   it('a child that moves the job and only talks about a rate limit completes its ticket', async () => {

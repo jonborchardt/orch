@@ -9,7 +9,7 @@ import { RUN_HELP, runRunner } from '../src/cli/run.ts';
 import { UsageError } from '../src/core/errors.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { resumeSession, RUNNER_SESSION, startSession } from '../src/ops/run.ts';
-import { readSession, type RunnerSession, writeSession } from '../src/ops/runner-state.ts';
+import { type RunnerSession, writeSession } from '../src/ops/runner-state.ts';
 import type { Job } from '../src/storage/schema.ts';
 import {
   clone,
@@ -22,6 +22,7 @@ import {
   quick,
   store,
   ticket,
+  lastSession,
 } from './run-fixture.ts';
 
 const fastDo = (id: number, log: (line: string) => void = () => undefined) => {
@@ -47,7 +48,7 @@ describe('orch do --fast', () => {
     const job = jobsOf(fast)[0];
     expect(job?.mode).toBe('fast');
     expect(eventsOf(job?.id ?? '', 'job.created')[0]?.payload).toMatchObject({ mode: 'fast' });
-    expect(readSession(store.paths)?.fast).toBe(true);
+    expect(lastSession()?.fast).toBe(true);
 
     const full = ticket('A feature');
     await one(launcher(idle), full);
@@ -55,7 +56,7 @@ describe('orch do --fast', () => {
     expect(eventsOf(jobsOf(full)[0]?.id ?? '', 'job.created')[0]?.payload).toMatchObject({
       mode: 'full',
     });
-    expect(readSession(store.paths)?.fast).toBeUndefined();
+    expect(lastSession()?.fast).toBeUndefined();
   });
 
   it('continues an unfinished full job unchanged and says --fast did not apply', async () => {

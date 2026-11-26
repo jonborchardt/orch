@@ -3,6 +3,9 @@
 Supersedes, for this one case only, the clause of decision 51 that rejected spawning `claude` from
 `orch`, and the "what is not built" lists that named `orch start`, `orch do`, and `orch stop next`.
 The recovery worker and the dashboard are unchanged: neither starts or messages a session.
+"One controller, one ticket at a time" below now reads "one controller per repository, each one
+ticket at a time"
+([2026-11-25-one-controller-per-repository](2026-11-25-one-controller-per-repository.md)).
 
 **Decision.** `orch start [repo]`, `orch do <ticket>`, and `orch resume` run one foreground
 controller (`src/ops/run.ts`). While that command runs, and only then, it takes the best ready
