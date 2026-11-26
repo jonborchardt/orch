@@ -70,6 +70,7 @@ describe('a usage limit ends the run resumably', () => {
       'Claude usage limit reached (resets 3pm); orch resume continues the session',
     );
     expect(s.stopped).toBe(false);
+    expect(s.handoff).toBeUndefined(); // only orch-rebuilt hands off
     expect(summaryExitCode(s)).toBe(1);
     const jobId = r?.jobId ?? '';
     // One launch, not MAX_IDLE_LAUNCHES.

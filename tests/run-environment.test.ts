@@ -100,6 +100,7 @@ describe('a rebuilt orch stops the session resumably', () => {
     const s = await run(launcher(rebuildThenFinish), () => version);
 
     expect(s.reason).toBe(REBUILT_REASON);
+    expect(s.handoff).toEqual({ repo: null });
     expect(s.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([[first, 'done']]);
     expect(jobsOf(second)).toHaveLength(0);
     expect(lastSession()).toMatchObject({ finished: null, ticketId: null });
@@ -132,6 +133,7 @@ describe('a bad factory.json stops the session resumably', () => {
     const s = await run(l);
 
     expect(s.reason).toContain(BAD);
+    expect(s.handoff).toBeUndefined(); // never handed to a new build: not a rebuild
     expect(s.tickets).toMatchObject([
       { ticketId: first, outcome: 'blocked', code: 'bad-config', next: 'orch resume' },
     ]);
@@ -162,6 +164,7 @@ describe('a bad factory.json stops the session resumably', () => {
     const s = await run(l);
 
     expect(s.reason).toContain(BAD);
+    expect(s.handoff).toBeUndefined();
     expect(s.tickets).toHaveLength(0);
     expect(l.calls).toHaveLength(0);
     expect(lastSession()).toMatchObject({ finished: null, ticketId: null });

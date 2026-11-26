@@ -643,7 +643,9 @@ What two controllers cost:
   higher one waits in the other.
 - Every controller's gates run the installed build. Rebuilding `dist/` (from `main` only) while
   any controller runs changes the gates under it and halts every one of them (`orch-rebuilt`);
-  this matters most when one controller works on the `orch` repository itself.
+  each then hands its session to the new build's `orch resume` in its own terminal (decision
+  2026-11-26-rebuilt-controller-hands-off). This matters most when one controller works on the
+  `orch` repository itself.
 - Machine load grows: builder and reviewer runs of the two repositories overlap, while
   verifications still run one at a time, machine-wide.
 - `orch backup restore` refuses while any controller lives.

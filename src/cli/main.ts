@@ -319,13 +319,13 @@ export async function main(argv: string[]): Promise<number> {
       case 'stop':
       case 'status':
       case 'resume': {
-        const { text, data, exitCode } = await runRunner(command, rest, {
+        const { text, data, exitCode, printed } = await runRunner(command, rest, {
           json,
           force: o.force,
           fast: o.fast,
           repo: o.repo,
         });
-        print(json ? data : text, json);
+        if (printed !== true) print(json ? data : text, json);
         return exitCode;
       }
       case 'recover':

@@ -11,6 +11,8 @@ import { parseTicketId, ticketKey } from '../core/tickets.ts';
 import { choiceLine } from '../ops/actions.ts';
 import {
   type ControllerStatus,
+  handOff,
+  type HandoffLaunch,
   IDLE_NEXT,
   resumeSession,
   type RunnerStatus,
@@ -140,11 +142,47 @@ export function summaryExitCode(s: RunSummary): number {
   return s.blocked > 0 || s.interrupted ? 1 : 0;
 }
 
+interface RunnerResult {
+  text: string;
+  data: unknown;
+  exitCode: number;
+  /** Already written to the terminal (a handoff): the caller prints nothing more. */
+  printed?: boolean;
+}
+
+/**
+ * One controller command. A session that halted on a rebuilt `orch` is handed to the new build
+ * once its store is closed and its lock released: the parent's summary is printed (to stderr
+ * under --json, so stdout is the child's one object), and the child's exit code is returned.
+ */
 export async function runRunner(
   command: (typeof RUN_COMMANDS)[number],
   args: string[],
   o: RunCliOptions,
-): Promise<{ text: string; data: unknown; exitCode: number }> {
+  launch?: HandoffLaunch,
+): Promise<RunnerResult> {
+  const r = await runOnce(command, args, o);
+  const handoff = r.summary?.handoff;
+  if (handoff === undefined) return r;
+  if (o.json) console.error(JSON.stringify(r.data, null, 2));
+  else console.log(r.text);
+  const exitCode = await handOff(handoff, { json: o.json, log: progress(o), launch });
+  return { text: '', data: null, exitCode, printed: true };
+}
+
+/** Progress goes to stderr under --json, so stdout stays one object. */
+const progress =
+  (o: RunCliOptions) =>
+  (line: string): void => {
+    if (o.json) process.stderr.write(line + '\n');
+    else console.log(line);
+  };
+
+async function runOnce(
+  command: (typeof RUN_COMMANDS)[number],
+  args: string[],
+  o: RunCliOptions,
+): Promise<RunnerResult & { summary?: RunSummary }> {
   const [arg, extra] = args;
   const noMore = (unexpected: string | undefined) => {
     if (unexpected !== undefined) {
@@ -174,11 +212,8 @@ export async function runRunner(
       return { text: stopped.message, data: stopped, exitCode: 0 };
     }
 
-    // The long-running commands. Progress goes to stderr under --json, so stdout stays one object.
-    const log = (line: string) => {
-      if (o.json) process.stderr.write(line + '\n');
-      else console.log(line);
-    };
+    // The long-running commands.
+    const log = progress(o);
     const stop = new AbortController();
     const abort = () => {
       stop.abort();
@@ -221,7 +256,12 @@ export async function runRunner(
         }
         summary = await startSession(store, { mode: 'queue', repo }, opts);
       }
-      return { text: formatSummary(summary), data: summary, exitCode: summaryExitCode(summary) };
+      return {
+        text: formatSummary(summary),
+        data: summary,
+        exitCode: summaryExitCode(summary),
+        summary,
+      };
     } finally {
       process.off('SIGINT', abort);
       process.off('SIGTERM', abort);

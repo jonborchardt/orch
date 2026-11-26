@@ -3,7 +3,7 @@
  * validated against an allowlist pattern, executables are resolved via PATH by this module, and
  * arguments are always passed as arrays.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, extname, isAbsolute, join } from 'node:path';
 
@@ -316,6 +316,36 @@ export function spawnCommand(
 
 function launchError(message: string): ToolResult {
   return { status: null, stdout: '', stderr: '', signal: null, error: message };
+}
+
+/**
+ * Run an absolute executable in the foreground of this terminal (inherited stdio, never detached,
+ * no shell) and wait for it: resolves with its exit code, null when a signal ended it or it could
+ * not start. A SIGINT this process receives meanwhile keeps it alive until the child exits and,
+ * on POSIX, is forwarded to the child. On Windows the console already delivers Ctrl-C to the
+ * child, and `kill('SIGINT')` there would terminate it without its own cleanup, so nothing is sent.
+ */
+export function runForeground(exe: string, args: readonly string[]): Promise<number | null> {
+  return new Promise((resolve) => {
+    const child = spawn(exe, args, { stdio: 'inherit' });
+    const forward = () => {
+      if (!WIN) child.kill('SIGINT');
+    };
+    process.on('SIGINT', forward);
+    let settled = false;
+    const end = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      process.off('SIGINT', forward);
+      resolve(code);
+    };
+    child.on('error', () => {
+      end(null);
+    });
+    child.on('exit', (code) => {
+      end(code);
+    });
+  });
 }
 
 /** Run a tool with an argument array and return trimmed stdout, or undefined on any failure. */

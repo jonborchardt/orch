@@ -116,6 +116,11 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   or nobody holds; they are evidence, and nothing may decide from them. Do not detach
   it, start it from the dashboard or another command, message a session, run two tickets at once
   within one controller or two controllers on one repository, or signal a PID read from a file.
+  The one way a controller process starts another is `handOff` in `src/ops/run.ts`: after an
+  `orch-rebuilt` halt has released the slot, it runs the installed build's `orch resume` for that
+  slot as one foreground child (`runForeground` in `src/core/exec.ts`), waits, and exits with its
+  code; never a Claude process, never a retry (decision
+  2026-11-26-rebuilt-controller-hands-off).
 
 ## Schema changes
 
