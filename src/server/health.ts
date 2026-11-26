@@ -38,15 +38,13 @@ const MERGE_STOPS = new Set<string>([...MERGE_BLOCKS, 'merge-no-answer', 'merge-
 
 /** `job.completed` is what `terminalAt` falls back to; the rest are the series' sources. */
 const TYPES = [
-  ...new Set([
-    'stage.started',
-    ...ENDS,
-    'job.completed',
-    'verification.completed',
-    'ci.observed',
-    'pr.merged',
-    'runner.stopped',
-  ]),
+  'stage.started',
+  ...ENDS,
+  'job.completed',
+  'verification.completed',
+  'ci.observed',
+  'pr.merged',
+  'runner.stopped',
 ];
 
 type Group = HealthSeries['group'];
