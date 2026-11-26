@@ -573,6 +573,9 @@ once (`token: null`, `--release` is redundant but accepted), so `orch do` can co
 and run `orch do <ticket>`: after a human resume to spec, a spec.md that differs from its
 registered content is registered by the next plan and challenged again.
 
+While its Claude child runs, the controller keeps that job's `orch-runner` lease live from its
+session heartbeat, and renews nothing for a job another session holds or after the child exits.
+
 `orch stop next` is read at the ticket boundary. `orch stop` (or Ctrl+C) terminates the Claude
 process the controller started, releases the job in the state it was in, and leaves the session
 for `orch resume`; with no controller alive it discards an interrupted session instead. Neither

@@ -47,6 +47,7 @@ import {
   mergeEvidence,
   recordEvent,
   releaseJob,
+  renewLease,
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { ticketJobs } from '../storage/tickets.ts';
@@ -144,6 +145,8 @@ export interface RunOptions {
   githubBackoff?: readonly number[] | undefined;
   /** The installed build's identity (`buildStamp`); tests replace it. */
   build?: (() => string | null) | undefined;
+  /** How often the session heartbeat runs; tests shorten it. Defaults to `BEAT_MS`. */
+  beatMs?: number | undefined;
 }
 
 export interface RunSummary {
@@ -1017,6 +1020,51 @@ function waitingOf(
   return out;
 }
 
+/** At most one lease renewal attempt per job in this long (ticket 0177). */
+export const LEASE_RENEW_EVERY_MS = 3 * 60_000;
+
+/** The heartbeat's memory of its last renewal attempt and of the child that was refused one. */
+export interface LeaseKeep {
+  jobId: string | null;
+  at: number;
+  refused: RunnerSession['child'];
+}
+
+/**
+ * While the controller's child runs, keep its job's lease live (ticket 0177): a long foreground
+ * subagent runs no `orch` command, so nothing else renews it. Only a job `orch-runner` holds,
+ * renewed as the row's current owner at its revision, so a claim landing in between fails with
+ * exit 4 instead of being overwritten; that refusal ends renewals for this child. Never throws.
+ */
+export function keepChildLease(
+  store: Store,
+  session: RunnerSession,
+  keep: LeaseKeep,
+  log: (line: string) => void,
+  at = Date.now(),
+): void {
+  const { child, jobId } = session;
+  if (child === null || jobId === null || keep.refused === child) return;
+  if (keep.jobId === jobId && at - keep.at < LEASE_RENEW_EVERY_MS) return;
+  try {
+    const job = getJob(store.db, jobId);
+    if (job.ownerSession !== RUNNER_SESSION || job.leaseExpiresAt === null) return;
+    if (Date.parse(job.leaseExpiresAt) - at > (job.leaseMinutes * 60_000) / 2) return;
+    keep.jobId = jobId;
+    keep.at = at;
+    renewLease(store, jobId, { token: job.ownerToken ?? undefined, expectRevision: job.revision });
+  } catch (err) {
+    keep.jobId = jobId;
+    keep.at = at;
+    if (err instanceof OwnershipError) keep.refused = child;
+    try {
+      log(`  job ${jobId}: lease not renewed: ${err instanceof Error ? err.message : String(err)}`);
+    } catch {
+      // the heartbeat never throws
+    }
+  }
+}
+
 /** Run the session to its end as the lock holder; `resuming` continues the ticket in flight. */
 async function drive(
   store: Store,
@@ -1082,9 +1130,12 @@ async function drive(
   session.child = null;
   run.save();
   // Never throws: after a lost lock it writes nothing, and the main flow stops at its next check.
+  const keep: LeaseKeep = { jobId: null, at: 0, refused: null };
   const beat = setInterval(() => {
-    if (lock.owned()) write();
-  }, BEAT_MS);
+    if (!lock.owned()) return;
+    write();
+    keepChildLease(store, session, keep, run.log);
+  }, opts.beatMs ?? BEAT_MS);
   beat.unref();
 
   const attempt = async (ticketId: number, pick: RunnerSession['pick']): Promise<TicketResult> => {
