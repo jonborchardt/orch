@@ -4,6 +4,7 @@
  * `RunSummary`: what merged, what needs you, what was passed over, and what it cost.
  */
 import { ticketKey } from '../core/tickets.ts';
+import { choiceLine } from './actions.ts';
 import type { MergedTicket, RunSummary } from './run.ts';
 import type { TokenCounts } from '../server/types.ts';
 
@@ -49,7 +50,17 @@ export function formatSummary(s: RunSummary): string {
   lines.push('', `Needs you (${String(needs.length)})`);
   if (needs.length === 0) lines.push('none');
   for (const t of needs) {
-    lines.push(`${ticketKey(t.ticketId)} ${t.outcome}: ${t.reason}`);
+    // A job still waiting in needs-human leads with what is needed and a link per choice.
+    const w =
+      t.outcome === 'needs-human'
+        ? s.waiting.find((x) => x.ticketId === t.ticketId && x.jobId === t.jobId)
+        : undefined;
+    if (w === undefined) lines.push(`${ticketKey(t.ticketId)} ${t.outcome}: ${t.reason}`);
+    else {
+      lines.push(`${ticketKey(t.ticketId)} needs-human: ${w.needed}`);
+      lines.push(...w.choices.map((c) => `     ${choiceLine(c)}`));
+      lines.push(`     reason: ${t.reason}`);
+    }
     if (t.next !== null) lines.push(`     next: ${t.next}`);
   }
   const other = s.tickets.filter((t) => t.outcome !== 'done' && !NEEDS_YOU.includes(t.outcome));

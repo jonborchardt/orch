@@ -17,7 +17,7 @@ import {
   type Stage,
   withDefaultChoice,
 } from '../src/core/workflow.ts';
-import { dashboardAction } from '../src/ops/actions.ts';
+import { choiceLine, choiceLinks, dashboardAction, needsHuman } from '../src/ops/actions.ts';
 import { acquireRunnerLock, type RunnerSession, writeSession } from '../src/ops/runner-state.ts';
 import { detail } from '../src/server/api.ts';
 import { appendEvent } from '../src/storage/events.ts';
@@ -174,6 +174,7 @@ describe('currentChoices fallback (AC2)', () => {
       label: 'Send back to build',
       action: 'approve',
       available: true,
+      effect: 'the job goes back to build and carries on from there',
     });
     expect(d.actions).toContain('answer');
 
@@ -204,6 +205,100 @@ describe('currentChoices fallback (AC2)', () => {
       choices: [{ kind: 'cancel', label: 'Drop it' }],
     });
     expect(detail(store, id).choices?.map((c) => c.label)).toEqual(['Retry approve', 'Drop it']);
+  });
+});
+
+describe('needsHuman: what is needed, each choice with its effect (ticket 0174)', () => {
+  const view = (id: string) => {
+    const v = needsHuman(store, getJob(store.db, id));
+    if (v === null) throw new Error('expected a needs-human view');
+    return v;
+  };
+  /** Plain words only: no job id, commit hash, run id, or orch command. */
+  const plain = (id: string, sentence: string) => {
+    expect(sentence).not.toContain(id);
+    expect(sentence).not.toMatch(/\b[0-9a-f]{7,40}\b/);
+    expect(sentence).not.toMatch(/\brun-\w+/);
+    expect(sentence).not.toMatch(/\borch\s/);
+    expect(sentence.split('\n')).toHaveLength(1);
+  };
+
+  it('a ci escalation with two recorded choices (the 0162 case)', () => {
+    const id = olderBlock({
+      from: 'ci',
+      reason:
+        'CI has not run on merged HEAD 3f84f12aa01; run orch job transition job-1 resume --to pr',
+      choices: [
+        { kind: 'resume', to: 'pr', label: 'Run the pr/ci pass for the merged HEAD' },
+        { kind: 'cancel', label: 'Drop the job' },
+      ],
+    });
+    store.db.update(jobs).set({ returnStage: 'ci' }).where(eq(jobs.id, id)).run();
+    const v = view(id);
+    expect(v.needed).toBe(
+      'CI cannot go on without a decision: pick "Run the pr/ci pass for the merged HEAD" or "Drop the job".',
+    );
+    plain(id, v.needed);
+    expect(v.choices.map((c) => [c.label, c.effect, c.available])).toEqual([
+      [
+        'Run the pr/ci pass for the merged HEAD',
+        'the job goes back to pr and carries on from there',
+        true,
+      ],
+      ['Drop the job', 'the job ends for good; its branch and worktree are kept', true],
+    ]);
+    // One link per available choice, by its currentChoices index.
+    expect(choiceLinks(id, v).map((c) => c.link)).toEqual([
+      `http://127.0.0.1:4777/#/jobs/${id}?choose=0`,
+      `http://127.0.0.1:4777/#/jobs/${id}?choose=1`,
+    ]);
+  });
+
+  it('an approver decision', () => {
+    const id = olderBlock({ from: 'approve', reason: 'AC2 needs deployment verification' });
+    const v = view(id);
+    expect(v.needed).toBe(
+      'The approver asks a person to decide: pick "Retry approve" or "Cancel".',
+    );
+    plain(id, v.needed);
+  });
+
+  it('max review rounds with default choices', () => {
+    const id = olderBlock({ from: 'review', reason: MAX_ROUNDS_REASON });
+    store.db.update(jobs).set({ returnStage: 'build' }).where(eq(jobs.id, id)).run();
+    const v = view(id);
+    expect(v.needed).toBe(
+      'Reviewers still ask for changes after the last allowed round: pick "Send back to build", "Retry review" or "Cancel".',
+    );
+    plain(id, v.needed);
+  });
+
+  it('gives every kind a one-line effect, names a resume stage, and links only what is available', () => {
+    const id = olderBlock({
+      from: 'approve',
+      reason: 'which way',
+      choices: [
+        { kind: 'resume', to: 'simplify', label: 'Simplify again' },
+        { kind: 'rework', label: 'Rework' },
+        { kind: 'review', label: 'Review' },
+        { kind: 'accept-delivery', label: 'Close out' },
+        { kind: 'accept-policy', label: 'Take the checks' },
+      ],
+    });
+    const v = view(id);
+    for (const c of v.choices) {
+      expect(c.effect.trim(), c.kind).not.toBe('');
+      expect(c.effect, c.kind).not.toContain('\n');
+    }
+    expect(v.choices[0]?.effect).toContain('simplify');
+    const links = choiceLinks(id, v);
+    // No policy drift and no CI verdict to close out: those two are listed, not linked.
+    expect(links.map((c) => c.link === null)).toEqual([false, false, false, true, true]);
+    expect(v.needed).not.toContain('Close out');
+    expect(choiceLine(links[3] ?? { label: '', effect: '', link: null })).toBe(
+      'Close out: the job is closed as delivered without a CI verdict; nothing is merged. (not available now)',
+    );
+    expect(needsHuman(store, { ...getJob(store.db, id), stage: 'build' })).toBeNull();
   });
 });
 

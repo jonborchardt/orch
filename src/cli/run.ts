@@ -5,7 +5,8 @@
  */
 import { UsageError } from '../core/errors.ts';
 import { findProjectRoot } from '../core/paths.ts';
-import { parseTicketId } from '../core/tickets.ts';
+import { parseTicketId, ticketKey } from '../core/tickets.ts';
+import { choiceLine } from '../ops/actions.ts';
 import {
   resumeSession,
   type RunnerStatus,
@@ -45,7 +46,8 @@ command runs; nothing is left behind when it exits.
                   kept as it is (never cancelled) for orch resume. With no controller alive,
                   discards an interrupted session instead
   status          Whether a controller is running or was interrupted, its ticket and job, what it
-                  waits on, pending stop requests, and what happens next
+                  waits on, pending stop requests, and what happens next; first, each of the
+                  session's jobs waiting for a person, with a dashboard link per choice
   resume          Continue an interrupted session: same scope, same ticket and job, same stop
                   request. Refused while the Claude process of the dead controller may still be
                   running (--force: that PID is another program now)
@@ -92,7 +94,13 @@ export function formatStatus(s: RunnerStatus): string {
   }
   lines.push(`next        ${s.next}`);
   if (s.build?.stale) lines.push(`build       ${s.build.message}`);
-  return lines.join('\n');
+  // What waits for a person comes first, with a link per choice; the internal detail follows.
+  const waiting = s.waiting.flatMap((w) => [
+    `needs you   ${ticketKey(w.ticketId)}: ${w.needed}`,
+    ...w.choices.map((c) => `              ${choiceLine(c)}`),
+    `              job ${w.jobId}`,
+  ]);
+  return [...waiting, ...lines].join('\n');
 }
 
 /**

@@ -255,6 +255,8 @@ export interface JobDetailView {
    * `available` whether it is in `actions`.
    */
   choices: ChoiceView[] | null;
+  /** While choices are offered: what is needed, in one plain sentence (`needsHuman`); else null. */
+  needed: string | null;
   /**
    * While choices are offered: what happens after an answer (`afterAction`), "the controller
    * continues it" or the command a person runs; null otherwise.
@@ -389,6 +391,8 @@ export interface ActionRequest {
 export interface ChoiceView extends Choice {
   action: DashboardAction;
   available: boolean;
+  /** What picking it does, in one line (`needsHuman`). */
+  effect: string;
 }
 
 export interface ActionResponse {

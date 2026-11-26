@@ -161,9 +161,11 @@ describe('orch start: the queue', () => {
     expect(s.reason).toBe('no ready ticket is left (1 waits for a person)');
     expect(summaryExitCode(s)).toBe(1);
     const text = formatSummary(s);
-    expect(text).toContain(
-      `${ticketKey(first)} needs-human: job ${jobId ?? ''} waits for a person`,
-    );
+    // What is needed leads; the recorded reason follows it.
+    const needed = text.indexOf(`${ticketKey(first)} needs-human: The `);
+    const reason = text.indexOf(`     reason: job ${jobId ?? ''} waits for a person`);
+    expect(needed).toBeGreaterThan(-1);
+    expect(reason).toBeGreaterThan(needed);
     expect(text).toContain(`     next: ${human?.next ?? ''}`);
   });
 

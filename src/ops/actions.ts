@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkArtifact } from '../core/artifact-rules.ts';
 import { ValidationError } from '../core/errors.ts';
-import { jobArtifactDir } from '../core/paths.ts';
+import { DEFAULT_PORT, jobArtifactDir } from '../core/paths.ts';
 import {
   cannotAcceptDelivery,
   cannotMerge,
@@ -18,10 +18,14 @@ import {
   type ChoiceKind,
   type Completion,
   defaultChoices,
+  MAX_CI_REPAIRS_REASON,
+  MAX_ROUNDS_REASON,
+  SCOPE_GAP_REASON,
   type Stage,
   TERMINAL_STATUSES,
   withDefaultChoice,
 } from '../core/workflow.ts';
+import type { ChoiceView } from '../server/types.ts';
 import { viewPr } from '../integrations/github.ts';
 import type { Store } from '../storage/client.ts';
 import { findArtifact } from '../storage/artifacts.ts';
@@ -44,6 +48,7 @@ import { completionFor, mergeJob, type MergeResult, relandJob, ticketText } from
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
 import { launchFor } from './dispatch.ts';
+import { planJob } from './factory.ts';
 import { controllerContinues } from './runner-state.ts';
 import {
   type BaseConflicts,
@@ -89,11 +94,120 @@ export const CHOICE_ACTIONS: Record<ChoiceKind, DashboardAction> = {
  * reader of choices uses this rule.
  */
 export function currentChoices(store: Store, job: Job): Choice[] | null {
+  return blocked(store, job)?.choices ?? null;
+}
+
+function blocked(store: Store, job: Job): { choices: Choice[]; reason: string | null } | null {
   if (job.stage !== 'needs-human' || TERMINAL_STATUSES.includes(job.status)) return null;
   const payload = eventsOfTypes(store.db, job.id, ['job.blocked'])[0]?.payload ?? {};
   const recorded = Array.isArray(payload['choices']) ? (payload['choices'] as Choice[]) : [];
   const reason = typeof payload['reason'] === 'string' ? payload['reason'] : null;
-  return withDefaultChoice(recorded, defaultChoices(job, reason));
+  return { choices: withDefaultChoice(recorded, defaultChoices(job, reason)), reason };
+}
+
+/** What picking a choice of each kind does, in one line (the dialog in Actions.tsx says more). */
+function choiceEffect(c: Choice): string {
+  switch (c.kind) {
+    case 'resume':
+      return `the job goes back to ${c.to ?? 'its stage'} and carries on from there`;
+    case 'rework':
+      return 'the builder reworks the change, then it is reviewed again';
+    case 'review':
+      return 'the reviewers look at the current change again';
+    case 'accept-delivery':
+      return 'the job is closed as delivered without a CI verdict; nothing is merged';
+    case 'accept-policy':
+      return 'the changed verification checks (factory.json) are accepted and the job continues';
+    case 'cancel':
+      return 'the job ends for good; its branch and worktree are kept';
+  }
+}
+
+/** Why the job stopped, in words a person needs no orch knowledge for. */
+function situation(job: Job, reason: string | null): string {
+  if (reason === MAX_ROUNDS_REASON)
+    return 'Reviewers still ask for changes after the last allowed round';
+  if (reason === MAX_CI_REPAIRS_REASON) return 'CI still fails after the allowed repairs';
+  if (reason === SCOPE_GAP_REASON) return 'The approver still finds requested work missing';
+  switch (job.returnStage) {
+    case 'ci':
+      return 'CI cannot go on without a decision';
+    case 'approve':
+      return 'The approver asks a person to decide';
+    case 'spec':
+      return 'The spec needs a decision from a person';
+    case 'review':
+      return 'The review needs a decision from a person';
+    default:
+      return 'The job needs a decision from a person';
+  }
+}
+
+export interface NeedsHuman {
+  /** One plain sentence: what is needed, naming each available choice. */
+  needed: string;
+  /** `currentChoices` in order (the index is the `answer` choice), each with its effect. */
+  choices: ChoiceView[];
+}
+
+/**
+ * What a job waiting in needs-human asks of a person, null otherwise: the one view the dashboard,
+ * the status mail, the controller's stop line, its summary, and `orch status` all show. `actions`
+ * is the detail view's `allowedActions`; without it they are derived as the mail does.
+ */
+export function needsHuman(
+  store: Store,
+  job: Job,
+  actions?: readonly DashboardAction[],
+): NeedsHuman | null {
+  const b = blocked(store, job);
+  if (b === null) return null;
+  const allowed = actions ?? allowedActions(job, policyDrift(store, job), null, null, true);
+  const choices = b.choices.map((c) => {
+    const action = CHOICE_ACTIONS[c.kind];
+    return { ...c, action, available: allowed.includes(action), effect: choiceEffect(c) };
+  });
+  const open = choices.filter((c) => c.available);
+  const labels = (open.length > 0 ? open : choices).map((c) => `"${c.label}"`);
+  const list =
+    labels.length <= 1
+      ? (labels[0] ?? '')
+      : `${labels.slice(0, -1).join(', ')} or ${labels.at(-1) ?? ''}`;
+  return { needed: `${situation(job, b.reason)}: pick ${list}.`, choices };
+}
+
+function policyDrift(store: Store, job: Job): boolean {
+  try {
+    return planJob(store, job.id).verification?.policy.authorization === 'required';
+  } catch {
+    return false; // no plan: no policy drift, as on the board
+  }
+}
+
+/** The dashboard link that opens choice `n`'s confirm dialog; opening it changes nothing. */
+export function chooseLink(jobId: string, n: number): string {
+  return `http://127.0.0.1:${String(DEFAULT_PORT)}/#/jobs/${jobId}?choose=${String(n)}`;
+}
+
+export interface ChoiceLink {
+  label: string;
+  effect: string;
+  /** `chooseLink` for an available choice; null when its action is not allowed now. */
+  link: string | null;
+}
+
+/** The choices as text surfaces print them: label, effect, and link by `currentChoices` index. */
+export function choiceLinks(jobId: string, view: NeedsHuman): ChoiceLink[] {
+  return view.choices.map((c, n) => ({
+    label: c.label,
+    effect: c.effect,
+    link: c.available ? chooseLink(jobId, n) : null,
+  }));
+}
+
+/** One line per choice for mail and terminal. */
+export function choiceLine(c: ChoiceLink): string {
+  return `${c.label}: ${c.effect}. ${c.link ?? '(not available now)'}`;
 }
 
 export interface ActionInput {

@@ -156,7 +156,8 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
     );
   }, [section]);
 
-  const jobMatch = /^#\/jobs\/(job-[0-9a-f]{8})$/.exec(hash);
+  // `?choose=<n>` (the mail's and terminal's per-choice link) only opens that choice's confirm.
+  const jobMatch = /^#\/jobs\/(job-[0-9a-f]{8})(?:\?choose=(\d{1,2}))?$/.exec(hash);
   const visible = useMemo(
     () => (rows ?? []).filter((r) => matches(r, status) && matchesText(r, text)),
     [rows, status, text],
@@ -307,7 +308,12 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
         ) : usageMatch ? (
           <UsagePage />
         ) : jobMatch ? (
-          <JobDetail id={jobMatch[1] ?? ''} refreshMs={refreshMs} onActivity={setDetailActivity} />
+          <JobDetail
+            id={jobMatch[1] ?? ''}
+            choose={jobMatch[2] === undefined ? null : Number(jobMatch[2])}
+            refreshMs={refreshMs}
+            onActivity={setDetailActivity}
+          />
         ) : rows === null ? (
           // A failed first load shows only the error alert above, not a bar that never ends.
           !error && (

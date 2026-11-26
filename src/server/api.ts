@@ -32,11 +32,11 @@ import {
 import {
   afterAction,
   allowedActions,
-  CHOICE_ACTIONS,
   currentChoices,
   DASHBOARD_ACTIONS,
   type DashboardAction,
   dashboardAction,
+  needsHuman,
   withoutToken,
 } from '../ops/actions.ts';
 import { planJob } from '../ops/factory.ts';
@@ -914,14 +914,14 @@ export function detail(store: Store, id: string): JobDetailView {
   // Without a readable worktree HEAD there is nothing to compare the verdict against.
   const ci = ciView(job, evidence.events, plan?.worktree?.head ?? undefined);
   const conflicts = baseConflicts(store, job, plan?.worktree ?? null);
-  const choices = currentChoices(store, job);
   const actions = allowedActions(
     job,
     plan?.verification?.policy.authorization === 'required',
     ci.completion,
     conflicts,
-    choices !== null,
+    currentChoices(store, job) !== null,
   );
+  const human = needsHuman(store, job, actions);
   return {
     job: safeJob(job),
     models: drawnModelsOf(eventsOfTypes(store.db, id, ['models.drawn'])),
@@ -940,12 +940,9 @@ export function detail(store: Store, id: string): JobDetailView {
     flake: plan ? plan.flake : (currentFlakes(store).get(id) ?? null),
     prPhase: prPhase(job, ci.completion),
     actions,
-    choices:
-      choices?.map((c) => {
-        const action = CHOICE_ACTIONS[c.kind];
-        return { ...c, action, available: actions.includes(action) };
-      }) ?? null,
-    afterAction: choices === null ? null : afterAction(store, job),
+    choices: human?.choices ?? null,
+    needed: human?.needed ?? null,
+    afterAction: human === null ? null : afterAction(store, job),
     conflicts,
     links: {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,

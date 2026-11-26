@@ -9,6 +9,7 @@ import {
   DialogTitle,
   FormControlLabel,
   MenuItem,
+  Paper,
   Stack,
   TextField,
   Tooltip,
@@ -108,8 +109,27 @@ function effect(a: DashboardAction, d: JobDetailView, to: string): string {
  * Human controls. Every action goes through the API, which applies the same validated workflow
  * transitions as the CLI. None of them can wake a session: the response says to resume.
  */
-export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () => void }) {
-  const [open, setOpen] = useState<DashboardAction | null>(null);
+export function Actions({
+  detail,
+  onDone,
+  part = 'controls',
+  choose = null,
+}: {
+  detail: JobDetailView;
+  onDone: () => void;
+  /** `choices`: only the needs-human block (what is needed, one button per choice); `controls`: the rest. */
+  part?: 'choices' | 'controls';
+  /**
+   * A `?choose=<n>` link: open choice n's confirm dialog on mount when it is offered and available.
+   * Opening it posts nothing; only its Confirm does. The caller keys the component by it.
+   */
+  choose?: number | null;
+}) {
+  const linked =
+    part === 'choices' && choose !== null && detail.choices?.[choose]?.available === true
+      ? choose
+      : null;
+  const [open, setOpen] = useState<DashboardAction | null>(linked === null ? null : 'answer');
   const [reason, setReason] = useState('');
   const [force, setForce] = useState(false);
   // The detail view is not remounted per job or per poll, so the default stage is re-read here and
@@ -120,7 +140,7 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
   const [result, setResult] = useState<ActionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The choice the open `answer` dialog is for; the dialog then reads as the action it maps to.
-  const [choice, setChoice] = useState<number | null>(null);
+  const [choice, setChoice] = useState<number | null>(linked);
   // The spec.md text the open `edit-spec` dialog edits.
   const [content, setContent] = useState('');
   const editing = open === 'edit-spec';
@@ -259,33 +279,61 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
     void send(finished ? { action: 'refresh-pr', force: true } : { action: 'refresh-pr' });
   };
 
+  const choicesPart = part === 'choices';
+  const hasChoices = detail.choices !== null && detail.choices.length > 0;
   return (
-    <Stack spacing={1}>
-      {allowed.size === 0 && (
+    // The choices part stays mounted after an answer, so its result outlives the choices.
+    <Stack spacing={1} sx={choicesPart && (hasChoices || result) ? { mt: 2 } : undefined}>
+      {!choicesPart && allowed.size === 0 && (
         <Typography variant="body2" color="text.secondary">
           No actions: the job is {detail.job.status}.
         </Typography>
       )}
-      {detail.choices && detail.choices.length > 0 && (
-        <Box component="section" aria-labelledby="choices-title" data-testid="choices">
+      {choicesPart && hasChoices && (
+        <Paper
+          variant="outlined"
+          sx={{ p: 1.5 }}
+          component="section"
+          aria-labelledby="choices-title"
+          data-testid="choices"
+        >
           <Typography id="choices-title" variant="subtitle2">
-            Choices
+            Needs you
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            The job waits for a person; picking an answer continues it from there.
-          </Typography>
-          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', mt: 1 }}>
-            {detail.choices.map((c, i) => (
-              <Button
+          {detail.needed !== null && (
+            <Typography data-testid="needed" sx={{ fontWeight: 600 }}>
+              {detail.needed}
+            </Typography>
+          )}
+          <Stack spacing={1} sx={{ mt: 1 }}>
+            {detail.choices?.map((c, i) => (
+              <Stack
                 key={c.label}
-                variant={i === 0 ? 'contained' : 'outlined'}
-                disabled={busy || !c.available}
-                onClick={() => {
-                  answer(i);
-                }}
+                direction="row"
+                spacing={1}
+                useFlexGap
+                sx={{ alignItems: 'center', flexWrap: 'wrap' }}
               >
-                {c.label}
-              </Button>
+                <Button
+                  variant={i === 0 ? 'contained' : 'outlined'}
+                  disabled={busy || !c.available}
+                  aria-describedby={`choice-effect-${String(i)}`}
+                  onClick={() => {
+                    answer(i);
+                  }}
+                >
+                  {c.label}
+                </Button>
+                <Typography
+                  id={`choice-effect-${String(i)}`}
+                  variant="body2"
+                  color="text.secondary"
+                  data-testid="choice-effect"
+                >
+                  {c.effect}
+                  {c.available ? '' : ' (not available now)'}
+                </Typography>
+              </Stack>
             ))}
           </Stack>
           {detail.afterAction !== null && (
@@ -298,75 +346,79 @@ export function Actions({ detail, onDone }: { detail: JobDetailView; onDone: () 
               After an answer, {detail.afterAction}.
             </Typography>
           )}
-        </Box>
+        </Paper>
       )}
-      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-        {allowed.has('merge') &&
-          tip(
-            'merge',
-            <Button
-              variant="contained"
-              color="success"
-              onClick={() => {
-                start('merge');
-              }}
-              disabled={busy}
-            >
-              Merge
-            </Button>,
-          )}
-        {allowed.has('refresh-pr') && (
-          <Button variant="outlined" onClick={refresh} disabled={busy}>
-            Refresh PR
-          </Button>
-        )}
-        {buttons.map(
-          ([a, label, variant, color]) =>
-            allowed.has(a) &&
-            (a !== 'edit-spec' || specText !== undefined) &&
-            tip(
-              a,
-              <Button
-                variant={variant}
-                color={color}
-                onClick={() => {
-                  start(a);
-                }}
-              >
-                {label}
-              </Button>,
-            ),
-        )}
-      </Stack>
+      {!choicesPart && (
+        <>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+            {allowed.has('merge') &&
+              tip(
+                'merge',
+                <Button
+                  variant="contained"
+                  color="success"
+                  onClick={() => {
+                    start('merge');
+                  }}
+                  disabled={busy}
+                >
+                  Merge
+                </Button>,
+              )}
+            {allowed.has('refresh-pr') && (
+              <Button variant="outlined" onClick={refresh} disabled={busy}>
+                Refresh PR
+              </Button>
+            )}
+            {buttons.map(
+              ([a, label, variant, color]) =>
+                allowed.has(a) &&
+                (a !== 'edit-spec' || specText !== undefined) &&
+                tip(
+                  a,
+                  <Button
+                    variant={variant}
+                    color={color}
+                    onClick={() => {
+                      start(a);
+                    }}
+                  >
+                    {label}
+                  </Button>,
+                ),
+            )}
+          </Stack>
 
-      {open === null && error && <Alert severity="error">{error}</Alert>}
-      {closeOut && (
-        <Alert severity="warning" variant="outlined" data-testid="close-out-caution">
-          Accept delivery completes the job by hand: CI is {detail.ci.status ?? 'not observed'} for{' '}
-          {detail.ci.head?.slice(0, 7) ?? '?'}
-          {detail.job.prState === 'merged' ? ' and the PR was merged outside the factory' : ''}. The
-          job is then recorded as completed by human close-out, not by a passing CI verdict, with
-          your reason. Nothing is merged or marked ready.
-        </Alert>
-      )}
-      {allowed.has('approve') && !approvalGate && (
-        <Alert severity="warning" variant="outlined" data-testid="approve-caution">
-          This job is not waiting for an approval; it stopped because of a problem (
-          {detail.blocker?.summary ?? 'see the status above'}). Resume only moves it back to a stage
-          without fixing anything; use it only once you have decided the job may continue.
-        </Alert>
-      )}
-      {allowed.has('accept-policy') && (
-        <Alert severity="warning" variant="outlined">
-          The worktree changes the verification policy (factory.json). Gates stay closed until a
-          human accepts it here or it is reverted.
-        </Alert>
-      )}
-      {liveOwner && !finished && (
-        <Alert severity="info" variant="outlined">
-          Session <b>{detail.job.ownerSession}</b> holds a live lease. Actions will be refused
-          unless you confirm a forced takeover, which invalidates that session&apos;s token.
-        </Alert>
+          {open === null && error && <Alert severity="error">{error}</Alert>}
+          {closeOut && (
+            <Alert severity="warning" variant="outlined" data-testid="close-out-caution">
+              Accept delivery completes the job by hand: CI is {detail.ci.status ?? 'not observed'}{' '}
+              for {detail.ci.head?.slice(0, 7) ?? '?'}
+              {detail.job.prState === 'merged' ? ' and the PR was merged outside the factory' : ''}.
+              The job is then recorded as completed by human close-out, not by a passing CI verdict,
+              with your reason. Nothing is merged or marked ready.
+            </Alert>
+          )}
+          {allowed.has('approve') && !approvalGate && (
+            <Alert severity="warning" variant="outlined" data-testid="approve-caution">
+              This job is not waiting for an approval; it stopped because of a problem (
+              {detail.blocker?.summary ?? 'see the status above'}). Resume only moves it back to a
+              stage without fixing anything; use it only once you have decided the job may continue.
+            </Alert>
+          )}
+          {allowed.has('accept-policy') && (
+            <Alert severity="warning" variant="outlined">
+              The worktree changes the verification policy (factory.json). Gates stay closed until a
+              human accepts it here or it is reverted.
+            </Alert>
+          )}
+          {liveOwner && !finished && (
+            <Alert severity="info" variant="outlined">
+              Session <b>{detail.job.ownerSession}</b> holds a live lease. Actions will be refused
+              unless you confirm a forced takeover, which invalidates that session&apos;s token.
+            </Alert>
+          )}
+        </>
       )}
       {result && (
         <Alert

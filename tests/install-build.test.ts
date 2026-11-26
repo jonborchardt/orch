@@ -76,6 +76,7 @@ describe('formatStatus build line', () => {
     next: 'Nothing is running.',
     last: null,
     build,
+    waiting: [],
   });
   const build = {
     builtFrom: 'a',
