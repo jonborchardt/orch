@@ -9,7 +9,16 @@ import { describe, expect, it } from 'vitest';
 import { OwnershipError } from '../src/core/errors.ts';
 import { addArtifact, recordVerdict } from '../src/ops/gates.ts';
 import { checkReadonly, type Plan, resumeFactoryJob } from '../src/ops/factory.ts';
-import { commitFile, fixture, gitIn, json, orch, tempDir, writeArtifact } from './helpers.ts';
+import {
+  answeredBuild,
+  commitFile,
+  fixture,
+  gitIn,
+  json,
+  orch,
+  tempDir,
+  writeArtifact,
+} from './helpers.ts';
 import {
   store,
   clone,
@@ -263,7 +272,10 @@ describe('review rounds', () => {
     const c = start();
     toReview(c);
     reviewRound(c, { 'code-quality': 'CHANGES' }, 1);
-    expect(() => runStage(c, 'build.md', fixture('build.md') + '\nround 2\n')).toThrow(/--replace/);
+    // A valid rework build.md (it answers round 1's one blocking finding) still needs --replace.
+    expect(() => runStage(c, 'build.md', answeredBuild('1.1') + '\nround 2\n')).toThrow(
+      /--replace/,
+    );
     // The failed registration left the stage running; register properly and complete.
     addArtifact(store, c.id, 'build.md', { token: c.token, replace: true });
     expect(go(c, 'complete').round).toBe(2);
