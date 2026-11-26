@@ -27,6 +27,7 @@ import type {
   SessionLogView,
   UsageView,
 } from '../src/server/types.ts';
+import { upsertArtifact } from '../src/storage/artifacts.ts';
 import { listEvents } from '../src/storage/events.ts';
 import {
   attachSession,
@@ -1501,6 +1502,39 @@ describe('recorded logs on the artifact route (todo 0019)', () => {
     const r = await get(`/api/jobs/${a.id}/artifacts/ci/fedcba9/test.log`);
     expect(r.status).toBe(422);
     expect(await r.text()).not.toContain('outside via junction');
+  });
+
+  it('refuses a registered artifact reached through a junction out of the job directory (422)', async () => {
+    const outside = tempDir('artifact-outside-');
+    dirs.push(outside);
+    writeFileSync(join(outside, 'linked.md'), 'registered artifact outside via junction\n');
+    symlinkSync(outside, join(jobArtifactDir(a.id, own.paths), 'reviews'), 'junction');
+    // registerArtifact refuses a link out, so the row is written directly: the read model must
+    // not trust a row to point inside the artifact directory.
+    upsertArtifact(own.db, {
+      jobId: a.id,
+      stage: 'spec',
+      round: 1,
+      path: 'reviews/linked.md',
+      bytes: 41,
+      sha256: '0'.repeat(64),
+      marker: null,
+      head: 'abcdef0123456789',
+      specSha256: null,
+      createdAt: new Date().toISOString(),
+    });
+    const r = await get(`/api/jobs/${a.id}/artifacts/reviews/linked.md`);
+    expect(r.status).toBe(422);
+    expect(await r.text()).not.toContain('registered artifact outside via junction');
+  });
+
+  it('refuses Windows name variants of a recorded CI log', async () => {
+    // On Windows each of these names the same file as `ciLog`; only the exact recorded string is
+    // served. Sent raw, so the server receives each one unchanged.
+    expect(await raw(`/api/jobs/${a.id}/artifacts/${ciLog}::$DATA`)).toBe(400);
+    expect(await raw(`/api/jobs/${a.id}/artifacts/${ciLog}.`)).toBe(422);
+    expect(await raw(`/api/jobs/${a.id}/artifacts/${ciLog}%20`)).toBe(422);
+    expect(await raw(`/api/jobs/${a.id}/artifacts/CI/abcdef0/test.log`)).toBe(422);
   });
 
   it('refuses a recorded log that is missing on disk (422)', async () => {
