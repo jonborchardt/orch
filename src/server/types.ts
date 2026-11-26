@@ -180,6 +180,7 @@ export interface BoardRow {
    */
   elapsedMs: number | null;
   /**
+   * `url` is the recorded PR URL only when it parses with an http(s) scheme (as `links.pr`).
    * `phase` is orch's recorded view (`prPhase`); GitHub is asked again only on Merge or Refresh PR.
    * `refreshable`: the server allows Refresh PR now (`cannotRefreshPr` is null).
    */
