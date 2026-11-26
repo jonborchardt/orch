@@ -6,11 +6,14 @@ import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ROLES } from '../src/core/roles.ts';
+import { MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
 import { cancelJob } from '../src/ops/actions.ts';
 import { jobUsage } from '../src/ops/usage.ts';
 import { median, timing } from '../src/server/api.ts';
+import { health } from '../src/server/health.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
-import type { AgentsView, RunsView } from '../src/server/types.ts';
+import { rangeOf } from '../src/server/token-usage.ts';
+import type { AgentsView, HealthView, RunsView } from '../src/server/types.ts';
 import { appendEvent } from '../src/storage/events.ts';
 import { claimJob, createJob, getJob, listJobs } from '../src/storage/jobs.ts';
 import { artifacts, events, jobs, reviews } from '../src/storage/schema.ts';
@@ -496,5 +499,170 @@ describe('GET /api/agents per model (ticket 0169, AC4)', () => {
     });
     // Legacy rows never appear in a note.
     expect(view.notes.some((n) => n.text.includes('null'))).toBe(false);
+  });
+});
+
+describe('GET /api/health', () => {
+  // The range ends with the hour holding NOW: bucket 22 is T0's hour, bucket 23 the next, partial one.
+  const NOW = T0 + 90 * MIN;
+  const ev = (job: string, type: string, min: number, payload: Record<string, unknown> = {}) =>
+    appendEvent(store.db, job, type, payload, null, at(min * MIN));
+  const hours = (v: HealthView, id: string) => v.buckets.slice(21).map((b) => b.values[id]);
+
+  it('serves one value per series per bucket and refuses other ranges (AC1, AC2)', async () => {
+    for (const q of ['hours=5', 'hours=abc', '']) {
+      const res = await get(`/api/health?${q}`);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: { type: 'UsageError', message: 'hours must be one of 24, 168, or 720' },
+      });
+    }
+    const before = Date.now();
+    const v = await json<HealthView>('/api/health?hours=24');
+    expect(v.hours).toBe(24);
+    expect(v.buckets).toHaveLength(24);
+    const last = Date.parse(v.buckets.at(-1)?.hour ?? '');
+    expect([rangeOf(24, before).last, rangeOf(24, Date.now()).last]).toContain(last);
+    expect(Date.parse(v.buckets[0]?.hour ?? '')).toBe(last - 23 * HOUR);
+    const ids = v.series.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const b of v.buckets) expect(Object.keys(b.values)).toEqual(ids);
+    expect(Object.keys(v.total)).toEqual(ids);
+    // Groups in table order, and no controller stop series on an empty store.
+    expect([...new Set(v.series.map((s) => s.group))]).toEqual([
+      'errors',
+      'reviewers',
+      'throughput',
+    ]);
+    expect(ids.some((id) => id.startsWith('stop.'))).toBe(false);
+    expect(ids.slice(0, 2)).toEqual(['failed.spec', 'failed.build']);
+    expect(ids).not.toContain('failed.needs-human');
+    for (const s of v.series) expect(v.total[s.id]).toBe(s.unit === 'count' ? 0 : null);
+    expect((await json<HealthView>('/api/health?hours=168')).buckets).toHaveLength(168);
+    expect(health(store, '720', NOW).buckets).toHaveLength(720);
+  });
+
+  it('counts events and rows in the UTC hour of their time (AC3 to AC8, AC12)', () => {
+    const a = seedJob({
+      status: 'completed',
+      round: 1,
+      createdAt: at(-30 * MIN),
+      completedAt: at(10 * MIN),
+    }); // 40 min, first hour
+    seedJob({ status: 'completed', round: 3, createdAt: at(0), completedAt: at(20 * MIN) }); // 20 min
+    const byEvent = seedJob({ status: 'completed', round: 5, createdAt: at(0) });
+    ev(byEvent, 'job.completed', 70); // 70 min, second hour
+    seedJob({ status: 'cancelled', round: 9, createdAt: at(0), completedAt: at(-23 * HOUR) }); // too old
+
+    ev(a, 'stage.failed', -22 * 60 - 1, { stage: 'build' }); // one minute before the first bucket
+    ev(a, 'stage.failed', 5, { stage: 'build' });
+    ev(a, 'stage.failed', 65, { stage: 'build' });
+    ev(a, 'stage.failed', 65, { stage: 'bogus' }); // not a stage: no series
+    ev(a, 'job.blocked', 6, { from: 'review', reason: MAX_ROUNDS_REASON });
+    ev(a, 'job.blocked', 66, { from: 'ci', reason: 'CI went away' });
+    ev(a, 'job.blocked', 67, { from: 'build' });
+    ev(a, 'runner.stopped', 7, { code: 'no-progress' });
+    ev(a, 'runner.stopped', 68, { code: 'merge-blocked' });
+    ev(a, 'pr.merged', 8, { ok: false, error: 'refused' });
+    ev(a, 'pr.merged', 69, { ok: true, mergeCommit: 'abc', verified: true, ticketId: 't1' });
+    ev(a, 'pr.merged', 69, { ok: true, mergeCommit: 'abd', verified: true, ticketId: null });
+    ev(a, 'job.reworked', 9, { from: 'ci' });
+    ev(a, 'job.reworked', 70, { from: 'ci', integration: true });
+    ev(a, 'verification.completed', 11, { status: 'failed' });
+    ev(a, 'verification.completed', 11, { status: 'passed' });
+    ev(a, 'ci.observed', 12, { outcome: 'failing' });
+    ev(a, 'ci.observed', 13); // a `pr status` observation: no outcome
+
+    const ci = seedJob({ createdAt: at(0) });
+    ev(ci, 'stage.started', 10, { stage: 'ci' });
+    ev(ci, 'stage.completed', 20, { stage: 'ci' }); // 10 min, first hour
+    ev(ci, 'stage.started', 30, { stage: 'ci' });
+    ev(ci, 'stage.failed', 62, { stage: 'ci' }); // 32 min, second hour
+    ev(ci, 'stage.started', 63, { stage: 'ci' }); // still open
+
+    const review = (round: number, verdict: 'pass' | 'changes' | null, done?: number) => ({
+      jobId: a,
+      round,
+      reviewer: 'security',
+      verdict,
+      createdAt: at(0),
+      completedAt: done === undefined ? null : at(done * MIN),
+    });
+    store.db
+      .insert(reviews)
+      .values([review(1, 'pass', 15), review(2, 'changes', 75), review(3, null)])
+      .run();
+    store.db
+      .insert(artifacts)
+      .values({
+        jobId: a,
+        stage: 'spec',
+        round: null,
+        path: 'spec-review-1.md',
+        bytes: 1,
+        marker: 'CHANGES',
+        createdAt: at(16 * MIN),
+      })
+      .run();
+
+    const before = listJobs(store.db);
+    const v = health(store, '24', NOW);
+    expect(listJobs(store.db)).toEqual(before);
+    expect(v.buckets.slice(21).map((b) => b.hour)).toEqual([at(-HOUR), at(0), at(HOUR)]);
+    const expected: Record<string, [(number | null)[], number | null]> = {
+      // errors; the event before the range is in no bucket and not in the total (d)
+      'failed.build': [[0, 1, 1], 2],
+      'failed.ci': [[0, 0, 1], 1],
+      'blocked.from.review': [[0, 1, 0], 1],
+      'blocked.from.ci': [[0, 0, 1], 1],
+      'blocked.reason.max-rounds': [[0, 1, 0], 1],
+      'blocked.reason.other': [[0, 0, 2], 2],
+      'blocked.reason.scope-gap': [[0, 0, 0], 0],
+      'verification.failed': [[0, 1, 0], 1],
+      'ci.failed': [[0, 1, 0], 1],
+      'ci.repair': [[0, 1, 0], 1],
+      'merge.failed': [[0, 1, 0], 1],
+      'merge.stopped': [[0, 0, 1], 1],
+      'stop.no-progress': [[0, 1, 0], 1],
+      'stop.merge-blocked': [[0, 0, 1], 1],
+      // reviewers; the cancelled job finished before the range
+      'review.runs.security': [[0, 1, 1], 2],
+      'review.changes.security': [[0, 0, 1], 1],
+      'review.runs.correctness': [[0, 0, 0], 0],
+      'spec-challenge.runs': [[0, 1, 0], 1],
+      'spec-challenge.changes': [[0, 1, 0], 1],
+      'review.rounds': [[null, 2, 5], 3],
+      'rework.from.ci': [[0, 1, 1], 2],
+      'rework.from.approve': [[0, 0, 0], 0],
+      // throughput: medians per hour, null when empty, and over every span in the total
+      'tickets.merged': [[0, 0, 1], 1],
+      'jobs.completed': [[0, 2, 1], 3],
+      'jobs.duration': [[null, 30 * MIN, 70 * MIN], 40 * MIN],
+      'ci.visits': [[0, 1, 1], 2],
+      'ci.wait': [[null, 10 * MIN, 32 * MIN], 21 * MIN],
+    };
+    for (const [id, [perHour, total]] of Object.entries(expected)) {
+      expect([id, hours(v, id), v.total[id]]).toEqual([id, perHour, total]);
+    }
+    // Nothing happened in the 21 hours before.
+    for (const b of v.buckets.slice(0, 21)) {
+      for (const s of v.series) expect(b.values[s.id]).toBe(s.unit === 'count' ? 0 : null);
+    }
+    // Stop codes seen in the range follow the fixed error series, sorted by code.
+    const ids = v.series.map((s) => s.id);
+    const i = ids.indexOf('merge.stopped');
+    expect(ids.slice(i, i + 4)).toEqual([
+      'merge.stopped',
+      'stop.merge-blocked',
+      'stop.no-progress',
+      'review.runs.security',
+    ]);
+    expect(v.series.find((s) => s.id === 'stop.no-progress')).toEqual({
+      id: 'stop.no-progress',
+      label: 'Controller stop: no-progress',
+      group: 'errors',
+      unit: 'count',
+    });
+    expect(ids).not.toContain('failed.bogus');
   });
 });

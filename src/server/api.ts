@@ -189,14 +189,14 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
 }
 
 /** When a finished job finished: `completedAt`, else its newest terminal event, never the poll time. */
-function terminalAt(job: Job, events: Map<string, Event>): string | null {
+export function terminalAt(job: Job, events: Map<string, Event>): string | null {
   if (job.completedAt) return job.completedAt;
   const times = ['job.completed', 'job.cancelled'].flatMap((t) => events.get(t)?.createdAt ?? []);
   return times.sort().at(-1) ?? null;
 }
 
 /** Wall-clock milliseconds, or null when the end is unknown or the span is unparseable or negative. */
-function span(from: string, to: string | null): number | null {
+export function span(from: string, to: string | null): number | null {
   const ms = to === null ? NaN : Date.parse(to) - Date.parse(from);
   return Number.isNaN(ms) || ms < 0 ? null : ms;
 }

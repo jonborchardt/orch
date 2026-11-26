@@ -116,6 +116,18 @@ missing, refused, or over a cap is not recorded and stays live-read. Decision
 2026-11-24-dashboard-token-usage-from-transcripts, partly superseded by
 2026-11-24-recorded-token-usage.
 
+**Health** (`GET /api/health?hours=<24|168|720>`, `health` in `src/server/health.ts`) is the same
+UTC-hour buckets as Usage for a later chart; no view shows it yet. It returns `series` (id, label,
+group, unit) and, per bucket and in `total`, one value per series, all derived from events and rows
+already recorded, archived jobs included: **errors** (stage failures and escalations by stage,
+escalations by reason, failed verification runs, failing CI, CI repairs, refused merges, and one
+`stop.<code>` series per controller stop code seen in the range), **reviewers** (finished reviews
+and CHANGES per reviewer, spec challenges, sent-back counts, median review rounds of finished
+jobs), and **throughput** (verified ticket merges, completed jobs and their median duration, ended
+CI waits and their median). A count is 0 in an empty hour; a median counts in the hour its span
+ended, is `null` with no spans, and its total is the median over the whole range. Any other
+`hours` is a 400. It writes nothing, and nothing decides from it.
+
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
 worktree, review round, reviews, elapsed time, start time, last update, PR link and CI rollup.
 Started is the local date and time of the job's first stage start (`jobs.startedAt`, stamped once
