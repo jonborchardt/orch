@@ -932,14 +932,13 @@ function summarize(
   session: RunnerSession,
   reason: string,
   stopped: boolean,
-  interrupted = false,
 ): RunSummary {
   const count = (...o: TicketOutcome[]) =>
     session.results.filter((r) => o.includes(r.outcome)).length;
   return {
     reason,
     stopped,
-    interrupted,
+    interrupted: false,
     attempted: session.results.length,
     completed: count('done'),
     blocked: count('blocked', 'needs-human', 'refused'),
@@ -1003,15 +1002,12 @@ async function drive(
       }
     },
     environment: () => {
-      const bad = builtAt !== null && build() !== builtAt ? REBUILT_REASON : configProblem(store);
+      const rebuilt = builtAt !== null && build() !== builtAt;
+      const reason = rebuilt ? REBUILT_REASON : configProblem(store);
       halted =
-        bad === null
+        reason === null
           ? null
-          : {
-              kind: 'blocked',
-              code: bad === REBUILT_REASON ? 'orch-rebuilt' : 'bad-config',
-              reason: bad,
-            };
+          : { kind: 'blocked', code: rebuilt ? 'orch-rebuilt' : 'bad-config', reason };
       return halted;
     },
   };
@@ -1066,7 +1062,7 @@ async function drive(
     // before a ticket has none in flight, so the reason comes from here, not from a result.
     if (halted !== null) {
       run.save();
-      return summarize(store, session, halted.reason, false, true);
+      return { ...summarize(store, session, halted.reason, false), interrupted: true };
     }
     if (stopped || reason === null) {
       run.save(); // first: a lost lock leaves the stop request to the controller that has it
