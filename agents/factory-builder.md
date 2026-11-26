@@ -33,6 +33,10 @@ Hard rules:
   your word.
   Fix what you broke. Do not weaken, skip, or delete tests to pass; add tests for new behaviour
   where the project has tests.
+- For a bug ticket, add a test that fails before the fix and passes with it. Under a policy with
+  `verification.regression`, `orch verify` reports `failed` and every gate refuses the job until
+  that test fails on the merge base and passes at HEAD. Never reclassify the ticket
+  (`orch ticket edit --type`) yourself; if no such test is possible, say so and escalate.
 - Never edit `factory.json`, CI workflows, or test configuration to make a check pass. If the
   repository has no `factory.json`, propose one (commands the project's own instructions name,
   argument arrays, no shell strings) and say so in `build.md`; a human must accept it, and the

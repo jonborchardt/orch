@@ -232,6 +232,15 @@ Request: <job description>
 plus the stage-specific inputs listed in [reference.md](reference.md). Wait for every agent to
 finish before registering anything.
 
+### Bug tickets
+
+For a job linked to a `bug` ticket, the builder adds a test that fails before the fix and passes
+with it. When the effective policy sets `verification.regression`, orch runs that test red at the
+merge base and green at HEAD on `orch verify`; without a `passed` or `exempt` record for HEAD the
+run reports `failed` and build, simplify, approve, and delivery are refused. Neither you nor any
+agent reclassifies the ticket (`orch ticket edit --type`) to lift it; a job that cannot add such a
+test escalates, and a human decides.
+
 ### Fast jobs
 
 A job with `mode: "fast"` (only `orch do <ticket> --fast` creates one) starts in `build` and goes

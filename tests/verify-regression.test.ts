@@ -1,7 +1,9 @@
 /**
  * Bug tickets prove the fix (ticket 0156): with `verification.regression` in the policy, a passed
  * `orch verify` of a bug job runs the job's changed tests with its other changes reverted to the
- * merge base (red) and at HEAD (green), and records the attempt. Evidence only: never a gate.
+ * merge base (red) and at HEAD (green), and records the attempt. The gate that reads it (ticket
+ * 0162) is in verify-regression-gate.test.ts; here a record that does not prove the fix makes
+ * `orch verify` report `failed`.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -98,16 +100,24 @@ describe('bug-fix regression evidence', () => {
     expectClean(c, sha);
   });
 
-  it('records not-red when the test passes at the base; verify still passes (CLI exit 0)', () => {
+  it('records not-red when the test passes at the base; verify fails (CLI exit 1)', () => {
     baseline();
     const c = job();
     commitFile(c.wt, 'src/lib.js', FIXED);
     commitFile(c.wt, 'tests/ok.test.js', "require('node:test')('ok', () => {});\n");
     const sha = head(c.wt);
     const res = orch(store.home, tmpdir(), ['--json', 'verify', c.id, '--token', c.token]);
-    expect(res.code).toBe(0);
-    const out = json<{ status: string; reused: boolean; regression: Record<string, unknown> }>(res);
-    expect(out.status).toBe('passed');
+    expect(res.code).toBe(1);
+    const out = json<{
+      status: string;
+      hint: string;
+      reused: boolean;
+      runId: number;
+      regression: Record<string, unknown>;
+    }>(res);
+    expect(out.status).toBe('failed');
+    expect(out.hint).toContain('test passed at the base (not red)');
+    expect(out.hint).toContain(`verification/${String(out.runId)}/regression-red.log`);
     expect(out.regression).toMatchObject({
       status: 'not-red',
       files: ['tests/ok.test.js'],
@@ -117,13 +127,13 @@ describe('bug-fix regression evidence', () => {
     });
     expect(out.regression['base']).toMatch(/^[0-9a-f]{40}$/);
     expectClean(c, sha);
-    // A reused run runs nothing and reports the recorded attempt, in text too (AC12).
+    // A refused run is never reused: the policy runs again and reports the new attempt, in text too.
     const text = orch(store.home, tmpdir(), ['verify', c.id, '--token', c.token]);
-    expect(text.code).toBe(0);
+    expect(text.code).toBe(1);
     expect(text.out).toMatch(/regression/);
     expect(text.out).toMatch(/not-red/);
     expect(text.out).toContain('tests/ok.test.js');
-    expect(rows(c)).toHaveLength(1);
+    expect(rows(c)).toHaveLength(2);
   });
 
   it('records no-tests for a bug job that changes no test file, and runs nothing', () => {
@@ -131,7 +141,7 @@ describe('bug-fix regression evidence', () => {
     const c = job();
     const sha = commitFile(c.wt, 'src/lib.js', FIXED);
     const r = verify(store, c);
-    expect(r.status).toBe('passed');
+    expect(r.status).toBe('failed');
     expect(r.regression).toMatchObject({ status: 'no-tests', files: [], red: null, green: null });
     expect(rows(c)).toHaveLength(1);
     expect(existsSync(log(c, r.runId ?? 0, 'red'))).toBe(false);
