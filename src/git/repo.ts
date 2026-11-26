@@ -3,7 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 
 import { ToolError, ValidationError } from '../core/errors.ts';
-import { spawnTool } from '../core/exec.ts';
+import { spawnTool, type ToolResult } from '../core/exec.ts';
 import { canonicalPath, findProjectRoot } from '../core/paths.ts';
 import { git, tryGit } from './run.ts';
 
@@ -44,7 +44,20 @@ export function describeRepo(cwd: string): RepoInfo {
 
 /** The shared `.git` directory of a checkout or worktree, resolved to an absolute real path. */
 export function commonGitDir(cwd: string): string {
-  return canonicalPath(resolve(cwd, git(cwd, 'rev-parse', '--git-common-dir')));
+  const r = revParseCommonDir(cwd);
+  if (r.path === undefined)
+    throw new ToolError(`git rev-parse failed in ${cwd}: ${(r.stderr || r.stdout).trim()}`);
+  return r.path;
+}
+
+/**
+ * The one place that asks Git for the common directory and canonicalises the answer: `path` is set
+ * only when Git succeeded. Without `timeout`, `spawnTool`'s default bound applies.
+ */
+function revParseCommonDir(cwd: string, timeout?: number): ToolResult & { path?: string } {
+  const r = spawnTool('git', ['rev-parse', '--git-common-dir'], { cwd, timeout });
+  if (r.status !== 0) return r;
+  return { ...r, path: canonicalPath(resolve(cwd, r.stdout.trim())) };
 }
 
 /**
@@ -55,10 +68,8 @@ export function commonGitDirWithin(
   cwd: string,
   timeoutMs: number,
 ): string | undefined | { timedOut: true } {
-  const r = spawnTool('git', ['rev-parse', '--git-common-dir'], { cwd, timeout: timeoutMs });
-  if (r.timedOut) return { timedOut: true };
-  if (r.status !== 0) return undefined;
-  return canonicalPath(resolve(cwd, r.stdout.trim()));
+  const r = revParseCommonDir(cwd, timeoutMs);
+  return r.timedOut ? { timedOut: true } : r.path;
 }
 
 export interface CheckoutIdentity {
