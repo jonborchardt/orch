@@ -149,7 +149,8 @@ What the code guarantees (`drive` and `runQueue` in `src/ops/run.ts`):
   end-of-session summary lists it with its next step and the exit status is 1); only an outcome
   that would hit every ticket ends the run with that reason: claude cannot start, GitHub cannot
   be read or answers nothing, or refuses the merge call (`RUN_ENDING_CODES` in
-  `src/core/workflow.ts`); `stopped` ends it as a resumable stop; `orch stop next` ends it before
+  `src/core/workflow.ts`); a rebuilt `orch` or an invalid `factory.json` also ends it, resumably;
+  `stopped` ends it as a resumable stop; `orch stop next` ends it before
   the next ticket, and so does an empty ready queue;
 - `orch do <ticket>` runs that one ticket and exits, whatever its outcome;
 - it is not a daemon: nothing keeps running after the command exits.
