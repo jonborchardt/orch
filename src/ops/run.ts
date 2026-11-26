@@ -140,6 +140,8 @@ export interface RunSummary {
   reason: string;
   /** Ended by `orch stop` (or Ctrl+C): the session is left for `orch resume`. */
   stopped: boolean;
+  /** Ended run-wide by a rebuilt `orch` or a bad `factory.json`; left for `orch resume`. */
+  interrupted: boolean;
   attempted: number;
   /** Tickets whose merge was verified and whose lifecycle says done. */
   completed: number;
@@ -930,12 +932,14 @@ function summarize(
   session: RunnerSession,
   reason: string,
   stopped: boolean,
+  interrupted = false,
 ): RunSummary {
   const count = (...o: TicketOutcome[]) =>
     session.results.filter((r) => o.includes(r.outcome)).length;
   return {
     reason,
     stopped,
+    interrupted,
     attempted: session.results.length,
     completed: count('done'),
     blocked: count('blocked', 'needs-human', 'refused'),
@@ -999,13 +1003,15 @@ async function drive(
       }
     },
     environment: () => {
-      const bad = configProblem(store);
+      const bad = builtAt !== null && build() !== builtAt ? REBUILT_REASON : configProblem(store);
       halted =
-        builtAt !== null && build() !== builtAt
-          ? { kind: 'blocked', code: 'orch-rebuilt', reason: REBUILT_REASON }
-          : bad !== null
-            ? { kind: 'blocked', code: 'bad-config', reason: bad }
-            : null;
+        bad === null
+          ? null
+          : {
+              kind: 'blocked',
+              code: bad === REBUILT_REASON ? 'orch-rebuilt' : 'bad-config',
+              reason: bad,
+            };
       return halted;
     },
   };
@@ -1060,7 +1066,7 @@ async function drive(
     // before a ticket has none in flight, so the reason comes from here, not from a result.
     if (halted !== null) {
       run.save();
-      return summarize(store, session, halted.reason, false);
+      return summarize(store, session, halted.reason, false, true);
     }
     if (stopped || reason === null) {
       run.save(); // first: a lost lock leaves the stop request to the controller that has it

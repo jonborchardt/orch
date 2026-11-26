@@ -120,7 +120,8 @@ and `orch resume` then takes a stranded in-progress ticket first (decision
 2026-11-25-environment-stops-are-resumable).
 Those codes are `RUN_ENDING_CODES` in `src/core/workflow.ts`; a code not named there continues
 the queue (decision 2026-11-23-queue-ends-only-on-run-wide-outcomes). It exits 0 unless a ticket
-ended blocked, refused, or waiting for a person.
+ended blocked, refused, or waiting for a person, or the run stopped on a rebuild or a bad
+`factory.json` (`interrupted` in the JSON).
 
 The end-of-session summary (also `--json`, as `merged`) is the report to read after an
 unattended run, in four parts: **Merged**, each done ticket with its job, merged head, merge

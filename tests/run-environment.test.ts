@@ -102,6 +102,8 @@ describe('a rebuilt orch stops the session resumably', () => {
     expect(s.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([[first, 'done']]);
     expect(jobsOf(second)).toHaveLength(0);
     expect(readSession(store.paths)).toMatchObject({ finished: null, ticketId: null });
+    expect(s).toMatchObject({ stopped: false, interrupted: true, blocked: 0 });
+    expect(summaryExitCode(s)).toBe(1);
   });
 
   it('no build stamp at start never stops the run', async () => {
@@ -162,6 +164,8 @@ describe('a bad factory.json stops the session resumably', () => {
     expect(s.tickets).toHaveLength(0);
     expect(l.calls).toHaveLength(0);
     expect(readSession(store.paths)).toMatchObject({ finished: null, ticketId: null });
+    expect(s).toMatchObject({ stopped: false, interrupted: true });
+    expect(summaryExitCode(s)).toBe(1);
 
     // A run-wide result on record does not pass the ticket over either.
     const session = readSession(store.paths);
