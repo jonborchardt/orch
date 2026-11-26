@@ -250,6 +250,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
       repo: null,
       branch: null,
       branchUnpushed: false,
+      pushedHeads: [],
       logs: {},
     },
     session: null,
@@ -4356,6 +4357,7 @@ describe('Job detail: navigable PR, commit, and log references (todo 0019)', () 
         ...b.links,
         pr,
         repo,
+        pushedHeads: [c3],
         // What the server's isLogPath accepts of the paths below (tests/server.test.ts).
         logs: Object.fromEntries(
           ['ci/5555555/test.log', 'verification/12/check.log'].map((l) => [
@@ -4364,16 +4366,6 @@ describe('Job detail: navigable PR, commit, and log references (todo 0019)', () 
           ]),
         ),
       },
-      events: [
-        {
-          id: 1,
-          jobId: b.job.id,
-          type: 'branch.pushed',
-          payload: { branch: 'factory/x', head: c3 },
-          actor: null,
-          createdAt: b.job.updatedAt,
-        },
-      ],
       actions: ['merge'],
       ci: noCi({
         head: ciHead,
@@ -4523,11 +4515,23 @@ describe('Job detail: navigable PR, commit, and log references (todo 0019)', () 
     expect(git).toHaveTextContent('44444444 Local only');
   });
 
+  it('Git tab: the pushed head comes from links.pushedHeads, not the capped events (ticket 0079)', async () => {
+    await view(rich({ events: [] }));
+    await tab(/^Git/);
+    const git = must(screen.getByText(/^Worktree/).parentElement);
+    expect(within(git).getByRole('link', { name: commitName(c3) })).toHaveAttribute(
+      'href',
+      `${repo}/commit/${c3}`,
+    );
+    expect(within(git).queryByRole('link', { name: commitName(c4) })).toBeNull();
+    expect(git).toHaveTextContent('44444444 Local only');
+  });
+
   it('Git tab after a merge: the PR, merged head and commits linked; since-the-merge by R3 b', async () => {
     const [m1, m0, o3, o2, o1] = [sha('a'), sha('9'), sha('8'), sha('7'), sha('6')];
     const d = rich();
     d.job = { ...d.job, prState: 'merged' };
-    d.events = [{ ...must(d.events[0]), payload: { branch: 'factory/x', head: o2 } }];
+    d.links = { ...d.links, pushedHeads: [o2] };
     d.merge = {
       base: 'main',
       prUrl: pr,
