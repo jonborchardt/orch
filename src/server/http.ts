@@ -43,6 +43,7 @@ import {
   sessionLog,
   tokenUsage,
 } from './api.ts';
+import { health } from './health.ts';
 import type { ApiError, SessionInfo } from './types.ts';
 
 const HOST = '127.0.0.1';
@@ -259,6 +260,11 @@ export function startServer(opts: ServerOptions): Promise<RunningServer> {
         send(res, 200, tokenUsage(store, url.searchParams.get('hours')), {
           'X-Content-Type-Options': 'nosniff',
         });
+        return;
+      }
+      // Health series per UTC hour, from recorded events and rows: display only, never a write.
+      if (root === 'health' && !id) {
+        send(res, 200, health(store, url.searchParams.get('hours')));
         return;
       }
       // What `orch status` prints. Read-only: the controller is started and stopped from the CLI.
