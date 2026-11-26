@@ -4,7 +4,7 @@
  * local refs only. Read-only: it never fetches, pulls, or rebuilds, so the upstream is only as
  * fresh as the last fetch.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { installRoot } from '../core/paths.ts';
@@ -19,6 +19,20 @@ export interface InstallBuild {
 }
 
 export const BUILD_INFO = join('dist', 'build-info.json');
+
+/**
+ * The installed build's identity: the stamp's commit and the file's modification time, so a
+ * rebuild from the same commit differs too. Null when there is no stamp; never throws, runs no Git.
+ */
+export function buildStamp(root: string = installRoot()): string | null {
+  const file = join(root, BUILD_INFO);
+  try {
+    const { commit } = JSON.parse(readFileSync(file, 'utf8')) as { commit?: unknown };
+    return `${String(commit)}@${String(statSync(file).mtimeMs)}`;
+  } catch {
+    return null;
+  }
+}
 
 /** Null when there is no stamp or `root` is not a Git checkout; never throws. */
 export function installBuild(root: string = installRoot()): InstallBuild | null {

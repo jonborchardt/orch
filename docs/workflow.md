@@ -523,7 +523,8 @@ whose merge only a person can make is not taken again: Merge on the dashboard co
 by itself (decision 2026-11-24-default-needs-human-choices). Only an
 outcome that would hit every ticket ends the whole session there: `claude-failed`, `usage-limit`
 (left unfinished, so `orch resume` continues the same ticket),
-`github-unreadable`, `merge-no-answer`, or `github-refused` (`RUN_ENDING_CODES` in
+`github-unreadable`, `merge-no-answer`, `github-refused`, or, also left unfinished,
+`orch-rebuilt` and `bad-config` (decision 2026-11-25-environment-stops-are-resumable) (`RUN_ENDING_CODES` in
 `src/core/workflow.ts`; any other code continues, decision
 2026-11-23-queue-ends-only-on-run-wide-outcomes). Before a GitHub failure ends the run there,
 the controller retries one that `transientGitHubError` calls transient (5xx, GraphQL "Something

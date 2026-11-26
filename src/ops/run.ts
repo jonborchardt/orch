@@ -51,7 +51,7 @@ import { dispatchJob } from './dispatch.ts';
 import { loadConfig, resumeFactoryJob, specResumeSteps } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
 import { reconcileCi } from './github.ts';
-import { type InstallBuild, installBuild } from './install-build.ts';
+import { buildStamp, type InstallBuild, installBuild } from './install-build.ts';
 import { mailWatermark, reportJobMail, reportRunMail } from './mail.ts';
 import { mergeAuthorized, mergeJob } from './merge.ts';
 import { mergedHead } from './merge-view.ts';
@@ -95,6 +95,25 @@ const POLL_MS = 2000;
 const BEAT_MS = 30_000;
 /** The stop code of a child that hit a Claude usage or rate limit; the run stays resumable. */
 const USAGE_LIMIT = 'usage-limit';
+export const REBUILT_REASON = 'orch was rebuilt since this controller started; run orch resume';
+/**
+ * Run-wide stops that leave the session unfinished with its ticket in flight, for `orch resume`
+ * (decisions 2026-11-24-usage-limit-ends-run-resumably, 2026-11-25-environment-stops-are-resumable).
+ */
+const RESUMABLE_CODES: readonly string[] = [USAGE_LIMIT, 'orch-rebuilt', 'bad-config'];
+const resumable = (code: string | undefined): boolean =>
+  code !== undefined && RESUMABLE_CODES.includes(code);
+
+/** The validation message of a `factory.json` that `loadConfig` rejects, or null when it loads. */
+function configProblem(store: Store): string | null {
+  try {
+    loadConfig(store);
+    return null;
+  } catch (err) {
+    if (err instanceof ValidationError) return err.message;
+    throw err;
+  }
+}
 
 export interface RunOptions {
   /** Starts the Claude child; tests replace it. */
@@ -112,6 +131,8 @@ export interface RunOptions {
   ciMaxPolls?: number | undefined;
   /** Waits before retrying a transient GitHub failure; tests shorten it. Defaults to `GITHUB_BACKOFF_SECONDS`. */
   githubBackoff?: readonly number[] | undefined;
+  /** The installed build's identity (`buildStamp`); tests replace it. */
+  build?: (() => string | null) | undefined;
 }
 
 export interface RunSummary {
@@ -166,6 +187,11 @@ interface Run {
   /** Wait `seconds`, returning early once a stop-now request is seen. */
   wait(seconds: number): Promise<void>;
   pause(ms: number): Promise<unknown>;
+  /**
+   * Checked before each ticket and each child launch: a rebuilt `orch` or a `factory.json` that
+   * fails validation, as the run-wide stop it is; null when neither.
+   */
+  environment(): Blocked | null;
 }
 
 /** `code` says which budget or refusal stopped the job; it goes on `runner.stopped`. */
@@ -417,6 +443,8 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
           `(still ${job.stage}/${job.status})`,
       };
     }
+    const env = run.environment();
+    if (env !== null) return env;
     const before = progressOf(store, job);
     const startedMs = Date.now();
     const { exit, stopped, pid, sessionId } = await runChild(run, job);
@@ -670,6 +698,8 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       // Losing the claim to another process is an ordinary outcome: its job is the ticket's job.
       const other = showTicket(store, ticketId).ticket.activeJob;
       if (other !== null) return out('claimed', `job ${other} was created for it meanwhile`, other);
+      const bad = configProblem(store);
+      if (bad !== null) return out('blocked', bad, null, 'orch resume', 'bad-config');
       return out('refused', err.message, null);
     }
     run.log(`  job ${job.id}: dispatched${job.mode === 'fast' ? ' (fast)' : ''}`);
@@ -693,7 +723,7 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
         return out('stopped', 'stopped on request; the job is kept as it is', jobId, 'orch resume');
       }
       if (r.kind === 'blocked') {
-        const next = r.code === USAGE_LIMIT ? 'orch resume' : retry;
+        const next = resumable(r.code) ? 'orch resume' : retry;
         return out('blocked', r.reason, jobId, next, r.code);
       }
       const after = getJob(store.db, jobId);
@@ -744,8 +774,12 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
     // A lost lock is never a ticket result: it goes up to the command, which exits.
     if (err instanceof LostLockError || !(err instanceof OrchError)) throw err;
     // A job another session holds is left alone: `leave` writes nothing to it.
-    const code = err instanceof OwnershipError ? 'ownership' : 'error';
-    return out('blocked', err.message, jobId, retry, code);
+    if (err instanceof OwnershipError)
+      return out('blocked', err.message, jobId, retry, 'ownership');
+    // A config read deeper in the ticket failed: that is the run's problem, not the ticket's.
+    const bad = configProblem(store);
+    if (bad !== null) return out('blocked', bad, jobId, 'orch resume', 'bad-config');
+    return out('blocked', err.message, jobId, retry, 'error');
   }
 }
 
@@ -814,6 +848,9 @@ async function runQueue(
   for (;;) {
     if (run.stopNow()) return null;
     if (stopRequests(store.paths).next) return 'stopped after the current ticket (orch stop next)';
+    // Before any ticket is taken, and before `mergeNotEnabled` reads the config.
+    const env = run.environment();
+    if (env !== null) return env.reason;
     // A ticket passed over for a person whose job a person has since moved on is taken again
     // before anything else (decision 2026-11-24-default-needs-human-choices).
     const again = session.results.find((r) => awaitsPerson(r) && movedOn(store, r.jobId));
@@ -928,6 +965,11 @@ async function drive(
     session.beatAt = now();
     writeSession(paths, session);
   };
+  // The build this process's code came from; null (no stamp) turns the check off.
+  const build = opts.build ?? (() => buildStamp());
+  const builtAt = build();
+  // The run-wide stop an `environment` check found; it ends the session unfinished.
+  let halted = null as Blocked | null; // set from a closure: no narrowing to null
   // ponytail: a starter can take the next generation between a check and the write after it;
   // the next check stops this controller. Closing that gap needs a real mutex (a lock redesign).
   const run: Run = {
@@ -956,6 +998,16 @@ async function drive(
         await pause(Math.min(left, run.pollMs));
       }
     },
+    environment: () => {
+      const bad = configProblem(store);
+      halted =
+        builtAt !== null && build() !== builtAt
+          ? { kind: 'blocked', code: 'orch-rebuilt', reason: REBUILT_REASON }
+          : bad !== null
+            ? { kind: 'blocked', code: 'bad-config', reason: bad }
+            : null;
+      return halted;
+    },
   };
   // A stop-now request was for the controller alive when it was made.
   clearStop(paths, 'now');
@@ -978,8 +1030,8 @@ async function drive(
     run.assertOwned();
     await reportJobMail(store, mark);
     session.results = [...session.results.filter((r) => r.ticketId !== ticketId), result];
-    // A stopped or limit-hit ticket stays the one in flight, for `orch resume`.
-    if (result.outcome !== 'stopped' && result.code !== USAGE_LIMIT) {
+    // A stopped or resumably ended ticket stays the one in flight, for `orch resume`.
+    if (result.outcome !== 'stopped' && !resumable(result.code)) {
       session.ticketId = null;
       session.pick = null;
       session.jobId = null;
@@ -992,7 +1044,7 @@ async function drive(
     let reason: string | null = null;
     let stopped = false;
     const first = session.mode === 'ticket' ? session.ticket : resuming ? session.ticketId : null;
-    if (first !== null) {
+    if (first !== null && run.environment() === null) {
       // `orch resume` keeps how the ticket in flight was taken.
       const r = await attempt(first, session.mode === 'ticket' ? null : session.pick);
       if (r.outcome === 'stopped') stopped = true;
@@ -1000,9 +1052,15 @@ async function drive(
         reason = `ticket ${ticketKey(first)} is ${r.outcome}: ${r.reason}`;
       }
     }
-    if (!stopped && reason === null) {
+    if (!stopped && reason === null && halted === null) {
       reason = await runQueue(run, attempt);
       stopped = reason === null;
+    }
+    // Rebuilt or bad config: unfinished, so `orch resume` continues once the cause is gone. A stop
+    // before a ticket has none in flight, so the reason comes from here, not from a result.
+    if (halted !== null) {
+      run.save();
+      return summarize(store, session, halted.reason, false);
     }
     if (stopped || reason === null) {
       run.save(); // first: a lost lock leaves the stop request to the controller that has it
@@ -1014,10 +1072,10 @@ async function drive(
         true,
       );
     }
-    // Only a limit-hit ticket is still in flight here (`attempt`): the run ended on it, and the
-    // session stays unfinished with it, so `orch resume` continues it.
+    // Only a resumably ended ticket is still in flight here (`attempt`): the run ended on it, and
+    // the session stays unfinished with it, so `orch resume` continues it.
     const limited = session.results.find(
-      (r) => r.ticketId === session.ticketId && r.code === USAGE_LIMIT,
+      (r) => r.ticketId === session.ticketId && resumable(r.code),
     );
     if (limited !== undefined) {
       run.save();

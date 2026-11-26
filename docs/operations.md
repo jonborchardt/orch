@@ -113,7 +113,11 @@ GitHub cannot be read or gives no answer (`github-unreadable`, `merge-no-answer`
 refuses the merge call (`github-refused`). A `usage-limit` stop leaves the session unfinished
 with its ticket in flight: the summary names the limit and its reset time when Claude printed
 one, and `orch resume` continues the same ticket and job once the limit has reset (decision
-2026-11-24-usage-limit-ends-run-resumably).
+2026-11-24-usage-limit-ends-run-resumably). The same holds when `orch` was rebuilt since the
+controller started (`orch-rebuilt`) or `factory.json` fails validation (`bad-config`), both
+checked before each ticket and each Claude launch; a stop before a ticket leaves none in flight,
+and `orch resume` then takes a stranded in-progress ticket first (decision
+2026-11-25-environment-stops-are-resumable).
 Those codes are `RUN_ENDING_CODES` in `src/core/workflow.ts`; a code not named there continues
 the queue (decision 2026-11-23-queue-ends-only-on-run-wide-outcomes). It exits 0 unless a ticket
 ended blocked, refused, or waiting for a person.
@@ -347,7 +351,8 @@ Each ticket the controller attempts ends with one outcome (`TICKET_OUTCOMES` in
 
 The one exception is a result whose code would hit every ticket (`RUN_ENDING_CODES` in
 `src/core/workflow.ts`: `claude-failed`, `usage-limit`, `github-unreadable`, `merge-no-answer`,
-`github-refused`): it ends the run with the reason; after `usage-limit` the run stays resumable.
+`github-refused`, `orch-rebuilt`, `bad-config`): it ends the run with the reason; after
+`usage-limit`, `orch-rebuilt`, or `bad-config` the run stays resumable.
 A GitHub failure that `transientGitHubError` calls transient (5xx, GraphQL "Something went
 wrong", timeouts, network errors; never a refusal or a rate limit) is first retried after 1, 2, 4,
 8, and 16 minutes (`GITHUB_BACKOFF_SECONDS`, decision 2026-11-25-bounded-github-retry); `orch stop`
