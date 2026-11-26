@@ -683,6 +683,16 @@ test('tickets: the queue lists the seeded tickets, one opens, and the list comes
   await expect(page.getByRole('checkbox')).toBeDisabled();
   await page.getByRole('link', { name: '← Tickets' }).click();
   await expect(table.getByRole('row')).toHaveCount(3);
+  // The dependency is removed by the button named after it; nothing later reads it.
+  await table.getByRole('link', { name: 'Seeded ticket two' }).click();
+  const dependsOn = page
+    .getByRole('region', { name: 'Links' })
+    .getByText('Depends on', { exact: true })
+    .locator('..');
+  await expect(dependsOn).toContainText('0001');
+  await page.getByRole('button', { name: 'Remove dependency on 0001' }).click();
+  await expect(dependsOn).toHaveText('Depends onnone');
+  await expect(page).toHaveURL(/#\/tickets\/2$/);
   // The existing section is one click away and unchanged.
   await page
     .getByRole('navigation', { name: 'Sections' })

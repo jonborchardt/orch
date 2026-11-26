@@ -12,6 +12,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
   LinearProgress,
   Link,
   Stack,
@@ -23,7 +24,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { type ReactNode, useCallback, useState } from 'react';
+import { Fragment, type ReactNode, useCallback, useState } from 'react';
 
 import type {
   Area,
@@ -417,22 +418,30 @@ export function TicketDetail({
       </Typography>
     ) : (
       ids.map((n) => (
-        <Chip
-          key={n}
-          component="a"
-          href={ticketHref(n)}
-          clickable
-          variant="outlined"
-          label={`${ticketKey(n)} ${titleOf(n) ?? ''}`.trim()}
-          sx={{ maxWidth: 320 }}
-          {...(remove && {
-            onDelete: (e: React.SyntheticEvent) => {
-              e.preventDefault();
-              void link(remove, false, n);
-            },
-            'aria-description': 'Press Delete to remove this link',
-          })}
-        />
+        <Fragment key={n}>
+          <Chip
+            component="a"
+            href={ticketHref(n)}
+            clickable
+            variant="outlined"
+            label={`${ticketKey(n)} ${titleOf(n) ?? ''}`.trim()}
+            sx={{ maxWidth: 320 }}
+          />
+          {remove && (
+            // A sibling of the link, never inside it: a native button with its own name.
+            <IconButton
+              size="small"
+              aria-label={`Remove ${remove === 'dep' ? 'dependency on' : 'related ticket'} ${ticketKey(n)}`}
+              disabled={busy}
+              onClick={() => {
+                void link(remove, false, n);
+              }}
+              sx={{ ml: -0.5 }}
+            >
+              <span aria-hidden>×</span>
+            </IconButton>
+          )}
+        </Fragment>
       ))
     );
   const linkRow = (label: string, body: ReactNode) => (
