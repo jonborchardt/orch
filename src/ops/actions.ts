@@ -47,7 +47,6 @@ import { addArtifact } from './gates.ts';
 import { completionFor, mergeJob, type MergeResult, relandJob, ticketText } from './merge.ts';
 import { worktreeOf } from './tree.ts';
 import { candidatePolicy } from './verify.ts';
-import { launchFor } from './dispatch.ts';
 import { planJob } from './factory.ts';
 import { controllerContinues } from './runner-state.ts';
 import {
@@ -586,13 +585,12 @@ function reland(store: Store, before: Job, force: boolean | undefined): ActionRe
     }
     return relandJob(store, before, token, DASHBOARD_SESSION);
   });
-  const launch = launchFor(created);
   return {
     job: withoutToken(getJob(store.db, before.id)),
     message:
       `Created ${created.id} to re-land this work on ${before.baseBranch}; this job is marked ` +
       `superseded by it. No session was started: start it in a new Claude Code session with ` +
-      `/factory ${created.id} (or ${launch.fallback[0] ?? ''}). Once its PR merges, close the old ` +
+      `/factory ${created.id}. Once its PR merges, close the old ` +
       `PR: gh pr close ${url} --comment "Superseded by <new PR url>."`,
     resumeCommand: `/factory ${created.id}`,
   };

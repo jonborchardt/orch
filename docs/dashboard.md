@@ -591,8 +591,9 @@ as read-only boxes and are changed by editing the Markdown. Start, Done, Drop, M
 and Reopen are offered by status and run the ticket's lifecycle action (Drop and Mark duplicate
 ask first; Start marks the ticket in progress and starts no job); a transition the server refuses
 is shown in its own words. Links lists what the ticket depends on, what it blocks, and what it is
-related to, each a link; a ticket id and Add dependency or Add related adds one, and the delete on
-a Depends on or Related chip removes it (Blocks chips have none: that link belongs to the other
+related to, each a link; a ticket id and Add dependency or Add related adds one, and the
+`Remove dependency on <key>` or `Remove related ticket <key>` button after a Depends on or Related
+chip removes it, leaving focus in that row (Blocks chips have none: that link belongs to the other
 ticket). Jobs lists every job that worked on the ticket with its stage, status, PR
 state, and supersession, each linked to its job detail; a job's header links back to its ticket.
 Merge receipt (only once a job of the ticket completed) renders `receipt.markdown` from

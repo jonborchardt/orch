@@ -246,28 +246,20 @@ blank description is refused (exit 2) and nothing is created. `orch factory star
 creates the job for a ticket and marks the ticket in progress in the same transaction.
 
 Run a single job in the interactive session: it shows progress and you can type to it. A headless
-`claude -p` session cannot be messaged; use headless sessions or dispatch for several jobs at once.
+`claude -p` session cannot be messaged; for unattended work use the controller (`orch start`, `orch do <ticket>`), one ticket at a time.
 Either way, `orch factory next` shows the session outside events on its next call (base moved, PR
 merged, cancelled) and any message left with `orch job notice post <id> --message "<text>"`, until
 the session acknowledges it ([workflow.md](workflow.md#session-notices)).
 
-**Dispatching several jobs.** From one session in VS Code's Agents window:
-
-```
-/factory dispatch #123 in E:\code\repo-b, #45 in ..\repo-c, and this repository: add CSV export
-```
-
-For each target the skill runs `orch factory dispatch`, which checks the repository the way
-`orch init --check` does and creates the job (nothing else: no claim, no worktree, no session), then
-asks VS Code's `create_session` tool for an independent session on that repository with its own
-worktree. The child's `/factory <id>` adopts that worktree as the job's and runs the job; the parent
-goes back to its own work. Repeating a dispatch for the same repository and issue returns the
-existing job. `orch factory list` shows one row per job with its stage, status, whether a human is
-needed (ACTION), PR, and title; `--json` adds the owner, the attached session, and the resume
-command for jobs no live session holds. The host cannot be pointed at an existing worktree, which
-is why `orch` lets it create one ([session-launch.md](session-launch.md)). Outside the Agents
-window dispatch prints the command for a person to run. Archiving a dispatched session in VS Code
-removes that session's worktree, which is the job's worktree.
+**Several jobs.** The skill no longer launches sessions for other jobs (decision
+[2026-11-25-retire-dispatch-launch](decisions/2026-11-25-retire-dispatch-launch.md)). File each
+request as a ticket and run `orch start` or `orch do <ticket>`, or run `/factory <job>` in one
+interactive session per job. `orch factory dispatch` still creates a job without claiming it
+(no worktree, no session); repeating it for the same repository and issue returns the existing
+job. `orch factory list` shows one row per job with its stage, status, whether a human is needed
+(ACTION), PR, and title; `--json` adds the owner, the attached session, and the resume command for
+jobs no live session holds. Archiving a VS Code session whose worktree a job adopted removes that
+worktree, which is the job's worktree.
 
 **Inspecting and resuming a job.**
 

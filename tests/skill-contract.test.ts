@@ -118,7 +118,6 @@ describe('skill', () => {
     const body = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
     for (const cmd of [
       'orch factory start',
-      'orch factory dispatch',
       'orch factory list',
       'orch factory next',
       'orch factory resume',
@@ -138,6 +137,21 @@ describe('skill', () => {
     expect(body).toContain('--force');
     expect(body).toContain('clearly died');
     expect(body.toLowerCase()).toContain('cannot restart');
+    // Decision 2026-11-25-retire-dispatch-launch: the skill starts no session for a job.
+    for (const gone of [
+      'dispatch <targets>',
+      '## 2b',
+      'step 2b',
+      'create_session',
+      'launch.fallback',
+      'orch factory dispatch',
+      'never starts a Claude process',
+    ]) {
+      expect(body, gone).not.toContain(gone);
+    }
+    expect(body.replace(/\s+/g, ' ')).toContain(
+      'Only the foreground factory controller (`orch start`, `orch do`, `orch resume`) starts a Claude process, through `launchClaude`',
+    );
   });
 
   it('records the claude-code session before the vscode-agents one, for the Session tab', () => {

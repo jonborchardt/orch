@@ -204,7 +204,7 @@ orch factory start  --title <t> --description <d> | --issue <ref> [--title <t>] 
                     [--repo <path>] [--base <b>] [--max-rounds <n>] [--session <name>] [--ui|--no-ui]
 orch factory dispatch --title <t> --description <d> | --issue <ref> [--title <t>] [--description <d>]
                     [--repo <path>] [--base <b>]
-                    [--max-rounds <n>] [--session <name>]   # job for another repo; an independent session runs it
+                    [--max-rounds <n>] [--session <name>]   # unclaimed job for another repo; /factory <id> or orch do <ticket> runs it
 orch factory list   [--repo <path|identity>]              # one row per job: stage, status, action, PR, title
 orch factory next|status <id> [--ui|--no-ui]          # where, what blocks, next step, numbered commands; --json for the full plan
 orch factory resume <id> [--session <name>] [--to <stage> [--release]] [--force] [--ui|--no-ui] [--adopt <worktree>]   # --to gives the job up again (token: null); --release is redundant

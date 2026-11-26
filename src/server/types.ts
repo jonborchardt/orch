@@ -275,7 +275,8 @@ export interface JobDetailView {
    * detail view uses it. `repo` is `https://github.com/<owner>/<repo>` for a github.com identity and
    * null for any other remote; commit links are built from it alone. `branchUnpushed` is true
    * when a github.com job has no PR and no `branch.pushed` event, so `branch` has no link yet.
-   * `logs` maps each log-shaped verification check `outputPath` and CI failure `log` to its
+   * `pushedHeads` is the string `head` of every `branch.pushed` event, newest first. These three
+   * come from the job's full event history, not the timeline cap. `logs` maps each log-shaped verification check `outputPath` and CI failure `log` to its
    * artifact route; a path missing from it is not served and is shown as text.
    */
   links: {
@@ -285,6 +286,7 @@ export interface JobDetailView {
     repo: string | null;
     branch: string | null;
     branchUnpushed: boolean;
+    pushedHeads: string[];
     logs: Record<string, string>;
   };
   /** Current execution session, or null when none was ever attached. */

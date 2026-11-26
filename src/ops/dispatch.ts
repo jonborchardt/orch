@@ -1,12 +1,10 @@
 /**
- * Dispatch: prepare a factory job for another repository (or this one) so that an independent
- * session can run it, and give the initiating session a view of all its jobs.
+ * Dispatch: create a factory job for another repository (or this one) without claiming it, and
+ * give a session a view of all its jobs.
  *
  * Dispatch creates the job and nothing else. It does not claim it, create a worktree, or start a
- * session: the session mechanism that is actually supported here (VS Code's Agents window, through
- * the host's `create_session` tool) creates its own worktree of the repository before the session
- * starts, and the child's `orch factory resume --adopt <that worktree>` records it. The result
- * carries exactly what the launcher needs: the workspace, the prompt, and fallbacks.
+ * session: the factory controller (`orch start`, `orch do`) or an interactive `/factory <id>`
+ * runs it (decision 2026-11-25-retire-dispatch-launch).
  */
 import { ValidationError } from '../core/errors.ts';
 import { leaseExpired } from '../core/ownership.ts';
@@ -42,47 +40,17 @@ export interface DispatchInput {
   cwd: string;
 }
 
-export interface Launch {
-  /** Repository root: the workspace an independent session is created for. */
-  workspace: string;
-  /** The session needs its own worktree of that workspace (`create_session` `worktree: true`). */
-  worktree: true;
-  title: string;
-  /** Initial prompt: the skill command plus one line of context. */
-  prompt: string;
-  /** Equivalent launches when the host tool is unavailable; the human runs one of them. */
-  fallback: string[];
-}
-
 export interface DispatchResult {
   job: Job;
   /** True when an active job for the same repository and issue already existed; nothing was created. */
   duplicate: boolean;
   readiness: Readiness;
-  launch: Launch;
 }
 
 /** `#45`, `45` → `#45`; URLs and other references stay as written. */
 export function normalizeIssue(ref: string): string {
   const m = /^#?(\d+)$/.exec(ref.trim());
   return m ? `#${m[1] ?? ''}` : ref.trim();
-}
-
-export function launchFor(job: Job): Launch {
-  const id = job.id;
-  return {
-    workspace: job.repoPath,
-    worktree: true,
-    title: `factory ${id}: ${job.title}`.slice(0, 80),
-    prompt:
-      `/factory ${id}\n\n` +
-      `Factory job ${id} for ${job.repo}: ${job.title}. Run it from the worktree this session ` +
-      'was created in (the skill adopts it as the job worktree) and stop when the job needs a human.',
-    fallback: [
-      `cd "${job.repoPath}" && claude --worktree ${id} "/factory ${id}"   # terminal session in its own worktree`,
-      `code --agents "${job.repoPath}"   # VS Code Agents window: New Session > New Worktree, then: /factory ${id}`,
-    ],
-  };
 }
 
 /**
@@ -119,10 +87,10 @@ export function dispatchJob(store: Store, input: DispatchInput): DispatchResult 
     const existing = findJobs(store, { repo: repo.root }).find(
       (j) => j.issueRef === issue && !TERMINAL_STATUSES.includes(j.status),
     );
-    if (existing) return { job: existing, duplicate: true, readiness, launch: launchFor(existing) };
+    if (existing) return { job: existing, duplicate: true, readiness };
   }
   const job = createRequestedJob(store, { ...input, issueRef: issue, forTicket, repo, base });
-  return { job, duplicate: false, readiness, launch: launchFor(job) };
+  return { job, duplicate: false, readiness };
 }
 
 export interface FactoryRow {

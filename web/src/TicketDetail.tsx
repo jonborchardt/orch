@@ -12,6 +12,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
   LinearProgress,
   Link,
   Stack,
@@ -23,7 +24,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { type ReactNode, useCallback, useState } from 'react';
+import { Fragment, type ReactNode, useCallback, useId, useState } from 'react';
 
 import type {
   Area,
@@ -295,6 +296,7 @@ export function TicketDetail({
   const [duplicateOf, setDuplicateOf] = useState('');
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState(false);
+  const linkRowId = useId();
 
   const back = (
     <Link href="#/tickets" underline="hover">
@@ -410,44 +412,69 @@ export function TicketDetail({
 
   const link = (kind: 'dep' | 'related', add: boolean, n: number | string) =>
     act({ action: `${kind}-${add ? 'add' : 'remove'}`, target: n });
-  const chips = (ids: readonly number[], remove?: 'dep' | 'related') =>
-    ids.length === 0 ? (
+  const chips = (ids: readonly number[], remove?: 'dep' | 'related') => {
+    const removes = remove === 'dep' ? 'dependency on' : 'related ticket';
+    return ids.length === 0 ? (
       <Typography component="span" color="text.secondary">
         none
       </Typography>
     ) : (
       ids.map((n) => (
-        <Chip
-          key={n}
-          component="a"
-          href={ticketHref(n)}
-          clickable
-          variant="outlined"
-          label={`${ticketKey(n)} ${titleOf(n) ?? ''}`.trim()}
-          sx={{ maxWidth: 320 }}
-          {...(remove && {
-            onDelete: (e: React.SyntheticEvent) => {
-              e.preventDefault();
-              void link(remove, false, n);
-            },
-            'aria-description': 'Press Delete to remove this link',
-          })}
-        />
+        <Fragment key={n}>
+          <Chip
+            component="a"
+            href={ticketHref(n)}
+            clickable
+            variant="outlined"
+            label={`${ticketKey(n)} ${titleOf(n) ?? ''}`.trim()}
+            sx={{ maxWidth: 320 }}
+          />
+          {remove && (
+            // A sibling of the link, never inside it: a native button with its own name.
+            <IconButton
+              size="small"
+              aria-label={`Remove ${removes} ${ticketKey(n)}`}
+              disabled={busy}
+              onClick={(e) => {
+                const button = e.currentTarget;
+                const row = button.parentElement;
+                void link(remove, false, n).then((ok) => {
+                  // The button is about to go with its link: focus stays in its row instead of
+                  // falling to the page. A refused removal, or focus the user has moved, is left.
+                  const at = document.activeElement;
+                  if (ok && (at === button || at === document.body)) row?.focus();
+                });
+              }}
+              sx={{ ml: -0.5 }}
+            >
+              <span aria-hidden>×</span>
+            </IconButton>
+          )}
+        </Fragment>
       ))
     );
-  const linkRow = (label: string, body: ReactNode) => (
-    <Stack
-      direction="row"
-      spacing={0.75}
-      useFlexGap
-      sx={{ alignItems: 'center', flexWrap: 'wrap', my: 0.5 }}
-    >
-      <Typography sx={{ minWidth: 90 }} color="text.secondary">
-        {label}
-      </Typography>
-      {body}
-    </Stack>
-  );
+  };
+  const linkRow = (label: string, body: ReactNode) => {
+    const labelId = `${linkRowId}-${label.replace(/\s/g, '-')}`;
+    return (
+      // Focusable from code only: where focus lands when one of the row's links is removed. A
+      // group named by its label, so that focus has something to announce.
+      <Stack
+        tabIndex={-1}
+        role="group"
+        aria-labelledby={labelId}
+        direction="row"
+        spacing={0.75}
+        useFlexGap
+        sx={{ alignItems: 'center', flexWrap: 'wrap', my: 0.5 }}
+      >
+        <Typography id={labelId} sx={{ minWidth: 90 }} color="text.secondary">
+          {label}
+        </Typography>
+        {body}
+      </Stack>
+    );
+  };
 
   return (
     <Box sx={{ p: 2, maxWidth: 1100, overflowWrap: 'anywhere' }}>
