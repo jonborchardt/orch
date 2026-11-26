@@ -999,11 +999,23 @@ describe('ticket detail', () => {
     expect(links().getByLabelText('Ticket id')).toHaveValue('');
 
     const chip = links().getByRole('link', { name: /0003 Refactor store/ });
-    fireEvent.click(within(chip).getByTestId('CancelIcon'));
+    const remove = links().getByRole('button', { name: 'Remove dependency on 0003' });
+    // A native button after the link, not inside it; the chip itself is only a link.
+    expect(remove.tagName).toBe('BUTTON');
+    expect(remove.previousElementSibling).toBe(chip);
+    expect(chip).toHaveAttribute('href', '#/tickets/3');
+    expect(chip).not.toHaveAttribute('aria-description');
+    expect(chip.querySelector('svg')).toBeNull();
+    const before = db.posts.length;
+    fireEvent.click(remove);
+    // Disabled while the action is in flight: a second click posts nothing.
+    expect(remove).toBeDisabled();
+    fireEvent.click(remove);
     await waitFor(() => {
       expect(links().queryByRole('link', { name: /0003/ })).toBeNull();
     });
     expect(lastPost()?.body).toEqual({ action: 'dep-remove', target: 3, revision: 2 });
+    expect(db.posts).toHaveLength(before + 1);
     expect(window.location.hash).toBe('#/tickets/2');
 
     db.refuse = {
@@ -1024,6 +1036,65 @@ describe('ticket detail', () => {
     await waitFor(() => {
       expect(lastPost()?.body).toMatchObject({ action: 'related-add', target: '9' });
     });
+  });
+
+  it('names each removal control after the link it removes, and gives Blocks none', async () => {
+    const byId = (id: number) => {
+      const t = db.tickets.find((x) => x.id === id);
+      if (!t) throw new Error(`fixture has no ticket ${String(id)}`);
+      return t;
+    };
+    byId(2).related = [4];
+    byId(5).dependsOn = [2]; // so the Blocks row of ticket 2 has an entry
+    mount('#/tickets/2');
+    await header();
+    const links = within(screen.getByRole('region', { name: 'Links' }));
+    expect(links.getByRole('link', { name: /0005 Needs a person/ })).toBeInTheDocument();
+    expect(
+      links.getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent),
+    ).toEqual([
+      'Remove dependency on 0003',
+      'Remove related ticket 0004',
+      'Add dependency',
+      'Add related',
+    ]);
+    expect(links.getByRole('button', { name: 'Remove related ticket 0004' })).toBeEnabled();
+  });
+
+  it('keeps focus in the row after a removal, and where it was after a refused one', async () => {
+    const two = db.tickets.find((x) => x.id === 2);
+    if (!two) throw new Error('fixture has no ticket 2');
+    two.dependsOn = [1, 3];
+    mount('#/tickets/2');
+    await header();
+    const links = within(screen.getByRole('region', { name: 'Links' }));
+    // jsdom does not turn Enter into a click; a focused native button's activation is one.
+    const press = (name: string) => {
+      const button = links.getByRole('button', { name });
+      button.focus();
+      expect(button).toHaveFocus();
+      fireEvent.click(button);
+      return button;
+    };
+
+    db.refuse = { status: 422, type: 'ValidationError', message: 'Nothing was changed.' };
+    const refused = press('Remove dependency on 0001');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Nothing was changed.');
+    await waitFor(() => {
+      expect(refused).toBeEnabled();
+    });
+    expect(refused).toHaveFocus();
+
+    // The row itself, which outlives the button and is not a Tab stop, gets the focus.
+    press('Remove dependency on 0001');
+    await waitFor(() => {
+      expect(links.queryByRole('link', { name: /0001/ })).toBeNull();
+    });
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toHaveTextContent(/^Depends on.*0003/);
+    expect(document.activeElement).toHaveAttribute('tabindex', '-1');
+    // Named, so a screen reader has something to announce where focus landed.
+    expect(links.getByRole('group', { name: 'Depends on' })).toHaveFocus();
   });
 
   it('offers the lifecycle actions of the status, confirms the consequential ones, and shows a refusal', async () => {
