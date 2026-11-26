@@ -22,8 +22,17 @@ import {
   useCiAuthority,
   verify,
 } from './drive.ts';
-import { commitFile, gitIn } from './helpers.ts';
-import { checks, clone, job, reconcile, run, store } from './ci-fixture.ts';
+import { gitIn } from './helpers.ts';
+import {
+  advanceBase,
+  checks,
+  clone,
+  eventTypes,
+  job,
+  reconcile,
+  run,
+  store,
+} from './ci-fixture.ts';
 
 /** A ci-authority job whose pre-review pr/ci pass passed: in review, pending. */
 function toReviewAfterCi(): Ctx {
@@ -48,11 +57,6 @@ function toApprove(): Ctx {
   return c;
 }
 
-function advanceBase(file = 'docs/notes.md', body = 'upstream\n'): void {
-  commitFile(clone, file, body, `base: ${file}`);
-  gitIn(clone, 'push', '-q', 'origin', 'main');
-}
-
 /** One clean recorded integration; the job stays where it is. Returns the merge commit. */
 function integrateClean(c: Ctx): string {
   const stage = job(c).stage;
@@ -71,9 +75,6 @@ function approveAndDeliver(c: Ctx): void {
   deliverPr(store, c);
   go(store, c, 'start');
 }
-
-const events = (c: Ctx) => listEvents(store.db, c.id, 1000);
-const eventTypes = (c: Ctx) => events(c).map((e) => e.type);
 
 function expectCompletedAt(c: Ctx, merge: string): void {
   checks(merge, [run('test', 'success')]);
@@ -116,7 +117,7 @@ describe('authority ci: a clean base integration after the pre-review CI pass', 
     expect(r.integration).toMatchObject({ status: 'merged', material: ['src/export.ts'] });
     expect(r.next).toBe('rework');
     expect(job(c)).toMatchObject({ stage: 'build', status: 'pending' });
-    const reworked = events(c).filter((e) => e.type === 'job.reworked');
+    const reworked = listEvents(store.db, c.id, 1000).filter((e) => e.type === 'job.reworked');
     expect(reworked.at(-1)?.payload).toMatchObject({ from: 'approve', integration: true });
   });
 

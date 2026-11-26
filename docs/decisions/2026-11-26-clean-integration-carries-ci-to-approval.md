@@ -30,8 +30,5 @@ gate.
 **Why.** A clean merge of the base is mechanical: its content is the reviewed head plus commits
 that already passed the base's own checks. Before this, every base move during review or approve in
 a `ci`-authority repository ended in `needs-human`, because the only way to get CI for the merge
-commit before approval was a person's `resume --to pr`; job-f6b197cf (ticket 0162) waited a night
-for that click with every reviewer passing. The pass a person started is the same pr/ci pass that
-follows approval anyway, so only the click goes away; the evidence does not. Running a pr/ci pass
-before approval instead (approve → pr → ci → approve) would need a new transition and stage
-machinery for the same evidence one stage earlier, so it was not chosen.
+commit before approval was a person's `resume --to pr`. The pass a person started is the same pr/ci
+pass that follows approval anyway, so only the click goes away; the evidence does not.

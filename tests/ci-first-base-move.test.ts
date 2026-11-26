@@ -9,7 +9,6 @@ import { describe, expect, it } from 'vitest';
 import { ValidationError } from '../src/core/errors.ts';
 import { integrateBase } from '../src/ops/worktree.ts';
 import { findArtifact } from '../src/storage/artifacts.ts';
-import { listEvents } from '../src/storage/events.ts';
 import {
   add,
   type Ctx,
@@ -22,8 +21,17 @@ import {
   verdict,
   verify,
 } from './drive.ts';
-import { commitFile, gitIn } from './helpers.ts';
-import { checks, clone, job, reconcile, run, store } from './ci-fixture.ts';
+import { gitIn } from './helpers.ts';
+import {
+  advanceBase,
+  checks,
+  clone,
+  eventTypes,
+  job,
+  reconcile,
+  run,
+  store,
+} from './ci-fixture.ts';
 
 /** A ci-authority job through build and simplify, in pr, running; returns simplify.md's head. */
 function toPr(): { c: Ctx; simplified: string } {
@@ -33,11 +41,6 @@ function toPr(): { c: Ctx; simplified: string } {
   expect(job(c)).toMatchObject({ stage: 'pr', status: 'pending' });
   go(store, c, 'start');
   return { c, simplified: head(c.wt) };
-}
-
-function advanceBase(): void {
-  commitFile(clone, 'docs/notes.md', 'upstream\n', 'base: notes');
-  gitIn(clone, 'push', '-q', 'origin', 'main');
 }
 
 /** Verify, the pre-review pr pass, CI passing for HEAD: the job is in review, running, verdicts in. */
@@ -52,8 +55,6 @@ function preReviewToVerdicts(c: Ctx): void {
   for (const r of ['security', 'correctness', 'code-quality']) verdict(store, c, r);
   add(store, c, 'round-1/consolidated.md');
 }
-
-const eventTypes = (c: Ctx) => listEvents(store.db, c.id, 1000).map((e) => e.type);
 
 describe('authority ci: a base merge between simplify and review', () => {
   it('a clean base merge in pr keeps simplify.md valid: review completes to approve', () => {

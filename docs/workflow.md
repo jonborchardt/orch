@@ -1073,13 +1073,9 @@ proposed one is accepted. Nothing is invented.
   where required checks on the base branch run the full suite.
 
 One exception carries the CI pass forward: when HEAD is the result of exactly one clean
-`orch worktree integrate` recorded from `ciHead` (an `integrations` row with status `merged` and
-no edits inside the merge commit, nothing but `up-to-date` rows after it), review and approve
-complete for that merge commit (`ciCarriesThroughIntegration` in `src/core/workflow.ts`). The
-pr/ci pass after approval then checks the merge commit itself, and nothing completes or merges
-without CI passing on it. The bound is one integration per CI pass: a second one before CI re-ran,
-an edited merge, or a merge made by hand is refused as before, and a human runs `resume --to pr`
-(decision
+`orch worktree integrate` recorded from `ciHead`, review and approve complete for that merge
+commit, and the pr/ci pass after approval checks it. The bound is one integration per CI pass; a
+second one, an edited merge, or a merge made by hand is refused as before (decision
 [2026-11-26-clean-integration-carries-ci-to-approval](decisions/2026-11-26-clean-integration-carries-ci-to-approval.md)).
 
 Any commit moves HEAD, so a repair, a commit during review, or a commit after approval makes the
