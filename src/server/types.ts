@@ -552,3 +552,32 @@ export interface UsageView {
   /** Jobs whose span overlaps the range and that have a claude-code session, by id. */
   jobs: UsageJobRow[];
 }
+
+/** One plottable health series; `ms` and `rounds` are medians, `count` a count. */
+export interface HealthSeries {
+  id: string;
+  label: string;
+  group: 'errors' | 'reviewers' | 'throughput';
+  unit: 'count' | 'ms' | 'rounds';
+}
+
+export interface HealthBucket {
+  /** ISO start of the UTC hour. */
+  hour: string;
+  /** One key per series: a count (0 when empty) or a median (null when there are no spans). */
+  values: Record<string, number | null>;
+}
+
+/**
+ * `GET /api/health?hours=<24|168|720>`: errors and stops, reviewer effectiveness, and throughput
+ * per UTC hour, derived from recorded events and rows. Display only.
+ */
+export interface HealthView {
+  hours: UsageRange;
+  /** Oldest bucket first; the last is the current, partial hour. */
+  buckets: HealthBucket[];
+  /** `stop.<code>` series appear only for codes seen in the range; the rest are fixed. */
+  series: HealthSeries[];
+  /** Counts summed over the range; medians taken over every span in the range. */
+  total: Record<string, number | null>;
+}
