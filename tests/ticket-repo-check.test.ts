@@ -1,6 +1,7 @@
 /** The ticket readiness repository check: per-call budget and the timeout memo (ticket 0101). */
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { ToolError } from '../src/core/errors.ts';
 import { blockReasons } from '../src/core/tickets.ts';
 import { commonGitDir, commonGitDirWithin } from '../src/git/repo.ts';
 import {
@@ -121,5 +122,17 @@ describe('commonGitDirWithin', () => {
     const repo = makeRepo();
     expect(commonGitDirWithin(repo, REPO_CHECK_BUDGET_MS)).toBe(commonGitDir(repo));
     expect(commonGitDirWithin(tempDir(), REPO_CHECK_BUDGET_MS)).toBeUndefined();
+  });
+
+  it('commonGitDir throws a ToolError carrying the Git error text outside a repository', () => {
+    let thrown: unknown;
+    try {
+      commonGitDir(tempDir());
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ToolError);
+    expect((thrown as ToolError).message).toMatch(/^git rev-parse failed in /);
+    expect((thrown as ToolError).message).toMatch(/not a git repository/i);
   });
 });
