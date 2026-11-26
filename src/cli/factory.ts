@@ -49,8 +49,8 @@ export const FACTORY_HELP = `Usage: orch factory <command> [options]
   dispatch (--title <t> --description <d> | --issue <ref> | --ticket <id>) [--title <t>]
           [--description <d>] [--repo <path>] [--base <branch>] [--max-rounds <n>]
           [--session <name>]
-                              Create a job for another (or this) repository that an independent
-                              session will run; print what that session needs (workspace, prompt).
+                              Create an unclaimed job for another (or this) repository;
+                              /factory <id> in a session or orch do <ticket> runs it.
                               Refused unless the repository's factory.json is ready. Nothing is
                               claimed, no worktree is made, no session is started.
   list [--repo <path|identity>]

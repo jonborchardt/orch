@@ -1,5 +1,8 @@
 # 51. Dispatch prepares a job; the harness starts the session; the child adopts the worktree (Phase 3)
 
+**Later note (2026-11-25).** The session launch (the skill calling `create_session`, the printed
+fallbacks) is retired: see [2026-11-25-retire-dispatch-launch](2026-11-25-retire-dispatch-launch.md).
+
 **Established by experiment** (VS Code 1.146.0, Claude Code 2.1.323, extension 2.1.322, Windows 10,
 2026-11-14; details in `docs/session-launch.md`). A session in VS Code's Agents window has the
 host's documented session tools (`create_session`, `list_sessions`, `get_session_context`,

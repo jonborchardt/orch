@@ -1,8 +1,8 @@
 /**
  * Phase 3: dispatching jobs to other repositories, independent sessions adopting their worktrees,
- * session association, and the initiating session's view of all its jobs. Deterministic: the
- * host's `create_session` is simulated with `git worktree add` (that is what it does before the
- * session starts); the real launch is demonstrated separately in docs/session-launch.md.
+ * session association, and the initiating session's view of all its jobs. Deterministic: a
+ * session started in a linked worktree is simulated with `git worktree add`. Dispatch returns no
+ * launch recipe (decision 2026-11-25-retire-dispatch-launch).
  */
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,7 +62,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** What VS Code does for `create_session({ worktree: true })`: a worktree of the repository. */
+/** What VS Code's Agents window makes for a session with its own worktree. */
 function hostWorktree(repo: string, name: string): string {
   const dir = tempDir('orch-host-wt-');
   dirs.push(dir);
@@ -91,13 +91,8 @@ describe('dispatch prepares a job for another repository', () => {
     expect([r.job.stage, r.job.status]).toEqual(['spec', 'pending']);
     expect(r.job.ownerSession).toBeNull();
     expect(r.job.worktreePath).toBeNull();
-    // What the launcher needs: the repository as the workspace, its own worktree, the skill command.
-    expect(r.launch.workspace).toBe(beta);
-    expect(r.launch.worktree).toBe(true);
-    expect(r.launch.prompt.startsWith(`/factory ${r.job.id}\n`)).toBe(true);
-    expect(r.launch.title).toContain(r.job.id);
-    expect(r.launch.fallback[0]).toContain(`claude --worktree ${r.job.id} "/factory ${r.job.id}"`);
-    expect(r.launch.fallback[1]).toContain('code --agents');
+    // No launch recipe: dispatch only creates the job.
+    expect(r).not.toHaveProperty('launch');
     // Neither repository changed: no files, no worktrees, no branches.
     for (const repo of [alpha, beta]) {
       expect(dirtyFiles(repo)).toEqual([]);
@@ -146,7 +141,7 @@ describe('dispatch prepares a job for another repository', () => {
     const again = dispatch(beta, { issue: '45', title: 'Different title' });
     expect(again.duplicate).toBe(true);
     expect(again.job.id).toBe(first.job.id);
-    expect(again.launch.prompt).toBe(first.launch.prompt);
+    expect(again).not.toHaveProperty('launch');
     expect(dispatch(beta, { issue: '#46' }).job.id).not.toBe(first.job.id);
     // Another clone of the same remote counts as the same repository.
     expect(dispatch(alpha, { issue: '#45' }).job.id).not.toBe(first.job.id);
@@ -313,7 +308,6 @@ describe('a job created from a linked worktree belongs to the primary checkout',
     const r = dispatch(linked);
     expect(canonicalPath(r.job.repoPath)).toBe(canonicalPath(beta));
     expect(r.job.baseBranch).toBe('main');
-    expect(canonicalPath(r.launch.workspace)).toBe(canonicalPath(beta));
     const resumed = resumeFactoryJob(store, r.job.id, { session: 'child-x', adopt: linked });
     expect(resumed.adopted).toBe('adopted');
     expect(resumed.job.worktreePath).toBe(linked);
@@ -470,11 +464,15 @@ describe('CLI', () => {
     ]);
     expect(r.code, r.err).toBe(0);
     const d = json<{
+      session: string;
       job: { id: string; ownerSession: string | null };
-      launch: { prompt: string };
+      duplicate: boolean;
+      readiness: { status: string };
     }>(r);
     expect(d.job.ownerSession).toBeNull();
-    expect(d.launch.prompt).toContain(`/factory ${d.job.id}`);
+    expect([d.session, d.duplicate, d.readiness.status]).toEqual([PARENT, false, 'ready']);
+    expect(d).not.toHaveProperty('launch');
+    expect(orch(home, alpha, ['factory', '--help']).out).not.toContain('(workspace, prompt)');
     expect(orch(home, alpha, ['factory', 'dispatch', '--session', PARENT]).code).toBe(2);
     expect(orch(home, alpha, ['factory', 'dispatch', '--title', 'x']).code).toBe(2);
     // A job needs a description: none, or a blank one, is a usage error that creates nothing.
