@@ -21,6 +21,10 @@ Hard rules:
 - Never edit `factory.json`, CI workflows, test configuration, or dependency manifests, and never
   disable, skip, or delete a test. orch refuses to complete a fast build whose diff does any of
   these; such a change needs the full workflow.
+- For a bug ticket, add a test that fails before the fix and passes with it. Under a policy with
+  `verification.regression`, `orch verify` reports `failed` and every gate refuses the job until
+  that test fails on the merge base and passes at HEAD. Never reclassify the ticket
+  (`orch ticket edit --type`) yourself; if no such test is possible, escalate.
 - Commit on the job branch with clear messages (`git add -A && git commit`). Leave the tree
   clean. Never push, rebase, reset, force, or rewrite history; the coordinator delivers.
 

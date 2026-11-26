@@ -309,6 +309,20 @@ export function runInvalidReason(run: RunEvidence, now: Snapshot): string | null
 export type RegressionStatus = 'passed' | 'not-red' | 'not-green' | 'no-tests' | 'exempt';
 
 /**
+ * Why a bug job's regression record does not prove the fix, or null when it does. `status` is the
+ * record matching HEAD, tree, merge base, and policy; null when none matches.
+ */
+export function regressionReason(status: RegressionStatus | null): string | null {
+  const why = {
+    'not-red': 'the test passed at the base (not red)',
+    'not-green': 'the test failed at HEAD',
+    'no-tests': 'no test file changed',
+  } as const;
+  if (status === 'passed' || status === 'exempt') return null;
+  return `bug-fix regression: ${status === null ? 'no regression run for this head' : why[status]}`;
+}
+
+/**
  * What a bug job's regression attempt runs, from the job's diff alone (no agent input): `exempt`
  * when every changed path is Markdown, else the added or modified files `classifyChanges` labels
  * `tests` (renamed ones do not count), `no-tests` when there are none.

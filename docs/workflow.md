@@ -1124,8 +1124,22 @@ green exit codes and logs) and a `verification.regression` event, with status `p
 nothing runs), or `exempt` (every changed path is `*.md`; nothing runs). `orch verify` reports it
 as `regression` (`null` for a non-bug job or a policy without the command); a reused run reports
 the latest attempt for the same HEAD and fingerprint. Any non-zero exit at the base counts as red,
-including a test that cannot import code the base lacks. The record is evidence only: it changes
-neither the run's status, its exit code, nor any gate. Refusing a bug fix without it is ticket 0162.
+including a test that cannot import code the base lacks.
+
+The record is a gate (decision
+[2026-11-25-bug-regression-evidence](decisions/2026-11-25-bug-regression-evidence.md)). It applies
+when the job has a ticket whose type is `bug` at the moment the gate runs (read live, never cached
+on the job) and the effective policy sets `regression`. `verificationStatus` is then valid only
+when a policy run is valid for HEAD and the latest record for HEAD and fingerprint is `passed` or
+`exempt` with the current tree and merge base. Otherwise `reason` names the cause: "the test passed
+at the base (not red)", "the test failed at HEAD", "no test file changed", or "no regression run
+for this head" (no matching record, including a null merge base, which never skips the gate). The
+policy run's own reason wins when it has one. Every gate that asks `verificationStatus` inherits
+this: completing build, simplify, and approve, delivery, and the integration row's verified run.
+`orch verify` reports such a run as `failed` (exit 1) with a hint naming the reason and the
+regression logs, and never reuses it. There is no waiver flag: a human who decides the ticket is
+not a bug reclassifies it (`orch ticket edit <key> --type chore`), which lifts the gate at once
+and stays in the ticket's history. Agents never reclassify.
 
 **What a run records** (`verification_runs`, `verification_checks`): job, run id, commit and tree,
 dirty files (always none, since a dirty worktree is refused), the policy fingerprint and where it

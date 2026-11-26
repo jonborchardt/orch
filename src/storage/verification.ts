@@ -368,7 +368,7 @@ export function listIntegrations(db: Db, jobId: string): Integration[] {
 
 export type RegressionInput = Omit<RegressionRun, 'id' | 'jobId' | 'completedAt'>;
 
-/** One bug-fix regression attempt, recorded once it finished. Evidence only; no gate reads it. */
+/** One bug-fix regression attempt, recorded once it finished; `verificationStatus` gates on it. */
 export function recordRegression(
   store: Store,
   id: string,
