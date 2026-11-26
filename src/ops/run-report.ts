@@ -5,7 +5,7 @@
  */
 import { ticketKey } from '../core/tickets.ts';
 import { choiceLine } from './actions.ts';
-import type { MergedTicket, RunSummary } from './run.ts';
+import type { MergedTicket, RunSummary, WaitingJob } from './run.ts';
 import type { TokenCounts } from '../server/types.ts';
 
 const NEEDS_YOU = ['needs-human', 'blocked', 'refused'];
@@ -34,6 +34,11 @@ function merged(m: MergedTicket): string[] {
   ];
 }
 
+/** A waiting job as the stop line and the summary print it, unindented: what is needed first. */
+export function needsHumanLines(w: WaitingJob, reason: string): string[] {
+  return [`needs-human: ${w.needed}`, ...w.choices.map(choiceLine), `reason: ${reason}`];
+}
+
 export function formatSummary(s: RunSummary): string {
   const lines = [
     '',
@@ -57,9 +62,8 @@ export function formatSummary(s: RunSummary): string {
         : undefined;
     if (w === undefined) lines.push(`${ticketKey(t.ticketId)} ${t.outcome}: ${t.reason}`);
     else {
-      lines.push(`${ticketKey(t.ticketId)} needs-human: ${w.needed}`);
-      lines.push(...w.choices.map((c) => `     ${choiceLine(c)}`));
-      lines.push(`     reason: ${t.reason}`);
+      const [head, ...rest] = needsHumanLines(w, t.reason);
+      lines.push(`${ticketKey(t.ticketId)} ${head ?? ''}`, ...rest.map((l) => `     ${l}`));
     }
     if (t.next !== null) lines.push(`     next: ${t.next}`);
   }

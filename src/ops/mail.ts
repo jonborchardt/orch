@@ -61,7 +61,7 @@ function neededOf(store: Store, job: Job): Needed | null {
   const blocker = blockerOf(job, state, evidence);
   if (!blocker) return null;
   const next: string[] = [];
-  let ask: Needed['ask'];
+  let lead: string[] | undefined;
   if (state === 'blocked') {
     const actions = allowedActions(
       job,
@@ -73,7 +73,7 @@ function neededOf(store: Store, job: Job): Needed | null {
     const view = needsHuman(store, job, actions);
     if (view) {
       const options = choiceLinks(job.id, view).map((c) => `  ${choiceLine(c)}`);
-      ask = { needed: view.needed, options };
+      lead = [view.needed, 'Options:', ...options];
     }
     next.push(
       `Dashboard: run orch ui, then open http://127.0.0.1:${String(DEFAULT_PORT)}/#/jobs/${job.id}`,
@@ -87,7 +87,7 @@ function neededOf(store: Store, job: Job): Needed | null {
     }
   }
   if (blocker.kind === 'ci') next.push(ci.guidance);
-  return { summary: blocker.summary, detail: blocker.detail, next, ask };
+  return { summary: blocker.summary, detail: blocker.detail, next, lead };
 }
 
 /** The block is help, not a requirement: a failure to derive it never stops the mail. */

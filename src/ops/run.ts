@@ -47,7 +47,8 @@ import {
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { ticketJobs } from '../storage/tickets.ts';
-import { type ChoiceLink, choiceLine, choiceLinks, needsHuman } from './actions.ts';
+import { type ChoiceLink, choiceLinks, needsHuman } from './actions.ts';
+import { needsHumanLines } from './run-report.ts';
 import { dispatchJob } from './dispatch.ts';
 import { loadConfig, resumeFactoryJob, specResumeSteps } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
@@ -657,9 +658,9 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
       outcome === 'needs-human' && jobId !== null ? waitingJob(store, ticketId, jobId) : null;
     if (waiting === null) run.log(`  ticket ${key}: ${outcome}: ${reason}`);
     else {
-      run.log(`  ticket ${key}: needs-human: ${waiting.needed}`);
-      for (const c of waiting.choices) run.log(`    ${choiceLine(c)}`);
-      run.log(`    reason: ${reason}`);
+      const [head, ...rest] = needsHumanLines(waiting, reason);
+      run.log(`  ticket ${key}: ${head ?? ''}`);
+      for (const l of rest) run.log(`    ${l}`);
     }
     if (jobId !== null && outcome === 'stopped') leaveJob(run, jobId);
     if (jobId !== null && (outcome === 'blocked' || outcome === 'needs-human')) {
