@@ -376,7 +376,7 @@ Every accepted change appends events (`job.created`, `job.claimed`, `job.release
 `review.recorded`, `job.blocked`, `job.resumed`, `job.interrupted`, `job.cancelled`,
 `job.completed`, `job.superseded`, `worktree.created`, `worktree.adopted`, `worktree.removed`, `worktree.kept`,
 `integration.started`, `integration.completed`, `verification.started`,
-`verification.completed`, `verification.flaky`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
+`verification.completed`, `verification.flaky`, `verification.regression`, `policy.authorized`, `job.reworked`, `branch.pushed`, `pr.recorded`,
 `ci.observed`, `pr.ready`) in the same transaction. A `ci.observed` event from `orch gh ci` carries the head,
 outcome, required-check list, every check's status and conclusion, and saved log paths.
 `orch job events <id>` lists them.
@@ -1088,6 +1088,43 @@ infrastructure failures, which escalate. A repository whose builds often fail te
 the limit for new jobs with `maxCiRepairs` in the orchestrator's `factory.json`
 (`<config>/factory.json`, read when a job is created); a running job keeps the limit it was created
 with, and a human resuming a job blocked with `max CI repair cycles reached` decides its next step.
+
+### Bug-fix regression evidence
+
+`verification.regression` is an optional command that proves a bug job's fix:
+
+```json
+{
+  "verification": {
+    "commands": [{ "id": "check", "command": "npm", "args": ["run", "check"] }],
+    "regression": { "command": "npx", "args": ["vitest", "run"] }
+  }
+}
+```
+
+It takes `command`, `args`, `cwd` (default `.`), and `timeoutMs` (default ten minutes) with the
+same rules as a check, and no `id` or `required`. It joins the fingerprint only when set, so a
+policy without it keeps its fingerprint; changing it in a worktree needs **Accept verification
+policy** like any policy change.
+
+When a job linked to a `bug` ticket passes `orch verify` under a policy with `regression`, orch
+picks the tests itself: the files the job added or modified since the merge base that
+`src/core/sensitive.ts` labels `tests` (renamed ones do not count). It appends them, relative to
+`cwd`, to the command's arguments and runs it twice under the verify lock: once with every
+non-test change reverted to the merge base (modified and deleted files restored, added files
+removed), which must fail (red), and once at HEAD, which must pass (green). The worktree is
+restored to HEAD in a `finally`; if it is not clean at the same HEAD afterwards, `orch verify`
+fails and names the files. Logs go to `<artifacts>/verification/<run>/regression-red.log` and
+`regression-green.log`.
+
+Each attempt is a `regression_runs` row (merge base, HEAD, tree, fingerprint, test files, red and
+green exit codes and logs) and a `verification.regression` event, with status `passed`, `not-red`
+(the tests also pass at the base; green is not run), `not-green`, `no-tests` (no changed test file;
+nothing runs), or `exempt` (every changed path is `*.md`; nothing runs). `orch verify` reports it
+as `regression` (`null` for a non-bug job or a policy without the command); a reused run reports
+the latest attempt for the same HEAD and fingerprint. Any non-zero exit at the base counts as red,
+including a test that cannot import code the base lacks. The record is evidence only: it changes
+neither the run's status, its exit code, nor any gate. Refusing a bug fix without it is ticket 0162.
 
 **What a run records** (`verification_runs`, `verification_checks`): job, run id, commit and tree,
 dirty files (always none, since a dirty worktree is refused), the policy fingerprint and where it
