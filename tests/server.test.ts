@@ -15,7 +15,7 @@ import {
 } from '../src/core/workflow.ts';
 import { dashboardAction } from '../src/ops/actions.ts';
 import { board, detail, isLogPath } from '../src/server/api.ts';
-import { liveness } from '../src/server/status.ts';
+import { liveness, TIMELINE_EVENTS } from '../src/server/status.ts';
 import { blockerOf, ciView, type Evidence, resumeOf } from '../src/server/status.ts';
 import type { Artifact, Event, VerificationRun } from '../src/storage/schema.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
@@ -434,6 +434,57 @@ describe('seeded board and detail', () => {
         'https://git.example/acme/alpha/tree/factory/fallback',
       );
       expect(withPr('script', 'javascript:alert(1)//x/acme/alpha/pull/3')).toBeNull();
+    } finally {
+      own.cleanup();
+    }
+  });
+
+  it('keeps pushed heads and the branch link beyond the timeline cap (ticket 0079)', () => {
+    const own = tempStore();
+    const repoPath = tempDir('pushed-heads-');
+    dirs.push(repoPath);
+    try {
+      const mk = (title: string) => {
+        const job = createJob(own, {
+          title,
+          description: title,
+          repo: 'github.com/acme/alpha',
+          repoPath,
+          baseBranch: 'main',
+        });
+        const { token } = claimJob(own, job.id, { session: 'claude-heads' });
+        setWorktree(own, job.id, {
+          token,
+          path: `/wt/${job.id}`,
+          branch: `factory/${title}`,
+          how: 'created',
+        });
+        return { id: job.id, token };
+      };
+      const long = mk('long');
+      recordEvent(own, long.id, { token: long.token }, 'branch.pushed', {
+        branch: 'factory/long',
+        head: 'abc123',
+      });
+      for (let i = 0; i < TIMELINE_EVENTS; i++)
+        recordEvent(own, long.id, { token: long.token }, 'test.noise', { i });
+      const d = detail(own, long.id);
+      expect(d.events.some((e) => e.type === 'branch.pushed')).toBe(false); // fell out of the cap
+      expect(d.links.pushedHeads).toEqual(['abc123']);
+      expect(d.links.branch).toBe('https://github.com/acme/alpha/tree/factory/long');
+      expect(d.links.branchUnpushed).toBe(false);
+
+      const never = detail(own, mk('never').id).links;
+      expect(never.branch).toBeNull();
+      expect(never.pushedHeads).toEqual([]);
+
+      // A malformed head is not a pushed commit, though the event still says the branch is pushed.
+      const odd = mk('odd');
+      recordEvent(own, odd.id, { token: odd.token }, 'branch.pushed', {
+        branch: 'factory/odd',
+        head: 42,
+      });
+      expect(detail(own, odd.id).links.pushedHeads).toEqual([]);
     } finally {
       own.cleanup();
     }

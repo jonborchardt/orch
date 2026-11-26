@@ -214,13 +214,13 @@ export function commitHref(repo: string | null, sha: string | null | undefined):
  */
 export function knownCommits(d: JobDetailView): Set<string> {
   const wt = d.plan?.worktree ?? null;
-  const pushed = d.events.flatMap((e) =>
-    e.type === 'branch.pushed' && typeof e.payload['head'] === 'string' ? [e.payload['head']] : [],
-  );
   const a = new Set(
-    [d.ci.head, ...pushed, d.merge?.head, ...(d.merge?.commits ?? []).map((c) => c.sha)].filter(
-      (s): s is string => typeof s === 'string',
-    ),
+    [
+      d.ci.head,
+      ...d.links.pushedHeads,
+      d.merge?.head,
+      ...(d.merge?.commits ?? []).map((c) => c.sha),
+    ].filter((s): s is string => typeof s === 'string'),
   );
   const known = new Set(a);
   for (const list of [wt?.commits ?? [], d.merge?.outstanding ?? []]) {
