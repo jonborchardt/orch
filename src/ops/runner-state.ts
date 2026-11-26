@@ -6,8 +6,9 @@
  * There is one controller per repository at most (decision
  * 2026-11-25-one-controller-per-repository), each in its own slot (`runnerSlots`). A slot's files
  * are kept under the data directory (`runnerPaths`), each with one writer: the lock (generations
- * taken by exclusive creation, see `acquireRunnerLock`), the session record (that controller, replaced atomically),
- * and the two stop requests (`orch stop`). A heartbeat can therefore never overwrite a stop.
+ * taken by exclusive creation, see `acquireRunnerLock`), the session record (that controller,
+ * replaced atomically), and the two stop requests (`orch stop`). A heartbeat can therefore never
+ * overwrite a stop.
  */
 import { randomBytes } from 'node:crypto';
 import {
@@ -337,7 +338,8 @@ function admit(
   start: Pick<RunnerScope, 'name' | 'commonDir'> | undefined,
 ): void {
   // An unfinished session keeps the scope it was started with; `startSession` refuses over it.
-  if (key !== undefined && start !== undefined && readSession(paths, key)?.finished !== null) {
+  const unfinished = readSession(paths, key)?.finished === null;
+  if (key !== undefined && start !== undefined && !unfinished) {
     const { name, commonDir } = start;
     replaceFile(runnerPaths(paths, key).scope, JSON.stringify({ name, commonDir }) + '\n');
   }

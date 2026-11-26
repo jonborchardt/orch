@@ -25,10 +25,11 @@ flowchart LR
 ## Who it's for, and who it isn't
 
 For a developer with several repositories, a backlog, and a Claude plan, but no time to review
-every agent PR. Choose something else for parallel throughput (`orch` works one ticket at a time),
-live steering (it never messages a running session), a team tracker (the queue is local and
-single-user), other agents or hosts (Claude Code and GitHub only), a weak test suite (the evidence
-is only as good as the checks), or large, ambiguous work (tickets must be small enough to specify).
+every agent PR. Choose something else for parallel tickets within one repository (`orch` works one
+ticket at a time per repository), live steering (it never messages a running session), a team
+tracker (the queue is local and single-user), other agents or hosts (Claude Code and GitHub only),
+a weak test suite (the evidence is only as good as the checks), or large, ambiguous work (tickets
+must be small enough to specify).
 
 | category                   | who decides the steps   | who runs the checks        | what stops a wrong merge                  | what runs unattended            |
 | -------------------------- | ----------------------- | -------------------------- | ----------------------------------------- | ------------------------------- |
@@ -387,15 +388,15 @@ counts come from Claude Code's undocumented transcript format (the dashboard's U
 
 ## Where things live
 
-| Purpose   | Windows                                                                     | macOS                                | Linux                   |
-| --------- | --------------------------------------------------------------------------- | ------------------------------------ | ----------------------- |
-| config    | `%APPDATA%\orch`                                                            | `~/Library/Application Support/orch` | `$XDG_CONFIG_HOME/orch` |
-| data      | `%LOCALAPPDATA%\orch`                                                       | same as config                       | `$XDG_DATA_HOME/orch`   |
-| database  | `<data>\orch.sqlite`                                                        | `<data>/orch.sqlite`                 | `<data>/orch.sqlite`    |
-| artifacts | `<data>\jobs\<id>\artifacts\`                                               | `<data>/jobs/<id>/artifacts/`        | same                    |
-| worktrees | `<data>\worktrees\<repo slug>\<id>`                                         | `<data>/worktrees/<repo slug>/<id>`  | same                    |
-| tickets   | the database; `<data>\tickets\<id>\assets\`                                 | `<data>/tickets/<id>/assets/`        | same                    |
-| runner    | `<data>\runner-lock\`, `runner.json`, `runner.stop-next`, `runner.stop-now` | the same under `<data>/`             | same                    |
+| Purpose   | Windows                                                                                                                                                             | macOS                                                | Linux                   |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ----------------------- |
+| config    | `%APPDATA%\orch`                                                                                                                                                    | `~/Library/Application Support/orch`                 | `$XDG_CONFIG_HOME/orch` |
+| data      | `%LOCALAPPDATA%\orch`                                                                                                                                               | same as config                                       | `$XDG_DATA_HOME/orch`   |
+| database  | `<data>\orch.sqlite`                                                                                                                                                | `<data>/orch.sqlite`                                 | `<data>/orch.sqlite`    |
+| artifacts | `<data>\jobs\<id>\artifacts\`                                                                                                                                       | `<data>/jobs/<id>/artifacts/`                        | same                    |
+| worktrees | `<data>\worktrees\<repo slug>\<id>`                                                                                                                                 | `<data>/worktrees/<repo slug>/<id>`                  | same                    |
+| tickets   | the database; `<data>\tickets\<id>\assets\`                                                                                                                         | `<data>/tickets/<id>/assets/`                        | same                    |
+| runner    | whole queue: `<data>\runner-lock\`, `runner.json`, `runner.stop-next`, `runner.stop-now`; each repository: the same plus `scope.json` under `<data>\runners\<key>\` | the same under `<data>/` and `<data>/runners/<key>/` | same                    |
 
 `ORCH_HOME=<dir>` redirects all of it (tests and side-by-side campaigns use this).
 

@@ -167,7 +167,7 @@ export async function runRunner(
     if (command === 'stop') {
       noMore(extra);
       if (arg !== undefined && arg !== 'next') {
-        throw new UsageError(`Usage: orch stop [next]\n\n${RUN_HELP}`);
+        throw new UsageError(`Usage: orch stop [next] [--repo <path>]\n\n${RUN_HELP}`);
       }
       const which = arg === 'next' ? 'next' : 'now';
       const stopped = stopSession(store, which, undefined, undefined, o.repo);

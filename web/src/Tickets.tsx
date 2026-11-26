@@ -138,7 +138,7 @@ function ControllerLine({
   const cur = c.current;
   const curId = cur ? Number(cur.ticket) : null;
   return (
-    <Box data-controller={c.scope}>
+    <Box role="group" aria-label={`Controller for ${c.scope}`} data-controller={c.scope}>
       <Stack direction="row" spacing={1} useFlexGap sx={ROW_SX}>
         <Typography sx={{ fontWeight: 700 }}>Factory</Typography>
         <Chip label={c.state} color={RUNNER_COLOR[c.state]} data-runner={c.state} />
@@ -195,12 +195,17 @@ function RunnerStrip({
           <Typography sx={{ fontWeight: 700 }}>Factory</Typography>
           <Chip label="idle" data-runner="idle" />
           <Typography variant="body2" color="text.secondary">
+            {/* The same sentence as IDLE_NEXT in src/ops/run.ts; web/ imports only types. */}
             Nothing is running. orch start resumes a stranded in-progress ticket first, then takes
             the next ready one.
           </Typography>
         </Stack>
       ) : (
-        runner.controllers.map((c) => <ControllerLine key={c.scope} c={c} byId={byId} />)
+        <Stack spacing={1} sx={{ mb: 0.5 }}>
+          {runner.controllers.map((c) => (
+            <ControllerLine key={c.scope} c={c} byId={byId} />
+          ))}
+        </Stack>
       )}
       {runner.last && (
         <Typography variant="body2" color="text.secondary">
