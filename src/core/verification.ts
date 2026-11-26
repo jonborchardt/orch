@@ -96,13 +96,10 @@ export function parsePolicy(raw: unknown): VerificationPolicy {
     fail(`verification.authority must be one of ${AUTHORITIES.map((a) => `"${a}"`).join(', ')}`);
   }
   // `local` is the default, so it is not stored: every existing policy keeps its exact shape.
-  const regression =
-    section['regression'] === undefined
-      ? {}
-      : { regression: parseRegression(section['regression']) };
-  return authority === 'ci'
-    ? { commands, authority: 'ci', ...regression }
-    : { commands, ...regression };
+  const out: VerificationPolicy = { commands };
+  if (authority === 'ci') out.authority = 'ci';
+  if (section['regression'] !== undefined) out.regression = parseRegression(section['regression']);
+  return out;
 }
 
 function parseRegression(item: unknown): RegressionSpec {
@@ -213,10 +210,12 @@ export function canonicalPolicy(policy: VerificationPolicy): string {
   return JSON.stringify({
     ...(ci ? { authority: 'ci' } : {}),
     commands: checks,
-    ...(r
-      ? { regression: { args: r.args, command: r.command, cwd: r.cwd, timeoutMs: r.timeoutMs } }
-      : {}),
+    ...(r ? { regression: canonicalRegression(r) } : {}),
   });
+}
+
+function canonicalRegression(r: RegressionSpec | undefined): RegressionSpec | undefined {
+  return r && { args: r.args, command: r.command, cwd: r.cwd, timeoutMs: r.timeoutMs };
 }
 
 export function policyFingerprint(policy: VerificationPolicy): string {
@@ -264,8 +263,8 @@ export function diffPolicy(
   const to = authorityOf(candidate);
   if (from === 'local' && to === 'ci') weakened.push('authority');
   const regression =
-    canonicalPolicy({ commands: [], regression: effective.regression }) !==
-    canonicalPolicy({ commands: [], regression: candidate.regression });
+    JSON.stringify(canonicalRegression(effective.regression)) !==
+    JSON.stringify(canonicalRegression(candidate.regression));
   return {
     changed: added.length + removed.length + modified.length > 0 || from !== to || regression,
     added,

@@ -412,6 +412,7 @@ export function verifyJob(
   // Nothing changed since a passed run (same clean HEAD, tree, and policy): it is still the
   // evidence every gate would accept, so return it without taking the lock or running again.
   if (status.valid && status.run) {
+    const r = latestRegression(store.db, id, wt.head, eff.fingerprint);
     return {
       jobId: id,
       status: 'passed',
@@ -421,9 +422,7 @@ export function verifyJob(
       checks: status.run.checks,
       hint: null,
       reused: true,
-      regression: ((r) => (r ? regressionView(r) : null))(
-        latestRegression(store.db, id, wt.head, eff.fingerprint),
-      ),
+      regression: r ? regressionView(r) : null,
     };
   }
   // A renewal bumps the revision; a caller pinning one follows it.
