@@ -44,6 +44,7 @@ import {
   policyFingerprint,
   type PolicySource,
   regressionPlan,
+  regressionReason,
   type RegressionStatus,
   runInvalidReason,
   type VerificationCheckSpec,
@@ -191,6 +192,7 @@ export function verificationStatus(
       dirty: wt.dirty,
       configFingerprint: eff.fingerprint,
     });
+    reason ??= regressionRefusal(store, job, eff, wt.head, tree)?.reason ?? null;
   }
   return {
     configured,
@@ -208,6 +210,29 @@ export function verificationStatus(
     reason,
     queue: verifyQueueState(verifyLockPath(store.paths), verifyQueueDir(store.paths), job.id),
   };
+}
+
+/**
+ * The bug-fix regression gate (decision 2026-11-25-bug-regression-evidence): a bug job under a
+ * policy with `regression` needs a `passed` or `exempt` record for this HEAD, tree, merge base, and
+ * policy. The ticket type is read now, never cached. Null when the gate does not apply or holds.
+ */
+function regressionRefusal(
+  store: Store,
+  job: Job,
+  eff: EffectivePolicy,
+  head: string,
+  tree: string,
+): { reason: string; logs: string[] } | null {
+  if (!eff.policy.regression || job.ticketId === null) return null;
+  if (getTicket(store.db, job.ticketId).type !== 'bug') return null;
+  const r = latestRegression(store.db, job.id, head, eff.fingerprint);
+  // A null merge base matches no record, so it refuses rather than skips.
+  const match = r?.tree === tree && r.mergeBase === eff.mergeBase ? r : undefined;
+  const reason = regressionReason(match ? match.status : null);
+  if (reason === null) return null;
+  const logs = [match?.redLog, match?.greenLog].filter((l): l is string => !!l);
+  return { reason, logs };
 }
 
 /** Sensitive-path report for the job's diff against its base. */
@@ -241,7 +266,8 @@ export interface VerifyResult {
   reused: boolean;
   /**
    * The bug-fix regression attempt of this run (on reuse, the latest one recorded for this HEAD
-   * and policy); null when none applies. Evidence only: it never changes `status`.
+   * and policy); null when none applies. For a bug job a record that does not prove the fix turns
+   * a passed policy run into `failed` (`regressionRefusal`).
    */
   regression: RegressionView | null;
 }
@@ -497,6 +523,8 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
     finished.status === 'passed'
       ? runRegression(store, job, auth, wt, eff, run.run.id, tree)
       : null;
+  const refused =
+    finished.status === 'passed' ? regressionRefusal(store, job, eff, wt.head, tree) : null;
   const first = checks.find((c) => c.required && c.status !== 'passed' && c.status !== 'pending');
   const behind = wt.behind ?? 0;
   const next =
@@ -505,14 +533,18 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
       : 'Fix, commit, and run orch verify again.';
   return {
     jobId: id,
-    status: finished.status === 'passed' ? 'passed' : 'failed',
+    status: finished.status === 'passed' && !refused ? 'passed' : 'failed',
     runId: run.run.id,
     head: wt.head,
     policy: status.policy,
     checks,
     hint: first
       ? `Required check ${first.checkId} ${first.status} (exit ${String(first.exitCode)}); see ${first.outputPath ?? ''}. ${next}`
-      : null,
+      : refused
+        ? `The checks passed, but ${refused.reason}` +
+          (refused.logs.length ? `; see ${refused.logs.join(', ')}` : '') +
+          '. Add a test that fails on the merge base and passes with the fix, commit, and run orch verify again.'
+        : null,
     reused: false,
     regression,
   };
@@ -521,7 +553,7 @@ function runPolicy(store: Store, job: Job, auth: Auth, fingerprint: string): Ver
 /**
  * A bug job's red-then-green evidence, after its policy passed and under the same lock: the job's
  * changed tests run with every other change reverted to the merge base (they must fail), then at
- * HEAD (they must pass). Recorded only; nothing decides from it (the gate is ticket 0162).
+ * HEAD (they must pass). `regressionRefusal` is the gate that reads the record.
  */
 function runRegression(
   store: Store,
