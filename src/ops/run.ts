@@ -47,6 +47,8 @@ import {
 } from '../storage/jobs.ts';
 import type { Job } from '../storage/schema.ts';
 import { ticketJobs } from '../storage/tickets.ts';
+import { type ChoiceLink, choiceLinks, needsHuman } from './actions.ts';
+import { needsHumanLines } from './run-report.ts';
 import { dispatchJob } from './dispatch.ts';
 import { loadConfig, resumeFactoryJob, specResumeSteps } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
@@ -152,6 +154,27 @@ export interface RunSummary {
   skipped: RunnerSession['skipped'];
   /** The `done` tickets with the evidence of their result job: display only, nothing decides from it. */
   merged: MergedTicket[];
+  /** Tickets whose job still waits in needs-human, with its choices: display only, like `merged`. */
+  waiting: WaitingJob[];
+}
+
+/** A job waiting in needs-human as the terminal shows it (`needsHuman`), derived when rendered. */
+export interface WaitingJob {
+  ticketId: number;
+  jobId: string;
+  needed: string;
+  choices: ChoiceLink[];
+}
+
+/** The job's needs-human view, or null; never throws, so it never stops the controller. */
+export function waitingJob(store: Store, ticketId: number, jobId: string): WaitingJob | null {
+  try {
+    const view = needsHuman(store, getJob(store.db, jobId));
+    if (view === null) return null;
+    return { ticketId, jobId, needed: view.needed, choices: choiceLinks(jobId, view) };
+  } catch {
+    return null;
+  }
 }
 
 /** A merged ticket's head, receipt link, and recorded cost, all of its result job only. */
@@ -629,7 +652,16 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
     next: string | null = null,
     code: string = outcome,
   ): TicketResult => {
-    run.log(`  ticket ${key}: ${outcome}: ${reason}`);
+    // A job waiting in needs-human leads with what is needed and a link per choice; the recorded
+    // reason (returned and on `runner.stopped`) is unchanged and printed below.
+    const waiting =
+      outcome === 'needs-human' && jobId !== null ? waitingJob(store, ticketId, jobId) : null;
+    if (waiting === null) run.log(`  ticket ${key}: ${outcome}: ${reason}`);
+    else {
+      const [head, ...rest] = needsHumanLines(waiting, reason);
+      run.log(`  ticket ${key}: ${head ?? ''}`);
+      for (const l of rest) run.log(`    ${l}`);
+    }
     if (jobId !== null && outcome === 'stopped') leaveJob(run, jobId);
     if (jobId !== null && (outcome === 'blocked' || outcome === 'needs-human')) {
       leaveJob(run, jobId, (job) =>
@@ -951,7 +983,24 @@ function summarize(
         (r): r is TicketResult & { jobId: string } => r.outcome === 'done' && r.jobId !== null,
       )
       .map((r) => mergedTicket(store, r)),
+    waiting: waitingOf(store, session.results),
   };
+}
+
+/** The waiting jobs among `results`, once per job. */
+function waitingOf(
+  store: Store,
+  results: readonly Pick<TicketResult, 'ticketId' | 'jobId'>[],
+): WaitingJob[] {
+  const seen = new Set<string>();
+  const out: WaitingJob[] = [];
+  for (const r of results) {
+    if (r.jobId === null || seen.has(r.jobId)) continue;
+    seen.add(r.jobId);
+    const w = waitingJob(store, r.ticketId, r.jobId);
+    if (w !== null) out.push(w);
+  }
+  return out;
 }
 
 /** Run the session to its end as the lock holder; `resuming` continues the ticket in flight. */
@@ -1317,6 +1366,11 @@ export interface RunnerStatus {
   last: { at: string; reason: string; completed: number; attempted: number } | null;
   /** The installed build against its checkout; null without a build stamp. */
   build: InstallBuild | null;
+  /**
+   * The recorded session's tickets (current or in its results) whose job waits in needs-human now,
+   * with their choices and links: display only, never decided from.
+   */
+  waiting: WaitingJob[];
 }
 
 /** `orch status`: the controller's own state plus the job row of the ticket in flight. Read-only. */
@@ -1398,5 +1452,14 @@ export function runnerStatus(store: Store): RunnerStatus {
             attempted: session.results.length,
           },
     build: installBuild(),
+    waiting:
+      session === null
+        ? []
+        : waitingOf(store, [
+            ...(session.ticketId === null
+              ? []
+              : [{ ticketId: session.ticketId, jobId: session.jobId }]),
+            ...session.results,
+          ]),
   };
 }

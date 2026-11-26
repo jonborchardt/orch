@@ -464,9 +464,18 @@ choice continues the job; an older `job.blocked` that recorded none gets the def
 view's `choices` lists them in order, each with the dashboard action it maps to (`resume:<stage>`
 is Resume at that stage, `rework` Request rework, `review` Request review round,
 `accept-delivery` Accept delivery, `accept-policy` Accept policy, `cancel` Cancel) and whether
-that action is in `actions`. The job detail shows them as a **Choices** block above the other
-controls, one button per choice labelled with its label (plain text); the first is the primary
+that action is in `actions`, plus `effect`, one line on what picking it does; `needed` is one plain
+sentence of what is needed, naming the available choices. Both come from `needsHuman` in
+`src/ops/actions.ts`, the one view the status mail, the controller's stop line and end-of-session
+summary, and `orch status` also print, each choice with its link
+`http://127.0.0.1:4777/#/jobs/<id>?choose=<n>` (`n` its index; a choice whose action is not allowed
+is listed as not available, without a link). The job detail shows them first, under the header and
+above the Status and Escalation sections, as a **Needs you** block: the sentence, then one button
+per choice labelled with its label (plain text) beside its effect line; the first is the primary
 (contained) button, the others outlined, and a button whose action is not allowed is disabled.
+Opening a `?choose=<n>` link shows the page with choice n's confirm dialog open; it posts nothing,
+and an out-of-range, unavailable, or no longer offered choice opens no dialog (decision
+2026-11-26-choose-link-opens-a-confirm).
 Under the buttons one line, `afterAction`, says what happens after an answer: "the controller
 continues it" only while a queue-mode `orch start` runs, its repository filter covers the job, and
 its session passed the job's ticket over as an escalation (`controllerContinues` in

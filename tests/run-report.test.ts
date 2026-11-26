@@ -115,7 +115,8 @@ describe('the end-of-session report', () => {
     expect(text).toContain(`job ${jobId}, head ${(m?.head ?? '').slice(0, 12)}`);
     expect(text).toContain(`receipt: ${job.prUrl ?? '?'}`);
     expect(text).toContain(`cost of job ${jobId} only: 0 min ${String(seconds)} s, 110 tokens`);
-    expect(text).toContain(`${ticketKey(first)} needs-human: job`);
+    expect(text).toContain(`${ticketKey(first)} needs-human: The spec needs a decision`);
+    expect(text).toContain(`     reason: job ${jobsOf(first)[0]?.id ?? ''} waits for a person`);
     expect(summaryExitCode(s)).toBe(1);
   });
 

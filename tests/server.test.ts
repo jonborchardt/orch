@@ -910,9 +910,24 @@ describe('mutations', () => {
     // Round 0: nothing was built, so a review is not available, as the action list says.
     expect(d.actions).not.toContain('request-review');
     expect(d.choices).toEqual([
-      { kind: 'resume', to: 'spec', label: 'Go on', action: 'approve', available: true },
-      { kind: 'review', label: 'Review it', action: 'request-review', available: false },
+      {
+        kind: 'resume',
+        to: 'spec',
+        label: 'Go on',
+        action: 'approve',
+        available: true,
+        effect: 'the job goes back to spec and carries on from there',
+      },
+      {
+        kind: 'review',
+        label: 'Review it',
+        action: 'request-review',
+        available: false,
+        effect: 'the reviewers look at the current change again',
+      },
     ]);
+    // Only the available choice is named in what is needed.
+    expect(d.needed).toBe('The spec needs a decision from a person: pick "Go on".');
     expect(detail(store, ids.fresh).choices).toBeNull();
     // Answered (approved) by an earlier test: it no longer waits in needs-human.
     expect(detail(store, ids.blocked).choices).toBeNull();

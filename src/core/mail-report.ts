@@ -107,6 +107,18 @@ export interface Needed {
   detail: string | null;
   /** The next command or dashboard action, one per line. */
   next: readonly string[];
+  /** Needs-human: what is needed and one line per choice (with its link), printed before all else. */
+  lead?: readonly string[] | undefined;
+}
+
+function neededLines(n: Needed): string[] {
+  return [
+    ...(n.lead ?? []),
+    n.summary,
+    ...(n.detail ? [`Reason: ${n.detail}`] : []),
+    ...n.next,
+    '',
+  ];
 }
 
 /**
@@ -121,9 +133,7 @@ export function reportBody(
   return [
     `${outcomeEmoji(job)} ${job.status} at ${job.stage}`,
     '',
-    ...(needed
-      ? [needed.summary, ...(needed.detail ? [`Reason: ${needed.detail}`] : []), ...needed.next, '']
-      : []),
+    ...(needed ? neededLines(needed) : []),
     `Job:    ${job.id}`,
     `Title:  ${job.title}`,
     `Repo:   ${job.repo}`,

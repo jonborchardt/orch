@@ -240,6 +240,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     choices: null,
+    needed: null,
     afterAction: null,
     conflicts: null,
     links: {
@@ -901,14 +902,45 @@ describe('Job detail', () => {
           label: 'Approve as is',
           action: 'approve',
           available: true,
+          effect: 'the job goes back to approve and carries on from there',
         },
-        { kind: 'review', label: 'Review again', action: 'request-review', available: false },
-        { kind: 'cancel', label: 'Drop it', action: 'cancel', available: true },
+        {
+          kind: 'review',
+          label: 'Review again',
+          action: 'request-review',
+          available: false,
+          effect: 'the reviewers look at the current change again',
+        },
+        {
+          kind: 'cancel',
+          label: 'Drop it',
+          action: 'cancel',
+          available: true,
+          effect: 'the job ends for good; its branch and worktree are kept',
+        },
       ],
+      needed: 'The approver asks a person to decide: pick "Approve as is" or "Drop it".',
     });
     window.location.hash = '#/jobs/job-00000003';
     mount();
     const block = await screen.findByTestId('choices');
+    // What is needed and each choice's effect, from the server, before the Escalation section.
+    expect(within(block).getByTestId('needed')).toHaveTextContent(
+      'The approver asks a person to decide',
+    );
+    expect(
+      within(block)
+        .getAllByTestId('choice-effect')
+        .map((e) => e.textContent),
+    ).toEqual([
+      'the job goes back to approve and carries on from there',
+      'the reviewers look at the current change again (not available now)',
+      'the job ends for good; its branch and worktree are kept',
+    ]);
+    const escalation = screen.getByRole('region', { name: 'Escalation' });
+    expect(
+      block.compareDocumentPosition(escalation) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(within(block).getByRole('button', { name: 'Approve as is' })).toBeEnabled();
     // The first choice is the primary one; the others are outlined.
     expect(within(block).getByRole('button', { name: 'Approve as is' })).toHaveClass(
@@ -947,8 +979,15 @@ describe('Job detail', () => {
     data.detail = detail({
       actions: ['approve', 'answer', 'cancel'],
       choices: [
-        { kind: 'resume', to: 'ci', label: 'Retry CI', action: 'approve', available: true },
-        { kind: 'cancel', label: 'Drop it', action: 'cancel', available: true },
+        {
+          kind: 'resume',
+          to: 'ci',
+          label: 'Retry CI',
+          action: 'approve',
+          available: true,
+          effect: 'e',
+        },
+        { kind: 'cancel', label: 'Drop it', action: 'cancel', available: true, effect: 'e' },
       ],
       afterAction: 'the controller continues it',
     });
@@ -967,6 +1006,59 @@ describe('Job detail', () => {
     mount();
     await screen.findByRole('button', { name: 'Resume at approve' });
     expect(screen.queryByTestId('choices')).not.toBeInTheDocument();
+  });
+
+  it('opens the choice a ?choose= link names, posting nothing until Confirm', async () => {
+    const f = mockFetch();
+    const choices: JobDetailView['choices'] = [
+      {
+        kind: 'resume',
+        to: 'ci',
+        label: 'Retry CI',
+        action: 'approve',
+        available: true,
+        effect: 'e',
+      },
+      { kind: 'cancel', label: 'Drop it', action: 'cancel', available: true, effect: 'e' },
+      {
+        kind: 'review',
+        label: 'Look again',
+        action: 'request-review',
+        available: false,
+        effect: 'e',
+      },
+    ];
+    const posts = () =>
+      (f.mock.calls as [RequestInfo | URL, RequestInit | undefined][]).filter(
+        ([, init]) => init?.method === 'POST',
+      );
+    data.detail = detail({ choices });
+    window.location.hash = '#/jobs/job-00000003?choose=1';
+    mount();
+    const dialog = await screen.findByRole('dialog', { name: 'Drop it' });
+    expect(within(dialog).getAllByRole('button', { name: 'Confirm' })).toHaveLength(1);
+    expect(posts()).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(posts()).toHaveLength(1);
+    });
+    expect(JSON.parse(posts()[0]?.[1]?.body as string)).toEqual({ action: 'answer', choice: 1 });
+
+    // Out of range, unavailable, or a job not in needs-human: the page, no dialog, no POST.
+    for (const [hash, over] of [
+      ['#/jobs/job-00000003?choose=7', { choices }],
+      ['#/jobs/job-00000003?choose=2', { choices }],
+      ['#/jobs/job-00000003?choose=0', {}],
+    ] as const) {
+      cleanup();
+      f.mockClear();
+      data.detail = detail(over);
+      window.location.hash = hash;
+      mount();
+      await screen.findByRole('button', { name: 'Resume at approve' });
+      expect(screen.queryByRole('dialog'), hash).not.toBeInTheDocument();
+      expect(posts(), hash).toHaveLength(0);
+    }
   });
 
   it('labels Resume by the current return stage, even when it changes under a mounted view', async () => {
