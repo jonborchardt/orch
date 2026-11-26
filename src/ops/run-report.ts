@@ -22,15 +22,20 @@ function tokens(t: TokenCounts | null): string {
   );
 }
 
+/** A merged job's cost line, as the summary and the merged status mail print it. */
+export function costLine(m: Pick<MergedTicket, 'jobId' | 'seconds' | 'tokens'>): string {
+  const time = m.seconds === null ? 'time not recorded' : duration(m.seconds);
+  return `cost of job ${m.jobId} only: ${time}, ${tokens(m.tokens)}`;
+}
+
 function merged(m: MergedTicket): string[] {
   const head = m.head === null ? 'head unknown' : `head ${m.head.slice(0, 12)}`;
   const commit = m.mergeCommit === null ? '' : `, merge commit ${m.mergeCommit.slice(0, 12)}`;
-  const time = m.seconds === null ? 'time not recorded' : duration(m.seconds);
   return [
     `${ticketKey(m.ticketId)} ${m.title}`,
     `     job ${m.jobId}, ${head}${commit}`,
     `     receipt: ${m.prUrl ?? 'no PR recorded'}`,
-    `     cost of job ${m.jobId} only: ${time}, ${tokens(m.tokens)}`,
+    `     ${costLine(m)}`,
   ];
 }
 

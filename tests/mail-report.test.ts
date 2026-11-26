@@ -147,6 +147,36 @@ describe('reportBody events', () => {
   });
 });
 
+describe('mailed events', () => {
+  it('are only what needs a person or a final outcome', () => {
+    expect(new Set(REPORTED_EVENTS)).toEqual(
+      new Set([
+        'job.blocked',
+        'job.cancelled',
+        'job.interrupted',
+        'recovery.failed',
+        'verification.flaky',
+        'runner.stopped',
+        'pr.merged',
+      ]),
+    );
+    expect(REPORTED_EVENTS).toHaveLength(7);
+  });
+
+  it('marks a merge as good news and prints the receipt under the PR line', () => {
+    expect(eventEmoji('pr.merged')).toBe(OK);
+    const cost = 'cost of job job-1 only: time not recorded, tokens not recorded';
+    const merged = { ...job('completed', 'completed'), prUrl: 'https://github.com/o/r/pull/7' };
+    const lines = reportBody(merged, [event('pr.merged', { ok: true })], null, {
+      mergeCommit: 'abc123def4567890',
+      cost,
+    }).split('\n');
+    const pr = lines.indexOf('PR:     https://github.com/o/r/pull/7');
+    expect(lines.slice(pr + 1, pr + 4)).toEqual(['Merged: abc123def4567890', cost, '']);
+    expect(reportBody(merged, [])).not.toContain('Merged:');
+  });
+});
+
 describe('likely flaky verification failures', () => {
   it('are reported, with the reason naming the test', () => {
     expect(REPORTED_EVENTS).toContain('verification.flaky');

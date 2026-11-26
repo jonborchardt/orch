@@ -287,7 +287,7 @@ or disables a test is refused and escalates. Nothing classifies tickets for you,
 never turns into a full one: cancel it instead, which reopens the ticket for a new full job
 ([docs/workflow.md](docs/workflow.md#fast-jobs)).
 
-Optional email reports of every job change and of each controller session's end: [docs/operations.md](docs/operations.md#email-reports).
+Optional email reports when a job needs a person or merged, and of each controller session's end: [docs/operations.md](docs/operations.md#email-reports).
 
 ## What `orch` automates and enforces
 
