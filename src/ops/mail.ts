@@ -4,7 +4,13 @@
  * are at most once: the batch is claimed before sending and never retried. Mail never fails, blocks,
  * or rolls back the operation: `reportJobMail` never throws.
  */
-import { type Needed, REPORTED_EVENTS, reportBody, reportSubject } from '../core/mail-report.ts';
+import {
+  type Needed,
+  type Receipt,
+  REPORTED_EVENTS,
+  reportBody,
+  reportSubject,
+} from '../core/mail-report.ts';
 import { DEFAULT_PORT } from '../core/paths.ts';
 import { type MailConfig, mailConfig, sendReport } from '../integrations/mail.ts';
 import { BLOCKER_EVENTS, blockerOf, ciView, liveness, resumeOf } from '../server/status.ts';
@@ -22,7 +28,8 @@ import { latestRun } from '../storage/verification.ts';
 import { allowedActions, choiceLine, choiceLinks, needsHuman } from './actions.ts';
 import { planJob } from './factory.ts';
 import type { RunSummary } from './run.ts';
-import { formatSummary, runSubject } from './run-report.ts';
+import { costLine, formatSummary, runSubject } from './run-report.ts';
+import { jobSeconds, jobTokens } from './token-usage.ts';
 
 export interface JobMailOutcome {
   jobId: string;
@@ -99,11 +106,33 @@ function safeNeededOf(store: Store, job: Job): Needed | null {
   }
 }
 
+/** Only GitHub's confirmed merge is mailed; a refused attempt (`ok: false`) is not. */
+const mailed = (e: Event) => e.type !== 'pr.merged' || e.payload['ok'] === true;
+
+/** The receipt of a batch holding the confirmed merge: its merge commit and the summary's cost line. */
+function receiptOf(store: Store, job: Job, batch: readonly Event[]): Receipt | null {
+  const merge = batch.find((e) => e.type === 'pr.merged');
+  if (!merge) return null;
+  const commit = merge.payload['mergeCommit'];
+  let cost: string;
+  try {
+    cost = costLine({
+      jobId: job.id,
+      seconds: jobSeconds(store, job.id),
+      tokens: jobTokens(store, job.id),
+    });
+  } catch {
+    cost = costLine({ jobId: job.id, seconds: null, tokens: null });
+  }
+  return { mergeCommit: typeof commit === 'string' ? commit : null, cost };
+}
+
 async function deliver(
   cfg: MailConfig | string,
   job: Job,
   batch: readonly Event[],
   needed: Needed | null,
+  receipt: Receipt | null,
 ): Promise<MailOutcome> {
   if (typeof cfg === 'string') return { sent: false, error: cfg };
   const subject = job.mailSubject ?? reportSubject(job);
@@ -112,7 +141,7 @@ async function deliver(
   try {
     const { messageId } = await sendReport(cfg, {
       subject,
-      text: reportBody(job, batch, needed),
+      text: reportBody(job, batch, needed, receipt),
       inReplyTo: last ?? undefined,
       references: thread && last ? [...new Set([thread, last])] : undefined,
     });
@@ -146,11 +175,12 @@ export async function reportJobMail(
       try {
         const job = getJob(store.db, id);
         const since = Math.max(job.mailCursor ?? 0, sinceEventId);
-        const batch = eventsAfter(store.db, id, since, REPORTED_EVENTS);
+        const batch = eventsAfter(store.db, id, since, REPORTED_EVENTS).filter(mailed);
         const last = batch.at(-1);
         if (!last || !claimMailCursor(store, id, job.mailCursor, last.id)) continue;
         const needed = typeof cfg === 'string' ? null : safeNeededOf(store, job);
-        const outcome = await deliver(cfg, job, batch, needed);
+        const receipt = typeof cfg === 'string' ? null : receiptOf(store, job, batch);
+        const outcome = await deliver(cfg, job, batch, needed, receipt);
         recordMailOutcome(store, id, outcome);
         out.push(
           outcome.sent

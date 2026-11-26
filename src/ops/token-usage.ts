@@ -25,6 +25,7 @@ import {
 import { confined, readConfined, USAGE_LIMITS, type UsageLimits } from '../server/transcript.ts';
 import type { TokenCounts, UsageRange } from '../server/types.ts';
 import type { Store } from '../storage/client.ts';
+import { eventsOfTypes } from '../storage/events.ts';
 import { listJobs } from '../storage/jobs.ts';
 import type { TokenUsageRow } from '../storage/schema.ts';
 import { insertUsage, recordedRefs, usageInRange, usageOfJob } from '../storage/usage.ts';
@@ -186,6 +187,14 @@ export function backfillUsage(store: Store, claudeDir: string = claudeHome()): B
     .filter((j) => !matched.has(j.id))
     .map((j) => ({ jobId: j.id, worktreePath: j.worktreePath ?? '' }));
   return report;
+}
+
+/** Summed `runner.session` seconds of `jobId`; null when none is recorded. */
+export function jobSeconds(store: Store, jobId: string): number | null {
+  const secs = eventsOfTypes(store.db, jobId, ['runner.session'])
+    .map((e) => e.payload['seconds'])
+    .filter((v): v is number => typeof v === 'number');
+  return secs.length === 0 ? null : secs.reduce((a, b) => a + b, 0);
 }
 
 /** The summed counts of every session recorded on `jobId`; null when none is recorded. */

@@ -25,13 +25,13 @@ afterAll(async () => {
 });
 
 describe('recovery worker mail', () => {
-  it('mails a failed recovery attempt into the job thread', async () => {
+  it('mails a failed recovery attempt, starting the job thread', async () => {
     const c = start(store, clone);
     toCi(store, c);
     releaseJob(store, c.id, { token: c.token });
     Object.assign(process.env, smtp.env());
-    const [opened] = await reportJobMail(store, 0); // the thread's first mail
-    expect(opened?.error).toBeNull();
+    // Driving the job to ci recorded only unmailed events: no thread yet.
+    expect(await reportJobMail(store, 0)).toEqual([]);
 
     shim.write({ fail: 'pr view' }); // the probe answers, the attempt fails
     const before = smtp.messages.length;
@@ -40,10 +40,11 @@ describe('recovery worker mail', () => {
 
     const mails = smtp.messages.slice(before);
     expect(mails).toHaveLength(1);
-    expect(mails[0]?.headers['in-reply-to']).toBe(opened?.messageId);
+    expect(mails[0]?.headers['in-reply-to']).toBeUndefined(); // the thread's first mail
     expect(mails[0]?.body).toContain('recovery.failed');
+    expect(job(c).mailThreadId).toBe(mails[0]?.headers['message-id']);
     expect(job(c).mailLastId).toBe(mails[0]?.headers['message-id']);
     const types = listEvents(store.db, c.id, 1000).map((e) => e.type);
-    expect(types.filter((t) => t === 'mail.sent')).toHaveLength(2);
+    expect(types.filter((t) => t === 'mail.sent')).toHaveLength(1);
   });
 });

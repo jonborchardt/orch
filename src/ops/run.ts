@@ -37,7 +37,7 @@ import {
 import type { TokenCounts } from '../server/types.ts';
 import { listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import { eventsOfTypes, latestEventsByJob, listEvents } from '../storage/events.ts';
+import { latestEventsByJob, listEvents } from '../storage/events.ts';
 import {
   attachSession,
   claimJob,
@@ -82,7 +82,7 @@ import {
   writeSession,
 } from './runner-state.ts';
 import { listTickets, showTicket } from './tickets.ts';
-import { jobTokens, recordSession } from './token-usage.ts';
+import { jobSeconds, jobTokens, recordSession } from './token-usage.ts';
 import { sleep } from './verify-lock.ts';
 
 /** The controller's owner identity on every job it runs; its Claude child claims under it too. */
@@ -953,9 +953,6 @@ async function runQueue(
 
 /** What a merged ticket's result job has on record: never estimated, never a second head lookup. */
 function mergedTicket(store: Store, r: TicketResult & { jobId: string }): MergedTicket {
-  const secs = eventsOfTypes(store.db, r.jobId, ['runner.session'])
-    .map((e) => e.payload['seconds'])
-    .filter((v): v is number => typeof v === 'number');
   const commit = mergeEvidence(store.db, r.jobId)?.['mergeCommit'];
   return {
     ticketId: r.ticketId,
@@ -964,7 +961,7 @@ function mergedTicket(store: Store, r: TicketResult & { jobId: string }): Merged
     head: mergedHead(store, r.jobId),
     mergeCommit: typeof commit === 'string' ? commit : null,
     prUrl: getJob(store.db, r.jobId).prUrl,
-    seconds: secs.length === 0 ? null : secs.reduce((a, b) => a + b, 0),
+    seconds: jobSeconds(store, r.jobId),
     tokens: jobTokens(store, r.jobId),
   };
 }
