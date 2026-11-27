@@ -12,7 +12,7 @@ import type { ChildExit } from '../src/integrations/claude-session.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { planJob } from '../src/ops/factory.ts';
 import { reportLimit } from '../src/ops/model-limit.ts';
-import { RUNNER_SESSION } from '../src/ops/run.ts';
+import { LIMIT_WAITS, RUNNER_SESSION, startSession } from '../src/ops/run.ts';
 import { jobUsage } from '../src/ops/usage.ts';
 import { claimJob } from '../src/storage/jobs.ts';
 import {
@@ -23,8 +23,10 @@ import {
   idle,
   type Launcher,
   launcher,
+  lastSession,
   one,
   queue,
+  quick,
   status,
   store,
   ticket,
@@ -182,34 +184,71 @@ describe('a fable limit falls back to the next pool model', () => {
   });
 });
 
-describe('no other model in the pool is the account-wide path (AC8)', () => {
-  const stopped = async (ticketId: number, jobId: string) => {
-    const l = exiting(launcher(idle), limited('Fable limit reached'));
-    const s = await one(l, ticketId);
-    expect(s.tickets[0]).toMatchObject({
-      ticketId,
-      outcome: 'blocked',
-      code: 'usage-limit',
-      next: 'orch resume',
-    });
-    expect(s.reason).toBe('Claude usage limit reached; orch resume continues the session');
-    expect(l.calls).toHaveLength(1);
+// The account-wide path no longer ends the run at once: the controller waits and relaunches the
+// same job (ticket 0180 AC4, decision 2026-11-26-controller-waits-for-limits).
+describe('no other model in the pool is the account-wide path: it waits (AC8)', () => {
+  const MIN = 60_000;
+  /** Run the ticket with a fake sleep, recording each wait the session showed. */
+  const waiting = async (ticketId: number, l: Launcher) => {
+    const waits: unknown[] = [];
+    const sleep = () => {
+      const w = lastSession()?.wait ?? null;
+      if (w !== null && JSON.stringify(waits.at(-1)) !== JSON.stringify(w)) waits.push(w);
+      return Promise.resolve();
+    };
+    const s = await startSession(
+      store,
+      { mode: 'ticket', ticket: ticketId },
+      { launch: l.launch, ...quick, sleep, pollMs: MIN },
+    );
+    return { s, waits };
+  };
+  const relaunched = async (ticketId: number, jobId: string) => {
+    const l = exiting(launcher(idle, done), limited('Fable limit reached'));
+    const { s, waits } = await waiting(ticketId, l);
+    expect(s.tickets.map((t) => [t.jobId, t.outcome])).toEqual([[jobId, 'done']]);
+    expect(l.calls.map((c) => c.jobId)).toEqual([jobId, jobId]);
+    // No reset time is known: a probe.
+    expect(waits).toMatchObject([{ reason: 'the next usage limit probe' }]);
     expect(fallbacks(jobId)).toEqual([]);
-    expect(status(ticketId)).toBe('in-progress');
+    expect(status(ticketId)).toBe('done');
   };
 
-  it('a single-model pool ends the run resumably and records no fallback', async () => {
+  it('a single-model pool waits, relaunches the same job, and records no fallback', async () => {
     const { ticketId, jobId } = fableJob('Only fable', { builder: ['fable'] }, ['builder']);
-    await stopped(ticketId, jobId);
+    await relaunched(ticketId, jobId);
   });
 
-  it('all or nothing: one role without an alternative stops the job', async () => {
+  it('all or nothing: one role without an alternative makes the job wait', async () => {
     const { ticketId, jobId } = fableJob(
       'Mixed pools',
       { builder: ['fable', 'opus'], approver: ['fable'] },
       ['builder', 'approver'],
     );
-    await stopped(ticketId, jobId);
+    await relaunched(ticketId, jobId);
+  });
+
+  it('a session-reported opus limit waits until its reset plus the margin', async () => {
+    const { ticketId, jobId } = fableJob('Opus spent');
+    const reset = Math.floor(Date.now() / 1000) + 3;
+    const report: Act = (job) => {
+      reportLimit(
+        store,
+        job.id,
+        { token: job.ownerToken ?? '' },
+        { model: 'opus', text: `Claude AI usage limit reached|${String(reset)}` },
+      );
+    };
+    const l = launcher(report, done);
+    const { s, waits } = await waiting(ticketId, l);
+    expect(s.tickets.map((t) => t.outcome)).toEqual(['done']);
+    expect(l.calls.map((c) => c.jobId)).toEqual([jobId, jobId]);
+    expect(waits).toEqual([
+      {
+        reason: 'the usage limit to reset',
+        until: new Date((reset + LIMIT_WAITS.marginSeconds) * 1000).toISOString(),
+      },
+    ]);
   });
 });
 

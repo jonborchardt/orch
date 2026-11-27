@@ -165,11 +165,14 @@ describe('runner.session: one Claude child, from start to exit', () => {
     };
     const log: string[] = [];
 
-    await startSession(
+    // An overloaded API is waited out (decision 2026-11-26-controller-waits-for-limits); a zero
+    // bound stops at once, resumably.
+    const s = await startSession(
       store,
       { mode: 'ticket', ticket: id },
-      { launch, log: (line) => log.push(line), ...quick },
+      { launch, log: (line) => log.push(line), ...quick, limitWaits: { boundSeconds: 0 } },
     );
+    expect(s.tickets[0]?.code).toBe('api-unreachable');
 
     const jobId = jobsOf(id)[0]?.id ?? '';
     expect(log).toContain('  claude: Bash: npm test');
@@ -179,6 +182,8 @@ describe('runner.session: one Claude child, from start to exit', () => {
       stderrTail: 'API Error: 529 overloaded\n',
       result: { subtype: 'error_during_execution', isError: true, numTurns: 3 },
     });
+    await resumeSession(store, {}, { launch: launcher(done).launch, ...quick });
+    expect(status(id)).toBe('done');
   });
 
   it('a requested stop records the ended session and no failure', async () => {

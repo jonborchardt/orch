@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { claudeLimit, limitUntil } from '../src/core/claude-limit.ts';
+import { apiUnreachable, claudeLimit, limitUntil } from '../src/core/claude-limit.ts';
 
 const error = (result: string) => ({ isError: true, result });
 
@@ -57,11 +57,41 @@ describe('claudeLimit', () => {
     expect(claudeLimit(undefined, { isError: null, result: text })).toBeNull();
   });
 
+  it('an unreachable API is not a limit', () => {
+    expect(claudeLimit("API Error: Can't reach the API server (ENOTFOUND)", null)).toBeNull();
+  });
+
   it('an ordinary failed or idle exit is no limit', () => {
     expect(
       claudeLimit('Error: ENOENT: no such file\n    at line 429', error('tool failed')),
     ).toBeNull();
     expect(claudeLimit('', null)).toBeNull();
     expect(claudeLimit(undefined, undefined)).toBeNull();
+  });
+});
+
+describe('apiUnreachable (ticket 0180 AC6)', () => {
+  it.each([
+    'getaddrinfo ENOTFOUND api.anthropic.com',
+    'connect ECONNREFUSED 127.0.0.1:443',
+    'read ECONNRESET',
+    'connect ETIMEDOUT 1.2.3.4:443',
+    "API Error: Can't reach the API server (ENOTFOUND)",
+    'API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+    'Error: 503 Service Unavailable',
+    'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+  ])('finds %j in stderr and in an error result', (text) => {
+    expect(apiUnreachable(`starting\n${text}\n`, null)).toBe(text);
+    expect(apiUnreachable('', error(text))).toBe(text);
+  });
+
+  it('never reads a result that is not an error, nor an ordinary exit', () => {
+    const text = 'The server said ECONNRESET and was overloaded, API Error: 500';
+    expect(apiUnreachable('', { isError: false, result: text })).toBeNull();
+    expect(apiUnreachable(undefined, { isError: null, result: text })).toBeNull();
+    expect(
+      apiUnreachable('Error: ENOENT: no such file\n    at line 500', error('tool failed')),
+    ).toBeNull();
+    expect(apiUnreachable('5-hour limit reached ∙ resets 3pm', null)).toBeNull();
   });
 });

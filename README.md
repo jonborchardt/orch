@@ -361,7 +361,8 @@ runs. What changes when two run (decision
 [2026-11-25-one-controller-per-repository](docs/decisions/2026-11-25-one-controller-per-repository.md)):
 
 - Both use one Claude account, so a long run reaches its usage limit sooner; each controller then
-  ends its own run, and `orch resume --repo <path>` continues it.
+  waits for the reset (at most 12 hours) before it ends its own run, and `orch resume --repo <path>`
+  continues it.
 - Ticket priority is per repository: a lower-priority ticket in one can run while a higher one
   waits in the other.
 - Every controller's gates run the installed build. Rebuilding `dist/` (from `main` only) while
