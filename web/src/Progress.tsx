@@ -13,6 +13,7 @@ import {
 
 import type { Progress, StepState, Timeline } from '../../src/server/types.ts';
 import { ago } from './format.ts';
+import { textSize, weight } from './theme.ts';
 
 /** Glyph and words per step state, so colour is never the only cue. */
 const STEP: Record<StepState, { glyph: string; words: string }> = {
@@ -70,7 +71,7 @@ export function ProgressStrip({ progress }: { progress: Progress }) {
         role="img"
         tabIndex={0}
         aria-label={`Progress: ${progress.label}. ${progress.steps.map(stepText).join(', ')}`}
-        style={{ whiteSpace: 'nowrap', cursor: 'help', fontSize: '0.875rem' }}
+        style={{ whiteSpace: 'nowrap', cursor: 'help', fontSize: textSize.progress }}
       >
         <span aria-hidden style={{ letterSpacing: '0.1em', marginRight: '0.4em' }}>
           {progress.steps.map((s) => (
@@ -78,7 +79,10 @@ export function ProgressStrip({ progress }: { progress: Progress }) {
               key={s.id}
               data-step={s.id}
               data-step-state={s.state}
-              style={{ color: color[s.state], fontWeight: s.state === 'done' ? 400 : 700 }}
+              style={{
+                color: color[s.state],
+                fontWeight: s.state === 'done' ? weight.regular : weight.bold,
+              }}
             >
               {STEP[s.state].glyph}
             </span>

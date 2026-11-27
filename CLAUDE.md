@@ -90,7 +90,8 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   `/api/tickets` computed and posts ticket actions; `web/src/ticketState.ts` is presentation, never
   a readiness or lifecycle rule. `GET /api/runner` is `runnerStatus` and nothing else: no route
   starts, stops, or resumes the controller. `web/` is the React + MUI client with its own `tsconfig.json`; it imports only
-  `src/server/types.ts` and `src/ops/actions.ts` types from `src/`.
+  `src/server/types.ts` and `src/ops/actions.ts` types from `src/`. Colours, type, and spacing
+  come from the theme module `web/src/theme.ts`; components never add their own values.
 - The CLI is one-shot: open the store, do one operation, print, exit. No daemons, timers, or
   background work. There are three exceptions, all opt-in and never required for jobs to run:
   `orch ui`, which serves the dashboard until interrupted; the recovery worker

@@ -21,7 +21,7 @@ import type {
   TicketView,
 } from '../../src/server/types.ts';
 import { App } from './App.tsx';
-import { theme } from './main.tsx';
+import { theme } from './theme.ts';
 
 // The full suite runs ~20 process-heavy files in parallel; the 1 s default flakes under that load.
 configure({ asyncUtilTimeout: 10_000 });
