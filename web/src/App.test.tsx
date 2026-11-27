@@ -5647,3 +5647,430 @@ describe('Job detail: Overview summary (ticket 0016)', () => {
     expect(document.activeElement).toBe(reviews);
   });
 });
+
+describe('Deep links (ticket 0007)', () => {
+  const go = (hash: string) => {
+    window.location.hash = hash;
+    fireEvent(window, new HashChangeEvent('hashchange'));
+  };
+  const select = (name: string) => screen.getByRole('combobox', { name });
+  const filter = () => screen.getByRole('searchbox', { name: 'Filter' });
+  const th = (name: string) => must(screen.getByRole('button', { name }).closest('th'));
+  const sorted = () => document.querySelectorAll('th[aria-sort]');
+  const jobsNav = () =>
+    within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('link', {
+      name: 'Jobs',
+    });
+  const brand = () => screen.getByRole('link', { name: 'orch factory' });
+  const selectedTab = () => screen.getByRole('tab', { selected: true });
+  const board = () => screen.findByRole('table', { name: 'Factory jobs' });
+  const query = () => new URLSearchParams(window.location.hash.slice(3));
+
+  it('a fresh load of a board URL restores Show, Repository, Filter, and sort (AC1)', async () => {
+    window.location.hash = '#/?show=needs-human&repo=gamma&q=Gamma&sort=updated:desc';
+    mockFetch();
+    mount();
+    await screen.findByText('Gamma blocked');
+    expect(select('Show')).toHaveValue('needs human');
+    await waitFor(() => {
+      expect(select('Repository')).toHaveValue('gamma');
+    });
+    expect(filter()).toHaveValue('Gamma');
+    expect(th('Updated')).toHaveAttribute('aria-sort', 'descending');
+    expect(jobsNav()).toHaveAttribute(
+      'href',
+      '#/?show=needs-human&repo=gamma&q=Gamma&sort=updated%3Adesc',
+    );
+  });
+
+  it('a fresh load of a bare #/ shows the defaults (AC1)', async () => {
+    window.location.hash = '#/';
+    mockFetch();
+    mount();
+    await board();
+    expect(select('Show')).toHaveValue('current');
+    expect(select('Repository')).toHaveValue('');
+    expect(filter()).toHaveValue('');
+    expect(sorted()).toHaveLength(0);
+    expect(window.location.hash).toBe('#/');
+  });
+
+  it('board changes replace the URL without history or hashchange, and clearing gives #/ (AC2)', async () => {
+    mockFetch();
+    mount();
+    await board();
+    const length = window.history.length;
+    const changes = vi.fn();
+    window.addEventListener('hashchange', changes);
+    await choose('Show', /^failed/);
+    expect(window.location.hash).toBe('#/?show=failed');
+    await choose('Repository', 'gamma');
+    expect(window.location.hash).toBe('#/?show=failed&repo=gamma');
+    fireEvent.click(screen.getByRole('button', { name: /need human$/ }));
+    expect(window.location.hash).toBe('#/?show=needs-human&repo=gamma');
+    expect(jobsNav()).toHaveAttribute('href', '#/?show=needs-human&repo=gamma');
+    expect(brand()).toHaveAttribute('href', '#/?show=needs-human&repo=gamma');
+    // Clearing every setting writes exactly #/.
+    fireEvent.click(screen.getByRole('button', { name: /need human$/ }));
+    await choose('Repository', 'All repositories');
+    expect(window.location.hash).toBe('#/');
+    expect(jobsNav()).toHaveAttribute('href', '#/');
+    expect(window.history.length).toBe(length);
+    expect(changes).not.toHaveBeenCalled();
+    window.removeEventListener('hashchange', changes);
+    // A reload shows the defaults.
+    cleanup();
+    mount();
+    await board();
+    expect(select('Show')).toHaveValue('current');
+    expect(select('Repository')).toHaveValue('');
+  });
+
+  it('a column sort is written to the URL (AC2)', async () => {
+    mockFetch();
+    mount();
+    await board();
+    const length = window.history.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Updated' }));
+    expect(query().get('sort')).toBe('updated:asc');
+    fireEvent.click(screen.getByRole('button', { name: 'Updated' }));
+    expect(query().get('sort')).toBe('updated:desc');
+    expect(window.history.length).toBe(length);
+  });
+
+  it('a summary chip on a job route leaves the job URL alone; #/ then shows it (AC2)', async () => {
+    window.location.hash = '#/jobs/job-00000003/events';
+    mockFetch();
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(await screen.findByRole('button', { name: /need human$/ }));
+    expect(window.location.hash).toBe('#/jobs/job-00000003/events');
+    go('#/');
+    await board();
+    expect(select('Show')).toHaveValue('needs human');
+    expect(window.location.hash).toBe('#/?show=needs-human');
+  });
+
+  it('Filter writes the URL once after typing stops, or at once on blur (AC3)', async () => {
+    mockFetch();
+    mount();
+    await board();
+    vi.useFakeTimers();
+    try {
+      for (const v of ['a', 'al', 'alp']) {
+        fireEvent.change(filter(), { target: { value: v } });
+        vi.advanceTimersByTime(300);
+        expect(window.location.hash).toBe('');
+      }
+      vi.advanceTimersByTime(99);
+      expect(window.location.hash).toBe('');
+      vi.advanceTimersByTime(1);
+      expect(window.location.hash).toBe('#/?q=alp');
+      fireEvent.change(filter(), { target: { value: 'alph' } });
+      fireEvent.blur(filter());
+      expect(window.location.hash).toBe('#/?q=alph');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('opening a row flushes the pending Filter write first, and nothing rewrites the job URL (AC3)', async () => {
+    mockFetch();
+    mount();
+    await board();
+    const replace = vi.spyOn(window.history, 'replaceState');
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(filter(), { target: { value: 'Gamma' } });
+      fireEvent.click(within(boardRowOf('job-00000003')).getByText('30m'));
+      expect(replace.mock.calls.map((c) => c[2])).toContain('#/?q=Gamma');
+      expect(window.location.hash).toBe('#/jobs/job-00000003');
+      vi.advanceTimersByTime(1000);
+      expect(window.location.hash).toBe('#/jobs/job-00000003');
+    } finally {
+      vi.useRealTimers();
+    }
+    replace.mockClear();
+    // Enter on a row flushes the same way.
+    go('#/');
+    await board();
+    fireEvent.change(filter(), { target: { value: 'Delta' } });
+    const r = boardRowOf('job-00000004');
+    r.focus();
+    fireEvent.keyDown(r, { key: 'Enter' });
+    expect(replace.mock.calls.map((c) => c[2])).toContain('#/?q=Delta');
+    expect(window.location.hash).toBe('#/jobs/job-00000004');
+    replace.mockRestore();
+  });
+
+  it('a pending Filter write is dropped when the route changes another way (AC3)', async () => {
+    mockFetch();
+    mount();
+    await board();
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(filter(), { target: { value: 'zzz' } });
+      go('#/jobs/job-00000003');
+      vi.advanceTimersByTime(1000);
+      expect(window.location.hash).toBe('#/jobs/job-00000003');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a bare #/ keeps Show, Repository, Filter, and sort and replaces the URL with them (AC4)', async () => {
+    mockFetch();
+    mount();
+    await board();
+    await choose('Repository', 'gamma');
+    fireEvent.change(filter(), { target: { value: 'delta' } });
+    fireEvent.blur(filter());
+    fireEvent.click(screen.getByRole('button', { name: 'Updated' }));
+    const url = window.location.hash;
+    expect(url).toBe('#/?repo=gamma&q=delta&sort=updated%3Aasc');
+    go('#/jobs/job-00000003');
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(jobsNav()).toHaveAttribute('href', url);
+    expect(brand()).toHaveAttribute('href', url);
+    go('#/');
+    await board();
+    expect(window.location.hash).toBe(url);
+    expect(select('Repository')).toHaveValue('gamma');
+    expect(filter()).toHaveValue('delta');
+    expect(th('Updated')).toHaveAttribute('aria-sort', 'ascending');
+    // An address-bar edit to #/ while on the board keeps them too.
+    go('#/');
+    expect(window.location.hash).toBe(url);
+    expect(filter()).toHaveValue('delta');
+  });
+
+  it('a hashchange to a board URL with parameters sets exactly those (AC5)', async () => {
+    mockFetch();
+    mount();
+    await board();
+    await choose('Show', /^cancelled/);
+    fireEvent.change(filter(), { target: { value: 'delta' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Updated' }));
+    go('#/?show=failed');
+    await waitFor(() => {
+      expect(select('Show')).toHaveValue('failed');
+    });
+    expect(filter()).toHaveValue('');
+    expect(select('Repository')).toHaveValue('');
+    expect(sorted()).toHaveLength(0);
+  });
+
+  it.each(['#/?show=bogus', '#/?sort=nope:asc', '#/?sort=updated:up', '#/?sort=updated'])(
+    'invalid board input %s gives the defaults (AC9)',
+    async (hash) => {
+      window.location.hash = hash;
+      mockFetch();
+      mount();
+      await board();
+      expect(select('Show')).toHaveValue('current');
+      expect(sorted()).toHaveLength(0);
+    },
+  );
+
+  it('a repo missing from the loaded list gives All repositories (AC9)', async () => {
+    window.location.hash = '#/?repo=github.com%2Fnobody%2Fnothing&show=failed';
+    mockFetch();
+    mount();
+    await waitFor(() => {
+      expect(window.location.hash).toBe('#/?show=failed');
+    });
+    expect(select('Repository')).toHaveValue('');
+    expect(select('Show')).toHaveValue('failed');
+  });
+
+  it('a tab URL opens that tab; an unavailable or unknown tab renders Overview (AC6, AC9, AC10)', async () => {
+    window.location.hash = '#/jobs/job-00000003';
+    mockFetch();
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(selectedTab()).toHaveAttribute('id', 'tab-Overview');
+    const d = detail();
+    // Some tab is unavailable for this detail, so the fallback is exercised.
+    expect(TABS.some((t) => t !== 'Overview' && resolveTab(d, t) === 'Overview')).toBe(true);
+    for (const t of TABS) {
+      go(`#/jobs/job-00000003/${t.toLowerCase()}`);
+      await waitFor(() => {
+        expect(selectedTab()).toHaveAttribute('id', `tab-${resolveTab(d, t)}`);
+      });
+    }
+    go('#/jobs/job-00000003/events');
+    await waitFor(() => {
+      expect(selectedTab()).toHaveAttribute('id', 'tab-Events');
+    });
+    go('#/jobs/job-00000003/bogus');
+    await waitFor(() => {
+      expect(selectedTab()).toHaveAttribute('id', 'tab-Overview');
+    });
+  });
+
+  it('a tab click pushes its URL, Overview the bare job URL, and Back returns (AC6, AC10)', async () => {
+    window.location.hash = '#/jobs/job-00000003';
+    mockFetch();
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    const length = window.history.length;
+    fireEvent.click(screen.getByRole('tab', { name: /^Events/ }));
+    expect(window.location.hash).toBe('#/jobs/job-00000003/events');
+    expect(window.history.length).toBe(length + 1);
+    expect(selectedTab()).toHaveAttribute('id', 'tab-Events');
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(window.location.hash).toBe('#/jobs/job-00000003');
+    fireEvent.click(screen.getByRole('tab', { name: /^Findings/ }));
+    expect(window.location.hash).toBe('#/jobs/job-00000003/findings');
+    window.history.back();
+    await waitFor(() => {
+      expect(window.location.hash).toBe('#/jobs/job-00000003');
+    });
+    await waitFor(() => {
+      expect(selectedTab()).toHaveAttribute('id', 'tab-Overview');
+    });
+  });
+
+  describe('review round and reviewer links (AC7)', () => {
+    const review = {
+      jobId: 'job-00000003',
+      artifactId: 1,
+      head: 'abc',
+      model: null,
+      sameAsAuthor: null,
+      summary: null,
+      verdict: 'pass' as const,
+      createdAt: '2026-11-13T08:10:00.000Z',
+      completedAt: '2026-11-13T08:20:00.000Z',
+    };
+    const scroll = vi.fn();
+    beforeEach(() => {
+      scroll.mockClear();
+      // jsdom has no scrollIntoView of its own.
+      Element.prototype.scrollIntoView = scroll;
+      data.detail = detail({
+        contents: {
+          'round-1/security.md': 'Security body text',
+          'round-1/odd.md': 'Odd body text',
+          'round-2/correctness.md': 'Correctness body text',
+        },
+        rounds: [
+          {
+            round: 1,
+            reviews: [
+              { ...review, round: 1, id: 1, reviewer: 'security', path: 'round-1/security.md' },
+              { ...review, round: 1, id: 2, reviewer: 'a b/c%', path: 'round-1/odd.md' },
+            ],
+            consolidated: null,
+            blocking: null,
+          },
+          {
+            round: 2,
+            reviews: [
+              {
+                ...review,
+                round: 2,
+                id: 3,
+                reviewer: 'correctness',
+                path: 'round-2/correctness.md',
+              },
+            ],
+            consolidated: null,
+            blocking: null,
+          },
+        ],
+      });
+    });
+    afterEach(() => {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    });
+    const header = (name: RegExp) => screen.getByRole('button', { name });
+
+    it('a round link opens Reviews and scrolls to it; a reviewer link also expands it', async () => {
+      window.location.hash = '#/jobs/job-00000003/reviews/2';
+      mockFetch();
+      mount();
+      await screen.findByRole('heading', { name: 'Gamma blocked' });
+      expect(selectedTab()).toHaveAttribute('id', 'tab-Reviews');
+      await waitFor(() => {
+        expect(scroll).toHaveBeenCalled();
+      });
+      expect(scroll.mock.contexts[0]).toHaveAttribute('id', 'review-round-2');
+      expect(header(/^correctness/)).toHaveAttribute('aria-expanded', 'false');
+      go(`#/jobs/job-00000003/reviews/1/${encodeURIComponent('a b/c%')}`);
+      await waitFor(() => {
+        expect(header(/^a b\/c%/)).toHaveAttribute('aria-expanded', 'true');
+      });
+      expect(header(/^security/)).toHaveAttribute('aria-expanded', 'false');
+      expect(scroll.mock.contexts.at(-1)).toHaveAttribute('id', 'review-round-1');
+    });
+
+    it('a collapsed linked report stays collapsed across polls; a hand expansion replaces the URL', async () => {
+      window.location.hash = '#/jobs/job-00000003/reviews/1/security';
+      mockFetch();
+      mount();
+      await screen.findByRole('heading', { name: 'Gamma blocked' });
+      await waitFor(() => {
+        expect(header(/^security/)).toHaveAttribute('aria-expanded', 'true');
+      });
+      expect(await screen.findByText('Security body text')).toBeInTheDocument();
+      fireEvent.click(header(/^security/));
+      expect(header(/^security/)).toHaveAttribute('aria-expanded', 'false');
+      // mount() polls every 50 ms; several polls later it is still collapsed.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(header(/^security/)).toHaveAttribute('aria-expanded', 'false');
+      const length = window.history.length;
+      fireEvent.click(header(/^correctness/));
+      expect(window.location.hash).toBe('#/jobs/job-00000003/reviews/2/correctness');
+      expect(window.history.length).toBe(length);
+    });
+
+    it("a reviewer link opened from another job's detail expands it once that job loads (AC7, AC10)", async () => {
+      const linked = data.detail;
+      data.detail = detail({ job: { ...detail().job, id: 'job-00000004', title: 'Other job' } });
+      window.location.hash = '#/jobs/job-00000004/reviews';
+      mockFetch();
+      mount();
+      await screen.findByRole('heading', { name: 'Other job' });
+      // The next job's detail is held, so the link is seen first against the previous job's data.
+      const next = Promise.withResolvers<undefined>();
+      hold.detail = next.promise;
+      data.detail = linked;
+      go('#/jobs/job-00000003/reviews/1/security');
+      await new Promise((r) => setTimeout(r, 100));
+      next.resolve(undefined);
+      await screen.findByRole('heading', { name: 'Gamma blocked' });
+      await waitFor(() => {
+        expect(header(/^security/)).toHaveAttribute('aria-expanded', 'true');
+      });
+      expect(scroll.mock.contexts.at(-1)).toHaveAttribute('id', 'review-round-1');
+    });
+
+    it('an unknown round or reviewer opens Reviews with nothing expanded (AC9)', async () => {
+      for (const hash of [
+        '#/jobs/job-00000003/reviews/9',
+        '#/jobs/job-00000003/reviews/1/nobody',
+        '#/jobs/job-00000003/reviews/x/security',
+        '#/jobs/job-00000003/reviews/1/%E0%A4%A',
+      ]) {
+        window.location.hash = hash;
+        mockFetch();
+        mount();
+        await screen.findByRole('heading', { name: 'Gamma blocked' });
+        expect(selectedTab()).toHaveAttribute('id', 'tab-Reviews');
+        for (const name of [/^security/, /^a b/, /^correctness/]) {
+          expect(header(name)).toHaveAttribute('aria-expanded', 'false');
+        }
+        cleanup();
+      }
+    });
+  });
+
+  it("the board's Reviews rollup chip links to the job's current round (AC8)", async () => {
+    mockFetch();
+    mount();
+    await board();
+    const chip = must(within(boardRowOf('job-00000002')).getByText('1/2, 1 pending').closest('a'));
+    expect(chip).toHaveAttribute('href', '#/jobs/job-00000002/reviews/1');
+  });
+});

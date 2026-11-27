@@ -510,6 +510,35 @@ test('filters by text and sorts by a header', async ({ page }) => {
   await expect(table.getByRole('row').last()).toContainText('Add health endpoint');
 });
 
+test('a board URL with Show and sort survives a reload (ticket 0007)', async ({ page }) => {
+  await page.goto('/#/?show=finished&sort=job:desc');
+  for (const pass of ['load', 'reload']) {
+    if (pass === 'reload') await page.reload();
+    await expect(page.getByRole('combobox', { name: 'Show' })).toHaveValue('finished');
+    await expect(
+      page.getByRole('table', { name: 'Factory jobs' }).getByRole('columnheader', { name: 'Job' }),
+    ).toHaveAttribute('aria-sort', 'descending');
+  }
+});
+
+test('a reviewer link survives a reload (ticket 0007)', async ({ page }) => {
+  const { ids } = state();
+  await page.goto(`/#/jobs/${ids.completed}/reviews/1/security`);
+  for (const pass of ['load', 'reload']) {
+    if (pass === 'reload') await page.reload();
+    await expect(page.getByRole('tab', { name: /^Reviews/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(
+      page.locator('#review-round-1').getByRole('button', { name: /^security/ }),
+    ).toHaveAttribute('aria-expanded', 'true');
+    await expect(
+      page.locator('#review-round-2').getByRole('button', { name: /^security/ }),
+    ).toHaveAttribute('aria-expanded', 'false');
+  }
+});
+
 test('a stopped job explains itself and offers recovery, not approval', async ({ page }) => {
   const { ids } = state();
   await page.goto(`/#/jobs/${ids.failed}`);
