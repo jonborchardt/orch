@@ -11,6 +11,7 @@ import {
   Link,
   Paper,
   Stack,
+  SvgIcon,
   Tab,
   Table,
   TableBody,
@@ -48,6 +49,15 @@ import { STATE, ago, eventDetail, preciseDuration, prNumber, verdictColor } from
 import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
 import { ticketHref, ticketKey } from './ticketState.ts';
 import { fonts, textSize, weight } from './theme.ts';
+
+/** Material's "expand more" chevron, for every accordion here; MUI rotates it when expanded. */
+function ExpandIcon() {
+  return (
+    <SvgIcon aria-hidden="true">
+      <path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z" />
+    </SvgIcon>
+  );
+}
 
 /** What the detail page's own fetch is doing, for the app bar's shared indicator. */
 export type DetailActivity = 'loading' | 'refreshing' | 'idle';
@@ -196,7 +206,7 @@ export function JobDetail({
             slotProps={{ transition: { unmountOnExit: true } }}
           >
             <AccordionSummary
-              expandIcon={<span aria-hidden>▾</span>}
+              expandIcon={<ExpandIcon />}
               id="status-details-header"
               aria-controls={detailsOpen ? 'status-details-body' : undefined}
             >
@@ -354,17 +364,42 @@ export function JobDetail({
           ) : (
             detail.rounds.map((r) => (
               <Box key={r.round} sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
-                  Round {r.round}
-                  {r.round === job.round && ' (current)'}
-                  {r.blocking !== null && (
-                    <Chip
-                      sx={{ ml: 1 }}
-                      label={`blocking ${String(r.blocking)}`}
-                      color={r.blocking > 0 ? 'error' : 'success'}
-                    />
-                  )}
-                </Typography>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  useFlexGap
+                  sx={{ alignItems: 'center', flexWrap: 'wrap' }}
+                >
+                  <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
+                    Round {r.round}
+                    {r.round === job.round && ' (current)'}
+                    {r.blocking !== null && (
+                      <Chip
+                        sx={{ ml: 1 }}
+                        label={`blocking ${String(r.blocking)}`}
+                        color={r.blocking > 0 ? 'error' : 'success'}
+                      />
+                    )}
+                  </Typography>
+                  {/* Beside the heading, not in it: its accessible name stays "Round N". */}
+                  {r.reviews.length > 0 &&
+                    ([true, false] as const).map((open) => (
+                      <Button
+                        key={String(open)}
+                        aria-label={`${open ? 'Expand' : 'Collapse'} all round ${String(r.round)}`}
+                        // Nothing to do when every panel is already in that state.
+                        disabled={r.reviews.every((rv) => (openReviews[rv.id] === true) === open)}
+                        onClick={() => {
+                          setOpenReviews((s) => ({
+                            ...s,
+                            ...Object.fromEntries(r.reviews.map((rv) => [rv.id, open])),
+                          }));
+                        }}
+                      >
+                        {open ? 'Expand all' : 'Collapse all'}
+                      </Button>
+                    ))}
+                </Stack>
                 {r.reviews.length === 0 && (
                   <Typography color="text.secondary">No reviewers recorded.</Typography>
                 )}
@@ -384,7 +419,7 @@ export function JobDetail({
                   >
                     {/* MUI gives the region this id; it is unmounted while collapsed. */}
                     <AccordionSummary
-                      expandIcon={<span aria-hidden>▾</span>}
+                      expandIcon={<ExpandIcon />}
                       id={`review-${String(rv.id)}-header`}
                       aria-controls={
                         openReviews[rv.id] ? `review-${String(rv.id)}-body` : undefined
@@ -976,7 +1011,7 @@ function EarlierRuns({
           {/* A div with role="button": its content is block-level, which a <button> may not hold. */}
           <AccordionSummary
             component="div"
-            expandIcon={<span aria-hidden>▾</span>}
+            expandIcon={<ExpandIcon />}
             id={`run-${String(r.id)}-header`}
           >
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
