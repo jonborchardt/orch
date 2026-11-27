@@ -230,6 +230,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     events: [],
     plan: null,
     planError: 'config broken',
+    verificationRuns: [],
     blocker: {
       kind: 'decision',
       summary: 'Approver escalated: a human must decide',
@@ -4905,6 +4906,151 @@ describe('Job detail: navigable PR, commit, and log references (todo 0019)', () 
       for (const a of as) external(a);
       expect(hrefs().some((x) => x.trim().toLowerCase().startsWith('javascript:'))).toBe(false);
     }
+  });
+
+  // Ticket 0027: the run history. Run 11 took 9m 06s; its head c2 is older than the pushed c3.
+  const earlierLog = 'verification/11/check.log';
+  const run = (id: number, status: string, head: string, checks: ReturnType<typeof check>[]) => ({
+    id,
+    jobId: 'job-00000003',
+    head,
+    tree: 't',
+    dirty: [],
+    configFingerprint: 'fp',
+    policySource: 'baseline',
+    policyHead: null,
+    status,
+    actor: null,
+    startedAt: '2026-11-13T08:00:00.000Z',
+    completedAt: '2026-11-13T08:09:06.218Z',
+    checks,
+  });
+  const latestRun = run(12, 'passed', c3, [
+    { ...check(1, 'check', 'verification/12/check.log'), durationMs: 546218 },
+  ]);
+  const earlierRun = run(11, 'passed', c2, [{ ...check(3, 'check', earlierLog), cwd: 'web' }]);
+  function history(
+    v: unknown = { ...verification, run: latestRun },
+    earlier: unknown = earlierRun,
+  ): JobDetailView {
+    const d = rich({}, { verification: v });
+    return {
+      ...d,
+      verificationRuns: [latestRun, earlier] as unknown as JobDetailView['verificationRuns'],
+      links: {
+        ...d.links,
+        logs: { ...d.links.logs, [earlierLog]: `/api/jobs/${d.job.id}/artifacts/${earlierLog}` },
+      },
+    };
+  }
+  const earlierSummary = () =>
+    within(screen.getByTestId('earlier-runs')).getByRole('button', { name: /#11/ });
+
+  it('Verification tab: the latest run expanded, an earlier run collapsed until opened (ticket 0027)', async () => {
+    await view(history());
+    await tab(/^Verification/);
+    const panel = screen.getByRole('tabpanel');
+    // The latest run as before, with a formatted duration and no "in ." for the root.
+    expect(panel).toHaveTextContent(/Latest run: #12\s*passed at 33333333, valid for HEAD/);
+    const latest = within(panel).getByRole('table', { name: 'Verification checks of run 12' });
+    expect(within(latest).getByRole('columnheader', { name: 'Duration' })).toBeInTheDocument();
+    expect(within(latest).queryByRole('columnheader', { name: 'ms' })).toBeNull();
+    expect(latest).toHaveTextContent('9m 06s');
+    const command = must(within(latest).getByText('npm').closest('td'));
+    expect(command.textContent).toBe('npm');
+    expect(panel.textContent.match(/valid for HEAD/g)).toHaveLength(1);
+
+    // The earlier run: id, status, when, how long, and its tested head; no checks yet.
+    const summary = earlierSummary();
+    expect(summary).toHaveAttribute('aria-expanded', 'false');
+    expect(summary).toHaveTextContent('#11');
+    expect(summary).toHaveTextContent('passed');
+    expect(summary).toHaveTextContent('took 9m 06s');
+    expect(summary).not.toHaveTextContent(/valid|stale/);
+    const time = must(summary.querySelector('time'));
+    expect(time).toHaveAttribute('dateTime', '2026-11-13T08:09:06.218Z');
+    expect(time).toHaveAttribute('title', localTime('2026-11-13T08:09:06.218Z'));
+    expect(time).toHaveTextContent(/ago$/);
+    // The collapsed row names the tested commit as text: a button holds no link (or any other
+    // focusable element), so the commit link is absent until the run is opened.
+    expect(summary).toHaveTextContent(`at ${c2.slice(0, 10)}`);
+    expect(within(summary).queryByRole('link')).toBeNull();
+    expect(summary.querySelector('a, button, input, select, textarea, [tabindex]')).toBeNull();
+    const earlier = screen.getByTestId('earlier-runs');
+    expect(within(earlier).queryByRole('link', { name: commitName(c2) })).toBeNull();
+    expect(
+      within(panel).queryByRole('table', { name: 'Verification checks of run 11' }),
+    ).toBeNull();
+    expect(panel).not.toHaveTextContent(earlierLog);
+
+    // Keyboard: the summary is focusable, and Enter opens it.
+    expect(summary).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(summary, { key: 'Enter' });
+    expect(earlierSummary()).toHaveAttribute('aria-expanded', 'true');
+    // Opened: the tested commit is a link beside the checks, outside the summary button.
+    const link = within(earlier).getByRole('link', { name: commitName(c2) });
+    expect(link).toHaveAttribute('href', `${repo}/commit/${c2}`);
+    external(link);
+    expect(earlierSummary().contains(link)).toBe(false);
+    const opened = within(panel).getByRole('table', { name: 'Verification checks of run 11' });
+    expect(must(within(opened).getByText('npm').closest('td')).textContent).toBe('npm in web');
+    const log = within(opened).getByRole('link', { name: earlierLog });
+    expect(log).toHaveAttribute('href', `/api/jobs/job-00000003/artifacts/${earlierLog}`);
+    external(log);
+  });
+
+  it('Verification tab: a passed earlier run makes no validity claim when the latest is not valid', async () => {
+    await view(
+      history({
+        ...verification,
+        run: { ...latestRun, status: 'failed' },
+        valid: false,
+        reason: 'a required check failed',
+      }),
+    );
+    await tab(/^Verification/);
+    const panel = screen.getByRole('tabpanel');
+    expect(panel).toHaveTextContent('stale: a required check failed');
+    expect(panel).not.toHaveTextContent('valid for HEAD');
+    const summary = earlierSummary();
+    expect(summary).toHaveTextContent('passed');
+    expect(summary).not.toHaveTextContent(/valid|stale/);
+    expect(summary.querySelector('.MuiChip-colorSuccess')).toBeNull();
+    expect(summary.querySelector('.MuiChip-colorDefault')).not.toBeNull();
+  });
+
+  it('Verification tab without a worktree: runs listed, no validity text, not labelled empty', async () => {
+    // The earlier run never completed: its row says when it started and claims no duration.
+    const d = history(null, { ...earlierRun, status: 'running', completedAt: null });
+    expect(detailTabs(d).find((t) => t.name === 'Verification')?.label).toBe('Verification');
+    await view(d);
+    fireEvent.click(screen.getByRole('tab', { name: 'Verification' }));
+    const panel = screen.getByRole('tabpanel');
+    expect(panel).toHaveTextContent(/Latest run: #12\s*passed at 33333333/);
+    expect(
+      within(panel).getByRole('table', { name: 'Verification checks of run 12' }),
+    ).toBeVisible();
+    expect(earlierSummary()).toHaveAttribute('aria-expanded', 'false');
+    expect(earlierSummary()).toHaveTextContent(/started .* ago/);
+    expect(earlierSummary()).not.toHaveTextContent('took');
+    expect(must(earlierSummary().querySelector('time'))).toHaveAttribute(
+      'dateTime',
+      '2026-11-13T08:00:00.000Z',
+    );
+    expect(panel).not.toHaveTextContent(/valid for HEAD|stale:|No worktree; nothing verified\./);
+    // The run's own chip claims nothing; only a passed check inside the table is green.
+    const line = within(panel).getByText(/Latest run:/);
+    expect(line.querySelector('.MuiChip-colorSuccess')).toBeNull();
+    expect(line.querySelector('.MuiChip-colorDefault')).not.toBeNull();
+    cleanup();
+
+    const none = { ...d, verificationRuns: [] };
+    expect(detailTabs(none).find((t) => t.name === 'Verification')?.label).toBe(
+      'Verification (empty)',
+    );
+    await view(none);
+    fireEvent.click(screen.getByRole('tab', { name: 'Verification (empty)' }));
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('No worktree; nothing verified.');
   });
 });
 

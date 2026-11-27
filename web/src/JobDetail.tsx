@@ -44,7 +44,7 @@ import {
   nextAction,
 } from './Status.tsx';
 import { failureText, fetchDetail } from './api.ts';
-import { STATE, ago, eventDetail, prNumber, verdictColor } from './format.ts';
+import { STATE, ago, eventDetail, preciseDuration, prNumber, verdictColor } from './format.ts';
 import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
 import { ticketHref, ticketKey } from './ticketState.ts';
 import { fonts, textSize, weight } from './theme.ts';
@@ -897,13 +897,142 @@ function SessionLine({ session }: { session: JobDetailView['session'] }) {
   );
 }
 
-/** Verification evidence, policy state, sensitive changes, and base integrations from the plan. */
+type Run = JobDetailView['verificationRuns'][number];
+
+/** One run's checks; a log is a link only when the server listed it in `links.logs`. */
+function ChecksTable({ run, logs }: { run: Run; logs: JobDetailView['links']['logs'] }) {
+  return (
+    <Table size="small" aria-label={`Verification checks of run ${String(run.id)}`} sx={{ mt: 1 }}>
+      <TableHead>
+        <TableRow>
+          <TableCell>Check</TableCell>
+          <TableCell>Command</TableCell>
+          <TableCell>Status</TableCell>
+          <TableCell align="right">Exit</TableCell>
+          <TableCell align="right">Duration</TableCell>
+          <TableCell>Log</TableCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {run.checks.map((c) => (
+          <TableRow key={c.id}>
+            <TableCell>
+              {c.checkId}
+              {c.required ? '' : ' (optional)'}
+            </TableCell>
+            <TableCell>
+              <code>{[c.command, ...c.args].join(' ')}</code>
+              {c.cwd === '.' ? '' : ` in ${c.cwd}`}
+            </TableCell>
+            <TableCell>
+              <Chip
+                size="small"
+                label={c.status}
+                color={
+                  c.status === 'passed' ? 'success' : c.status === 'pending' ? 'default' : 'error'
+                }
+              />
+            </TableCell>
+            <TableCell align="right">{c.exitCode ?? c.signal ?? ''}</TableCell>
+            <TableCell align="right">{preciseDuration(c.durationMs)}</TableCell>
+            <TableCell>
+              {c.outputPath ? <LogRef path={c.outputPath} href={logs[c.outputPath]} /> : ''}
+              {c.truncated ? ' (truncated)' : ''}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+/**
+ * The runs before the one shown as latest, each collapsed with its checks unmounted until opened.
+ * The chip is never the success colour: an earlier run is history, not evidence for HEAD. The
+ * summary is a button, so it names the tested commit as text; the commit link is in the body.
+ */
+function EarlierRuns({
+  runs,
+  logs,
+  commit,
+}: {
+  runs: Run[];
+  logs: JobDetailView['links']['logs'];
+  commit: ReturnType<typeof commitRef>;
+}) {
+  return (
+    <Box data-testid="earlier-runs">
+      <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
+        Earlier runs
+      </Typography>
+      {runs.map((r) => (
+        <Accordion
+          key={r.id}
+          variant="outlined"
+          disableGutters
+          sx={{ my: 1 }}
+          slotProps={{ transition: { unmountOnExit: true } }}
+        >
+          {/* A div with role="button": its content is block-level, which a <button> may not hold. */}
+          <AccordionSummary
+            component="div"
+            expandIcon={<span aria-hidden>▾</span>}
+            id={`run-${String(r.id)}-header`}
+          >
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+              <Typography sx={{ fontWeight: weight.semibold }}>#{r.id}</Typography>
+              <Chip size="small" label={r.status} />
+              <Typography variant="body2" color="text.secondary">
+                {r.completedAt ? (
+                  <>
+                    <When iso={r.completedAt} />, took{' '}
+                    {preciseDuration(Date.parse(r.completedAt) - Date.parse(r.startedAt))}
+                  </>
+                ) : (
+                  <>
+                    started <When iso={r.startedAt} />
+                  </>
+                )}
+              </Typography>
+              <Typography variant="body2">
+                at <code>{r.head.slice(0, 10)}</code>
+              </Typography>
+            </Stack>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Typography variant="body2">Tested commit: {commit(r.head, 10)}</Typography>
+            <ChecksTable run={r} logs={logs} />
+          </AccordionDetails>
+        </Accordion>
+      ))}
+    </Box>
+  );
+}
+
+/**
+ * Verification evidence, policy state, sensitive changes, and base integrations from the plan,
+ * then the job's earlier runs. Only the latest run carries a validity statement, and only from
+ * `plan.verification`; without a worktree the recorded runs are listed with none.
+ */
 function Verification({ detail }: { detail: JobDetailView }) {
   const v = detail.plan?.verification ?? null;
   const s = detail.plan?.sensitive ?? null;
   const integ = detail.plan?.integration ?? null;
   if (!detail.plan) return <Typography color="text.secondary">Plan unavailable.</Typography>;
   const commit = commitRef(detail);
+  const latest = v ? v.run : (detail.verificationRuns[0] ?? null);
+  const earlier = detail.verificationRuns.filter((r) => r.id !== latest?.id);
+  const latestRun = latest && (
+    <>
+      <Typography variant="body2" sx={{ mt: 1 }}>
+        Latest run: #{latest.id}{' '}
+        <Chip size="small" label={latest.status} color={v?.valid ? 'success' : 'default'} /> at{' '}
+        {commit(latest.head, 10)}
+        {v ? `, ${v.valid ? 'valid for HEAD' : `stale: ${v.reason ?? ''}`}` : ''}
+      </Typography>
+      <ChecksTable run={latest} logs={detail.links.logs} />
+    </>
+  );
   return (
     <Stack spacing={2}>
       {v ? (
@@ -936,72 +1065,21 @@ function Verification({ detail }: { detail: JobDetailView }) {
                   `${new Date(v.queue.since).toLocaleString()} (${String(v.queue.ahead)} ahead).`}
             </Alert>
           )}
-          <Typography variant="body2" sx={{ mt: 1 }}>
-            Latest run:{' '}
-            {v.run ? (
-              <>
-                #{v.run.id}{' '}
-                <Chip size="small" label={v.run.status} color={v.valid ? 'success' : 'default'} />{' '}
-                at {commit(v.run.head, 10)},{' '}
-                {v.valid ? 'valid for HEAD' : `stale: ${v.reason ?? ''}`}
-              </>
-            ) : (
-              <>none ({v.reason ?? ''})</>
-            )}
-          </Typography>
-          {v.run && (
-            <Table size="small" aria-label="Verification checks" sx={{ mt: 1 }}>
-              <TableHead>
-                <TableRow>
-                  <TableCell>Check</TableCell>
-                  <TableCell>Command</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell align="right">Exit</TableCell>
-                  <TableCell align="right">ms</TableCell>
-                  <TableCell>Log</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {v.run.checks.map((c) => (
-                  <TableRow key={c.id}>
-                    <TableCell>
-                      {c.checkId}
-                      {c.required ? '' : ' (optional)'}
-                    </TableCell>
-                    <TableCell>
-                      <code>{[c.command, ...c.args].join(' ')}</code> in {c.cwd}
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        label={c.status}
-                        color={
-                          c.status === 'passed'
-                            ? 'success'
-                            : c.status === 'pending'
-                              ? 'default'
-                              : 'error'
-                        }
-                      />
-                    </TableCell>
-                    <TableCell align="right">{c.exitCode ?? c.signal ?? ''}</TableCell>
-                    <TableCell align="right">{c.durationMs ?? ''}</TableCell>
-                    <TableCell>
-                      {c.outputPath ? (
-                        <LogRef path={c.outputPath} href={detail.links.logs[c.outputPath]} />
-                      ) : (
-                        ''
-                      )}
-                      {c.truncated ? ' (truncated)' : ''}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          {latestRun ?? (
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              Latest run: none ({v.reason ?? ''})
+            </Typography>
           )}
+        </Paper>
+      ) : latestRun ? (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          {latestRun}
         </Paper>
       ) : (
         <Typography color="text.secondary">No worktree; nothing verified.</Typography>
+      )}
+      {earlier.length > 0 && (
+        <EarlierRuns runs={earlier} logs={detail.links.logs} commit={commit} />
       )}
       {s &&
         (s.changes.length > 0 || s.scan.disabled.length > 0 || s.scan.removedTests.length > 0) && (
