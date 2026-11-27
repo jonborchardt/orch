@@ -1,6 +1,7 @@
 import {
   Box,
   Chip,
+  Link,
   Stack,
   Table,
   TableBody,
@@ -13,6 +14,7 @@ import {
 
 import type { Progress, StepState, Timeline } from '../../src/server/types.ts';
 import { ago, localTime } from './format.ts';
+import { type DetailTab, type TabName, stepTab } from './tabs.ts';
 import { textSize, weight } from './theme.ts';
 
 /** Glyph and words per step state, so colour is never the only cue. */
@@ -157,13 +159,20 @@ export function When({ iso }: { iso: string }) {
   );
 }
 
-/** The detail's Progress section: every step with its state and known times, then the timeline. */
+/**
+ * The detail's Progress section: every step with its state and known times, then the timeline.
+ * An entry whose step maps to an available tab (`stepTab`) is a link to it.
+ */
 export function ProgressSection({
   progress,
   timeline,
+  tabs,
+  onOpen,
 }: {
   progress: Progress;
   timeline: Timeline;
+  tabs: readonly DetailTab[];
+  onOpen: (tab: TabName) => void;
 }) {
   const color = useStepColor();
   const challenge = progress.specChallenge;
@@ -222,11 +231,6 @@ export function ProgressSection({
       <Typography variant="subtitle2" component="h3">
         Timeline
       </Typography>
-      {timeline.truncated && (
-        <Typography variant="body2" color="text.secondary">
-          Earlier history not shown (only the newest events are loaded).
-        </Typography>
-      )}
       {timeline.entries.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
           No stage has started yet.
@@ -234,14 +238,34 @@ export function ProgressSection({
       ) : (
         <Table size="small" aria-label="Timeline">
           <TableBody>
-            {timeline.entries.map((e, i) => (
-              <TableRow key={i} data-kind={e.kind}>
-                <TableCell sx={{ whiteSpace: 'nowrap', width: '1%' }}>
-                  <When iso={e.at} />
-                </TableCell>
-                <TableCell>{e.label}</TableCell>
-              </TableRow>
-            ))}
+            {timeline.entries.map((e, i) => {
+              const tab = stepTab(tabs, e.step);
+              return (
+                <TableRow key={i} data-kind={e.kind}>
+                  <TableCell sx={{ whiteSpace: 'nowrap', width: '1%' }}>
+                    <When iso={e.at} />
+                  </TableCell>
+                  <TableCell>
+                    {tab ? (
+                      <Link
+                        component="button"
+                        type="button"
+                        variant="body2"
+                        aria-label={`Open ${tab} tab: ${e.label}`}
+                        onClick={() => {
+                          onOpen(tab);
+                        }}
+                        sx={{ textAlign: 'left' }}
+                      >
+                        {e.label}
+                      </Link>
+                    ) : (
+                      e.label
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}

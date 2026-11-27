@@ -531,8 +531,24 @@ function position(
   };
 }
 
-/** The detail view loads at most this many newest events; the timeline says when it hit the cap. */
+/** The detail's Events tab loads at most this many newest events; `eventsCapped` says when. */
 export const TIMELINE_EVENTS = 500;
+
+/** The event types `timelineOf` reads; the detail loads every one of them, uncapped. */
+export const TIMELINE_TYPES = [
+  'stage.started',
+  'stage.completed',
+  'stage.failed',
+  'job.blocked',
+  'job.resumed',
+  'job.reworked',
+  'job.interrupted',
+  'job.cancelled',
+  'job.completed',
+] as const;
+type TimelineType = (typeof TIMELINE_TYPES)[number];
+const isTimelineType = (t: string): t is TimelineType =>
+  (TIMELINE_TYPES as readonly string[]).includes(t);
 
 const stepName = (stage: unknown): string =>
   STEPS.find((s) => s.id === stage)?.label ?? (typeof stage === 'string' ? stage : '?');
@@ -551,7 +567,10 @@ export function timelineOf(events: readonly Event[]): Timeline {
   };
   for (const [i, e] of events.entries()) {
     const p = e.payload;
-    switch (e.type) {
+    const type = e.type;
+    if (!isTimelineType(type)) continue;
+    // Exhaustive over TIMELINE_TYPES: a case outside the list or a listed type without a case fails tsc.
+    switch (type) {
       case 'stage.started':
         at = asStep(p['stage']);
         add(e, at, 'started', `${stepName(p['stage'])} started`);
@@ -605,7 +624,11 @@ export function timelineOf(events: readonly Event[]): Timeline {
       case 'job.completed':
         add(e, 'done', 'completed', 'Done');
         break;
+      default: {
+        const unhandled: never = type;
+        throw new Error(`timelineOf: unhandled type ${String(unhandled)}`);
+      }
     }
   }
-  return { entries, truncated: events.length >= TIMELINE_EVENTS };
+  return { entries };
 }
