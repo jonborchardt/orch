@@ -590,6 +590,10 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
   // job or ends any other way resets both.
   let waited = 0;
   let waits = 0;
+  const reset = () => {
+    waited = 0;
+    waits = 0;
+  };
   for (;;) {
     if (run.stopNow()) return { kind: 'stopped' };
     const job = getJob(store.db, jobId);
@@ -649,10 +653,7 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
       run.log(`  usage: session ${sessionId} not recorded: ${(err as Error).message}`);
     }
     if (stopped) return { kind: 'stopped' };
-    if (moved) {
-      waited = 0;
-      waits = 0;
-    }
+    if (moved) reset();
     // A spent account or an unreachable API would fail every ticket the same way: wait it out
     // here and relaunch the same job, never counting the exit as idle; past the bound, end the run
     // resumably (decision 2026-11-26-controller-waits-for-limits).
@@ -692,12 +693,9 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
       const backoff = ws.backoffSeconds[Math.min(waits, ws.backoffSeconds.length - 1)] ?? 0;
       const toReset =
         until === null ? null : Math.max(0, Math.ceil((Date.parse(until) - Date.now()) / 1000));
+      const probe = limited && !rate;
       const seconds =
-        toReset === null
-          ? limited && !rate
-            ? ws.probeSeconds
-            : backoff
-          : toReset + ws.marginSeconds;
+        toReset === null ? (probe ? ws.probeSeconds : backoff) : toReset + ws.marginSeconds;
       if (waited + (toReset ?? seconds) > ws.boundSeconds) {
         if (unreachable !== null) {
           return {
@@ -735,8 +733,7 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
       waits += 1;
       continue;
     }
-    waited = 0;
-    waits = 0;
+    reset();
     run.log(
       `  claude: exited (${exit.error ?? `code ${String(exit.code ?? exit.signal)}`}); ` +
         `job is ${after.stage}/${after.status}`,

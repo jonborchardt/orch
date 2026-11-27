@@ -20,13 +20,15 @@ import {
   clone,
   done,
   eventsOf,
+  exiting,
   idle,
   type Launcher,
   launcher,
-  lastSession,
+  MIN,
   one,
   queue,
   quick,
+  sleeper,
   status,
   store,
   ticket,
@@ -60,17 +62,6 @@ const limited = (text: string): ChildExit => ({
   error: null,
   stderrTail: `starting\n${text}\n`,
 });
-
-/** The n-th launch exits with `exits[n]` when it is set, else the fixture's ordinary exit. */
-function exiting(l: Launcher, ...exits: (ChildExit | null)[]): Launcher {
-  const base = l.launch;
-  l.launch = (input) => {
-    const child = base(input);
-    const exit = exits[l.calls.length - 1];
-    return exit ? { ...child, done: Promise.resolve(exit) } : child;
-  };
-  return l;
-}
 
 const fallbacks = (jobId: string) => eventsOf(jobId, 'models.fallback').map((e) => e.payload);
 const agentsOf = (jobId: string) =>
@@ -187,21 +178,15 @@ describe('a fable limit falls back to the next pool model', () => {
 // The account-wide path no longer ends the run at once: the controller waits and relaunches the
 // same job (ticket 0180 AC4, decision 2026-11-26-controller-waits-for-limits).
 describe('no other model in the pool is the account-wide path: it waits (AC8)', () => {
-  const MIN = 60_000;
   /** Run the ticket with a fake sleep, recording each wait the session showed. */
   const waiting = async (ticketId: number, l: Launcher) => {
-    const waits: unknown[] = [];
-    const sleep = () => {
-      const w = lastSession()?.wait ?? null;
-      if (w !== null && JSON.stringify(waits.at(-1)) !== JSON.stringify(w)) waits.push(w);
-      return Promise.resolve();
-    };
+    const { seen, sleep } = sleeper();
     const s = await startSession(
       store,
       { mode: 'ticket', ticket: ticketId },
       { launch: l.launch, ...quick, sleep, pollMs: MIN },
     );
-    return { s, waits };
+    return { s, waits: seen.waits };
   };
   const relaunched = async (ticketId: number, jobId: string) => {
     const l = exiting(launcher(idle, done), limited('Fable limit reached'));

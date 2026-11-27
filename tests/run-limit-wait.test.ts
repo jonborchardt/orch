@@ -12,29 +12,26 @@ import { summaryExitCode } from '../src/cli/run.ts';
 import type { ChildExit } from '../src/integrations/claude-session.ts';
 import { configPath } from '../src/ops/factory.ts';
 import {
-  type ControllerStatus,
   LIMIT_WAITS,
   MAX_IDLE_LAUNCHES,
   type RunOptions,
   resumeSession,
-  runnerStatus,
   startSession,
 } from '../src/ops/run.ts';
+import { requestStop, runnerSlots, stopRequests } from '../src/ops/runner-state.ts';
 import {
-  requestStop,
-  type RunnerSession,
-  runnerSlots,
-  stopRequests,
-} from '../src/ops/runner-state.ts';
-import {
+  type Act,
   done,
   eventsOf,
+  exiting,
   idle,
   jobsOf,
   type Launcher,
   launcher,
   lastSession,
+  MIN,
   quick,
+  sleeper,
   status,
   store,
   ticket,
@@ -48,38 +45,10 @@ const failing = (text: string): ChildExit => ({
 });
 
 /** The first `n` launches exit with `exit` (without moving the job); later ones finish it. */
-function failsThenDone(n: number, exit: ChildExit): Launcher {
-  const l = launcher(...Array.from({ length: n }, () => idle), done);
-  const base = l.launch;
-  l.launch = (input) => {
-    const child = base(input);
-    return l.calls.length <= n ? { ...child, done: Promise.resolve(exit) } : child;
-  };
-  return l;
-}
-
-/** A fake sleep that records what it was asked to wait while the session showed a wait. */
-function sleeper(during?: (w: NonNullable<RunnerSession['wait']>) => void) {
-  const seen = {
-    waitMs: 0,
-    waits: [] as NonNullable<RunnerSession['wait']>[],
-    status: null as ControllerStatus | null,
-  };
-  const sleep = (ms: number) => {
-    const w = lastSession()?.wait ?? null;
-    if (w !== null) {
-      seen.waitMs += ms;
-      if (seen.waits.at(-1)?.until !== w.until) seen.waits.push(w);
-      seen.status ??= runnerStatus(store).controllers.find((c) => c.pid !== null) ?? null;
-      during?.(w);
-    }
-    return Promise.resolve();
-  };
-  return { seen, sleep };
-}
+const failsThenDone = (n: number, exit: ChildExit): Launcher =>
+  exiting(launcher(...Array<Act>(n).fill(idle), done), ...Array<ChildExit>(n).fill(exit));
 
 const epoch = (ms: number) => Math.floor((Date.now() + ms) / 1000);
-const MIN = 60_000;
 
 const opts = (l: Launcher, o: RunOptions = {}): RunOptions => ({
   launch: l.launch,

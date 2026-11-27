@@ -9,9 +9,14 @@ import { rmSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach } from 'vitest';
 
-import type { ClaudeChild, LaunchInput } from '../src/integrations/claude-session.ts';
+import type { ChildExit, ClaudeChild, LaunchInput } from '../src/integrations/claude-session.ts';
 import { setMergeAuthorization } from '../src/ops/merge.ts';
-import { type RunSummary, startSession } from '../src/ops/run.ts';
+import {
+  type ControllerStatus,
+  runnerStatus,
+  type RunSummary,
+  startSession,
+} from '../src/ops/run.ts';
 import { requestStop, type RunnerSession, runnerSlots } from '../src/ops/runner-state.ts';
 import { addTicket, showTicket } from '../src/ops/tickets.ts';
 import { appendEvent, listEvents } from '../src/storage/events.ts';
@@ -146,6 +151,43 @@ export function launcher(...acts: Act[]): Launcher {
       };
     },
   };
+}
+
+/** The n-th launch exits with `exits[n]` when it is set, else the fixture's ordinary exit. */
+export function exiting(l: Launcher, ...exits: (ChildExit | null)[]): Launcher {
+  const base = l.launch;
+  l.launch = (input) => {
+    const child = base(input);
+    const exit = exits[l.calls.length - 1];
+    return exit ? { ...child, done: Promise.resolve(exit) } : child;
+  };
+  return l;
+}
+
+export const MIN = 60_000;
+
+/**
+ * A fake sleep that records what it was asked to wait while the session showed a limit wait
+ * (`RunnerSession.wait`): the total, each distinct wait, and the live controller's status at the
+ * first one. `during` runs on every such sleep.
+ */
+export function sleeper(during?: (w: NonNullable<RunnerSession['wait']>) => void) {
+  const seen = {
+    waitMs: 0,
+    waits: [] as NonNullable<RunnerSession['wait']>[],
+    status: null as ControllerStatus | null,
+  };
+  const sleep = (ms: number) => {
+    const w = lastSession()?.wait ?? null;
+    if (w !== null) {
+      seen.waitMs += ms;
+      if (seen.waits.at(-1)?.until !== w.until) seen.waits.push(w);
+      seen.status ??= runnerStatus(store).controllers.find((c) => c.pid !== null) ?? null;
+      during?.(w);
+    }
+    return Promise.resolve();
+  };
+  return { seen, sleep };
 }
 
 /**
