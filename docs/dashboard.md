@@ -315,8 +315,10 @@ of their own.
 The **Verification** tab shows the latest run expanded: its id, status, tested HEAD, and checks
 table (check, command, status, exit, duration, log). Every earlier run of the job
 (`verificationRuns` on the detail, newest first) is listed below it collapsed; its summary shows
-`#<id>`, the status, when it completed (relative, exact time in the tooltip), how long it took,
-and the commit it tested, and opening it shows its checks table with its log links. Only the
+`#<id>`, the status, when it completed (relative, exact time in the tooltip) and how long it took
+(or when it started, for a run that never completed), and the short sha it tested as text, since
+the summary is a button and holds no link; opening it shows the tested commit as a commit
+reference and its checks table with its log links. Only the
 latest run carries a validity statement (`valid for HEAD` or `stale: <reason>`, from the plan);
 an earlier run is history, so its status chip is never green and it says nothing about HEAD.
 Without a worktree there is no plan state to judge a run against: the recorded runs are still

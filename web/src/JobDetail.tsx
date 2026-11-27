@@ -947,6 +947,69 @@ function ChecksTable({ run, logs }: { run: Run; logs: JobDetailView['links']['lo
 }
 
 /**
+ * The runs before the one shown as latest, each collapsed with its checks unmounted until opened.
+ * The chip is never the success colour: an earlier run is history, not evidence for HEAD. The
+ * summary is a button, so it names the tested commit as text; the commit link is in the body.
+ */
+function EarlierRuns({
+  runs,
+  logs,
+  commit,
+}: {
+  runs: Run[];
+  logs: JobDetailView['links']['logs'];
+  commit: ReturnType<typeof commitRef>;
+}) {
+  return (
+    <Box data-testid="earlier-runs">
+      <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
+        Earlier runs
+      </Typography>
+      {runs.map((r) => (
+        <Accordion
+          key={r.id}
+          variant="outlined"
+          disableGutters
+          sx={{ my: 1 }}
+          slotProps={{ transition: { unmountOnExit: true } }}
+        >
+          {/* A div with role="button": its content is block-level, which a <button> may not hold. */}
+          <AccordionSummary
+            component="div"
+            expandIcon={<span aria-hidden>▾</span>}
+            id={`run-${String(r.id)}-header`}
+          >
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+              <Typography sx={{ fontWeight: weight.semibold }}>#{r.id}</Typography>
+              <Chip size="small" label={r.status} />
+              <Typography variant="body2" color="text.secondary">
+                {r.completedAt ? (
+                  <>
+                    <When iso={r.completedAt} />, took{' '}
+                    {preciseDuration(Date.parse(r.completedAt) - Date.parse(r.startedAt))}
+                  </>
+                ) : (
+                  <>
+                    started <When iso={r.startedAt} />
+                  </>
+                )}
+              </Typography>
+              <Typography variant="body2">
+                at <code>{r.head.slice(0, 10)}</code>
+              </Typography>
+            </Stack>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Typography variant="body2">Tested commit: {commit(r.head, 10)}</Typography>
+            <ChecksTable run={r} logs={logs} />
+          </AccordionDetails>
+        </Accordion>
+      ))}
+    </Box>
+  );
+}
+
+/**
  * Verification evidence, policy state, sensitive changes, and base integrations from the plan,
  * then the job's earlier runs. Only the latest run carries a validity statement, and only from
  * `plan.verification`; without a worktree the recorded runs are listed with none.
@@ -1016,52 +1079,7 @@ function Verification({ detail }: { detail: JobDetailView }) {
         <Typography color="text.secondary">No worktree; nothing verified.</Typography>
       )}
       {earlier.length > 0 && (
-        <Box data-testid="earlier-runs">
-          <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
-            Earlier runs
-          </Typography>
-          {earlier.map((r) => (
-            // Collapsed, its checks unmounted, until opened. The chip is never the success
-            // colour: an earlier run is history, not evidence for HEAD.
-            <Accordion
-              key={r.id}
-              variant="outlined"
-              disableGutters
-              sx={{ my: 1 }}
-              slotProps={{ transition: { unmountOnExit: true } }}
-            >
-              {/* A div with role="button", not a <button>: it holds the commit link. */}
-              <AccordionSummary
-                component="div"
-                expandIcon={<span aria-hidden>▾</span>}
-                id={`run-${String(r.id)}-header`}
-              >
-                <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                  <Typography sx={{ fontWeight: weight.semibold }}>#{r.id}</Typography>
-                  <Chip size="small" label={r.status} />
-                  {r.completedAt && (
-                    <Typography variant="body2" color="text.secondary">
-                      <When iso={r.completedAt} />, took{' '}
-                      {preciseDuration(Date.parse(r.completedAt) - Date.parse(r.startedAt))}
-                    </Typography>
-                  )}
-                  <Typography
-                    variant="body2"
-                    onClick={(e) => {
-                      // Following the commit link must not also toggle the run.
-                      e.stopPropagation();
-                    }}
-                  >
-                    at {commit(r.head, 10)}
-                  </Typography>
-                </Stack>
-              </AccordionSummary>
-              <AccordionDetails>
-                <ChecksTable run={r} logs={detail.links.logs} />
-              </AccordionDetails>
-            </Accordion>
-          ))}
-        </Box>
+        <EarlierRuns runs={earlier} logs={detail.links.logs} commit={commit} />
       )}
       {s &&
         (s.changes.length > 0 || s.scan.disabled.length > 0 || s.scan.removedTests.length > 0) && (

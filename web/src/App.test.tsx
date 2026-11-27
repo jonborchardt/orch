@@ -4929,11 +4929,14 @@ describe('Job detail: navigable PR, commit, and log references (todo 0019)', () 
     { ...check(1, 'check', 'verification/12/check.log'), durationMs: 546218 },
   ]);
   const earlierRun = run(11, 'passed', c2, [{ ...check(3, 'check', earlierLog), cwd: 'web' }]);
-  function history(v: unknown = { ...verification, run: latestRun }): JobDetailView {
+  function history(
+    v: unknown = { ...verification, run: latestRun },
+    earlier: unknown = earlierRun,
+  ): JobDetailView {
     const d = rich({}, { verification: v });
     return {
       ...d,
-      verificationRuns: [latestRun, earlierRun] as unknown as JobDetailView['verificationRuns'],
+      verificationRuns: [latestRun, earlier] as unknown as JobDetailView['verificationRuns'],
       links: {
         ...d.links,
         logs: { ...d.links.logs, [earlierLog]: `/api/jobs/${d.job.id}/artifacts/${earlierLog}` },
@@ -4968,21 +4971,27 @@ describe('Job detail: navigable PR, commit, and log references (todo 0019)', () 
     expect(time).toHaveAttribute('dateTime', '2026-11-13T08:09:06.218Z');
     expect(time).toHaveAttribute('title', localTime('2026-11-13T08:09:06.218Z'));
     expect(time).toHaveTextContent(/ago$/);
-    expect(within(summary).getByRole('link', { name: commitName(c2) })).toHaveAttribute(
-      'href',
-      `${repo}/commit/${c2}`,
-    );
+    // The collapsed row names the tested commit as text: a button holds no link (or any other
+    // focusable element), so the commit link is absent until the run is opened.
+    expect(summary).toHaveTextContent(`at ${c2.slice(0, 10)}`);
+    expect(within(summary).queryByRole('link')).toBeNull();
+    expect(summary.querySelector('a, button, input, select, textarea, [tabindex]')).toBeNull();
+    const earlier = screen.getByTestId('earlier-runs');
+    expect(within(earlier).queryByRole('link', { name: commitName(c2) })).toBeNull();
     expect(
       within(panel).queryByRole('table', { name: 'Verification checks of run 11' }),
     ).toBeNull();
     expect(panel).not.toHaveTextContent(earlierLog);
 
-    // Following the commit link does not open the run. Keyboard: focusable, and Enter opens it.
-    fireEvent.click(within(summary).getByRole('link', { name: commitName(c2) }));
-    expect(summary).toHaveAttribute('aria-expanded', 'false');
+    // Keyboard: the summary is focusable, and Enter opens it.
     expect(summary).toHaveAttribute('tabindex', '0');
     fireEvent.keyDown(summary, { key: 'Enter' });
     expect(earlierSummary()).toHaveAttribute('aria-expanded', 'true');
+    // Opened: the tested commit is a link beside the checks, outside the summary button.
+    const link = within(earlier).getByRole('link', { name: commitName(c2) });
+    expect(link).toHaveAttribute('href', `${repo}/commit/${c2}`);
+    external(link);
+    expect(earlierSummary().contains(link)).toBe(false);
     const opened = within(panel).getByRole('table', { name: 'Verification checks of run 11' });
     expect(must(within(opened).getByText('npm').closest('td')).textContent).toBe('npm in web');
     const log = within(opened).getByRole('link', { name: earlierLog });
@@ -5011,7 +5020,8 @@ describe('Job detail: navigable PR, commit, and log references (todo 0019)', () 
   });
 
   it('Verification tab without a worktree: runs listed, no validity text, not labelled empty', async () => {
-    const d = history(null);
+    // The earlier run never completed: its row says when it started and claims no duration.
+    const d = history(null, { ...earlierRun, status: 'running', completedAt: null });
     expect(detailTabs(d).find((t) => t.name === 'Verification')?.label).toBe('Verification');
     await view(d);
     fireEvent.click(screen.getByRole('tab', { name: 'Verification' }));
@@ -5021,6 +5031,12 @@ describe('Job detail: navigable PR, commit, and log references (todo 0019)', () 
       within(panel).getByRole('table', { name: 'Verification checks of run 12' }),
     ).toBeVisible();
     expect(earlierSummary()).toHaveAttribute('aria-expanded', 'false');
+    expect(earlierSummary()).toHaveTextContent(/started .* ago/);
+    expect(earlierSummary()).not.toHaveTextContent('took');
+    expect(must(earlierSummary().querySelector('time'))).toHaveAttribute(
+      'dateTime',
+      '2026-11-13T08:00:00.000Z',
+    );
     expect(panel).not.toHaveTextContent(/valid for HEAD|stale:|No worktree; nothing verified\./);
     // The run's own chip claims nothing; only a passed check inside the table is green.
     const line = within(panel).getByText(/Latest run:/);

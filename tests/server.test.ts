@@ -1703,8 +1703,10 @@ describe('recorded logs on the artifact route (todo 0019)', () => {
           timeoutMs: 1000,
         })),
       });
-      outputs(started.run.id).forEach(([, outputPath], i) => {
-        recordCheck(own, c.id, auth, (started.checks[i] ?? { id: -1 }).id, {
+      outputs(started.run.id).forEach(([checkId, outputPath], i) => {
+        const row = started.checks[i];
+        if (!row) throw new Error(`startRun returned no row for check ${checkId}`);
+        recordCheck(own, c.id, auth, row.id, {
           status,
           startedAt: ts,
           completedAt: ts,
