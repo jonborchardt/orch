@@ -57,6 +57,7 @@ import {
   ticketKey,
   ticketState,
 } from './ticketState.ts';
+import { statusColor, weight } from './theme.ts';
 
 /** `current` is what is left to do: the tickets in progress, then the open ones in queue order. */
 const SHOWS = [
@@ -124,7 +125,7 @@ const NATIVE_SX = {
   borderRadius: 1,
 } as const;
 
-const RUNNER_COLOR = { running: 'primary', interrupted: 'warning' } as const;
+const RUNNER_COLOR = { running: statusColor.running, interrupted: 'warning' } as const;
 const ROW_SX = { alignItems: 'center', flexWrap: 'wrap', overflowWrap: 'anywhere' } as const;
 
 /** One controller: its state, scope, ticket and job, stop requests, and what it does next. */
@@ -140,7 +141,7 @@ function ControllerLine({
   return (
     <Box role="group" aria-label={`Controller for ${c.scope}`} data-controller={c.scope}>
       <Stack direction="row" spacing={1} useFlexGap sx={ROW_SX}>
-        <Typography sx={{ fontWeight: 700 }}>Factory</Typography>
+        <Typography sx={{ fontWeight: weight.bold }}>Factory</Typography>
         <Chip label={c.state} color={RUNNER_COLOR[c.state]} data-runner={c.state} />
         <Typography color="text.secondary">
           {c.mode === 'ticket'
@@ -192,7 +193,7 @@ function RunnerStrip({
     <Paper component="section" aria-label="Factory status" variant="outlined" sx={{ m: 1, p: 1 }}>
       {runner.controllers.length === 0 ? (
         <Stack direction="row" spacing={1} useFlexGap sx={ROW_SX}>
-          <Typography sx={{ fontWeight: 700 }}>Factory</Typography>
+          <Typography sx={{ fontWeight: weight.bold }}>Factory</Typography>
           <Chip label="idle" data-runner="idle" />
           <Typography variant="body2" color="text.secondary">
             {/* The same sentence as IDLE_NEXT in src/ops/run.ts; web/ imports only types. */}
@@ -632,7 +633,11 @@ export function TicketsPage({
                     </TableCell>
                     <TableCell>{key}</TableCell>
                     <TableCell sx={{ minWidth: 200, overflowWrap: 'anywhere' }}>
-                      <Link href={ticketHref(t.id)} underline="hover" sx={{ fontWeight: 600 }}>
+                      <Link
+                        href={ticketHref(t.id)}
+                        underline="hover"
+                        sx={{ fontWeight: weight.semibold }}
+                      >
                         {t.title}
                       </Link>
                     </TableCell>

@@ -13,7 +13,7 @@ import type {
   StageRow,
 } from '../../src/server/types.ts';
 import { App } from './App.tsx';
-import { theme } from './main.tsx';
+import { theme } from './theme.ts';
 
 configure({ asyncUtilTimeout: 10_000 });
 

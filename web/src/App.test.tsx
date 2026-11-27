@@ -34,7 +34,7 @@ import { Markdown } from './Markdown.tsx';
 import { RUNNING_WINDOW_MS, subagentState } from './SessionLog.tsx';
 import { RESUME_NOTE } from './Status.tsx';
 import { TABS, detailTabs, resolveTab } from './tabs.ts';
-import { theme } from './main.tsx';
+import { theme } from './theme.ts';
 
 // The full suite runs ~20 process-heavy files in parallel; the 1 s default flakes under that load.
 configure({ asyncUtilTimeout: 10_000 });
@@ -746,6 +746,19 @@ describe('App board', () => {
     ]);
     expect(timelineRows[0]?.cells[0]).toHaveTextContent(/ ago$/);
     expect(within(section).getByText(/Earlier history not shown/)).toBeInTheDocument();
+  });
+
+  it('labels sections, tabs, and control buttons in sentence case, never uppercase (ticket 0166)', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    const nav = screen.getByRole('navigation', { name: 'Sections' });
+    const upper = (el: HTMLElement) => getComputedStyle(el).textTransform;
+    expect(upper(within(nav).getByRole('link', { name: 'Jobs' }))).not.toBe('uppercase');
+    expect(upper(screen.getByRole('button', { name: 'Columns' }))).not.toBe('uppercase');
+    window.location.hash = '#/jobs/job-00000003';
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(upper(screen.getByRole('tab', { name: 'Overview' }))).not.toBe('uppercase');
   });
 
   it('filters cancelled jobs separately from finished ones', async () => {

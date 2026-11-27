@@ -21,6 +21,7 @@ import { Pick } from './TicketDetail.tsx';
 import { NO_FILTERS, type TicketFilters, TicketsPage } from './Tickets.tsx';
 import { UsagePage } from './Usage.tsx';
 import { failureText, fetchBoard, fetchRepos, fetchRunner } from './api.ts';
+import { statusColor, weight } from './theme.ts';
 
 function useHashRoute(): string {
   const [hash, setHash] = useState(() => window.location.hash);
@@ -85,10 +86,10 @@ function matches(row: BoardRow, f: StatusFilter): boolean {
 
 /** App-bar summary chips; each is a shortcut for its Show option and shares its count. */
 const CHIPS = [
-  { filter: 'running', label: 'running', color: 'primary' },
+  { filter: 'running', label: 'running', color: statusColor.running },
   { filter: 'stale', label: 'stale', color: 'warning' },
-  { filter: 'needs human', label: 'need human', color: 'error' },
-  { filter: 'failed', label: 'failed', color: 'error' },
+  { filter: 'needs human', label: 'need human', color: statusColor.needsHuman },
+  { filter: 'failed', label: 'failed', color: statusColor.failed },
   { filter: 'idle', label: 'idle', color: 'default' },
 ] as const;
 
@@ -195,7 +196,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             variant="subtitle1"
             component="a"
             href="#/"
-            sx={{ fontWeight: 700, color: 'inherit', textDecoration: 'none' }}
+            sx={{ fontWeight: weight.bold, color: 'inherit', textDecoration: 'none' }}
           >
             orch factory
           </Typography>

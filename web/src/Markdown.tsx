@@ -1,6 +1,8 @@
 import { Box, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 
+import { fonts, textSize, weight } from './theme.ts';
+
 /**
  * Just enough Markdown for factory artifacts and ticket bodies: headings, bullet and numbered
  * lists, read-only task items (`- [ ]`, `- [x]`), fenced code, paragraphs, and the VERDICT / DECISION / BLOCKING marker lines. No HTML is ever interpreted.
@@ -28,7 +30,7 @@ export function Markdown({ text }: { text: string }) {
             borderRadius: 1,
             bgcolor: 'action.hover',
             overflowX: 'auto',
-            fontSize: 12,
+            fontSize: textSize.code,
           }}
         >
           {code.join('\n')}
@@ -42,7 +44,7 @@ export function Markdown({ text }: { text: string }) {
       push(
         <Typography
           variant={level <= 1 ? 'h6' : level === 2 ? 'subtitle1' : 'subtitle2'}
-          sx={{ mt: level <= 2 ? 2 : 1, fontWeight: 600 }}
+          sx={{ mt: level <= 2 ? 2 : 1, fontWeight: weight.semibold }}
         >
           {heading[2]}
         </Typography>,
@@ -55,7 +57,7 @@ export function Markdown({ text }: { text: string }) {
       push(
         <Typography
           component="p"
-          sx={{ fontFamily: 'monospace', fontWeight: 700, mt: 1 }}
+          sx={{ fontFamily: fonts.mono, fontWeight: weight.bold, mt: 1 }}
           data-marker={marker[1]}
         >
           {marker[1]}: {marker[2]}
@@ -140,7 +142,12 @@ function Inline({ text }: { text: string }) {
             <Box
               key={n}
               component="code"
-              sx={{ px: 0.5, borderRadius: 0.5, bgcolor: 'action.hover', fontSize: '0.92em' }}
+              sx={{
+                px: 0.5,
+                borderRadius: 0.5,
+                bgcolor: 'action.hover',
+                fontSize: textSize.inlineCode,
+              }}
             >
               {p.slice(1, -1)}
             </Box>
