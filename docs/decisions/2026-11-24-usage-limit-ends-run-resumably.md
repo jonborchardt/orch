@@ -18,3 +18,6 @@ controller sleep for hours. A form the detector misses falls back to the old beh
 
 A limit on a model with its own allowance (`fable`) is the exception: see
 [2026-11-26-per-model-limit-falls-back](2026-11-26-per-model-limit-falls-back.md).
+
+Waiting for the reset, and riding out an unreachable API, now happen in the controller: see
+[2026-11-26-controller-waits-for-limits](2026-11-26-controller-waits-for-limits.md).

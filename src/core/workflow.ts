@@ -932,7 +932,8 @@ export function personMergeStep(code: string, jobId: string, ticketKey: string):
 
 /**
  * The stop codes of a ticket result that would hit every ticket, so the factory controller's
- * queue ends on them: claude cannot start or hit its account's usage limit, GitHub cannot be
+ * queue ends on them: claude cannot start, hit its account's usage limit, or could not reach its
+ * API past the controller's wait (decision 2026-11-26-controller-waits-for-limits), GitHub cannot be
  * read, answers nothing, or refuses the merge call; `orch` was rebuilt since the controller
  * started (`orch-rebuilt`) or `factory.json` fails validation (`bad-config`), both left for
  * `orch resume` (decision 2026-11-25-environment-stops-are-resumable). Any other code, including
@@ -943,6 +944,7 @@ export function personMergeStep(code: string, jobId: string, ticketKey: string):
 export const RUN_ENDING_CODES: readonly string[] = [
   'claude-failed',
   'usage-limit',
+  'api-unreachable',
   'github-unreadable',
   'merge-no-answer',
   'github-refused',

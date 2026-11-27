@@ -1,7 +1,8 @@
 /**
- * A Claude child that ends on a usage or rate limit ends the run at once and leaves the session
- * for `orch resume` (decision 2026-11-24-usage-limit-ends-run-resumably). The limit child is a
- * real process through ORCH_CLAUDE_SHIM. Uses tests/run-fixture.ts.
+ * A Claude child that ends on a usage or rate limit is waited out and relaunched; past the bound
+ * the run ends and leaves the session for `orch resume` (decisions
+ * 2026-11-24-usage-limit-ends-run-resumably, 2026-11-26-controller-waits-for-limits). The limit
+ * child is a real process through ORCH_CLAUDE_SHIM. Uses tests/run-fixture.ts.
  */
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -45,17 +46,21 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('a usage limit ends the run resumably', () => {
-  it('stops after one launch, keeps the ticket in flight, and orch resume continues it', async () => {
+describe('a usage limit ends the run resumably past the wait', () => {
+  it('probes, stops past the bound, keeps the ticket in flight, and orch resume continues it', async () => {
     const first = ticket('Hits the limit', { priority: 'P1' });
     const second = ticket('Waits', { priority: 'P2' });
 
     // The real launcher: the shim prints the limit and exits non-zero. A real timer, so the
-    // child's exit event can arrive between polls.
+    // child's exit event can arrive between polls. Two 20 ms probes fit a 50 ms bound.
     const s = await startSession(
       store,
       { mode: 'queue' },
-      { sleep: (ms) => delay(ms), pollMs: 20 },
+      {
+        sleep: (ms) => delay(ms),
+        pollMs: 20,
+        limitWaits: { probeSeconds: 0.02, boundSeconds: 0.05 },
+      },
     );
 
     expect(s.tickets).toHaveLength(1);
@@ -73,8 +78,8 @@ describe('a usage limit ends the run resumably', () => {
     expect(s.handoff).toBeUndefined(); // only orch-rebuilt hands off
     expect(summaryExitCode(s)).toBe(1);
     const jobId = r?.jobId ?? '';
-    // One launch, not MAX_IDLE_LAUNCHES.
-    expect(eventsOf(jobId, 'runner.session')).toHaveLength(1);
+    // The first launch and one per probe; never no-progress after MAX_IDLE_LAUNCHES.
+    expect(eventsOf(jobId, 'runner.session')).toHaveLength(3);
     expect(eventsOf(jobId, 'runner.stopped').at(-1)?.payload).toMatchObject({
       code: 'usage-limit',
       next: 'orch resume',

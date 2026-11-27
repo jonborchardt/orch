@@ -143,7 +143,9 @@ applies those events after the draw, so the role runs the next model in its conf
 learns of the limit from the child's stderr or error result, or from a `models.limit` event the
 session recorded with `orch job limit <id> --model <m> --text "<message>" --token <t>` when a
 subagent hit it. The rule is all or nothing: when one affected role has no other model in its
-pool, nothing is recorded and the run ends with `usage-limit` as for any other limit. A limit
+pool, nothing is recorded and the controller waits as for any other limit, then relaunches the
+same job (decision 2026-11-26-controller-waits-for-limits); past that wait's bound the run ends
+with `usage-limit`. A limit
 whose text carried an epoch reset is honoured by every controller until then, for new jobs too;
 one without is remembered only by the controller process that saw it. `models.drawn` is never
 rewritten: review rows, the Agents tab, and `orch job usage` credit the model the role had when
@@ -542,7 +544,8 @@ session ends; Accept delivery leaves the job completed, so the retake merges it.
 whose merge only a person can make is not taken again: Merge on the dashboard completes the ticket
 by itself (decision 2026-11-24-default-needs-human-choices). Only an
 outcome that would hit every ticket ends the whole session there: `claude-failed`, `usage-limit`
-(left unfinished, so `orch resume` continues the same ticket),
+or `api-unreachable` (after the controller's bounded wait, decision
+2026-11-26-controller-waits-for-limits; left unfinished, so `orch resume` continues the same ticket),
 `github-unreadable`, `merge-no-answer`, `github-refused`, or, also left unfinished,
 `orch-rebuilt` and `bad-config` (`RUN_ENDING_CODES` in `src/core/workflow.ts`; decision
 2026-11-25-environment-stops-are-resumable; any other code continues, decision
@@ -569,7 +572,7 @@ Events tab, and, for a stop, the status mail (decision 2026-11-21-runner-evidenc
 `exited` with `exitCode` 0 says only that the process ended; `moved` says whether the job's
 stage, round, CI repairs, or artifacts changed during it. `runner.stopped` describes the
 controller, not the job: the job keeps the stage and status it had, and `code` says what stopped
-the ticket: `no-progress`, `claude-failed`, `usage-limit`, `ci-pending`, `github-unreadable`, `needs-human`,
+the ticket: `no-progress`, `claude-failed`, `usage-limit`, `api-unreachable`, `ci-pending`, `github-unreadable`, `needs-human`,
 `unverified-merge`, `ticket-open`, `reland-refused`, `merge-no-answer`, `ownership` (another
 session held the job), `error` (any other `orch` refusal), any `mergeJob` block code
 (`MERGE_BLOCKS` in `src/core/workflow.ts`, listed under [Merging](#merging)), or `merge-blocked`
@@ -659,7 +662,7 @@ and lists the open ones. `orch status` prints one block per controller.
 What two controllers cost:
 
 - They share one Claude account's usage limit, so a long run reaches it sooner; each controller
-  then ends its own run resumably.
+  then waits for the reset on its own, at most 12 hours, before it ends its run resumably.
 - Ticket priority is per repository: a lower-priority ticket in one repository can run while a
   higher one waits in the other.
 - Every controller's gates run the installed build. Rebuilding `dist/` (from `main` only) while

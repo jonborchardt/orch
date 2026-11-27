@@ -1284,6 +1284,7 @@ describe('endsRun: only run-wide outcomes end the queue', () => {
   it('names the run-wide codes and lets every other code, or none, continue', () => {
     expect([...RUN_ENDING_CODES].sort()).toEqual(
       [
+        'api-unreachable',
         'bad-config',
         'claude-failed',
         'orch-rebuilt',

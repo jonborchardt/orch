@@ -18,7 +18,7 @@ import {
   UsageError,
   ValidationError,
 } from '../core/errors.ts';
-import { claudeLimit } from '../core/claude-limit.ts';
+import { apiUnreachable, claudeLimit, limitUntil } from '../core/claude-limit.ts';
 import { runForeground } from '../core/exec.ts';
 import { installRoot, jobArtifactDir } from '../core/paths.ts';
 import { leaseExpired } from '../core/ownership.ts';
@@ -105,16 +105,44 @@ export const RETRY_SECONDS = 30;
  * 2026-11-25-bounded-github-retry).
  */
 export const GITHUB_BACKOFF_SECONDS: readonly number[] = [60, 120, 240, 480, 960];
+/**
+ * How the controller waits out an account usage limit, a rate limit, or an unreachable API before
+ * relaunching the same job (decision 2026-11-26-controller-waits-for-limits).
+ */
+export interface LimitWaits {
+  /** Waiting in a row, over every kind, before the run stops resumably; also the farthest reset waited for. */
+  boundSeconds: number;
+  /** Added to a parsed reset time. */
+  marginSeconds: number;
+  /** Between relaunches when a usage limit gave no parsed reset. */
+  probeSeconds: number;
+  /** A rate limit or an unreachable API: the n-th wait in a row; the last one repeats. */
+  backoffSeconds: readonly number[];
+}
+export const LIMIT_WAITS: LimitWaits = {
+  boundSeconds: 12 * 3600,
+  marginSeconds: 60,
+  probeSeconds: 30 * 60,
+  backoffSeconds: [60, 120, 240, 480, 900],
+};
 const POLL_MS = 2000;
 const BEAT_MS = 30_000;
 /** The stop code of a child that hit a Claude usage or rate limit; the run stays resumable. */
 const USAGE_LIMIT = 'usage-limit';
+/** The stop code of a child that could not reach the Claude API past the wait's bound. */
+const API_UNREACHABLE = 'api-unreachable';
 export const REBUILT_REASON = 'orch was rebuilt since this controller started; run orch resume';
 /**
  * Run-wide stops that leave the session unfinished with its ticket in flight, for `orch resume`
- * (decisions 2026-11-24-usage-limit-ends-run-resumably, 2026-11-25-environment-stops-are-resumable).
+ * (decisions 2026-11-24-usage-limit-ends-run-resumably, 2026-11-25-environment-stops-are-resumable,
+ * 2026-11-26-controller-waits-for-limits).
  */
-const RESUMABLE_CODES: readonly string[] = [USAGE_LIMIT, 'orch-rebuilt', 'bad-config'];
+const RESUMABLE_CODES: readonly string[] = [
+  USAGE_LIMIT,
+  API_UNREACHABLE,
+  'orch-rebuilt',
+  'bad-config',
+];
 const resumable = (code: string | undefined): boolean =>
   code !== undefined && RESUMABLE_CODES.includes(code);
 
@@ -145,6 +173,8 @@ export interface RunOptions {
   ciMaxPolls?: number | undefined;
   /** Waits before retrying a transient GitHub failure; tests shorten it. Defaults to `GITHUB_BACKOFF_SECONDS`. */
   githubBackoff?: readonly number[] | undefined;
+  /** The limit and outage waits; tests shorten them. Defaults to `LIMIT_WAITS`. */
+  limitWaits?: Partial<LimitWaits> | undefined;
   /** The installed build's identity (`buildStamp`); tests replace it. */
   build?: (() => string | null) | undefined;
   /** How often the session heartbeat runs; tests shorten it. Defaults to `BEAT_MS`. */
@@ -221,6 +251,7 @@ interface Run {
   pollMs: number;
   ciMaxPolls: number;
   githubBackoff: readonly number[];
+  limitWaits: LimitWaits;
   /**
    * Own-allowance limits with no known reset, remembered for this controller process only
    * (decision 2026-11-26-per-model-limit-falls-back); ones with a reset time are read from events.
@@ -523,6 +554,31 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
 }
 
 /**
+ * Wait `seconds` for a limit or an outage with `wait` on the session record, checking every
+ * `pollMs` for `orch stop`, `orch stop next`, and Ctrl+C. True when one ended it. The record is
+ * cleared however it ends.
+ */
+async function waitOut(
+  run: Run,
+  wait: NonNullable<RunnerSession['wait']>,
+  seconds: number,
+): Promise<boolean> {
+  const stop = () => run.stopNow() || stopRequests(run.store.paths, run.slot).next;
+  run.session.wait = wait;
+  run.save();
+  try {
+    for (let left = seconds * 1000; left > 0; left -= run.pollMs) {
+      if (stop()) return true;
+      await run.pause(Math.min(left, run.pollMs));
+    }
+    return stop();
+  } finally {
+    run.session.wait = null;
+    if (run.owned()) run.save();
+  }
+}
+
+/**
  * Drive one job until it is finished (completed, cancelled, or waiting in needs-human), a stop
  * was requested, or a budget is spent. Agent stages run in a Claude child; the ci stage is read
  * here. The caller reads the job row for what "finished" means.
@@ -530,6 +586,14 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
 export async function runJob(run: Run, jobId: string): Promise<JobRun> {
   const { store } = run;
   let idle = 0;
+  // Seconds waited in a row on limits and outages, and how many waits; a launch that moves the
+  // job or ends any other way resets both.
+  let waited = 0;
+  let waits = 0;
+  const reset = () => {
+    waited = 0;
+    waits = 0;
+  };
   for (;;) {
     if (run.stopNow()) return { kind: 'stopped' };
     const job = getJob(store.db, jobId);
@@ -589,8 +653,10 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
       run.log(`  usage: session ${sessionId} not recorded: ${(err as Error).message}`);
     }
     if (stopped) return { kind: 'stopped' };
-    // A spent account would fail every ticket the same way: end the run, resumably, before the
-    // exit counts as idle (decision 2026-11-24-usage-limit-ends-run-resumably).
+    if (moved) reset();
+    // A spent account or an unreachable API would fail every ticket the same way: wait it out
+    // here and relaunch the same job, never counting the exit as idle; past the bound, end the run
+    // resumably (decision 2026-11-26-controller-waits-for-limits).
     const limit = claudeLimit(exit.stderrTail, exit.result);
     // Limits the session reported for a subagent (`orch job limit`) while this child ran, and the
     // child's own when it names a model: recorded here, since the child could not.
@@ -602,21 +668,72 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
       recordModelEvents(run, jobId, [{ type: 'models.limit', payload: { ...own } }]);
       hits.push(own);
     }
-    if (limit !== null || hits.length > 0) {
+    const limited = limit !== null || hits.length > 0;
+    const unreachable = limited ? null : apiUnreachable(exit.stderrTail, exit.result);
+    if (limited || unreachable !== null) {
       // Only a model with an allowance of its own falls back, and only when every affected role
-      // has another model (decision 2026-11-26-per-model-limit-falls-back); else the run ends.
+      // has another model (decision 2026-11-26-per-model-limit-falls-back); else the run waits.
       // (`limit?.model` is undefined when only the session reported one.)
-      if (limit?.model !== null && hits.every((h) => OWN_ALLOWANCE_MODELS.includes(h.model))) {
+      if (
+        limited &&
+        limit?.model !== null &&
+        hits.every((h) => OWN_ALLOWANCE_MODELS.includes(h.model))
+      ) {
         run.limits.push(...hits.filter((h) => h.until === null));
         if (fallBack(run, jobId)) continue;
       }
-      const resets = limit?.resetsAt == null ? '' : ` (resets ${limit.resetsAt})`;
-      return {
-        kind: 'blocked',
-        code: USAGE_LIMIT,
-        reason: `Claude ${limit?.limit ?? 'usage limit'} reached${resets}; orch resume continues the session`,
+      const ws = run.limitWaits;
+      const rate = limit?.limit === 'rate limit';
+      // The earliest known reset of the limit and the hits; ISO times sort as text.
+      const until = rate
+        ? null
+        : ([limitUntil(limit?.resetsAt), ...hits.map((h) => h.until)]
+            .filter((u): u is string => u !== null)
+            .sort()[0] ?? null);
+      const backoff = ws.backoffSeconds[Math.min(waits, ws.backoffSeconds.length - 1)] ?? 0;
+      const toReset =
+        until === null ? null : Math.max(0, Math.ceil((Date.parse(until) - Date.now()) / 1000));
+      const probe = limited && !rate;
+      const seconds =
+        toReset === null ? (probe ? ws.probeSeconds : backoff) : toReset + ws.marginSeconds;
+      if (waited + (toReset ?? seconds) > ws.boundSeconds) {
+        if (unreachable !== null) {
+          return {
+            kind: 'blocked',
+            code: API_UNREACHABLE,
+            reason: `the Claude API could not be reached (${unreachable.slice(0, 200)}); orch resume continues the session`,
+          };
+        }
+        const resets = until ?? limit?.resetsAt ?? null;
+        return {
+          kind: 'blocked',
+          code: USAGE_LIMIT,
+          reason: `Claude ${limit?.limit ?? 'usage limit'} reached${resets === null ? '' : ` (resets ${resets})`}; orch resume continues the session`,
+        };
+      }
+      const wait = {
+        reason:
+          unreachable !== null
+            ? 'the next try at reaching the Claude API'
+            : rate
+              ? 'the next try after a rate limit'
+              : until !== null
+                ? 'the usage limit to reset'
+                : 'the next usage limit probe',
+        until: new Date(
+          (until === null ? Date.now() : Date.parse(until)) +
+            (until === null ? seconds : ws.marginSeconds) * 1000,
+        ).toISOString(),
       };
+      run.log(
+        `  claude: ${unreachable ?? limitLine(exit)}; waiting for ${wait.reason} at ${wait.until}`,
+      );
+      if (await waitOut(run, wait, seconds)) return { kind: 'stopped' };
+      waited += seconds;
+      waits += 1;
+      continue;
     }
+    reset();
     run.log(
       `  claude: exited (${exit.error ?? `code ${String(exit.code ?? exit.signal)}`}); ` +
         `job is ${after.stage}/${after.status}`,
@@ -1179,6 +1296,7 @@ async function drive(
     pollMs: opts.pollMs ?? POLL_MS,
     ciMaxPolls: opts.ciMaxPolls ?? CI_MAX_POLLS,
     githubBackoff: opts.githubBackoff ?? GITHUB_BACKOFF_SECONDS,
+    limitWaits: { ...LIMIT_WAITS, ...opts.limitWaits },
     limits: [],
     owned: () => lock.owned(),
     assertOwned: () => {
@@ -1212,6 +1330,7 @@ async function drive(
   clearStop(paths, 'now', slot);
   session.pid = process.pid;
   session.child = null;
+  session.wait = null;
   run.save();
   // Never throws: after a lost lock it writes nothing, and the main flow stops at its next check.
   const keep: LeaseKeep = { jobId: null, at: 0, refused: null };
@@ -1635,6 +1754,11 @@ export interface ControllerStatus {
     childPid: number | null;
     childAlive: boolean;
   } | null;
+  /**
+   * What a live controller waits for before relaunching its job (`RunnerSession.wait`), and
+   * until when; null when it is not waiting out a limit or an outage.
+   */
+  wait: { reason: string; until: string } | null;
   /** What happens next, in one sentence. */
   next: string;
 }
@@ -1690,6 +1814,7 @@ function controllerStatus(store: Store, slot: RunnerSlot): ControllerStatus {
       childAlive: childMayBeAlive(session),
     };
   }
+  const wait = pid === null ? null : (session?.wait ?? null);
   const after =
     stop.next || session?.mode === 'ticket' ? 'then exit' : 'then take the next ready ticket';
   let next: string;
@@ -1699,6 +1824,8 @@ function controllerStatus(store: Store, slot: RunnerSlot): ControllerStatus {
         'orch resume checks whether that PID is still the same process, and continues once it is not.'
       : 'The controller is gone. orch resume continues the session; orch stop discards it.';
   } else if (stop.now) next = 'Stopping now: the current job is kept as it is.';
+  else if (wait !== null && current !== null)
+    next = `Waiting for ${wait.reason} at ${wait.until}, then continue ticket ${current.ticket}.`;
   else if (current === null)
     next = `Resume a stranded in-progress ticket, else select the next ready one${stop.next ? ', unless stopped' : ''}.`;
   else {
@@ -1719,6 +1846,7 @@ function controllerStatus(store: Store, slot: RunnerSlot): ControllerStatus {
     startedAt: session?.startedAt ?? null,
     stop,
     current,
+    wait,
     next,
   };
 }
