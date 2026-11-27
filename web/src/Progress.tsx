@@ -53,18 +53,17 @@ const stepText = (s: Progress['steps'][number]) => `${s.label}: ${STEP[s.state].
 
 type Challenge = NonNullable<Progress['specChallenge']>;
 /** The spec challenge's verdict as a step state (for its glyph and colour) and in words. */
-const CHALLENGE: Record<Challenge['verdict'], { state: StepState; words: string; strip: string }> =
-  {
-    pending: { state: 'current', words: 'pending', strip: 'pending' },
-    changes: { state: 'stopped', words: 'changes requested', strip: 'requested changes' },
-    pass: { state: 'done', words: 'passed', strip: 'passed' },
-  };
+const CHALLENGE: Record<Challenge['verdict'], { state: StepState; words: string }> = {
+  pending: { state: 'current', words: 'pending' },
+  changes: { state: 'stopped', words: 'changes requested' },
+  pass: { state: 'done', words: 'passed' },
+};
 
 /** The Spec step's text in the strip, with the spec challenge after it when there is one. */
 function stripText(s: Progress['steps'][number], challenge: Progress['specChallenge']): string {
   if (s.id !== 'spec' || !challenge) return stepText(s);
   const after = challenge.revised ? ' after a revision' : '';
-  return `${stepText(s)}, spec challenge ${CHALLENGE[challenge.verdict].strip}${after}`;
+  return `${stepText(s)}, spec challenge ${CHALLENGE[challenge.verdict].words}${after}`;
 }
 
 /**
