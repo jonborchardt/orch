@@ -416,7 +416,7 @@ test('every board action is reachable at 800px', async ({ page }) => {
   const groups = [
     table.getByRole('button', { name: /^(Archive|Unarchive) / }),
     table.getByRole('button', { name: /Copy resume command/ }),
-    table.getByRole('link', { name: /^PR \(/ }),
+    table.getByRole('link', { name: /^PR #\d+$/ }),
   ];
   for (const group of groups) {
     const n = await group.count();

@@ -639,7 +639,17 @@ describe('App board', () => {
     const later = '2026-11-13T09:00:00.000Z';
     const earlier = '2026-11-12T07:15:00.000Z';
     data.rows = [
-      row({ id: 'job-00000001', startedAt: null }),
+      // With a PR, so Started's is the row's only dash (a row without a PR shows one too).
+      row({
+        id: 'job-00000001',
+        startedAt: null,
+        pr: {
+          url: 'https://github.com/x/y/pull/1',
+          state: 'draft',
+          phase: 'draft',
+          refreshable: false,
+        },
+      }),
       row({ id: 'job-00000002', startedAt: later }),
       row({ id: 'job-00000003', startedAt: earlier }),
     ];
@@ -2575,7 +2585,7 @@ describe('Board grid: columns, sort, filter, row archive', () => {
     expect(window.location.hash).toBe('');
 
     // The PR link keeps its own target and href and does not open the row.
-    const pr = within(boardRow('job-00000003')).getByRole('link', { name: 'PR (draft)' });
+    const pr = within(boardRow('job-00000003')).getByRole('link', { name: 'PR #1' });
     expect(pr).toHaveAttribute('target', '_blank');
     expect(pr).toHaveAttribute('href', 'https://github.com/x/y/pull/1');
     fireEvent.click(pr);
@@ -2871,6 +2881,72 @@ describe('PR phase, Merge, and Refresh PR', () => {
         expect(posts(f)).toHaveLength(2);
       });
     });
+  });
+
+  it('links the PR by number beside the phase chip, and shows a dash without a PR (ticket 0022)', async () => {
+    mockFetch();
+    data.rows = [
+      row({
+        id: 'job-00000021',
+        title: 'Merged',
+        pr: {
+          url: 'https://github.com/x/y/pull/36',
+          state: 'merged',
+          phase: 'merged',
+          refreshable: false,
+        },
+      }),
+      row({
+        id: 'job-00000022',
+        title: 'Draft',
+        pr: {
+          url: 'https://github.com/x/y/pull/53/',
+          state: 'draft',
+          phase: 'draft',
+          refreshable: false,
+        },
+      }),
+      row({
+        id: 'job-00000023',
+        title: 'Odd URL',
+        pr: { url: 'https://example.test/pr', state: 'draft', phase: 'draft', refreshable: false },
+      }),
+      row({ id: 'job-00000024', title: 'No PR yet' }),
+    ];
+    mount();
+    await screen.findByText('No PR yet');
+
+    const numbered: [string, string, string][] = [
+      ['job-00000021', '36', 'merged'],
+      ['job-00000022', '53', 'draft'],
+    ];
+    for (const [id, n, phase] of numbered) {
+      const link = within(boardRowOf(id)).getByRole('link', { name: `PR #${n}` });
+      expect(link).toHaveTextContent(new RegExp(`^#${n}$`));
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noreferrer noopener');
+      const cell = must(link.closest('td'));
+      expect(must(cell.querySelector('[data-phase]'))).toHaveAttribute('data-phase', phase);
+      // The state comes from the phase chip alone: it is in the cell once, in the chip.
+      expect(cell.textContent.split(phase)).toHaveLength(2);
+      expect(cell.textContent).not.toContain('PR (');
+    }
+    expect(
+      within(boardRowOf('job-00000022')).getByRole('link', { name: 'PR #53' }),
+    ).toHaveAttribute('href', 'https://github.com/x/y/pull/53/');
+
+    // A URL with no trailing /pull/<n> is named plainly.
+    const odd = within(boardRowOf('job-00000023')).getByRole('link', { name: 'PR' });
+    expect(odd).toHaveTextContent(/^PR$/);
+    expect(odd).toHaveAttribute('href', 'https://example.test/pr');
+
+    // No PR: a dash, read as "no PR", and no link in the cell.
+    const none = within(boardRowOf('job-00000024')).getByRole('img', { name: 'no PR' });
+    expect(none).toHaveTextContent(/^—$/);
+    const cell = must(none.closest('td'));
+    expect(cell.textContent).toBe('—');
+    expect(within(cell).queryByRole('link')).toBeNull();
+    expect(document.body.textContent).not.toContain('PR (');
   });
 
   it('names how a completed job ended and keeps its CI chip secondary, hidden once merged and passing', async () => {

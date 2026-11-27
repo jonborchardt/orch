@@ -152,6 +152,8 @@ ended, is `null` with no spans, and its total is the median over the whole range
 
 **Job board** (all repositories): repository, title and id, stage, status, session, branch and
 worktree, review round, reviews, elapsed time, start time, last update, PR link and CI rollup.
+The PR link reads `#<n>` (or `PR` when the URL has no `/pull/<n>`), with the PR phase chip beside
+it saying where the PR stands; a row without a PR shows `—`.
 Started is the local date and time of the job's first stage start (`jobs.startedAt`, stamped once
 by the first `start` transition, not at creation; `—` before then or for jobs older than the
 column), and unstarted jobs sort after started ones when ascending. Elapsed is

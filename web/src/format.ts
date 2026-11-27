@@ -202,6 +202,11 @@ export function repoLabels(repos: readonly string[]): Map<string, string> {
   return labels;
 }
 
+/** The PR number when the URL ends in `/pull/<n>` (optional trailing slash), else undefined. */
+export function prNumber(url: string | null): string | undefined {
+  return url ? /\/pull\/(\d+)\/?$/.exec(url)?.[1] : undefined;
+}
+
 /** R2: `<links.repo>/commit/<sha>` for a hex SHA, else null (no base, or not a SHA). */
 export function commitHref(repo: string | null, sha: string | null | undefined): string | null {
   return repo && sha && /^[0-9a-f]{7,40}$/.test(sha) ? `${repo}/commit/${sha}` : null;
