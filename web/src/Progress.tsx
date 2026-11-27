@@ -51,6 +51,21 @@ const HIDDEN = {
 
 const stepText = (s: Progress['steps'][number]) => `${s.label}: ${STEP[s.state].words}`;
 
+type Challenge = NonNullable<Progress['specChallenge']>;
+/** The spec challenge's verdict as a step state (for its glyph and colour) and in words. */
+const CHALLENGE: Record<Challenge['verdict'], { state: StepState; words: string }> = {
+  pending: { state: 'current', words: 'pending' },
+  changes: { state: 'stopped', words: 'changes requested' },
+  pass: { state: 'done', words: 'passed' },
+};
+
+/** The Spec step's text in the strip, with the spec challenge after it when there is one. */
+function stripText(s: Progress['steps'][number], challenge: Progress['specChallenge']): string {
+  if (s.id !== 'spec' || !challenge) return stepText(s);
+  const after = challenge.revised ? ' after a revision' : '';
+  return `${stepText(s)}, spec challenge ${CHALLENGE[challenge.verdict].words}${after}`;
+}
+
 /**
  * The workflow at a glance: eight glyphs in order, then where the job is ("CI, needs human").
  * Focusable, with every step's state in its accessible name and its tooltip.
@@ -63,14 +78,14 @@ export function ProgressStrip({ progress }: { progress: Progress }) {
       describeChild
       title={progress.steps.map((s) => (
         <div key={s.id}>
-          {STEP[s.state].glyph} {stepText(s)}
+          {STEP[s.state].glyph} {stripText(s, progress.specChallenge)}
         </div>
       ))}
     >
       <span
         role="img"
         tabIndex={0}
-        aria-label={`Progress: ${progress.label}. ${progress.steps.map(stepText).join(', ')}`}
+        aria-label={`Progress: ${progress.label}. ${progress.steps.map((s) => stripText(s, progress.specChallenge)).join(', ')}`}
         style={{ whiteSpace: 'nowrap', cursor: 'help', fontSize: textSize.progress }}
       >
         <span aria-hidden style={{ letterSpacing: '0.1em', marginRight: '0.4em' }}>
@@ -151,6 +166,7 @@ export function ProgressSection({
   timeline: Timeline;
 }) {
   const color = useStepColor();
+  const challenge = progress.specChallenge;
   const last = (id: string, kind: string) =>
     timeline.entries.findLast((e) => e.step === id && e.kind === kind)?.at;
   return (
@@ -180,6 +196,24 @@ export function ProgressSection({
                   {' '}
                   — {verb} <When iso={iso} />
                 </Typography>
+              )}
+              {s.id === 'spec' && challenge && (
+                <Box component="ul" sx={{ m: 0, pl: 3, listStyle: 'none' }}>
+                  <li
+                    data-testid="spec-challenge"
+                    data-step-state={CHALLENGE[challenge.verdict].state}
+                  >
+                    <Box
+                      component="span"
+                      aria-hidden
+                      sx={{ color: color[CHALLENGE[challenge.verdict].state], mr: 0.5 }}
+                    >
+                      {STEP[CHALLENGE[challenge.verdict].state].glyph}
+                    </Box>
+                    Spec challenge: {CHALLENGE[challenge.verdict].words}
+                    {challenge.revised && ' (spec revised)'}
+                  </li>
+                </Box>
               )}
             </li>
           );

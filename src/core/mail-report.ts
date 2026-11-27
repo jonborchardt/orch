@@ -3,7 +3,7 @@
  * the event types worth a mail, and the subject and plain-text body for one batch of them.
  */
 import type { Event, Job } from '../storage/schema.ts';
-import { STAGES, type Stage, type Status } from './workflow.ts';
+import { type SpecChallengeState, STAGES, type Stage, type Status } from './workflow.ts';
 
 /** The only emojis a status mail uses: single codepoints, no variation selectors. */
 export const EMOJI = {
@@ -47,16 +47,27 @@ export function eventEmoji(type: string): string {
   return EVENT_EMOJI[type] ?? EMOJI.progress;
 }
 
-/** Every stage in workflow order: done, current (marked with the outcome emoji), or pending. */
-export function stageLines(job: { stage: Stage; status: Status }): string[] {
+/**
+ * Every stage in workflow order: done, current (marked with the outcome emoji), or pending. The
+ * spec challenge, when there is one to show, is one indented line under `spec`.
+ */
+export function stageLines(
+  job: { stage: Stage; status: Status },
+  challenge: SpecChallengeState | null = null,
+): string[] {
   const at = job.status === 'completed' ? STAGES.length : STAGES.indexOf(job.stage);
-  return STAGES.map((s, i) =>
+  return STAGES.flatMap((s, i) => [
     i < at
       ? `${EMOJI.success} ${s}  done`
       : i === at
         ? `${outcomeEmoji(job)} ${s}  current`
         : `${EMOJI.pending} ${s}  pending`,
-  );
+    ...(s === 'spec' && challenge
+      ? [
+          `    spec challenge: ${challenge.verdict.toUpperCase()}${challenge.revised ? ' (spec revised)' : ''}`,
+        ]
+      : []),
+  ]);
 }
 
 /**
@@ -134,6 +145,7 @@ export function reportBody(
   events: readonly Event[],
   needed: Needed | null = null,
   receipt: Receipt | null = null,
+  challenge: SpecChallengeState | null = null,
 ): string {
   return [
     `${outcomeEmoji(job)} ${job.status} at ${job.stage}`,
@@ -148,7 +160,7 @@ export function reportBody(
       : []),
     '',
     'Stages:',
-    ...stageLines(job),
+    ...stageLines(job, challenge),
     '',
     'Events:',
     ...events.map(describe),

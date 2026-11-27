@@ -292,9 +292,15 @@ describe('seeded board and detail', () => {
         'done',
       ]);
     }
+    // The spec challenge (spec-review-1.md, PASS on the current spec) under Spec; none without spec.md.
+    const passed = { verdict: 'pass', revised: false };
+    expect(by(ids.ciExhausted).progress.specChallenge).toEqual(passed);
+    expect(by(ids.reviewing).progress.specChallenge).toEqual(passed);
+    expect(by(ids.cancelled).progress.specChallenge).toBeNull();
     const d = (await (await api(`/api/jobs/${ids.ciExhausted}`)).json()) as JobDetailView;
     // The detail's step states equal the board's.
     expect(d.progress).toEqual(by(ids.ciExhausted).progress);
+    expect(d.progress.specChallenge).toEqual(passed);
     expect(d.timeline.truncated).toBe(false);
     const labels = d.timeline.entries.map((e) => e.label);
     const rework = labels.indexOf('Rework from CI: back to Build');

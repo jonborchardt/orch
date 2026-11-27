@@ -763,7 +763,10 @@ the cost line `costLine` in `src/ops/run-report.ts` prints for the end-of-sessio
    it still holds the value read, so concurrent processes send a batch at most once;
 2. compose: subject `<prefix> <id>: <title>` (kept in `mailSubject` from the first send) and a body
    with an outcome emoji, status, and stage on its first line (the inbox preview), every `STAGES`
-   entry marked done, current (with the outcome emoji), or pending, the PR, each event prefixed by
+   entry marked done, current (with the outcome emoji), or pending, with the spec challenge as one
+   indented line under `spec` (`    spec challenge: PENDING | CHANGES | PASS`, plus
+   ` (spec revised)`; `specChallengeState` in `src/core/workflow.ts` from the artifact rows, absent
+   for a fast job, before `spec.md`, and for a job past spec with no challenge), the PR, each event prefixed by
    its kind's emoji with its `reason`, and the status command. The emoji table is in
    `src/core/mail-report.ts`; the subject carries none, because a changing subject splits the thread;
 3. send, as a reply to `mailLastId` with `References: <mailThreadId> <mailLastId>` once a thread

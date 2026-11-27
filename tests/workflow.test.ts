@@ -26,6 +26,7 @@ import {
   reviewedHeadRefusal,
   RUN_ENDING_CODES,
   SCOPE_GAP_REASON,
+  specChallengeState,
   type Stage,
   STAGES,
   type Status,
@@ -557,6 +558,63 @@ describe('transition: review loop', () => {
       reviews: trio(1, 'security'),
     });
     expect(r.patch.stage).toBe('needs-human');
+  });
+});
+
+describe('specChallengeState: the challenge as the progress display shows it', () => {
+  const spec = (sha = 's1') => art('spec.md', null, { sha256: sha });
+  const challenge = (n: number, marker: string, specSha256 = 's1') =>
+    art(`spec-review-${String(n)}.md`, marker, { specSha256 });
+  const at = (stage: Stage, artifacts: Artifact[], mode: 'full' | 'fast' = 'full') =>
+    specChallengeState(artifacts, { stage, mode });
+
+  it('is null before spec.md is registered', () => {
+    expect(at('spec', [])).toBeNull();
+    expect(at('spec', [art('spec.md')])).toBeNull();
+  });
+
+  it('is pending at spec while no challenge is of the current spec.md', () => {
+    expect(at('spec', [spec()])).toEqual({ verdict: 'pending', revised: false });
+    // Revised after a CHANGES, not yet re-challenged: pending, and revised.
+    expect(at('spec', [spec('s2'), challenge(1, 'changes')])).toEqual({
+      verdict: 'pending',
+      revised: true,
+    });
+  });
+
+  it('shows CHANGES on the current spec as changes, not revised', () => {
+    expect(at('spec', [spec(), challenge(1, 'changes')])).toEqual({
+      verdict: 'changes',
+      revised: false,
+    });
+  });
+
+  it('shows CHANGES, a revision, then PASS as passed after a revision', () => {
+    const artifacts = [spec('s2'), challenge(1, 'changes'), challenge(2, 'pass', 's2')];
+    expect(at('spec', artifacts)).toEqual({ verdict: 'pass', revised: true });
+    expect(at('build', artifacts)).toEqual({ verdict: 'pass', revised: true });
+  });
+
+  it('shows a first-time PASS as passed, not revised, at spec and after', () => {
+    expect(at('spec', passedSpec())).toEqual({ verdict: 'pass', revised: false });
+    expect(at('completed', passedSpec())).toEqual({ verdict: 'pass', revised: false });
+  });
+
+  it('is null for a legacy job past spec with no challenge, and for a fast job', () => {
+    expect(at('build', [spec()])).toBeNull();
+    expect(at('completed', [spec()])).toBeNull();
+    expect(at('build', passedSpec(), 'fast')).toBeNull();
+    expect(at('spec', [spec()], 'fast')).toBeNull();
+  });
+
+  it('shows a slot-3 CHANGES escalated to a human as changes', () => {
+    const artifacts = [
+      spec('s3'),
+      challenge(1, 'changes'),
+      challenge(2, 'changes', 's2'),
+      challenge(3, 'changes', 's3'),
+    ];
+    expect(at('needs-human', artifacts)).toEqual({ verdict: 'changes', revised: true });
   });
 });
 

@@ -12,6 +12,7 @@ import {
   reportSubject,
 } from '../core/mail-report.ts';
 import { DEFAULT_PORT } from '../core/paths.ts';
+import { type SpecChallengeState, specChallengeState } from '../core/workflow.ts';
 import { type MailConfig, mailConfig, sendReport } from '../integrations/mail.ts';
 import { BLOCKER_EVENTS, blockerOf, ciView, liveness, resumeOf } from '../server/status.ts';
 import { listArtifacts } from '../storage/artifacts.ts';
@@ -127,12 +128,22 @@ function receiptOf(store: Store, job: Job, batch: readonly Event[]): Receipt | n
   return { mergeCommit: typeof commit === 'string' ? commit : null, cost };
 }
 
+/** The spec challenge line under `spec`, from the artifact rows; never stops the mail. */
+function challengeOf(store: Store, job: Job): SpecChallengeState | null {
+  try {
+    return specChallengeState(listArtifacts(store.db, job.id), job);
+  } catch {
+    return null;
+  }
+}
+
 async function deliver(
   cfg: MailConfig | string,
   job: Job,
   batch: readonly Event[],
   needed: Needed | null,
   receipt: Receipt | null,
+  challenge: SpecChallengeState | null,
 ): Promise<MailOutcome> {
   if (typeof cfg === 'string') return { sent: false, error: cfg };
   const subject = job.mailSubject ?? reportSubject(job);
@@ -141,7 +152,7 @@ async function deliver(
   try {
     const { messageId } = await sendReport(cfg, {
       subject,
-      text: reportBody(job, batch, needed, receipt),
+      text: reportBody(job, batch, needed, receipt, challenge),
       inReplyTo: last ?? undefined,
       references: thread && last ? [...new Set([thread, last])] : undefined,
     });
@@ -180,7 +191,8 @@ export async function reportJobMail(
         if (!last || !claimMailCursor(store, id, job.mailCursor, last.id)) continue;
         const needed = typeof cfg === 'string' ? null : safeNeededOf(store, job);
         const receipt = typeof cfg === 'string' ? null : receiptOf(store, job, batch);
-        const outcome = await deliver(cfg, job, batch, needed, receipt);
+        const challenge = typeof cfg === 'string' ? null : challengeOf(store, job);
+        const outcome = await deliver(cfg, job, batch, needed, receipt, challenge);
         recordMailOutcome(store, id, outcome);
         out.push(
           outcome.sent
