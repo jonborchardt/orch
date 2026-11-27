@@ -44,7 +44,7 @@ import {
   nextAction,
 } from './Status.tsx';
 import { failureText, fetchDetail } from './api.ts';
-import { STATE, ago, eventSummary, prNumber, verdictColor } from './format.ts';
+import { STATE, ago, eventDetail, prNumber, verdictColor } from './format.ts';
 import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
 import { ticketHref, ticketKey } from './ticketState.ts';
 import { fonts, textSize, weight } from './theme.ts';
@@ -488,7 +488,6 @@ export function JobDetail({
   );
 }
 
-/** "opus (same as author: no)"; no flag for roles without an author. Null means not recorded. */
 const ONE_LINE = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } as const;
 
 /**
@@ -540,9 +539,7 @@ function EventsTab({ events }: { events: JobDetailView['events'] }) {
               </TableCell>
               <TableCell>
                 <details>
-                  <summary style={{ cursor: 'pointer' }}>
-                    {eventSummary(e).slice(e.type.length + 2) || 'payload'}
-                  </summary>
+                  <summary style={{ cursor: 'pointer' }}>{eventDetail(e) || 'payload'}</summary>
                   <Box
                     component="pre"
                     sx={{ m: 0, mt: 0.5, overflowX: 'auto', fontSize: textSize.code }}
@@ -564,6 +561,7 @@ function EventsTab({ events }: { events: JobDetailView['events'] }) {
   );
 }
 
+/** "opus (same as author: no)"; no flag for roles without an author. Null means not recorded. */
 function modelText(model: string | null, same: boolean | null | undefined): string {
   const flag =
     same === undefined

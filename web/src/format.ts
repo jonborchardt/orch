@@ -183,12 +183,18 @@ export function localTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { timeZoneName: 'short' });
 }
 
-/**
- * One line for an event: its type, then the fields that type records (the same choices as the
- * status mail's `describe`). Payloads are untyped JSON, so a missing or wrong-typed field is left
- * out; an unknown type lists its short scalar fields. Never throws.
- */
+/** One line for an event: its type, then its `eventDetail` when there is any. Never throws. */
 export function eventSummary(e: JobDetailView['events'][number]): string {
+  const detail = eventDetail(e);
+  return detail ? `${e.type}: ${detail}` : e.type;
+}
+
+/**
+ * The fields an event's type records (the same choices as the status mail's `describe`), without
+ * the type; empty when there is nothing to say. Payloads are untyped JSON, so a missing or
+ * wrong-typed field is left out; an unknown type lists its short scalar fields. Never throws.
+ */
+export function eventDetail(e: JobDetailView['events'][number]): string {
   const raw: unknown = e.payload;
   const p = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   /** A non-empty string or a number, on one line; anything else is absent. */
@@ -203,9 +209,8 @@ export function eventSummary(e: JobDetailView['events'][number]): string {
   };
   const at = () => (typeof p['head'] === 'string' && p['head'] ? `@${sha7(p['head'])}` : null);
   const join = (...xs: (string | null)[]) => xs.filter(Boolean).join(' ') || null;
-  const type = e.type;
   let parts: (string | null)[];
-  switch (type) {
+  switch (e.type) {
     case 'stage.started':
     case 'stage.completed':
     case 'stage.failed':
@@ -259,8 +264,7 @@ export function eventSummary(e: JobDetailView['events'][number]): string {
           : null,
       );
   }
-  const text = parts.filter(Boolean).join(', ');
-  return text ? `${type}: ${text}` : type;
+  return parts.filter(Boolean).join(', ');
 }
 
 /**
