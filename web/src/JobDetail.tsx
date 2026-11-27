@@ -28,8 +28,9 @@ import { Actions } from './Actions.tsx';
 import { CiChip, CiPanel, PrPhaseChip } from './Ci.tsx';
 import { LogRef, PrLink, PrText, commitRef } from './Links.tsx';
 import { Markdown, blockingLines, section } from './Markdown.tsx';
-import { ProgressSection, ProgressStrip, RoundIndicator } from './Progress.tsx';
+import { ProgressSection, ProgressStrip, RoundIndicator, When } from './Progress.tsx';
 import { usePolled } from './Runs.tsx';
+import { Pick } from './TicketDetail.tsx';
 import { SessionLog } from './SessionLog.tsx';
 import {
   BlockerNotes,
@@ -43,7 +44,7 @@ import {
   nextAction,
 } from './Status.tsx';
 import { failureText, fetchDetail } from './api.ts';
-import { STATE, ago, prNumber, verdictColor } from './format.ts';
+import { STATE, ago, eventDetail, prNumber, verdictColor } from './format.ts';
 import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
 import { ticketHref, ticketKey } from './ticketState.ts';
 import { fonts, textSize, weight } from './theme.ts';
@@ -466,37 +467,7 @@ export function JobDetail({
             </TableBody>
           </Table>
         )}
-        {tab === 'Events' && (
-          <Table size="small" aria-label="Events">
-            <TableHead>
-              <TableRow>
-                <TableCell>Time</TableCell>
-                <TableCell>Type</TableCell>
-                <TableCell>Actor</TableCell>
-                <TableCell>Payload</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {[...detail.events].reverse().map((e) => (
-                <TableRow key={e.id}>
-                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                    {e.createdAt.replace('T', ' ').slice(0, 19)}
-                  </TableCell>
-                  <TableCell>{e.type}</TableCell>
-                  <TableCell>{e.actor ?? ''}</TableCell>
-                  <TableCell>
-                    <code style={{ fontSize: textSize.code }}>{JSON.stringify(e.payload)}</code>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {detail.events.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={4}>No events recorded.</TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        )}
+        {tab === 'Events' && <EventsTab events={detail.events} />}
         {tab === 'Session' && <SessionLog detail={detail} />}
         {tab === 'Git' && <GitTab detail={detail} />}
         {tab === 'PR' && (
@@ -514,6 +485,83 @@ export function JobDetail({
         )}
       </Box>
     </Box>
+  );
+}
+
+const ONE_LINE = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } as const;
+
+/**
+ * Every loaded event, newest first: its type, then the rest of its summary line as the handle of
+ * a collapsed expander holding the raw payload. The fixed layout keeps every cell inside the page.
+ */
+function EventsTab({ events }: { events: JobDetailView['events'] }) {
+  const [picked, setPicked] = useState('');
+  const counts = new Map<string, number>();
+  for (const e of events) counts.set(e.type, (counts.get(e.type) ?? 0) + 1);
+  // A type that left the loaded window shows everything rather than an empty table.
+  const type = counts.has(picked) ? picked : '';
+  const shown = [...events].reverse().filter((e) => type === '' || e.type === type);
+  return (
+    <Stack spacing={1} sx={{ alignItems: 'flex-start' }}>
+      <Pick
+        label="Type"
+        value={type}
+        onChange={setPicked}
+        all="All types"
+        options={[...counts]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([t, n]) => ({ value: t, label: `${t} (${String(n)})` }))}
+        width={200}
+        size="small"
+      />
+      <Table
+        size="small"
+        aria-label="Events"
+        sx={{ tableLayout: 'fixed', width: '100%', '& td': { overflowWrap: 'anywhere' } }}
+      >
+        <TableHead>
+          <TableRow>
+            <TableCell sx={{ width: '14%' }}>Time</TableCell>
+            <TableCell sx={{ width: '22%' }}>Type</TableCell>
+            <TableCell sx={{ width: '18%' }}>Actor</TableCell>
+            <TableCell>Summary</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {shown.map((e) => (
+            <TableRow key={e.id} data-event-type={e.type} sx={{ verticalAlign: 'top' }}>
+              <TableCell>
+                <When iso={e.createdAt} />
+              </TableCell>
+              <TableCell>{e.type}</TableCell>
+              <TableCell title={e.actor ?? undefined} sx={ONE_LINE}>
+                {e.actor ?? ''}
+              </TableCell>
+              <TableCell>
+                <details>
+                  <Box component="summary" sx={{ cursor: 'pointer' }}>
+                    {eventDetail(e) || 'payload'}
+                  </Box>
+                  {/* Focusable so the keyboard can scroll a wide payload sideways. */}
+                  <Box
+                    component="pre"
+                    tabIndex={0}
+                    sx={{ m: 0, mt: 0.5, overflowX: 'auto', fontSize: textSize.code }}
+                  >
+                    {JSON.stringify(e.payload, null, 2)}
+                  </Box>
+                </details>
+              </TableCell>
+            </TableRow>
+          ))}
+          {events.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={4}>No events recorded.</TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </Stack>
   );
 }
 

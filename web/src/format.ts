@@ -177,6 +177,99 @@ export function sha7(sha: string | null | undefined): string {
   return sha ? sha.slice(0, 7) : '?';
 }
 
+/** Local date and time with the zone (a tooltip's absolute time); the input when it is no date. */
+export function localTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { timeZoneName: 'short' });
+}
+
+/** One line for an event: its type, then its `eventDetail` when there is any. Never throws. */
+export function eventSummary(e: JobDetailView['events'][number]): string {
+  const detail = eventDetail(e);
+  return detail ? `${e.type}: ${detail}` : e.type;
+}
+
+/**
+ * The fields an event's type records (the same choices as the status mail's `describe`), without
+ * the type; empty when there is nothing to say. Payloads are untyped JSON, so a missing or
+ * wrong-typed field is left out; an unknown type lists its short scalar fields. Never throws.
+ */
+export function eventDetail(e: JobDetailView['events'][number]): string {
+  const raw: unknown = e.payload;
+  const p = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const oneLine = (v: string) => v.trim().replace(/\s+/g, ' ');
+  /** A non-empty string or a number, on one line; anything else is absent. */
+  const str = (key: string): string | null => {
+    const v = p[key];
+    if (typeof v === 'number') return String(v);
+    return typeof v === 'string' && v.trim() !== '' ? oneLine(v) : null;
+  };
+  const labelled = (label: string, key: string) => {
+    const v = str(key);
+    return v === null ? null : `${label} ${v}`;
+  };
+  const at = () => (typeof p['head'] === 'string' && p['head'] ? `@${sha7(p['head'])}` : null);
+  const join = (...xs: (string | null)[]) => xs.filter(Boolean).join(' ') || null;
+  let parts: (string | null)[];
+  switch (e.type) {
+    case 'stage.started':
+    case 'stage.completed':
+    case 'stage.failed':
+      parts = [str('stage'), labelled('round', 'round'), str('reason')];
+      break;
+    case 'job.blocked':
+    case 'job.resumed':
+    case 'job.reworked':
+    case 'job.cancelled':
+    case 'job.interrupted':
+      parts = [str('stage'), labelled('from', 'from'), labelled('to', 'to'), str('reason')];
+      break;
+    case 'ci.observed':
+      parts = [join(str('outcome') ?? str('ciStatus'), at()), labelled('poll', 'polls')];
+      break;
+    case 'verification.completed':
+      parts = [labelled('run', 'runId'), str('status')];
+      break;
+    case 'review.recorded': {
+      const reviewer = str('reviewer');
+      const verdict = str('verdict') ?? 'pending';
+      parts = [labelled('round', 'round'), reviewer === null ? verdict : `${reviewer}: ${verdict}`];
+      break;
+    }
+    case 'artifact.registered':
+    case 'artifact.replaced':
+      parts = [str('path')];
+      break;
+    case 'pr.recorded':
+    case 'pr.merged':
+    case 'pr.observed': {
+      let merge: string | null = null;
+      if (p['ok'] === true) merge = 'merged';
+      else if (p['ok'] === false) merge = 'merge refused';
+      parts = [join(str('state') ?? merge, at()), str('error')];
+      break;
+    }
+    case 'branch.pushed':
+      parts = [join(str('branch'), at())];
+      break;
+    case 'session.attached':
+      // A UUID or a session link: the first eight characters of its last path segment.
+      parts = [str('provider'), str('ref')?.split('/').pop()?.slice(0, 8) ?? null];
+      break;
+    case 'runner.session':
+    case 'runner.stopped':
+      parts = [str('outcome'), str('code'), labelled('exit', 'exitCode'), str('reason')];
+      break;
+    default:
+      parts = Object.entries(p).map(([k, v]) =>
+        typeof v === 'boolean' || typeof v === 'number' || (typeof v === 'string' && v.length <= 60)
+          ? `${k}=${oneLine(String(v))}`
+          : null,
+      );
+  }
+  return parts.filter(Boolean).join(', ');
+}
+
 /**
  * Short labels for the distinct repository identities on the board: the basename, or the
  * shortest unique trailing path when basenames collide, else the full identity. Empty when

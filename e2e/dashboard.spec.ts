@@ -388,6 +388,43 @@ for (const width of [390, 800]) {
   });
 }
 
+for (const width of [800, 1440]) {
+  test(`events tab at ${String(width)}px keeps a long payload inside the page`, async ({
+    page,
+  }) => {
+    const { ids } = state();
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/#/jobs/${ids.completed}`);
+    await page.getByRole('tab', { name: /^Events/ }).click();
+    const table = page.getByRole('table', { name: 'Events' });
+    // No DOM lib here, so page checks are passed as expressions.
+    const pageFits = (): Promise<unknown> =>
+      page.evaluate('document.documentElement.scrollWidth <= window.innerWidth');
+    // Every event is listed under the default filter, and none widens the page.
+    await expect(page.getByLabel('Type')).toHaveValue('');
+    expect(await pageFits()).toBe(true);
+    const row = table.getByRole('row').filter({ hasText: 'kind=long-payload' });
+    await expect(row).toHaveCount(1);
+    const payload = row.locator('pre');
+    await expect(payload).toBeHidden();
+    await row.locator('summary').click();
+    await expect(payload).toBeVisible();
+    await expect(payload).toContainText('"kind": "long-payload"');
+    expect(await pageFits()).toBe(true);
+    // The long lines scroll inside the expander, which stays inside the viewport.
+    const scrolls: unknown = await page.evaluate(
+      `(() => { const p = document.querySelector('table[aria-label="Events"] details[open] pre');
+        return p.scrollWidth > p.clientWidth; })()`,
+    );
+    expect(scrolls).toBe(true);
+    await withinWidth(page, payload);
+    // The filter narrows to one type.
+    await page.getByLabel('Type').selectOption('job.note');
+    await expect(table.getByRole('row')).toHaveCount(2);
+    expect(await pageFits()).toBe(true);
+  });
+}
+
 test('board at 1440px renders every default column', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
