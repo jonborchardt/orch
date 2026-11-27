@@ -3928,10 +3928,10 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
       (t) => t.name === 'Reviews',
     );
     expect(reviews?.label).toBe('Reviews (1 round)');
-    const truncated = detailTabs(fresh({ events: events(500), eventsCapped: true })).find(
+    const capped = detailTabs(fresh({ events: events(500), eventsCapped: true })).find(
       (t) => t.name === 'Events',
     );
-    expect(truncated).toMatchObject({ label: 'Events (500+)', count: 500 });
+    expect(capped).toMatchObject({ label: 'Events (500+)', count: 500 });
   });
 
   it('resolves an unavailable tab to Overview and an available one to itself (AC2)', () => {
@@ -5630,5 +5630,20 @@ describe('Job detail: Overview summary (ticket 0016)', () => {
     const entry = screen.getByRole('button', { name: 'Open Reviews tab: Review round 2 passed' });
     fireEvent.click(entry);
     expect(screen.getByRole('tab', { name: /^Reviews/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('moves keyboard focus to the tab a timeline entry opens', async () => {
+    await view(twoRounds());
+    const entry = screen.getByRole('button', { name: 'Open Reviews tab: Review round 2 passed' });
+    // A native button: the browser turns Enter into a click, which jsdom does not synthesize.
+    expect(entry.tagName).toBe('BUTTON');
+    entry.focus();
+    expect(document.activeElement).toBe(entry);
+    fireEvent.keyDown(entry, { key: 'Enter' });
+    fireEvent.click(entry);
+    const reviews = screen.getByRole('tab', { name: /^Reviews/ });
+    expect(reviews).toHaveAttribute('aria-selected', 'true');
+    expect(reviews).toHaveAttribute('id', 'tab-Reviews');
+    expect(document.activeElement).toBe(reviews);
   });
 });

@@ -290,16 +290,15 @@ blocking count when above zero; `No review round yet` before round 1; absent for
 without a plan. **Delivery**, only once a PR is recorded, is the PR link, the PR phase chip, and
 the CI line verbatim. Last, in muted text under **For the agent session**, come the plan's next
 step and agents and the models drawn (or the `Plan unavailable` warning). Beyond the Overview
-there are tabs for the spec, build summary, review history per round (the job's current round is labelled
-`Round N (current)`; one collapsed panel per reviewer whose header shows the reviewer, verdict,
+there are tabs for the spec, build summary, review history per round (the job's current round is
+labelled `Round N (current)`; one collapsed panel per reviewer whose header shows the reviewer, verdict,
 and summary; expand it for the full review text; each round with reviewers has **Expand all** and
 **Collapse all** for its own panels, disabled when they would change nothing), consolidated
 findings per round, the approval decision, registered artifacts (size, marker, hash), the event
 log, Git state (branch, HEAD, ahead/behind base, commits, changed files, uncommitted files; once
 the PR is recorded merged, "Merged into `<base>`" with the PR link and merged head, the commits
 and files from the merged head's recorded verification, and only commits made since the merge as
-outstanding, never the current ahead/behind), and
-the PR with its CI state. Buttons below the header open the worktree in VS Code
+outstanding, never the current ahead/behind), and the PR with its CI state. Buttons below the header open the worktree in VS Code
 (`vscode://file/...`) and the PR on GitHub. The header is two lines. The first is the title, the
 job id, the status chip, the same progress strip as the board (in place of a raw stage chip), and
 the round as `Round: none` or `Round N / M` with the same tooltip (plus `archived` and
@@ -324,8 +323,8 @@ challenge: pending`, `changes requested`, or `passed`, plus ` (spec revised)`, w
 or `✓` glyph), then the **Timeline**. Times read relatively (`5m ago`), with the local date and
 time, zone included, in the tooltip (the `When` component; its `<time datetime>` keeps the ISO
 value). The timeline is built by `timelineOf` in `src/server/status.ts` from every event of the
-types in `TIMELINE_TYPES`, uncapped: `stage.started`, `stage.completed` (with the review round and whether it requested changes),
-`stage.failed`, `job.blocked`, `job.resumed`, `job.reworked`, `job.interrupted`, `job.cancelled`,
+types in `TIMELINE_TYPES`, uncapped: `stage.started`, `stage.completed` (with the review round
+and whether it requested changes), `stage.failed`, `job.blocked`, `job.resumed`, `job.reworked`, `job.interrupted`, `job.cancelled`,
 and `job.completed`, oldest first, each with its time and a plain label. Going back (changes
 requested, rework from PR or CI, resume to an earlier stage) is a new entry, never an edit to an
 earlier one. An entry whose step has a tab (`STEP_TAB` in `web/src/tabs.ts`: Spec; Build and

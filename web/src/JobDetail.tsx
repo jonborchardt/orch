@@ -23,6 +23,7 @@ import {
   Typography,
 } from '@mui/material';
 import { Fragment, useCallback, useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
@@ -348,7 +349,13 @@ export function JobDetail({
               progress={detail.progress}
               timeline={detail.timeline}
               tabs={tabs}
-              onOpen={setSelected}
+              onOpen={(t) => {
+                // The Overview unmounts with the focused entry; keep focus on the tab it opened.
+                flushSync(() => {
+                  setSelected(t);
+                });
+                document.getElementById(`tab-${t}`)?.focus();
+              }}
             />
             <Divider />
             <Stack
