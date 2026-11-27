@@ -37,8 +37,9 @@ prints, from `GET /api/runner` (`runnerStatus`, read-only; the body is described
 below). It sits below the sticky app bar and scrolls with the page. A line reads `Updated <ago>`
 (`Updated just now` under 5 s), measured from the last successful runner poll, in a `<time>` whose
 `datetime` and `title` carry that exact time, and ages once a second while a poll is pending.
-When the latest poll failed, a warning (a ⚠ glyph and text, `role="status"`) gives the error, the
-last successful update when there is one, and "retries every N s"; when no poll has answered for
+When the latest poll failed, a warning (a ⚠ glyph and text) gives the error, the last successful
+update when there is one, and "retries every N s"; only the error and retry sentence are its
+`role="status"` live region, so the ticking time is not re-announced every second. When no poll has answered for
 more than three refresh intervals it reads `Not updating` with the last update time. Either
 clears with the next good poll, and the last good content stays shown under it. Before the first
 response nothing is shown. There is no control in the box and no Retry: the next poll is the

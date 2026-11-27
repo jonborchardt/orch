@@ -31,6 +31,12 @@ const must = () => {
   return r;
 };
 const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+/** The warning box (glyph, message, ticking time) and its live region (static text only). */
+const warningBox = () => {
+  const w = must().querySelector('[data-warning]');
+  if (!(w instanceof HTMLElement)) throw new Error('no warning');
+  return w;
+};
 
 beforeEach(() => {
   vi.useFakeTimers({ now: T0 });
@@ -70,15 +76,23 @@ it('ages Updated while a poll is held, says Not updating past 3 polls, and recov
   // Held past 3 × refreshMs: Not updating, in text with a glyph, the last good content kept.
   held = Promise.withResolvers<RunnerStatus>();
   await advance(13_000);
-  const warning = within(must()).getByRole('status');
+  const warning = warningBox();
+  const live = within(must()).getByRole('status');
+  expect(warning).toContainElement(live);
   expect(warning).toHaveTextContent('⚠');
-  expect(warning).toHaveTextContent('Not updating');
+  expect(live).toHaveTextContent('Not updating');
   expect(warning).toHaveTextContent('Last updated 13s ago');
-  expect(warning).toHaveTextContent('retries every 4 s');
+  expect(live).toHaveTextContent('retries every 4 s');
   expect(warning.querySelector('time')).toHaveAttribute(
     'datetime',
     new Date(T0 + 6000).toISOString(),
   );
+  // The clock ticks: the shown time ages, the live region's text does not change.
+  const said = live.textContent;
+  expect(live.querySelector('time')).toBeNull();
+  await advance(2000);
+  expect(warningBox()).toHaveTextContent('Last updated 15s ago');
+  expect(within(must()).getByRole('status').textContent).toBe(said);
   expect(must().querySelector('[data-runner]')).toHaveAttribute('data-runner', 'idle');
   expect(within(must()).queryAllByRole('button')).toHaveLength(0);
   await act(async () => {
@@ -103,10 +117,11 @@ it('renders nothing before the first answer; a failure warns with its text, then
     first.reject(new Error('Factory unreachable'));
     await first.promise.catch(() => undefined);
   });
-  let warning = within(must()).getByRole('status');
+  let warning = warningBox();
+  expect(warning).toContainElement(within(must()).getByRole('status'));
   expect(warning).toHaveTextContent('⚠');
-  expect(warning).toHaveTextContent('Factory unreachable');
-  expect(warning).toHaveTextContent('retries every 4 s');
+  expect(within(must()).getByRole('status')).toHaveTextContent('Factory unreachable');
+  expect(within(must()).getByRole('status')).toHaveTextContent('retries every 4 s');
   expect(warning).not.toHaveTextContent('Last updated');
   expect(must().querySelector('[data-runner]')).toBeNull();
   expect(within(must()).queryAllByRole('button')).toHaveLength(0);
@@ -121,14 +136,16 @@ it('renders nothing before the first answer; a failure warns with its text, then
   // A later failure keeps the last content and names the last good update.
   next = () => Promise.reject(new Error('db locked'));
   await advance(2 * REFRESH);
-  warning = within(must()).getByRole('status');
-  expect(warning).toHaveTextContent('db locked');
+  warning = warningBox();
+  const live = within(must()).getByRole('status');
+  expect(live).toHaveTextContent('db locked');
   expect(warning).toHaveTextContent('Last updated 8s ago');
   expect(warning.querySelector('time')).toHaveAttribute(
     'datetime',
     new Date(T0 + REFRESH).toISOString(),
   );
-  expect(warning).toHaveTextContent('retries every 4 s');
+  expect(live).toHaveTextContent('retries every 4 s');
+  expect(live.querySelector('time')).toBeNull();
   expect(must().querySelector('[data-runner]')).toHaveAttribute('data-runner', 'idle');
   expect(within(must()).queryAllByRole('button')).toHaveLength(0);
   next = () => Promise.resolve(IDLE);

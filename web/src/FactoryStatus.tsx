@@ -88,21 +88,33 @@ export function FactoryStatus({
     );
   const hung = error === null && updatedAt !== null && now - updatedAt > 3 * refreshMs;
   const retries = `retries every ${String(refreshMs / 1000)} s.`;
+  const warn = error !== null || hung;
   return (
-    <Paper component="section" aria-label="Factory status" variant="outlined" sx={{ m: 1, p: 1 }}>
-      {(error !== null || hung) && (
-        // A status, not an alert: it repeats every poll and is advice about freshness.
+    // While warning, the Alert is the frame; the outer border would double it.
+    <Paper
+      component="section"
+      aria-label="Factory status"
+      variant={warn ? 'elevation' : 'outlined'}
+      elevation={0}
+      sx={{ m: 1, p: 1 }}
+    >
+      {warn && (
+        // Not an alert: it repeats every poll and is advice about freshness. The live region is
+        // only the static sentence; the ticking time sits outside it so it is not re-announced.
         <Alert
           severity="warning"
-          role="status"
+          role="none"
+          data-warning
           icon={<span aria-hidden="true">⚠</span>}
           sx={{ mb: runner ? 1 : 0 }}
         >
-          {error !== null
-            ? `Factory status could not be read: ${errorText(error)}. `
-            : 'Not updating: the last request has not answered. '}
-          {at && <>Last updated {at}; </>}
-          {retries}
+          <span role="status">
+            {error !== null
+              ? `Factory status could not be read: ${errorText(error)}; `
+              : 'Not updating: the last request has not answered; '}
+            {retries}
+          </span>
+          {at && <> Last updated {at}.</>}
         </Alert>
       )}
       {runner && (
@@ -131,7 +143,7 @@ export function FactoryStatus({
               {String(runner.last.attempted)} attempted tickets done, {runner.last.scope}).
             </Typography>
           )}
-          {at && error === null && !hung && (
+          {at && !warn && (
             <Typography variant="caption" component="p" color="text.secondary">
               Updated {at}
             </Typography>
