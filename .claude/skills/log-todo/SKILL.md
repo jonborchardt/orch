@@ -5,7 +5,7 @@ description: Use when the user types "/log-todo ..." or asks to log, file, note 
 
 # log-todo
 
-Todos are tickets in orch's private, global queue (`orch ticket --help`, `docs/tickets.md`): one
+Todos are tickets in orch's private, global queue (`orch ticket --help`): one
 SQLite database for every repository, never a file in a repository. You decide what a ticket says and
 how it is classified; `orch` owns ids, storage, validation, links, order and history. Every command
 takes `--json`; read that, never the text tables. You never read source code to size an item: the
@@ -45,10 +45,12 @@ area, a dependency cycle, a closed ticket); exit 3 is no such id.
    with `orch ticket edit NNNN --body-file -`, add `orch ticket note NNNN "<what was merged>"`, file nothing; its
    classification stays (say so in the reply if the new text argues for a higher priority). Same subject as a done or
    dropped ticket: a new ticket with `--related <that id>`, no question.
-4. Classify each todo: `type` (`bug|feature|chore|question`; a question is a decision to make, not code), `area` (an
-   existing area whenever one fits; if none does, `orch ticket area add <name> --description "<d>"` first and say so),
+4. Classify each todo: `type` (`bug|feature|chore|question`; a question is a decision to make, not code), `area` (areas
+   are one global list shared by every repository, read from `orch ticket area list`; choose by the general meaning of
+   the name, since a description may describe another repository; an existing area whenever one fits; if none does,
+   `other` or `orch ticket area add <name> --description "<d>"` first and say so),
    `priority` (P0 drop everything, P1 fix now, P2 next, P3 someday, P4 parked, P5 below parked; P0, P4 and P5 only when the user says so), `effort` (see **Effort**
-   below), `--depends-on` and `--related` by id. Values the text gives (`p1`, `area: api`, `0.25 days`, `3 hours`,
+   below), `--depends-on` and `--related` by id. Values the text gives (for example `p1`, `area: api`, `0.25 days`, `3 hours`,
    `depends on 7`, `blocks 9`) are taken as given (hours: divide by 24, round up to the scale); "blocks 9" is
    `orch ticket dep add 9 <new id>` after filing. `--classified user` when the text gave any of area, priority or
    effort, else `auto`. Two items combined into one take the higher priority and one fresh estimate of the combined
@@ -57,7 +59,8 @@ area, a dependency cycle, a closed ticket); exit 3 is no such id.
    state); its pixels cannot be saved. A path: after filing, `orch ticket asset add <id> <path>` (it is copied into
    orch's private data directory, never the repository), name the file in `## Screenshot`, read it once and transcribe
    it too. Text that mentions a screenshot with neither: **question 3**, "Paste the screenshot or give me its path."
-6. File it, the body on stdin so nothing needs shell escaping:
+6. File it, the body on stdin so nothing needs shell escaping (the values are examples; `web` stands for whichever
+   area step 4 chose):
 
    ```sh
    orch ticket add "<title>" --type bug --area web --priority P2 --effort 0.5 \
@@ -77,8 +80,8 @@ No other question is ever asked.
 `effort` is how long the factory will take on the ticket, start to merge, in elapsed wall-clock time: not human
 engineering effort. It is stored in days where **one day is 24 hours**. Estimate in hours, then convert:
 
-1. Start from the fixed cost every ticket pays, about 0.8 h: worktree, spec, two 15-minute check runs, CI, reviews,
-   approval, PR.
+1. Start from the fixed cost every ticket pays, about 0.8 h as measured on orch's own queue: worktree, spec, the
+   repository's verification runs, CI, reviews, approval, PR.
 2. Add the work itself: how much there is to write, how many files and subsystems it crosses, the new tests it
    needs, rendered UI (four more reviewers), and the risk of a failed verification or a review rework round (each
    costs about another 0.5 h).
@@ -94,7 +97,7 @@ engineering effort. It is stored in days where **one day is 24 hours**. Estimate
 | `0.5` | 12 | several of those at once; consider splitting |
 | `1, 2, 3, 5` | 24+ | only when the user says so |
 
-Measured on 41 completed tickets: half finished within 1.5 h, 73% within 2.4 h, 83% within 3.6 h, and the slowest
+Measured on 41 completed tickets of orch's own queue (calibration, not a fact about this repository): half finished within 1.5 h, 73% within 2.4 h, 83% within 3.6 h, and the slowest
 four took 6 to 11 h. Nothing finishes in under half an hour. One glance at the request is the whole estimate: no
 arithmetic in the reply, no reading code.
 
@@ -119,8 +122,7 @@ The title is one line. No personal data (names, emails, credentials) in a ticket
 ## Common mistakes
 
 - Grepping the code to size an item. Guess from the area and the request.
-- Writing a ticket, an index or a table as a file. Only `orch ticket` stores tickets; `todo/` is a
-  read-only archive of the register that was imported.
+- Writing a ticket, an index or a table as a file. Only `orch ticket` stores tickets.
 - Picking the id yourself. `orch ticket add` allocates it and prints it.
 - Trying to delete a ticket to undo a mistake. Use `drop` or `dup`; ids are forever.
 - Guessing P0, P4, or P5. Drop-everything, parked, and below-parked are the user's call.
