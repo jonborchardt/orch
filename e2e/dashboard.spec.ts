@@ -665,6 +665,12 @@ test('tickets: the queue lists the seeded tickets, one opens, and the list comes
   page,
 }) => {
   await page.goto('/');
+  // The shared header shows the factory's status on every section, not only on Tickets.
+  const status = page.getByRole('region', { name: 'Factory status' });
+  await expect(status).toContainText('idle');
+  await page.goto('/#/runs');
+  await expect(status).toContainText('idle');
+  await page.goto('/');
   await page
     .getByRole('navigation', { name: 'Sections' })
     .getByRole('link', { name: 'Tickets' })

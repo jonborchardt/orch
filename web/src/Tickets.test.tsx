@@ -21,7 +21,7 @@ import type {
   TicketView,
 } from '../../src/server/types.ts';
 import { App } from './App.tsx';
-import { theme } from './main.tsx';
+import { theme } from './theme.ts';
 
 // The full suite runs ~20 process-heavy files in parallel; the 1 s default flakes under that load.
 configure({ asyncUtilTimeout: 10_000 });
@@ -364,10 +364,11 @@ describe('sections', () => {
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('No jobs yet');
     });
-    // Nothing about tickets is asked for until the section is opened. The app-wide installed-build
-    // warning reads the runner once per section change; the queue's runner poll waits for Tickets.
+    // Nothing about tickets is asked for until the section is opened; the factory's status is the
+    // shared header's, polled on every section.
     expect(db.gets.some((u) => u.includes('ticket'))).toBe(false);
-    expect(db.gets.filter((u) => u.includes('runner')).length).toBeLessThanOrEqual(1);
+    expect(await screen.findByRole('region', { name: 'Factory status' })).toBeInTheDocument();
+    expect(screen.queryByTestId('ready-line')).toBeNull();
 
     go('#/tickets');
     await table();
@@ -728,10 +729,20 @@ describe('factory status', () => {
     expect(r).toHaveTextContent(
       `no ready ticket is left (2 of 3 attempted tickets done, ${ALPHA})`,
     );
-    // The first ready ticket of the queue, never promised as what runs next.
-    expect(r).toHaveTextContent('Highest-priority ready ticket: 0009 Urgent and newest (2 ready)');
+    // The first ready ticket of the queue, never promised as what runs next: the Tickets list's
+    // line, below the shared header's box and outside it.
+    const ready = await screen.findByTestId('ready-line');
+    expect(ready).toHaveTextContent(
+      'Highest-priority ready ticket: 0009 Urgent and newest (2 ready)',
+    );
+    expect(r).not.toHaveTextContent('Highest-priority ready ticket');
     expect(r).not.toHaveTextContent(/next ticket/i);
-    expect(within(r).getByRole('link', { name: '0009' })).toHaveAttribute('href', '#/tickets/9');
+    expect(r.contains(ready)).toBe(false);
+    expect(r.compareDocumentPosition(ready) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(ready).getByRole('link', { name: '0009' })).toHaveAttribute(
+      'href',
+      '#/tickets/9',
+    );
 
     const building: ControllerStatus['current'] = {
       ticket: '0003',
@@ -756,8 +767,10 @@ describe('factory status', () => {
     r = await stateIs('running');
     expect(r).toHaveTextContent('queue of every repository');
     expect(r).toHaveTextContent(
-      `ticket 0003 Refactor store · job-00000003 at build (running) · ${ALPHA} · waiting for agent`,
+      `ticket 0003 · job-00000003 at build (running) · ${ALPHA} · waiting for agent`,
     );
+    // Only what /api/runner returns: the ticket key, not its title.
+    expect(r).not.toHaveTextContent('Refactor store');
     expect(within(r).getByRole('link', { name: '0003' })).toHaveAttribute('href', '#/tickets/3');
     expect(within(r).getByRole('link', { name: 'job-00000003' })).toHaveAttribute(
       'href',

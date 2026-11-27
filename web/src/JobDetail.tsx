@@ -46,6 +46,7 @@ import { failureText, fetchDetail } from './api.ts';
 import { STATE, ago, verdictColor } from './format.ts';
 import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
 import { ticketHref, ticketKey } from './ticketState.ts';
+import { fonts, textSize, weight } from './theme.ts';
 
 /** What the detail page's own fetch is doing, for the app bar's shared indicator. */
 export type DetailActivity = 'loading' | 'refreshing' | 'idle';
@@ -146,14 +147,6 @@ export function JobDetail({
             Open PR on GitHub
           </Button>
         )}
-        <Button
-          variant="text"
-          onClick={() => {
-            void polled.reload();
-          }}
-        >
-          Refresh
-        </Button>
       </Stack>
 
       <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }} component="section" aria-label="Status">
@@ -360,7 +353,7 @@ export function JobDetail({
           ) : (
             detail.rounds.map((r) => (
               <Box key={r.round} sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
                   Round {r.round}
                   {r.round === job.round && ' (current)'}
                   {r.blocking !== null && (
@@ -397,7 +390,7 @@ export function JobDetail({
                       }
                     >
                       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                        <Typography sx={{ fontWeight: 600 }}>{rv.reviewer}</Typography>
+                        <Typography sx={{ fontWeight: weight.semibold }}>{rv.reviewer}</Typography>
                         <Chip label={rv.verdict ?? 'pending'} color={verdictColor(rv.verdict)} />
                         <Typography variant="body2" color="text.secondary">
                           {modelText(rv.model, rv.sameAsAuthor)}
@@ -421,7 +414,7 @@ export function JobDetail({
           (consolidatedRounds.length > 0 ? (
             consolidatedRounds.map((r) => (
               <Box key={r.round} sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
                   Round {r.round} consolidated findings
                 </Typography>
                 {content(r.consolidated)}
@@ -492,7 +485,7 @@ export function JobDetail({
                   <TableCell>{e.type}</TableCell>
                   <TableCell>{e.actor ?? ''}</TableCell>
                   <TableCell>
-                    <code style={{ fontSize: 12 }}>{JSON.stringify(e.payload)}</code>
+                    <code style={{ fontSize: textSize.code }}>{JSON.stringify(e.payload)}</code>
                   </TableCell>
                 </TableRow>
               ))}
@@ -761,7 +754,10 @@ function Escalation({ detail }: { detail: JobDetailView }) {
         <Box data-testid="decision-summary">
           {decision ? (
             <>
-              <Typography sx={{ fontFamily: 'monospace', fontWeight: 700 }} data-marker="DECISION">
+              <Typography
+                sx={{ fontFamily: fonts.mono, fontWeight: weight.bold }}
+                data-marker="DECISION"
+              >
                 DECISION: {decision.marker?.toUpperCase() ?? '?'}
               </Typography>
               {rationale ? (
@@ -779,7 +775,7 @@ function Escalation({ detail }: { detail: JobDetailView }) {
         <Box data-testid="blocking-findings">
           {latest ? (
             <>
-              <Typography sx={{ fontWeight: 600 }}>
+              <Typography sx={{ fontWeight: weight.semibold }}>
                 Round {latest.round}:{' '}
                 {blocking > 0 ? `${String(blocking)} blocking finding(s)` : 'no blocking findings.'}
               </Typography>
@@ -864,7 +860,7 @@ function Verification({ detail }: { detail: JobDetailView }) {
     <Stack spacing={2}>
       {v ? (
         <Paper variant="outlined" sx={{ p: 2 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
             Policy
           </Typography>
           <Typography variant="body2">
@@ -962,7 +958,7 @@ function Verification({ detail }: { detail: JobDetailView }) {
       {s &&
         (s.changes.length > 0 || s.scan.disabled.length > 0 || s.scan.removedTests.length > 0) && (
           <Paper variant="outlined" sx={{ p: 2 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
               Sensitive changes {s.needsReview ? '(review required)' : '(new tests only)'}
             </Typography>
             <ul>
@@ -986,7 +982,7 @@ function Verification({ detail }: { detail: JobDetailView }) {
         )}
       {integ && (
         <Paper variant="outlined" sx={{ p: 2 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: weight.semibold }}>
             Base integration #{integ.id}: {integ.status}
           </Typography>
           <Typography variant="body2">
