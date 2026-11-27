@@ -23,6 +23,19 @@ export function elapsedCell(ms: number | null): string {
   return ms < 1000 ? '<1s' : elapsed(ms);
 }
 
+/** A measured span to the second: `<1s`, `42s`, `9m 06s`, `1h 02m 03s`; empty when unknown. */
+export function preciseDuration(ms: number | null): string {
+  if (ms === null) return '';
+  if (ms < 1000) return '<1s';
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  if (m === 0) return `${String(s)}s`;
+  const two = (n: number) => String(n).padStart(2, '0');
+  const h = Math.floor(m / 60);
+  const tail = `${two(s % 60)}s`;
+  return h === 0 ? `${String(m)}m ${tail}` : `${String(h)}h ${two(m % 60)}m ${tail}`;
+}
+
 export function ago(iso: string | null, now = Date.now()): string {
   if (!iso) return '—';
   const diff = now - Date.parse(iso);

@@ -73,7 +73,7 @@ export function detailTabs(detail: JobDetailView): DetailTab[] {
     // Empty without a claude-code session, but reachable: its panel says how to attach one.
     plain('Session', detail.claudeSessions.length === 0),
     plain('Git', !detail.plan?.worktree && !detail.merge),
-    plain('Verification', !detail.plan?.verification),
+    plain('Verification', !detail.plan?.verification && detail.verificationRuns.length === 0),
     plain('PR', !detail.job.prUrl && !has('pr.md'), 'PR needs an opened PR or pr.md (pr stage).'),
   ];
 }

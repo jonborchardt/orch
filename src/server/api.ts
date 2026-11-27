@@ -66,7 +66,7 @@ import {
 } from '../storage/jobs.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 import { allTickets } from '../storage/tickets.ts';
-import { latestRun, latestRunsByJob, listRuns, runDetail } from '../storage/verification.ts';
+import { latestRunsByJob, listChecks, listRuns, runDetail } from '../storage/verification.ts';
 import {
   BLOCKER_EVENTS,
   blockerOf,
@@ -922,10 +922,14 @@ export function detail(store: Store, id: string): JobDetailView {
     planError = (err as Error).message;
   }
   const state = liveness(job);
+  const verificationRuns = listRuns(store.db, id).map((run) => ({
+    ...run,
+    checks: listChecks(store.db, run.id),
+  }));
   const evidence = {
     events: latestEventsByJob(store.db, [id], BLOCKER_EVENTS).get(id) ?? new Map<string, Event>(),
     artifacts,
-    latestRun: latestRun(store.db, id)?.run ?? null,
+    latestRun: verificationRuns[0] ?? null,
   };
   // Without a readable worktree HEAD there is nothing to compare the verdict against.
   const ci = ciView(job, evidence.events, plan?.worktree?.head ?? undefined);
@@ -951,6 +955,7 @@ export function detail(store: Store, id: string): JobDetailView {
     events,
     plan,
     planError,
+    verificationRuns,
     blocker: blockerOf(job, state, evidence),
     ci,
     progress: progressOf(job, evidence.events),
@@ -973,7 +978,7 @@ export function detail(store: Store, id: string): JobDetailView {
         typeof e.payload['head'] === 'string' ? [e.payload['head']] : [],
       ),
       logs: logLinks(id, [
-        ...(plan?.verification?.run?.checks.map((c) => c.outputPath) ?? []),
+        ...verificationRuns.flatMap((r) => r.checks.map((c) => c.outputPath)),
         ...ci.failures.map((f) => f.log),
       ]),
     },
