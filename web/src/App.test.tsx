@@ -6025,6 +6025,27 @@ describe('Deep links (ticket 0007)', () => {
       expect(window.history.length).toBe(length);
     });
 
+    it("a reviewer link opened from another job's detail expands it once that job loads (AC7, AC10)", async () => {
+      const linked = data.detail;
+      data.detail = detail({ job: { ...detail().job, id: 'job-00000004', title: 'Other job' } });
+      window.location.hash = '#/jobs/job-00000004/reviews';
+      mockFetch();
+      mount();
+      await screen.findByRole('heading', { name: 'Other job' });
+      // The next job's detail is held, so the link is seen first against the previous job's data.
+      const next = Promise.withResolvers<undefined>();
+      hold.detail = next.promise;
+      data.detail = linked;
+      go('#/jobs/job-00000003/reviews/1/security');
+      await new Promise((r) => setTimeout(r, 100));
+      next.resolve(undefined);
+      await screen.findByRole('heading', { name: 'Gamma blocked' });
+      await waitFor(() => {
+        expect(header(/^security/)).toHaveAttribute('aria-expanded', 'true');
+      });
+      expect(scroll.mock.contexts.at(-1)).toHaveAttribute('id', 'review-round-1');
+    });
+
     it('an unknown round or reviewer opens Reviews with nothing expanded (AC9)', async () => {
       for (const hash of [
         '#/jobs/job-00000003/reviews/9',

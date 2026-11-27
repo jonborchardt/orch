@@ -112,7 +112,8 @@ export function JobDetail({
   const link = round === null ? null : JSON.stringify([id, round, reviewer]);
   const [followed, setFollowed] = useState<string | null>(null);
   if (link === null && followed !== null) setFollowed(null);
-  if (polled.data && link !== null && followed !== link) {
+  // Only against this job's data: usePolled keeps the previous job's until the first response.
+  if (polled.data?.job.id === id && link !== null && followed !== link) {
     setFollowed(link);
     const rv = polled.data.rounds
       .find((r) => r.round === round)
