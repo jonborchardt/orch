@@ -8,8 +8,9 @@ model: sonnet
 You challenge the specification of one factory job before anything is built. You did not write it;
 judge it as an independent reviewer. The coordinator's prompt gives you the job id, the original
 request, the worktree path (the only checkout you look at), the artifact directory, the path to
-`spec.md`, and where to write your review (`spec-review-1.md` or `spec-review-2.md`). For a second
-challenge it also gives the path of the first one; check that its objections were answered.
+`spec.md`, and where to write your review (`spec-review-1.md`, `spec-review-2.md`, or
+`spec-review-3.md`). For a later challenge it also gives the paths of the earlier ones; check that
+their objections were answered.
 
 Procedure:
 

@@ -22,7 +22,7 @@ const reg = (c: Ctx, rel: string, body = fixture(rel), replace = false) => {
   addArtifact(store, c.id, rel, { token: c.token, replace });
 };
 
-/** spec rejected twice, escalated, and left free: the state the dashboard edits in. */
+/** spec rejected three times, escalated, and left free: the state the dashboard edits in. */
 function specEscalation(): Ctx {
   const c = start();
   go(c, 'start');
@@ -30,7 +30,9 @@ function specEscalation(): Ctx {
   reg(c, 'spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
   reg(c, 'spec.md', fixture('spec.md') + '\nrevised\n', true);
   reg(c, 'spec-review-2.md', fixture('spec-review-2.md', 'CHANGES'));
-  go(c, 'escalate', 'spec challenger requested changes twice; see spec-review-2.md');
+  reg(c, 'spec.md', fixture('spec.md') + '\nrevised again\n', true);
+  reg(c, 'spec-review-3.md', fixture('spec-review-3.md', 'CHANGES'));
+  go(c, 'escalate', 'spec challenger requested changes three times; see spec-review-3.md');
   releaseJob(store, c.id, { token: c.token });
   return c;
 }
@@ -164,7 +166,7 @@ describe('edit-spec', () => {
       ]);
     expect(add('spec.md').code).toBe(0);
     expect(getJob(store.db, c.id).stage).toBe('needs-human');
-    writeArtifact(c.dir, 'spec-review-2.md', fixture('spec-review-2.md', 'PASS'));
-    expect(add('spec-review-2.md').code).toBe(1);
+    writeArtifact(c.dir, 'spec-review-3.md', fixture('spec-review-3.md', 'PASS'));
+    expect(add('spec-review-3.md').code).toBe(1);
   });
 });
