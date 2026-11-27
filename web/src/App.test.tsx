@@ -2756,6 +2756,105 @@ describe('Job detail: reviews', () => {
     expect(screen.getByRole('button', { name: /correctness.*changes/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /correctness.*pass/ })).toBeInTheDocument();
   });
+
+  it('expands and collapses one round at a time, with a standard expand icon (ticket 0028)', async () => {
+    const review = (id: number, round: number, reviewer: string) => ({
+      jobId: 'job-00000003',
+      artifactId: 1,
+      head: 'abc',
+      model: null,
+      sameAsAuthor: null,
+      summary: null,
+      createdAt: '2026-11-13T08:10:00.000Z',
+      completedAt: '2026-11-13T08:20:00.000Z',
+      id,
+      round,
+      reviewer,
+      verdict: 'pass' as const,
+      path: null,
+    });
+    const base = detail();
+    data.detail = detail({
+      job: { ...base.job, round: 3 },
+      rounds: [
+        {
+          round: 1,
+          reviews: [review(1, 1, 'alpha'), review(2, 1, 'beta')],
+          consolidated: null,
+          blocking: 0,
+        },
+        {
+          round: 2,
+          reviews: [review(3, 2, 'gamma'), review(4, 2, 'delta')],
+          consolidated: null,
+          blocking: null,
+        },
+        { round: 3, reviews: [], consolidated: null, blocking: null },
+      ],
+    });
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Reviews (3 rounds)' }));
+    const button = (name: string) => screen.getByRole('button', { name });
+    const header = (reviewer: string) => screen.getByRole('button', { name: new RegExp(reviewer) });
+    const expanded = (reviewer: string, value: 'true' | 'false') => {
+      expect(header(reviewer)).toHaveAttribute('aria-expanded', value);
+    };
+
+    // One pair per round with reviewers, none for the empty round, none inside a heading.
+    for (const n of [1, 2]) {
+      expect(button(`Expand all round ${String(n)}`)).toBeEnabled();
+      expect(button(`Collapse all round ${String(n)}`)).toBeDisabled();
+    }
+    expect(screen.getByText('No reviewers recorded.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand all round 3' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Collapse all round 3' })).not.toBeInTheDocument();
+    expect(button('Expand all round 2').closest('h1,h2,h3,h4,h5,h6,[role="heading"]')).toBeNull();
+    expect(button('Expand all round 2').closest('.MuiAccordionSummary-root')).toBeNull();
+
+    // The expand control is an icon, not the text arrow.
+    expect(header('alpha').querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(header('alpha')).not.toHaveTextContent('▾');
+
+    // A panel opened by hand in round 1 survives round 2's buttons; round 1 is now mixed.
+    fireEvent.click(header('alpha'));
+    expect(button('Expand all round 1')).toBeEnabled();
+    expect(button('Collapse all round 1')).toBeEnabled();
+
+    fireEvent.click(button('Expand all round 2'));
+    expanded('gamma', 'true');
+    expanded('delta', 'true');
+    expanded('alpha', 'true');
+    expanded('beta', 'false');
+    expect(button('Expand all round 2')).toBeDisabled();
+    expect(button('Collapse all round 2')).toBeEnabled();
+
+    // One header still toggles only its own panel.
+    fireEvent.click(header('gamma'));
+    expanded('gamma', 'false');
+    expanded('delta', 'true');
+    expect(button('Expand all round 2')).toBeEnabled();
+    expect(button('Collapse all round 2')).toBeEnabled();
+
+    fireEvent.click(button('Collapse all round 2'));
+    expanded('gamma', 'false');
+    expanded('delta', 'false');
+    expanded('alpha', 'true');
+    expect(button('Collapse all round 2')).toBeDisabled();
+  });
+
+  it('draws the Details expander with the same icon (ticket 0028)', async () => {
+    data.detail = detail();
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(
+      screen.getByRole('button', { name: 'Details' }).querySelector('svg[aria-hidden="true"]'),
+    ).not.toBeNull();
+  });
 });
 
 describe('PR phase, Merge, and Refresh PR', () => {
