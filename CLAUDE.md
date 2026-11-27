@@ -58,10 +58,14 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   says MERGED, and `recordMerge` in `storage/jobs.ts` writes the evidence and the ticket's
   completion in one transaction. Callers other than the dashboard need the repository in the
   user's `mergeRepos` (`orch factory config merge`); never read that from a repository file. No
-  merge queue, lock, or polling; a completed job stays completed. The one exception is the
+  merge queue, lock, or polling; a completed job stays completed. The exceptions are the
   factory controller's bounded backoff on a transient GitHub failure (`transientGitHubError` in
-  `core/workflow.ts`), inside its foreground command (decision
-  [2026-11-25-bounded-github-retry](docs/decisions/2026-11-25-bounded-github-retry.md)).
+  `core/workflow.ts`, decision
+  [2026-11-25-bounded-github-retry](docs/decisions/2026-11-25-bounded-github-retry.md)) and its
+  bounded wait for a Claude usage limit, a rate limit, or an unreachable API (`LIMIT_WAITS` in
+  `ops/run.ts`, at most 12 hours in a row, decision
+  [2026-11-26-controller-waits-for-limits](docs/decisions/2026-11-26-controller-waits-for-limits.md)),
+  both inside its foreground command.
 - `skills/factory/` and `agents/` are prose for Claude, linked into `~/.claude` by `orch install`.
   They must only call `orch` commands; any rule that matters is enforced in TypeScript first and
   described in prose second. `tests/skill-contract.test.ts` keeps roles, agent frontmatter, and the
@@ -100,7 +104,9 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   session (decision 2026-11-16-opt-in-recovery-worker); and the factory controller
   (`orch start`, `orch do`, `orch resume`), a foreground process that exists only while its
   command runs; one per repository may run at a time, each in its own terminal (decision
-  2026-11-25-one-controller-per-repository).
+  2026-11-25-one-controller-per-repository). Its only waits are the bounded GitHub backoff and the
+  bounded limit and outage wait, inside that command (decision
+  2026-11-26-controller-waits-for-limits).
 - Only the factory controller starts a Claude process, and only through `launchClaude` in
   `src/integrations/claude-session.ts`: one headless `/factory <job>` child at a time, for the
   ticket it is working on (decision 2026-11-21-foreground-factory-runner). There is at most one

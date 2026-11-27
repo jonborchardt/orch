@@ -97,6 +97,12 @@ export interface RunnerSession {
   jobId: string | null;
   /** The Claude process started for that job, until its exit was seen. */
   child: { pid: number; startedAt: string } | null;
+  /**
+   * While the controller waits out a usage limit, a rate limit, or an unreachable API before
+   * relaunching the job (decision 2026-11-26-controller-waits-for-limits): what for, and until
+   * when. Cleared when the wait ends; absent in older records.
+   */
+  wait?: { reason: string; until: string } | null | undefined;
   results: TicketResult[];
   /** Tickets passed over without an attempt, with why. */
   skipped: { ticketId: number; reason: string }[];

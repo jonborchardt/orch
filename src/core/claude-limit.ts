@@ -71,6 +71,31 @@ export function claudeLimit(
   );
 }
 
+/** A network failure, "Can't reach the API server", an API 5xx, or an overloaded API. */
+const UNREACHABLE =
+  /\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT)\b|can(?:'|’)?t reach the api server|\bapi error:? 5\d\d\b|\bstatus(?: code)?:? 5\d\d\b|\b5\d\d (?:internal server error|bad gateway|service unavailable|gateway timeout)\b|overloaded/i;
+
+const unreachableLine = (text: string): string | null =>
+  text
+    .split(/\r?\n/)
+    .find((l) => UNREACHABLE.test(l))
+    ?.trim() ?? null;
+
+/**
+ * The line saying a child could not reach the Claude API (decision
+ * 2026-11-26-controller-waits-for-limits), or null. Read like `claudeLimit`: `stderrTail` always,
+ * `result.result` only when the result is an error.
+ */
+export function apiUnreachable(
+  stderrTail: string | null | undefined,
+  result: { isError: boolean | null; result: string | null } | null | undefined,
+): string | null {
+  return (
+    unreachableLine(stderrTail ?? '') ??
+    (result?.isError === true && result.result !== null ? unreachableLine(result.result) : null)
+  );
+}
+
 /** The ISO time a limit lifts: only the epoch form (`limit reached|<epoch>`) is a known time. */
 export function limitUntil(resetsAt: string | null | undefined): string | null {
   if (resetsAt == null || !/^\d{9,11}$/.test(resetsAt)) return null;

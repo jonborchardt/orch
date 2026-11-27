@@ -111,11 +111,18 @@ or `refused` for a reason of its own, such as a merge that left a checklist box 
 (`ticket-open`; next step: tick or move the remaining boxes, then `orch ticket done <id>`), an
 unverified merge, or a job that made no progress. The run ends when no ready ticket is left,
 when `orch stop next` was requested, or at the first ticket whose outcome would hit every ticket:
-claude cannot start (`claude-failed`), Claude's usage or rate limit is reached (`usage-limit`),
+claude cannot start (`claude-failed`), Claude's usage or rate limit is still reached after the
+controller's wait (`usage-limit`), the Claude API is still unreachable after it (`api-unreachable`),
 GitHub cannot be read or gives no answer (`github-unreadable`, `merge-no-answer`), or GitHub
-refuses the merge call (`github-refused`). A `usage-limit` stop leaves the session unfinished
-with its ticket in flight: the summary names the limit and its reset time when Claude printed
-one, and `orch resume` continues the same ticket and job once the limit has reset (decision
+refuses the merge call (`github-refused`). Before a limit or an outage ends the run, the
+controller waits inside its own command and relaunches the same job: until an epoch reset plus a
+minute when it is at most 12 hours away, a probe every 30 minutes when no reset was parsed, and
+1, 2, 4, 8, then every 15 minutes for a rate limit or an unreachable API; at most 12 hours of
+waiting in a row, and a reset further away stops at once (`LIMIT_WAITS`, decision
+2026-11-26-controller-waits-for-limits). `orch status` says what it waits for and until when;
+`orch stop`, `orch stop next`, and Ctrl+C end the wait. A `usage-limit` or `api-unreachable` stop
+leaves the session unfinished with its ticket in flight: the summary names the limit and its reset
+time when Claude printed one, and `orch resume` continues the same ticket and job (decision
 2026-11-24-usage-limit-ends-run-resumably). A limit on `fable`, which has an allowance of its
 own, does not end the run while every role of the job drawn `fable` has another model in its
 pool: the controller records `models.fallback` on the job and launches again on that model
@@ -356,9 +363,10 @@ Each ticket the controller attempts ends with one outcome (`TICKET_OUTCOMES` in
 | `stopped`     | `orch stop` interrupted it                                                     | end the run, resumable             |
 
 The one exception is a result whose code would hit every ticket (`RUN_ENDING_CODES` in
-`src/core/workflow.ts`: `claude-failed`, `usage-limit`, `github-unreadable`, `merge-no-answer`,
-`github-refused`, `orch-rebuilt`, `bad-config`): it ends the run with the reason; after
-`usage-limit`, `orch-rebuilt`, or `bad-config` the run stays resumable.
+`src/core/workflow.ts`: `claude-failed`, `usage-limit`, `api-unreachable`, `github-unreadable`,
+`merge-no-answer`, `github-refused`, `orch-rebuilt`, `bad-config`): it ends the run with the
+reason; after `usage-limit`, `api-unreachable`, `orch-rebuilt`, or `bad-config` the run stays
+resumable.
 A GitHub failure that `transientGitHubError` calls transient (5xx, GraphQL "Something went
 wrong", timeouts, network errors; never a refusal or a rate limit) is first retried after 1, 2, 4,
 8, and 16 minutes (`GITHUB_BACKOFF_SECONDS`, decision 2026-11-25-bounded-github-retry); `orch stop`
@@ -409,7 +417,8 @@ Stop codes `src/ops/run.ts` can write:
 
 - the controller's own: `no-progress` (two Claude sessions in a row without moving the job),
   `claude-failed` (Claude could not be started), `usage-limit` (the session ended on a Claude
-  usage or rate limit; next step `orch resume`), `ci-pending` (60 CI reads without a verdict),
+  usage or rate limit past the controller's wait; next step `orch resume`), `api-unreachable` (the
+  Claude API stayed unreachable or overloaded past the wait; next step `orch resume`), `ci-pending` (60 CI reads without a verdict),
   `github-unreadable` (five unreadable GitHub answers in a row during CI, six for a transient
   failure), `unverified-merge` (the
   PR merged at a head other than the verified one), `ticket-open` (merged and verified, but the
@@ -524,9 +533,10 @@ A Cancel returns the job's ticket to open, so the controller gives it a new job 
 
 Every automatic recovery is bounded. A spent budget is not a success: it stops the ticket with
 its reason. The queue passes a `blocked` ticket over and goes on, except for the run-wide codes
-`claude-failed`, `usage-limit`, `github-unreadable`, and `merge-no-answer` (and `github-refused`
-at merge), which end the run there, after the bounded backoff on a transient GitHub failure
-(decision 2026-11-25-bounded-github-retry).
+`claude-failed`, `usage-limit`, `api-unreachable`, `github-unreadable`, and `merge-no-answer` (and
+`github-refused` at merge), which end the run there, after the bounded backoff on a transient
+GitHub failure (decision 2026-11-25-bounded-github-retry) or the bounded limit wait (decision
+2026-11-26-controller-waits-for-limits).
 
 ```mermaid
 flowchart TD
@@ -550,22 +560,23 @@ flowchart TD
     S --> U["A person inspects and decides, then orch do or orch resume"]
 ```
 
-| failure                            | budget (code)                                                                                                                                                                                                                       | counted in                                  | survives a new controller session         |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------- |
-| review rejects a round             | `maxRounds`, default 3 (1–10 in `factory.json`, `--max-rounds` per job); base-integration rework, CI repair, a human resume to build/simplify/review, and a scope rework raise the limit instead of spending it; then `needs-human` | job row (`round`, `maxRounds`)              | yes, durable                              |
-| scope gap (`REWORK-BUILD`/`-SPEC`) | one automatic rework, then `needs-human`                                                                                                                                                                                            | job row (`scopeReworks`)                    | yes, durable                              |
-| spec challenge says CHANGES        | two revisions; a third CHANGES escalates (a bound set by the plan, not a code cap)                                                                                                                                                  | the registered `spec-review-N.md` files     | yes, durable                              |
-| `orch verify` fails                | the builder gets the failing log once, then the skill fails the stage and escalates; the gate never opens without a passing run                                                                                                     | the factory session (skill rule)            | not counted                               |
-| CI fails                           | one re-run per head, then `maxCiRepairs`, default 2 (0–10), then `needs-human`                                                                                                                                                      | job row (`ciRepairs`) and `ci.rerun` events | yes, durable                              |
-| PR conflicts at merge              | one re-land job; a second conflict blocks with `second-conflict`                                                                                                                                                                    | job rows (`supersededBy`)                   | yes, durable                              |
-| Claude exits without progress      | `MAX_IDLE_LAUNCHES` = 2 consecutive exits that change none of stage, round, CI repairs, artifact count (`no-progress`)                                                                                                              | the running controller                      | no: reset by `orch do`, `resume`, `start` |
-| Claude cannot be started           | none: stops at once (`claude-failed`)                                                                                                                                                                                               | –                                           | –                                         |
-| Claude usage or rate limit         | none: ends the run at once, unfinished, for `orch resume` (`usage-limit`)                                                                                                                                                           | the session file                            | yes, until `orch resume` or `orch stop`   |
-| CI pending                         | `CI_MAX_POLLS` = 60 controller reads (`ci-pending`)                                                                                                                                                                                 | the running controller                      | no: reset                                 |
-| GitHub unreadable during CI        | `TRANSIENT_ATTEMPTS` = 5 consecutive failed reads, or 6 transient ones `GITHUB_BACKOFF_SECONDS` apart (`github-unreadable`)                                                                                                         | the running controller                      | no: reset                                 |
-| merge `waiting` or `error`         | `waiting`: 5 attempts, `RETRY_SECONDS` = 30 s apart; `error`: 6 attempts, `GITHUB_BACKOFF_SECONDS` apart (`merge-no-answer`)                                                                                                        | the running controller                      | no: reset                                 |
-| recovery worker episode fails      | 5 consecutive `recovery.failed` for one CI head, then `needs-human`                                                                                                                                                                 | job events                                  | yes, durable                              |
-| a person must decide               | none: the job waits in `needs-human`                                                                                                                                                                                                | job row (`stage`, `returnStage`)            | yes, durable                              |
+| failure                            | budget (code)                                                                                                                                                                                                                                                       | counted in                                  | survives a new controller session         |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------- |
+| review rejects a round             | `maxRounds`, default 3 (1–10 in `factory.json`, `--max-rounds` per job); base-integration rework, CI repair, a human resume to build/simplify/review, and a scope rework raise the limit instead of spending it; then `needs-human`                                 | job row (`round`, `maxRounds`)              | yes, durable                              |
+| scope gap (`REWORK-BUILD`/`-SPEC`) | one automatic rework, then `needs-human`                                                                                                                                                                                                                            | job row (`scopeReworks`)                    | yes, durable                              |
+| spec challenge says CHANGES        | two revisions; a third CHANGES escalates (a bound set by the plan, not a code cap)                                                                                                                                                                                  | the registered `spec-review-N.md` files     | yes, durable                              |
+| `orch verify` fails                | the builder gets the failing log once, then the skill fails the stage and escalates; the gate never opens without a passing run                                                                                                                                     | the factory session (skill rule)            | not counted                               |
+| CI fails                           | one re-run per head, then `maxCiRepairs`, default 2 (0–10), then `needs-human`                                                                                                                                                                                      | job row (`ciRepairs`) and `ci.rerun` events | yes, durable                              |
+| PR conflicts at merge              | one re-land job; a second conflict blocks with `second-conflict`                                                                                                                                                                                                    | job rows (`supersededBy`)                   | yes, durable                              |
+| Claude exits without progress      | `MAX_IDLE_LAUNCHES` = 2 consecutive exits that change none of stage, round, CI repairs, artifact count (`no-progress`)                                                                                                                                              | the running controller                      | no: reset by `orch do`, `resume`, `start` |
+| Claude cannot be started           | none: stops at once (`claude-failed`)                                                                                                                                                                                                                               | –                                           | –                                         |
+| Claude usage or rate limit         | `LIMIT_WAITS`: until an epoch reset plus 60 s (at most 12 h away, else stops at once), a probe every 30 min without one, 1, 2, 4, 8, then 15 min for a rate limit; at most 12 h of waiting in a row, then ends the run unfinished for `orch resume` (`usage-limit`) | the session file                            | yes, until `orch resume` or `orch stop`   |
+| Claude API unreachable             | `LIMIT_WAITS`: 1, 2, 4, 8, then every 15 min, never counted as idle; at most 12 h in a row, then ends the run unfinished for `orch resume` (`api-unreachable`)                                                                                                      | the session file                            | yes, until `orch resume` or `orch stop`   |
+| CI pending                         | `CI_MAX_POLLS` = 60 controller reads (`ci-pending`)                                                                                                                                                                                                                 | the running controller                      | no: reset                                 |
+| GitHub unreadable during CI        | `TRANSIENT_ATTEMPTS` = 5 consecutive failed reads, or 6 transient ones `GITHUB_BACKOFF_SECONDS` apart (`github-unreadable`)                                                                                                                                         | the running controller                      | no: reset                                 |
+| merge `waiting` or `error`         | `waiting`: 5 attempts, `RETRY_SECONDS` = 30 s apart; `error`: 6 attempts, `GITHUB_BACKOFF_SECONDS` apart (`merge-no-answer`)                                                                                                                                        | the running controller                      | no: reset                                 |
+| recovery worker episode fails      | 5 consecutive `recovery.failed` for one CI head, then `needs-human`                                                                                                                                                                                                 | job events                                  | yes, durable                              |
+| a person must decide               | none: the job waits in `needs-human`                                                                                                                                                                                                                                | job row (`stage`, `returnStage`)            | yes, durable                              |
 
 The runner-local counters start again with each `orch do`, `orch resume`, or `orch start`, and
 each of those takes a person, so a retry loop always has someone in it. Nothing waits between two

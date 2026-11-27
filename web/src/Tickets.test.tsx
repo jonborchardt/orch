@@ -92,6 +92,7 @@ const controller = (over: Partial<ControllerStatus> = {}): ControllerStatus => (
   startedAt: '2026-11-20T09:00:00.000Z',
   stop: { next: false, now: false },
   current: null,
+  wait: null,
   next: 'Resume a stranded in-progress ticket, else select the next ready one.',
   ...over,
 });
