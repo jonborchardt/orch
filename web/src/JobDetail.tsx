@@ -355,7 +355,6 @@ export function JobDetail({
               spacing={0.5}
               component="section"
               aria-labelledby="agent-session-heading"
-              data-testid="agent-block"
               sx={{ color: 'text.secondary' }}
             >
               <Typography variant="subtitle2" component="h2" id="agent-session-heading">
@@ -598,19 +597,18 @@ function ReviewsLine({ detail }: { detail: JobDetailView }) {
 function VerificationLine({ detail }: { detail: JobDetailView }) {
   if (!detail.plan) return null;
   const v = detail.plan.verification;
-  const run = v?.run ?? null;
+  if (!v?.run) {
+    return (
+      <Typography data-testid="summary-verification">
+        <b>Verification:</b> Not verified yet
+      </Typography>
+    );
+  }
   return (
     <Typography component="div" data-testid="summary-verification">
       <b>Verification:</b>{' '}
-      {v && run ? (
-        <>
-          <Chip size="small" label={run.status} color={v.valid ? 'success' : 'default'} /> at{' '}
-          {commitRef(detail)(run.head, 10)},{' '}
-          {v.valid ? 'valid for HEAD' : `stale: ${v.reason ?? ''}`}
-        </>
-      ) : (
-        'Not verified yet'
-      )}
+      <Chip size="small" label={v.run.status} color={v.valid ? 'success' : 'default'} /> at{' '}
+      {commitRef(detail)(v.run.head, 10)}, {v.valid ? 'valid for HEAD' : `stale: ${v.reason ?? ''}`}
     </Typography>
   );
 }

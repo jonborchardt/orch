@@ -161,18 +161,18 @@ export function When({ iso }: { iso: string }) {
 
 /**
  * The detail's Progress section: every step with its state and known times, then the timeline.
- * With `onOpen`, an entry whose step maps to an available tab (`stepTab`) is a link to it.
+ * An entry whose step maps to an available tab (`stepTab`) is a link to it.
  */
 export function ProgressSection({
   progress,
   timeline,
-  tabs = [],
+  tabs,
   onOpen,
 }: {
   progress: Progress;
   timeline: Timeline;
-  tabs?: readonly DetailTab[];
-  onOpen?: (tab: TabName) => void;
+  tabs: readonly DetailTab[];
+  onOpen: (tab: TabName) => void;
 }) {
   const color = useStepColor();
   const challenge = progress.specChallenge;
@@ -239,14 +239,14 @@ export function ProgressSection({
         <Table size="small" aria-label="Timeline">
           <TableBody>
             {timeline.entries.map((e, i) => {
-              const tab = onOpen ? stepTab(tabs, e.step) : null;
+              const tab = stepTab(tabs, e.step);
               return (
                 <TableRow key={i} data-kind={e.kind}>
                   <TableCell sx={{ whiteSpace: 'nowrap', width: '1%' }}>
                     <When iso={e.at} />
                   </TableCell>
                   <TableCell>
-                    {tab && onOpen ? (
+                    {tab ? (
                       <Link
                         component="button"
                         type="button"
