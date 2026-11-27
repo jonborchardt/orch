@@ -26,16 +26,33 @@ on Windows) and it keeps serving; a pipe that closes at once (`echo | orch ui`) 
 and **Usage** (`#/usage`). Each is a link, so every view can be opened, reloaded, and bookmarked by
 its URL. The job counts, the job filters, and the board's error alert show only in Jobs; a section
 polls only what it shows, so the ticket queue is not read while Jobs is open and the job board
-rests while any other section is. Usage does not poll at all: it loads on open, on a range change,
-and from its Refresh button. A further section is one entry in `SECTIONS` in `web/src/App.tsx` and one branch
+rests while any other section is. Usage does not poll its own data: it loads on open, on a range
+change, and from its Refresh button; the shared header's runner poll still runs there, as on every
+section. A further section is one entry in `SECTIONS` in `web/src/App.tsx` and one branch
 where the page body is chosen.
 
-**Installed build.** Under the app bar, on every section, a warning shows `build.message` from
+**Shared header.** Under the app bar, on every section, `App` renders one **Factory status** box
+(`web/src/FactoryStatus.tsx`) from one `usePolled(fetchRunner, refreshMs)`: what `orch status`
+prints, from `GET /api/runner` (`runnerStatus`, read-only; the body is described under Tickets
+below). It sits below the sticky app bar and scrolls with the page. A line reads `Updated <ago>`
+(`Updated just now` under 5 s), measured from the last successful runner poll, in a `<time>` whose
+`datetime` and `title` carry that exact time, and ages once a second while a poll is pending.
+When the latest poll failed, a warning (a ⚠ glyph and text) gives the error, the last successful
+update when there is one, and "retries every N s"; only the error and retry sentence are its
+`role="status"` live region, so the ticking time is not re-announced every second. When no poll has answered for
+more than three refresh intervals it reads `Not updating` with the last update time. Either
+clears with the next good poll, and the last good content stays shown under it. Before the first
+response nothing is shown. There is no control in the box and no Retry: the next poll is the
+retry, and the controller is started, stopped, and resumed from the CLI only. The job detail page
+has no plain Refresh button either; its own poll keeps it current.
+
+**Installed build.** Under the Factory status box, on every section, a warning shows `build.message` from
 `GET /api/runner` when the installed build is older than the install checkout or its upstream
 ("built from X, main is at Y: pull, `npm run build`, `orch install`"; `installBuild` in
 `src/ops/install-build.ts`, reading the stamp `npm run build` writes to `dist/build-info.json`).
 While a controller runs, the advice says to run `orch stop next` first (`buildForStatus` in
-`src/ops/run.ts`), since rebuilding mid-run halts it. It is read on load and on each section change. Local refs only, nothing is fetched; no stamp, or a
+`src/ops/run.ts`), since rebuilding mid-run halts it. It comes from the shared header's runner
+poll, every refresh interval. Local refs only, nothing is fetched; no stamp, or a
 failed request, shows nothing.
 
 **Runs** (`GET /api/runs`, `runs` in `src/server/api.ts`) aggregates every job in every repository,
@@ -541,8 +558,8 @@ lifecycle, or dependency cycles is decided in the browser: the page shows the `r
 `blockedBy`, and `activeJob` the server computed, and every write is one ticket action that the
 server validates.
 
-- **Factory status** heads the page: what `orch status` prints, from `GET /api/runner`
-  (`runnerStatus`, read-only). The body is
+- **Factory status** is the shared header's box (above), on this and every section: what
+  `orch status` prints, from `GET /api/runner` (`runnerStatus`, read-only). The body is
   `{ controllers: ControllerStatus[], last, build, waiting }`: `controllers` has one entry per
   open controller slot (one per repository, or the whole-queue one), live ones first, then by
   `startedAt`, each with `scope` (the repository as shown), `state` (`running` or
@@ -551,16 +568,18 @@ server validates.
   is the union over every slot's session, once per job. With no open slot `controllers` is `[]`
   and the strip shows one `idle` line. The strip shows one line per controller: whether it is
   `running` or `interrupted`; its mode (one ticket for `orch do`, or the queue of one repository
-  or of every repository); the ticket, job, stage, status, and repository in flight (links to both); what it
+  or of every repository); the ticket key, job, stage, status, and repository in flight (links to
+  ticket and job; only what `/api/runner` returns, so no ticket title); what it
   waits for (`agent`, `ci`, `merge`, or a person); a requested stop (`now`, or after this ticket);
   what happens next, in one sentence; and how the last finished session ended, with its reason and
-  its done-of-attempted counts. Under it is the highest-priority ready ticket and the number
-  ready. That is the head of the queue, not a promise: the controller passes over a repository
-  without the merge opt-in. There is no control here; the controller is started, stopped, and
+  its done-of-attempted counts. There is no control here; the controller is started, stopped, and
   resumed from the CLI only. The strip does not list Claude sessions: each child's outcome is a
   `runner.session` event, and a stop's reason a `runner.stopped` event, on the job's Events tab
   ([operations.md](operations.md#runner-events-on-the-job)).
-- **The list** has Queue, ID, Title, Repository, Priority, Effort (days), State, Area / Type,
+- **The list** opens with the highest-priority ready ticket and the number ready ("No ticket is
+  ready." when none is). That is the head of the queue, not a promise: the controller passes over
+  a repository without the merge opt-in. The list itself reads three routes per poll
+  (`/api/tickets?view=all`, `?view=order`, `/api/jobs`), never `/api/runner`. It has Queue, ID, Title, Repository, Priority, Effort (days), State, Area / Type,
   Created (local date and time), Job, and Blocked by. Queue is the ticket's position in `GET /api/tickets?view=order`, the server's proposed
   order of the open tickets; an open row's Up, Down, and Top buttons post the `move` action and
   read the queue again. They move within the global order, not the filtered rows, as

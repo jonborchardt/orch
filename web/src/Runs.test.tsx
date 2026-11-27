@@ -49,3 +49,45 @@ it('drops a response from a superseded fetcher and polls nothing while disabled'
   expect(fresh).toBe('second');
   expect(result.current.error).toBeNull();
 });
+
+it('reports the time of the latest good response as updatedAt (ticket 0136)', async () => {
+  vi.useFakeTimers({ now: Date.parse('2026-11-26T10:00:00.000Z'), toFake: ['Date'] });
+  try {
+    let answer: () => Promise<string> = () => Promise.resolve('one');
+    const f = vi.fn(() => answer());
+    const { result } = renderHook(() => usePolled(f, 60_000));
+    // Pending: nothing has answered yet.
+    expect(result.current.updatedAt).toBeNull();
+    await waitFor(() => {
+      expect(result.current.data).toBe('one');
+    });
+    const first = Date.parse('2026-11-26T10:00:00.000Z');
+    expect(result.current.updatedAt).toBe(first);
+
+    // A failed fetch keeps the last success time.
+    vi.setSystemTime(first + 5_000);
+    answer = () => Promise.reject(new Error('down'));
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.updatedAt).toBe(first);
+
+    // So does a pending one; its success moves the time.
+    const held = Promise.withResolvers<string>();
+    answer = () => held.promise;
+    let pending: Promise<string | null> = Promise.resolve(null);
+    act(() => {
+      pending = result.current.reload();
+    });
+    vi.setSystemTime(first + 9_000);
+    expect(result.current.updatedAt).toBe(first);
+    await act(async () => {
+      held.resolve('two');
+      await pending;
+    });
+    expect(result.current.updatedAt).toBe(first + 9_000);
+  } finally {
+    vi.useRealTimers();
+  }
+});

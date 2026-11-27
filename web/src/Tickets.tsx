@@ -1,5 +1,5 @@
 /**
- * The Tickets section: the factory controller's status, the global ticket queue with its filters,
+ * The Tickets section: the global ticket queue with its filters and first ready ticket,
  * and (on `#/tickets/<id>`) one ticket. Readiness, blockers, and order are the server's; this
  * file only filters and shows them.
  */
@@ -14,7 +14,6 @@ import {
   DialogTitle,
   LinearProgress,
   Link,
-  Paper,
   Stack,
   Table,
   TableBody,
@@ -28,14 +27,7 @@ import {
 } from '@mui/material';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import type {
-  Area,
-  BoardRow,
-  ControllerStatus,
-  RunnerStatus,
-  TicketSummary,
-  TicketView,
-} from '../../src/server/types.ts';
+import type { Area, BoardRow, TicketSummary, TicketView } from '../../src/server/types.ts';
 import { usePolled } from './Runs.tsx';
 import { Pick, Reasons, TicketDetail, TicketFields } from './TicketDetail.tsx';
 import {
@@ -43,11 +35,10 @@ import {
   errorText,
   fetchAreas,
   fetchBoard,
-  fetchRunner,
   fetchTickets,
   ticketAction,
 } from './api.ts';
-import { STATE, ago, repoLabels } from './format.ts';
+import { STATE, repoLabels } from './format.ts';
 import {
   EFFORTS,
   PRIORITIES,
@@ -57,7 +48,7 @@ import {
   ticketKey,
   ticketState,
 } from './ticketState.ts';
-import { statusColor, weight } from './theme.ts';
+import { weight } from './theme.ts';
 
 /** `current` is what is left to do: the tickets in progress, then the open ones in queue order. */
 const SHOWS = [
@@ -125,64 +116,11 @@ const NATIVE_SX = {
   borderRadius: 1,
 } as const;
 
-const RUNNER_COLOR = { running: statusColor.running, interrupted: 'warning' } as const;
-const ROW_SX = { alignItems: 'center', flexWrap: 'wrap', overflowWrap: 'anywhere' } as const;
-
-/** One controller: its state, scope, ticket and job, stop requests, and what it does next. */
-function ControllerLine({
-  c,
-  byId,
-}: {
-  c: ControllerStatus;
-  byId: ReadonlyMap<number, TicketSummary>;
-}) {
-  const cur = c.current;
-  const curId = cur ? Number(cur.ticket) : null;
-  return (
-    <Box role="group" aria-label={`Controller for ${c.scope}`} data-controller={c.scope}>
-      <Stack direction="row" spacing={1} useFlexGap sx={ROW_SX}>
-        <Typography sx={{ fontWeight: weight.bold }}>Factory</Typography>
-        <Chip label={c.state} color={RUNNER_COLOR[c.state]} data-runner={c.state} />
-        <Typography color="text.secondary">
-          {c.mode === 'ticket'
-            ? `one ticket (orch do) in ${c.scope}`
-            : c.mode === 'queue'
-              ? `queue of ${c.scope}`
-              : c.scope}
-        </Typography>
-        {cur && curId !== null && (
-          <Typography>
-            ticket <Link href={ticketHref(curId)}>{cur.ticket}</Link>
-            {byId.has(curId) && ` ${byId.get(curId)?.title ?? ''}`}
-            {cur.job && (
-              <>
-                {' · '}
-                <Link href={`#/jobs/${cur.job}`}>{cur.job}</Link>
-                {cur.stage && ` at ${cur.stage}`}
-                {cur.status && ` (${cur.status})`}
-              </>
-            )}
-            {cur.repo && ` · ${cur.repo}`}
-            {cur.waiting && ` · waiting for ${cur.waiting === 'human' ? 'a person' : cur.waiting}`}
-          </Typography>
-        )}
-        {c.stop.now && <Chip color="warning" label="stop requested: now" />}
-        {c.stop.next && <Chip color="warning" label="stop requested: after this ticket" />}
-      </Stack>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-        {c.next}
-      </Typography>
-    </Box>
-  );
-}
-
-/** What `orch status` prints, read-only. Controllers are started and stopped from the CLI. */
-function RunnerStrip({
-  runner,
+/** The queue's first ready ticket, never promised as what the controller runs next. */
+function ReadyLine({
   tickets,
   order,
 }: {
-  runner: RunnerStatus;
   tickets: readonly TicketSummary[];
   order: readonly number[];
 }) {
@@ -190,43 +128,22 @@ function RunnerStrip({
   const ready = order.flatMap((id) => (byId.get(id)?.ready ? [id] : []));
   const first = ready[0];
   return (
-    <Paper component="section" aria-label="Factory status" variant="outlined" sx={{ m: 1, p: 1 }}>
-      {runner.controllers.length === 0 ? (
-        <Stack direction="row" spacing={1} useFlexGap sx={ROW_SX}>
-          <Typography sx={{ fontWeight: weight.bold }}>Factory</Typography>
-          <Chip label="idle" data-runner="idle" />
-          <Typography variant="body2" color="text.secondary">
-            {/* The same sentence as IDLE_NEXT in src/ops/run.ts; web/ imports only types. */}
-            Nothing is running. orch start resumes a stranded in-progress ticket first, then takes
-            the next ready one.
-          </Typography>
-        </Stack>
+    <Typography
+      variant="body2"
+      color="text.secondary"
+      sx={{ px: 1, pt: 1 }}
+      data-testid="ready-line"
+    >
+      {first === undefined ? (
+        'No ticket is ready.'
       ) : (
-        <Stack spacing={1} sx={{ mb: 0.5 }}>
-          {runner.controllers.map((c) => (
-            <ControllerLine key={c.scope} c={c} byId={byId} />
-          ))}
-        </Stack>
+        <>
+          Highest-priority ready ticket: <Link href={ticketHref(first)}>{ticketKey(first)}</Link>{' '}
+          {byId.get(first)?.title} ({String(ready.length)} ready). The controller passes over a
+          repository without the merge opt-in.
+        </>
       )}
-      {runner.last && (
-        <Typography variant="body2" color="text.secondary">
-          Last session ended <time dateTime={runner.last.at}>{ago(runner.last.at)}</time>:{' '}
-          {runner.last.reason} ({String(runner.last.completed)} of {String(runner.last.attempted)}{' '}
-          attempted tickets done, {runner.last.scope}).
-        </Typography>
-      )}
-      <Typography variant="body2" color="text.secondary">
-        {first === undefined ? (
-          'No ticket is ready.'
-        ) : (
-          <>
-            Highest-priority ready ticket: <Link href={ticketHref(first)}>{ticketKey(first)}</Link>{' '}
-            {byId.get(first)?.title} ({String(ready.length)} ready). The controller passes over a
-            repository without the merge opt-in.
-          </>
-        )}
-      </Typography>
-    </Paper>
+    </Typography>
   );
 }
 
@@ -373,7 +290,6 @@ interface Data {
   /** Ids of the open tickets in the server's proposed order. */
   order: number[];
   rows: BoardRow[];
-  runner: RunnerStatus;
 }
 
 export function TicketsPage({
@@ -394,7 +310,8 @@ export function TicketsPage({
   const [refused, setRefused] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
-  // Four requests for the whole view, whatever the number of tickets: never one per row.
+  // Three requests for the whole view, whatever the number of tickets: never one per row. The
+  // factory's status is the shared header's, polled by App.
   const {
     data,
     error: polled,
@@ -402,12 +319,11 @@ export function TicketsPage({
   } = usePolled(
     useCallback(
       () =>
-        Promise.all([fetchTickets('all'), fetchTickets('order'), fetchBoard(), fetchRunner()]).then(
-          ([all, order, rows, runner]): Data => ({
+        Promise.all([fetchTickets('all'), fetchTickets('order'), fetchBoard()]).then(
+          ([all, order, rows]): Data => ({
             tickets: all.tickets,
             order: order.tickets.map((t) => t.id),
             rows,
-            runner,
           }),
         ),
       [],
@@ -488,7 +404,7 @@ export function TicketsPage({
 
   return (
     <>
-      <RunnerStrip runner={data.runner} tickets={tickets} order={data.order} />
+      <ReadyLine tickets={tickets} order={data.order} />
       {(refused ?? error) && (
         <Alert
           severity="error"

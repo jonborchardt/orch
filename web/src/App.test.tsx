@@ -311,6 +311,7 @@ const noSessionLog = (): SessionLogView => ({
   entries: [],
   truncated: false,
 });
+const IDLE_RUNNER = { controllers: [], last: null, build: null, waiting: [] };
 /** While set, board or detail responses wait for the promise (a held request). */
 let hold: { board?: Promise<void>; detail?: Promise<void> } = {};
 
@@ -368,6 +369,8 @@ beforeEach(() => {
       resumeCommand: 'orch factory resume job-00000003 --session <name>',
       supersedes: [],
     },
+    // The shared header polls the runner on every section; idle unless a test says otherwise.
+    runner: IDLE_RUNNER,
   };
 });
 afterEach(() => {
@@ -866,6 +869,51 @@ describe('Installed build warning', () => {
       expect(screen.queryByRole('alert')).toBeNull();
       cleanup();
     }
+  });
+
+  it('comes from the header runner poll on another section, which keeps polling (ticket 0136)', async () => {
+    data.runner = runner(true);
+    const f = mockFetch();
+    window.location.hash = '#/runs';
+    mount();
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    const asked = () => f.mock.calls.filter(([u]) => u === '/api/runner').length;
+    const seen = asked();
+    await waitFor(() => {
+      expect(asked()).toBeGreaterThan(seen);
+    });
+  });
+});
+
+describe('Shared header (ticket 0136)', () => {
+  it('shows one Factory status box with the state chip on every section', async () => {
+    for (const hash of [
+      '#/',
+      '#/jobs/job-00000003',
+      '#/tickets',
+      '#/tickets/1',
+      '#/runs',
+      '#/agents',
+      '#/usage',
+    ]) {
+      mockFetch();
+      window.location.hash = hash;
+      mount();
+      const r = await screen.findByRole('region', { name: 'Factory status' });
+      await waitFor(() => {
+        expect(r.querySelector('[data-runner]')).toHaveAttribute('data-runner', 'idle');
+      });
+      expect(screen.getAllByRole('region', { name: 'Factory status' })).toHaveLength(1);
+      cleanup();
+    }
+  });
+
+  it('has no plain Refresh button on a job detail page', async () => {
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull();
   });
 });
 
@@ -3730,9 +3778,13 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
     expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'panel-Overview');
     expect(screen.getByRole('tabpanel')).toHaveTextContent('Request');
     expect(tab('Spec')).toHaveAttribute('aria-disabled', 'true');
-    // Refresh refetches the same unavailable state: still Overview.
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-    await new Promise((r) => setTimeout(r, 150));
+    // A later poll refetches the same unavailable state: still Overview.
+    const detailCalls = () =>
+      vi.mocked(fetch).mock.calls.filter(([u]) => u === '/api/jobs/job-00000003').length;
+    const polled = detailCalls();
+    await waitFor(() => {
+      expect(detailCalls()).toBeGreaterThan(polled + 1);
+    });
     expect(tab('Overview')).toHaveAttribute('aria-selected', 'true');
     observer.disconnect();
     expect(drawnUnavailable).toBe(false);

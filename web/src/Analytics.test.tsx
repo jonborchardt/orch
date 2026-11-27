@@ -72,7 +72,14 @@ beforeEach(() => {
     vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : '';
       gets.push(url);
-      const body = url === '/api/runs' ? RUNS : url === '/api/agents' ? AGENTS : [];
+      const body =
+        url === '/api/runs'
+          ? RUNS
+          : url === '/api/agents'
+            ? AGENTS
+            : url === '/api/runner'
+              ? { controllers: [], last: null, build: null, waiting: [] }
+              : [];
       return Promise.resolve(
         new Response(JSON.stringify(body), {
           status: 200,

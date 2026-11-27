@@ -147,14 +147,6 @@ export function JobDetail({
             Open PR on GitHub
           </Button>
         )}
-        <Button
-          variant="text"
-          onClick={() => {
-            void polled.reload();
-          }}
-        >
-          Refresh
-        </Button>
       </Stack>
 
       <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }} component="section" aria-label="Status">
