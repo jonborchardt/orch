@@ -22,7 +22,7 @@ import { claudeLimit } from '../core/claude-limit.ts';
 import { runForeground } from '../core/exec.ts';
 import { installRoot, jobArtifactDir } from '../core/paths.ts';
 import { leaseExpired } from '../core/ownership.ts';
-import { type Model, OWN_ALLOWANCE_MODELS } from '../core/roles.ts';
+import { OWN_ALLOWANCE_MODELS } from '../core/roles.ts';
 import { orderTickets, ticketKey } from '../core/tickets.ts';
 import {
   endsRun,
@@ -352,9 +352,6 @@ function limitLine(exit: ChildExit): string {
   return lines.find((l) => claudeLimit(l, null) !== null) ?? '';
 }
 
-const ownAllowance = (model: unknown): model is Model =>
-  OWN_ALLOWANCE_MODELS.includes(model as Model);
-
 /** Events that follow a stop without anything having happened to the job. */
 const AFTER_STOP = /^(job\.(claimed|released)|mail\.)/;
 
@@ -597,30 +594,27 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
     const limit = claudeLimit(exit.stderrTail, exit.result);
     // Limits the session reported for a subagent (`orch job limit`) while this child ran, and the
     // child's own when it names a model: recorded here, since the child could not.
-    const hits: Record<string, unknown>[] = eventsAfter(store.db, jobId, mark, [
-      'models.limit',
-    ]).map((e) => e.payload);
+    const hits = eventsAfter(store.db, jobId, mark, ['models.limit']).map(
+      (e) => e.payload as unknown as LimitRecord,
+    );
     if (limit !== null && limit.model !== null) {
-      const own = { ...limitRecord(limit.model, limitLine(exit)) };
-      recordModelEvents(run, jobId, [{ type: 'models.limit', payload: own }]);
+      const own = limitRecord(limit.model, limitLine(exit));
+      recordModelEvents(run, jobId, [{ type: 'models.limit', payload: { ...own } }]);
       hits.push(own);
     }
     if (limit !== null || hits.length > 0) {
       // Only a model with an allowance of its own falls back, and only when every affected role
       // has another model (decision 2026-11-26-per-model-limit-falls-back); else the run ends.
       // (`limit?.model` is undefined when only the session reported one.)
-      if (limit?.model !== null && hits.every((h) => ownAllowance(h['model']))) {
-        for (const h of hits) {
-          if (h['until'] === null) run.limits.push(h as unknown as LimitRecord);
-        }
+      if (limit?.model !== null && hits.every((h) => OWN_ALLOWANCE_MODELS.includes(h.model))) {
+        run.limits.push(...hits.filter((h) => h.until === null));
         if (fallBack(run, jobId)) continue;
       }
-      const model = limit === null ? `${String(hits[0]?.['model'])} ` : '';
       const resets = limit?.resetsAt == null ? '' : ` (resets ${limit.resetsAt})`;
       return {
         kind: 'blocked',
         code: USAGE_LIMIT,
-        reason: `Claude ${model}${limit?.limit ?? 'usage limit'} reached${resets}; orch resume continues the session`,
+        reason: `Claude ${limit?.limit ?? 'usage limit'} reached${resets}; orch resume continues the session`,
       };
     }
     run.log(
