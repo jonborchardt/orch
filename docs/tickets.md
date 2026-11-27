@@ -246,7 +246,7 @@ split, the duplicate check, and the classification; `orch` allocates ids and enf
 `orch do <ticket>` runs a ticket autonomously: it creates or continues the ticket's job, runs
 `/factory <job>` headless, reads CI, and merges. To run one by hand, continue its job with
 `/factory <job>` in an interactive session, then merge with `orch do <ticket>` or
-`orch job merge <job>`. A ticket whose work is already on `main` is closed by a person:
+`orch job merge <job>`. A ticket whose work is already on the job's base branch is closed by a person:
 `orch factory cancel` on the job, then `orch ticket done <id> --note ...`
 (decision 2026-11-23-manual-and-autonomous-ticket-runs).
 
