@@ -281,4 +281,8 @@ describe('the todo skills use the ticket commands that exist', () => {
     // The manual path starts a ticket's job with `orch factory start ... --ticket <id>`.
     expect(FACTORY_HELP).toContain('--ticket <id>');
   });
+
+  it('log-todo names no path that exists only in the orch repository', () => {
+    expect(skill('log-todo')).not.toMatch(/docs\/|src\/|todo\//);
+  });
 });
