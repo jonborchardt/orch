@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UsageView } from '../../src/server/types.ts';
 import { App } from './App.tsx';
-import { theme } from './main.tsx';
+import { theme } from './theme.ts';
 
 configure({ asyncUtilTimeout: 10_000 });
 
@@ -182,5 +182,12 @@ describe('Usage section', () => {
     await waitFor(() => {
       expect(gets.filter((g) => g === '/api/usage?hours=168')).toHaveLength(2);
     });
+  });
+
+  it('labels the range toggles in sentence case, never uppercase (ticket 0166)', async () => {
+    mount('#/usage');
+    await screen.findByRole('table', { name: 'Usage total' });
+    const toggle = screen.getByRole('button', { name: '7 days' });
+    expect(getComputedStyle(toggle).textTransform).not.toBe('uppercase');
   });
 });

@@ -11,6 +11,7 @@ import type {
 import { ApiFailure, fetchSessionLog } from './api.ts';
 import { ago } from './format.ts';
 import { When } from './Progress.tsx';
+import { fonts } from './theme.ts';
 
 /** Collapsed text shows its first line, cut here. */
 const PREVIEW = 200;
@@ -57,7 +58,7 @@ function Text({ entry }: { entry: SessionEntry }) {
         sx={{
           whiteSpace: 'pre-wrap',
           overflowWrap: 'anywhere',
-          fontFamily: entry.kind === 'user' || entry.kind === 'assistant' ? undefined : 'monospace',
+          fontFamily: entry.kind === 'user' || entry.kind === 'assistant' ? undefined : fonts.mono,
         }}
       >
         {open || !long ? entry.text : preview}

@@ -5,6 +5,7 @@ import type {
   Liveness,
   Verdict,
 } from '../../src/server/types.ts';
+import { statusColor } from './theme.ts';
 
 export function elapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -45,7 +46,7 @@ export interface StateStyle {
 export const STATE: Record<Liveness, StateStyle> = {
   running: {
     label: 'running',
-    color: 'primary',
+    color: statusColor.running,
     variant: 'filled',
     glyph: '●',
     describe:
@@ -75,21 +76,21 @@ export const STATE: Record<Liveness, StateStyle> = {
   },
   failed: {
     label: 'failed',
-    color: 'error',
+    color: statusColor.failed,
     variant: 'outlined',
     glyph: '✕',
     describe: 'The stage was marked failed.',
   },
   blocked: {
     label: 'needs human',
-    color: 'error',
+    color: statusColor.needsHuman,
     variant: 'filled',
     glyph: '⚠',
     describe: 'The workflow is waiting for a human decision.',
   },
   completed: {
     label: 'completed',
-    color: 'success',
+    color: statusColor.completed,
     variant: 'filled',
     glyph: '✓',
     describe:

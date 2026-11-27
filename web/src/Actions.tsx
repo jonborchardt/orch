@@ -22,6 +22,7 @@ import type { ActionResponse, JobDetailView } from '../../src/server/types.ts';
 import { ApiFailure, fetchReadiness, postAction } from './api.ts';
 import { PrLink } from './Links.tsx';
 import { resumeAt } from './Status.tsx';
+import { fonts, weight } from './theme.ts';
 
 const LABEL: Record<DashboardAction, string> = {
   approve: 'Resume at stage',
@@ -301,7 +302,7 @@ export function Actions({
             Needs you
           </Typography>
           {detail.needed !== null && (
-            <Typography data-testid="needed" sx={{ fontWeight: 600 }}>
+            <Typography data-testid="needed" sx={{ fontWeight: weight.semibold }}>
               {detail.needed}
             </Typography>
           )}
@@ -520,7 +521,7 @@ export function Actions({
                     minRows={12}
                     maxRows={30}
                     slotProps={{
-                      htmlInput: { spellCheck: false, style: { fontFamily: 'monospace' } },
+                      htmlInput: { spellCheck: false, style: { fontFamily: fonts.mono } },
                     }}
                     autoFocus
                   />
