@@ -315,8 +315,9 @@ of their own.
 The **Events** tab lists every loaded event, newest first, in a fixed-layout table that cannot
 widen the page: Time (relative, with the local date and time and its zone in the tooltip), Type,
 Actor (one line, cut with an ellipsis, the full value in its tooltip), and Summary. The summary is
-one line built on the client by `eventSummary` in `web/src/format.ts` from the type and the fields
-that type records, shown after the Type column without repeating the type: `passing @92e988a,
+one line built on the client by `eventDetail` in `web/src/format.ts` from the fields the event's
+type records; the type is in its own column, so the cell does not repeat it (`eventSummary` is the
+same line with the type in front, `ci.observed: passing @92e988a, poll 5`): `passing @92e988a,
 poll 5` for a `ci.observed`, the stage and round for `stage.*`, from, to and reason for `job.*`,
 the run and status for `verification.completed`, `round 1, security: changes` for a review, the
 path for an artifact, the state for `pr.*`, the branch and head for `branch.pushed`, the provider

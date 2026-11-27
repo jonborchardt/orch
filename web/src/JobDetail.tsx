@@ -539,9 +539,13 @@ function EventsTab({ events }: { events: JobDetailView['events'] }) {
               </TableCell>
               <TableCell>
                 <details>
-                  <summary style={{ cursor: 'pointer' }}>{eventDetail(e) || 'payload'}</summary>
+                  <Box component="summary" sx={{ cursor: 'pointer' }}>
+                    {eventDetail(e) || 'payload'}
+                  </Box>
+                  {/* Focusable so the keyboard can scroll a wide payload sideways. */}
                   <Box
                     component="pre"
+                    tabIndex={0}
                     sx={{ m: 0, mt: 0.5, overflowX: 'auto', fontSize: textSize.code }}
                   >
                     {JSON.stringify(e.payload, null, 2)}

@@ -122,6 +122,10 @@ describe('eventSummary (ticket 0018)', () => {
       ),
     ).toBe('mail.sent: ok=true, count=2, to=a@b.c');
     expect(eventSummary(ev('job.note', {}))).toBe('job.note');
+    // A short value with a newline still reads on one line.
+    expect(eventSummary(ev('job.note', { text: ' two\n  lines ' }))).toBe(
+      'job.note: text=two lines',
+    );
   });
 
   it('never throws on a malformed payload and still starts with the type', () => {
@@ -162,7 +166,7 @@ describe('eventSummary (ticket 0018)', () => {
           'ref',
           'code',
           'exitCode',
-        ].flatMap((k, i) => [[k, [{ a: { b: 1 } }, [1], null][i % 3]]]),
+        ].map((k, i) => [k, [{ a: { b: 1 } }, [1], null][i % 3]]),
       ),
     ];
     for (const type of [...NAMED.map(([t]) => t), 'other.type']) {

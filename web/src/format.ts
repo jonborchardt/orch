@@ -197,13 +197,14 @@ export function eventSummary(e: JobDetailView['events'][number]): string {
 export function eventDetail(e: JobDetailView['events'][number]): string {
   const raw: unknown = e.payload;
   const p = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const oneLine = (v: string) => v.trim().replace(/\s+/g, ' ');
   /** A non-empty string or a number, on one line; anything else is absent. */
   const str = (key: string): string | null => {
     const v = p[key];
     if (typeof v === 'number') return String(v);
-    return typeof v === 'string' && v.trim() !== '' ? v.trim().replace(/\s+/g, ' ') : null;
+    return typeof v === 'string' && v.trim() !== '' ? oneLine(v) : null;
   };
-  const with_ = (label: string, key: string) => {
+  const labelled = (label: string, key: string) => {
     const v = str(key);
     return v === null ? null : `${label} ${v}`;
   };
@@ -214,25 +215,25 @@ export function eventDetail(e: JobDetailView['events'][number]): string {
     case 'stage.started':
     case 'stage.completed':
     case 'stage.failed':
-      parts = [str('stage'), with_('round', 'round'), str('reason')];
+      parts = [str('stage'), labelled('round', 'round'), str('reason')];
       break;
     case 'job.blocked':
     case 'job.resumed':
     case 'job.reworked':
     case 'job.cancelled':
     case 'job.interrupted':
-      parts = [str('stage'), with_('from', 'from'), with_('to', 'to'), str('reason')];
+      parts = [str('stage'), labelled('from', 'from'), labelled('to', 'to'), str('reason')];
       break;
     case 'ci.observed':
-      parts = [join(str('outcome') ?? str('ciStatus'), at()), with_('poll', 'polls')];
+      parts = [join(str('outcome') ?? str('ciStatus'), at()), labelled('poll', 'polls')];
       break;
     case 'verification.completed':
-      parts = [with_('run', 'runId'), str('status')];
+      parts = [labelled('run', 'runId'), str('status')];
       break;
     case 'review.recorded': {
       const reviewer = str('reviewer');
       const verdict = str('verdict') ?? 'pending';
-      parts = [with_('round', 'round'), reviewer === null ? verdict : `${reviewer}: ${verdict}`];
+      parts = [labelled('round', 'round'), reviewer === null ? verdict : `${reviewer}: ${verdict}`];
       break;
     }
     case 'artifact.registered':
@@ -242,7 +243,9 @@ export function eventDetail(e: JobDetailView['events'][number]): string {
     case 'pr.recorded':
     case 'pr.merged':
     case 'pr.observed': {
-      const merge = p['ok'] === true ? 'merged' : p['ok'] === false ? 'merge refused' : null;
+      let merge: string | null = null;
+      if (p['ok'] === true) merge = 'merged';
+      else if (p['ok'] === false) merge = 'merge refused';
       parts = [join(str('state') ?? merge, at()), str('error')];
       break;
     }
@@ -255,12 +258,12 @@ export function eventDetail(e: JobDetailView['events'][number]): string {
       break;
     case 'runner.session':
     case 'runner.stopped':
-      parts = [str('outcome'), str('code'), with_('exit', 'exitCode'), str('reason')];
+      parts = [str('outcome'), str('code'), labelled('exit', 'exitCode'), str('reason')];
       break;
     default:
       parts = Object.entries(p).map(([k, v]) =>
         typeof v === 'boolean' || typeof v === 'number' || (typeof v === 'string' && v.length <= 60)
-          ? `${k}=${String(v)}`
+          ? `${k}=${oneLine(String(v))}`
           : null,
       );
   }
