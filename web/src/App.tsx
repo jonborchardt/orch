@@ -55,18 +55,22 @@ function isBoard(hash: string): boolean {
   );
 }
 
+/** A URL part decoded; null for a malformed escape, which would otherwise throw in render. */
+function safeDecode(s: string): string | null {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return null;
+  }
+}
+
 /** `#/jobs/<id>[/<tab>[/<round>[/<reviewer>]]][?choose=<n>]`; an unknown part reads as absent. */
 function parseJobRoute(hash: string) {
   const m = JOB_ROUTE.exec(hash);
   if (!m) return null;
   const tab = tabOf(m[2]);
   const round = tab === 'Reviews' && /^\d{1,9}$/.test(m[3] ?? '') ? Number(m[3]) : null;
-  let reviewer: string | null = null;
-  try {
-    reviewer = round !== null && m[4] ? decodeURIComponent(m[4]) : null;
-  } catch {
-    // A malformed escape names no reviewer.
-  }
+  const reviewer = round !== null && m[4] ? safeDecode(m[4]) : null;
   return {
     id: m[1] ?? '',
     tab,
@@ -143,9 +147,7 @@ function useBoardSettings() {
   };
   useEffect(() => {
     const on = () => {
-      // A pending Filter write never rewrites the new route's URL.
-      window.clearTimeout(pending.current);
-      pending.current = undefined;
+      cancel(); // A pending Filter write never rewrites the new route's URL.
       const hash = window.location.hash;
       if (!isBoard(hash)) return;
       const p = boardParams(hash);
@@ -159,7 +161,7 @@ function useBoardSettings() {
     window.addEventListener('hashchange', on);
     return () => {
       window.removeEventListener('hashchange', on);
-      window.clearTimeout(pending.current);
+      cancel();
     };
   }, []);
 

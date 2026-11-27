@@ -459,7 +459,7 @@ export function JobBoard({
   total,
   now,
   onChanged,
-  sort = null,
+  sort,
   onSort,
   beforeOpen,
 }: {
@@ -469,14 +469,14 @@ export function JobBoard({
   now: number;
   onChanged: () => void;
   /** The column sort; App session state, kept in the board URL. Null: attention order. */
-  sort?: Sort;
-  onSort?: (s: Sort) => void;
+  sort: Sort;
+  onSort: (s: Sort) => void;
   /** Runs before a row opens its job, so a pending board URL write lands first. */
-  beforeOpen?: () => void;
+  beforeOpen: () => void;
 }) {
   const [hidden, setHidden] = useState<string[]>(readHidden);
   const openJob = (id: string) => {
-    beforeOpen?.();
+    beforeOpen();
     window.location.hash = jobHref(id);
   };
   const [menu, setMenu] = useState<HTMLElement | null>(null);
@@ -580,7 +580,7 @@ export function JobBoard({
                             active={active}
                             direction={active ? sort.dir : 'asc'}
                             onClick={() => {
-                              onSort?.({
+                              onSort({
                                 id: c.id,
                                 dir: active && sort.dir === 'asc' ? 'desc' : 'asc',
                               });
