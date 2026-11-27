@@ -13,6 +13,7 @@ import {
   prPhase,
   type PrPhase,
   SCOPE_GAP_REASON,
+  specChallengeState,
 } from '../core/workflow.ts';
 import type { Artifact, Event, Job, VerificationRun } from '../storage/schema.ts';
 import type {
@@ -486,12 +487,21 @@ const STOPPED: Partial<Record<Job['status'], string>> = {
 /**
  * Where the job is, from its row and the newest `job.blocked` event (in the BLOCKER_EVENTS map the
  * board already loads). An escalated job is stopped at the stage it escalated from, which for an
- * exhausted CI repair budget is `ci` even though `returnStage` says build.
+ * exhausted CI repair budget is `ci` even though `returnStage` says build. The spec challenge
+ * comes from the artifact rows the caller already loaded.
  */
 export function progressOf(
   job: Pick<Job, 'stage' | 'status' | 'returnStage'> & Partial<Pick<Job, 'mode'>>,
   events: Map<string, Event>,
+  artifacts: readonly Artifact[],
 ): Progress {
+  return { ...position(job, events), specChallenge: specChallengeState(artifacts, job) };
+}
+
+function position(
+  job: Pick<Job, 'stage' | 'status' | 'returnStage'> & Partial<Pick<Job, 'mode'>>,
+  events: Map<string, Event>,
+): Omit<Progress, 'specChallenge'> {
   // A fast job never visits spec, simplify, review, or approve, so they are not its steps.
   const list = job.mode === 'fast' ? STEPS.filter((s) => FAST_STEPS.includes(s.id)) : STEPS;
   const index = (stage: unknown) => stepIndex(stage, list);

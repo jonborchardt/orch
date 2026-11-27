@@ -3,7 +3,7 @@ import type { Flake } from '../core/flake.ts';
 import type { ReadinessGrade } from '../core/readiness.ts';
 import type { DrawnModels } from '../core/roles.ts';
 import type { SessionLinks, SessionRef } from '../core/session.ts';
-import type { Choice, Completion, PrPhase } from '../core/workflow.ts';
+import type { Choice, Completion, PrPhase, SpecChallengeState } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
 import type { Plan } from '../ops/factory.ts';
 import type { MergeView } from '../ops/merge-view.ts';
@@ -121,6 +121,12 @@ export interface Progress {
   position: number;
   /** Short text for the position, e.g. "Build", "CI, needs human", "Done", "Needs human". */
   label: string;
+  /**
+   * The spec challenge (`spec-review-N.md`), shown as a sub-step of Spec: its verdict and whether
+   * the spec was revised (`specChallengeState`). Null for a fast job, before spec.md, and for a
+   * job past spec that has no challenge.
+   */
+  specChallenge: SpecChallengeState | null;
 }
 
 /** One stage entry or exit from the job's events, oldest first; going back is a new entry. */

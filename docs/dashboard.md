@@ -208,7 +208,14 @@ escalated job (`needs-human`, never itself a step) is stopped at the `from` stag
 `job.blocked` event, else at its `returnStage`, so a CI escalation after the repair budget is spent
 reads `CI, needs human` though it would return to build; when neither names a delivery stage no
 step is marked and the label is `Needs human`. A completed job has all eight done; a cancelled job
-never shows Done. Sorting the column orders by that workflow position. The status column is the
+never shows Done. The spec challenge (`spec-review-N.md`) is not a ninth step: `progress.specChallenge`
+(`specChallengeState` in `src/core/workflow.ts`, from the artifact rows the board already loads)
+is its verdict, `pending` while the current `spec.md` has no challenge at stage spec, else the
+newest challenge's `changes` or `pass`, and `revised` when a challenge reviewed an earlier
+`spec.md` or `spec-review-2.md` exists. It is null for a fast job, before `spec.md`, and for a job
+past spec with no challenge. When it is set, the Spec step's tooltip line and accessible name add
+it after the step's state (`Spec: done, spec challenge passed after a revision`, `Spec: current,
+spec challenge pending`). Sorting the column orders by that workflow position. The status column is the
 execution state, kept separate so a job stopped in
 `build` never reads as done. Its states (each with a glyph and label, never colour alone):
 `running` means the status is `running` and a session renewed its lease recently (a live lease, not
@@ -303,7 +310,9 @@ whenever an owner is recorded, live or lapsed. Details also always has a visible
 hovering. The update time is a `<time datetime>` element. The Overview tab ends with a
 **Progress** section: every step in order with the same state as the strip and the times the
 timeline knows (`started …`, `completed …`, or `completed earlier …` for a step the current pass
-has not redone), then the **Timeline**. Times read relatively (`5m ago`), with the local date and
+has not redone), with the spec challenge as a sub-item under Spec when there is one (`Spec
+challenge: pending`, `changes requested`, or `passed`, plus ` (spec revised)`, with the `▶`, `■`,
+or `✓` glyph), then the **Timeline**. Times read relatively (`5m ago`), with the local date and
 time, zone included, in the tooltip (the `When` component; its `<time datetime>` keeps the ISO
 value). The timeline is built by `timelineOf` in `src/server/status.ts` from
 `stage.started`, `stage.completed` (with the review round and whether it requested changes),
