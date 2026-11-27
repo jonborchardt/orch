@@ -10,19 +10,20 @@ import {
   Toolbar,
   Typography,
 } from '@mui/material';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BoardRow } from '../../src/server/types.ts';
 import { AgentsPage } from './Agents.tsx';
 import { FactoryStatus } from './FactoryStatus.tsx';
 import { Help } from './Help.tsx';
-import { JobBoard } from './JobBoard.tsx';
+import { JobBoard, parseSort, type Sort } from './JobBoard.tsx';
 import { type DetailActivity, JobDetail } from './JobDetail.tsx';
 import { RunsPage, usePolled } from './Runs.tsx';
 import { Pick } from './TicketDetail.tsx';
 import { NO_FILTERS, type TicketFilters, TicketsPage } from './Tickets.tsx';
 import { UsagePage } from './Usage.tsx';
 import { failureText, fetchBoard, fetchRepos, fetchRunner } from './api.ts';
+import { tabOf } from './tabs.ts';
 import { statusColor, weight } from './theme.ts';
 
 function useHashRoute(): string {
@@ -37,6 +38,149 @@ function useHashRoute(): string {
     };
   }, []);
   return hash;
+}
+
+const TICKETS_ROUTE = /^#\/tickets(?:\/(\d{1,9}))?\/?$/;
+const RUNS_ROUTE = /^#\/runs\/?$/;
+const AGENTS_ROUTE = /^#\/agents\/?$/;
+const USAGE_ROUTE = /^#\/usage\/?$/;
+// `?choose=<n>` (the mail's and terminal's per-choice link) only opens that choice's confirm.
+const JOB_ROUTE =
+  /^#\/jobs\/(job-[0-9a-f]{8})(?:\/([^/?]*)(?:\/([^/?]*)(?:\/([^/?]*))?)?)?(?:\?choose=(\d{1,2}))?$/;
+
+/** Every hash no other section claims is the board. */
+function isBoard(hash: string): boolean {
+  return ![TICKETS_ROUTE, RUNS_ROUTE, AGENTS_ROUTE, USAGE_ROUTE, JOB_ROUTE].some((r) =>
+    r.test(hash),
+  );
+}
+
+/** A URL part decoded; null for a malformed escape, which would otherwise throw in render. */
+function safeDecode(s: string): string | null {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return null;
+  }
+}
+
+/** `#/jobs/<id>[/<tab>[/<round>[/<reviewer>]]][?choose=<n>]`; an unknown part reads as absent. */
+function parseJobRoute(hash: string) {
+  const m = JOB_ROUTE.exec(hash);
+  if (!m) return null;
+  const tab = tabOf(m[2]);
+  const round = tab === 'Reviews' && /^\d{1,9}$/.test(m[3] ?? '') ? Number(m[3]) : null;
+  const reviewer = round !== null && m[4] ? safeDecode(m[4]) : null;
+  return {
+    id: m[1] ?? '',
+    tab,
+    round,
+    reviewer,
+    choose: m[5] === undefined ? null : Number(m[5]),
+  };
+}
+
+/** The board's settings: App session state, mirrored in `#/?show=&repo=&q=&sort=` (ticket 0007). */
+interface BoardSettings {
+  show: StatusFilter;
+  repo: string;
+  q: string;
+  sort: Sort;
+}
+const DEFAULT_BOARD: BoardSettings = { show: 'current', repo: '', q: '', sort: null };
+const BOARD_KEYS = ['show', 'repo', 'q', 'sort'];
+
+/** The board parameters of a board hash, or null when it carries none (a bare `#/`). */
+function boardParams(hash: string): URLSearchParams | null {
+  const p = new URLSearchParams(/^#\/?\?(.*)$/.exec(hash)?.[1] ?? '');
+  return BOARD_KEYS.some((k) => p.has(k)) ? p : null;
+}
+
+/** Absent or unknown values take their defaults. */
+function parseBoard(p: URLSearchParams): BoardSettings {
+  const show = (p.get('show') ?? '').replace(/-/g, ' ');
+  return {
+    show: STATUS_FILTERS.find((f) => f === show) ?? 'current',
+    repo: p.get('repo') ?? '',
+    q: p.get('q') ?? '',
+    sort: parseSort(p.get('sort')),
+  };
+}
+
+/** The board URL for these settings, defaults omitted: exactly `#/` when all are defaults. */
+function boardHash(b: BoardSettings): string {
+  const p = new URLSearchParams();
+  if (b.show !== 'current') p.set('show', b.show.replace(/ /g, '-'));
+  if (b.repo) p.set('repo', b.repo);
+  if (b.q) p.set('q', b.q);
+  if (b.sort) p.set('sort', `${b.sort.id}:${b.sort.dir}`);
+  const query = p.toString();
+  return query ? `#/?${query}` : '#/';
+}
+
+/** The Filter's URL write waits this long after the last keystroke. */
+const FILTER_WRITE_MS = 400;
+
+/**
+ * The board settings and their URL (ticket 0007). A fresh load reads the URL; a `hashchange` to
+ * a board URL with parameters overwrites the settings, and to a bare `#/` keeps them and replaces
+ * the URL with them. The board's own changes replace the URL (no history entry, no hashchange),
+ * only while the route is the board.
+ */
+function useBoardSettings() {
+  const [settings, setSettings] = useState<BoardSettings>(() => {
+    const p = boardParams(window.location.hash);
+    return p && isBoard(window.location.hash) ? parseBoard(p) : DEFAULT_BOARD;
+  });
+  const current = useRef(settings);
+  const pending = useRef<number | undefined>(undefined);
+
+  const cancel = () => {
+    window.clearTimeout(pending.current);
+    pending.current = undefined;
+  };
+  const write = () => {
+    cancel();
+    if (isBoard(window.location.hash)) {
+      window.history.replaceState(window.history.state, '', boardHash(current.current));
+    }
+  };
+  useEffect(() => {
+    const on = () => {
+      cancel(); // A pending Filter write never rewrites the new route's URL.
+      const hash = window.location.hash;
+      if (!isBoard(hash)) return;
+      const p = boardParams(hash);
+      if (p) {
+        current.current = parseBoard(p);
+        setSettings(current.current);
+      } else if (boardHash(current.current) !== '#/') {
+        window.history.replaceState(window.history.state, '', boardHash(current.current));
+      }
+    };
+    window.addEventListener('hashchange', on);
+    return () => {
+      window.removeEventListener('hashchange', on);
+      cancel();
+    };
+  }, []);
+
+  /** Apply a board change; the Filter (`debounce`) writes the URL later, the rest at once. */
+  const change = (patch: Partial<BoardSettings>, debounce = false) => {
+    current.current = { ...current.current, ...patch };
+    setSettings(current.current);
+    if (!debounce) {
+      write();
+      return;
+    }
+    cancel();
+    pending.current = window.setTimeout(write, FILTER_WRITE_MS);
+  };
+  /** Land a pending Filter write now (blur, and before a row opens its job). */
+  const flush = () => {
+    if (pending.current !== undefined) write();
+  };
+  return { settings, change, flush };
 }
 
 /** The top-level sections. A new one is an entry here and a branch where `main` is rendered. */
@@ -106,15 +250,15 @@ function matchesText(row: BoardRow, text: string): boolean {
 
 export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const hash = useHashRoute();
-  const [repo, setRepo] = useState<string>('');
-  const [status, setStatus] = useState<StatusFilter>('current');
-  const [text, setText] = useState('');
+  const { settings, change, flush } = useBoardSettings();
+  const { show: status, repo, q: text } = settings;
+  const boardHref = boardHash(settings);
   const [detailActivity, setDetailActivity] = useState<DetailActivity>('loading');
   const [ticketFilters, setTicketFilters] = useState<TicketFilters>(NO_FILTERS);
-  const ticketMatch = /^#\/tickets(?:\/(\d{1,9}))?\/?$/.exec(hash);
-  const runsMatch = /^#\/runs\/?$/.test(hash);
-  const agentsMatch = /^#\/agents\/?$/.test(hash);
-  const usageMatch = /^#\/usage\/?$/.test(hash);
+  const ticketMatch = TICKETS_ROUTE.exec(hash);
+  const runsMatch = RUNS_ROUTE.test(hash);
+  const agentsMatch = AGENTS_ROUTE.test(hash);
+  const usageMatch = USAGE_ROUTE.test(hash);
   const section = ticketMatch
     ? 'Tickets'
     : runsMatch
@@ -145,6 +289,11 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const rows = board.data?.rows ?? null;
   const repos = board.data?.repos ?? [];
   const now = board.data?.now ?? 0;
+  // A repository the loaded list does not have (a stale or edited link) means All repositories.
+  const unknownRepo = board.data !== null && repo !== '' && !board.data.repos.includes(repo);
+  useEffect(() => {
+    if (unknownRepo) change({ repo: '' });
+  }, [unknownRepo]); // `change` reads only refs
   const error = board.error === null ? null : failureText(board.error);
 
   // The shared header's one runner poll, on every section: the Factory status box and whether
@@ -153,8 +302,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const runner = usePolled(fetchRunner, refreshMs);
   const build = runner.data?.build ?? null;
 
-  // `?choose=<n>` (the mail's and terminal's per-choice link) only opens that choice's confirm.
-  const jobMatch = /^#\/jobs\/(job-[0-9a-f]{8})(?:\?choose=(\d{1,2}))?$/.exec(hash);
+  const jobMatch = parseJobRoute(hash);
   const visible = useMemo(
     () => (rows ?? []).filter((r) => matches(r, status) && matchesText(r, text)),
     [rows, status, text],
@@ -191,7 +339,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           <Typography
             variant="subtitle1"
             component="a"
-            href="#/"
+            href={boardHref}
             sx={{ fontWeight: weight.bold, color: 'inherit', textDecoration: 'none' }}
           >
             orch factory
@@ -200,7 +348,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             {SECTIONS.map((s) => (
               <Button
                 key={s.label}
-                href={s.href}
+                href={s.label === 'Jobs' ? boardHref : s.href}
                 variant={s.label === section ? 'outlined' : 'text'}
                 color="inherit"
                 aria-current={s.label === section ? 'page' : undefined}
@@ -223,7 +371,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
                     variant={counts?.[c.filter] ? 'filled' : 'outlined'}
                     aria-pressed={pressed}
                     onClick={() => {
-                      setStatus(pressed ? 'current' : c.filter);
+                      change({ show: pressed ? 'current' : c.filter });
                     }}
                     // A full ring in the text colour reads on filled and outlined chips, light or dark.
                     sx={
@@ -246,8 +394,9 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
                 placeholder="title, id, stage, branch…"
                 value={text}
                 onChange={(e) => {
-                  setText(e.target.value);
+                  change({ q: e.target.value }, true);
                 }}
+                onBlur={flush}
                 slotProps={{ inputLabel: { shrink: true } }}
                 sx={{ minWidth: 200 }}
               />
@@ -255,7 +404,9 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
                 size="small"
                 label="Repository"
                 value={repo}
-                onChange={setRepo}
+                onChange={(v) => {
+                  change({ repo: v });
+                }}
                 options={repos}
                 all="All repositories"
                 width={180}
@@ -265,7 +416,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
                 label="Show"
                 value={status}
                 onChange={(v) => {
-                  setStatus(v as StatusFilter);
+                  change({ show: v as StatusFilter });
                 }}
                 options={STATUS_FILTERS.map((s) => ({
                   value: s,
@@ -313,8 +464,11 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           <UsagePage />
         ) : jobMatch ? (
           <JobDetail
-            id={jobMatch[1] ?? ''}
-            choose={jobMatch[2] === undefined ? null : Number(jobMatch[2])}
+            id={jobMatch.id}
+            choose={jobMatch.choose}
+            tab={jobMatch.tab}
+            round={jobMatch.round}
+            reviewer={jobMatch.reviewer}
             refreshMs={refreshMs}
             onActivity={setDetailActivity}
           />
@@ -331,6 +485,11 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             total={rows.length}
             now={now}
             onChanged={() => void board.reload()}
+            sort={settings.sort}
+            onSort={(sort) => {
+              change({ sort });
+            }}
+            beforeOpen={flush}
           />
         )}
       </Box>
