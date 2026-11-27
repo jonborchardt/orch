@@ -43,7 +43,7 @@ import {
   nextAction,
 } from './Status.tsx';
 import { failureText, fetchDetail } from './api.ts';
-import { STATE, ago, verdictColor } from './format.ts';
+import { STATE, ago, prNumber, verdictColor } from './format.ts';
 import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
 import { ticketHref, ticketKey } from './ticketState.ts';
 import { fonts, textSize, weight } from './theme.ts';
@@ -544,7 +544,7 @@ function JobHeader({ detail, error }: { detail: JobDetailView; error: string | n
   const owner = job.ownerSession ? `Owner ${job.ownerSession}${lease ? `; ${lease}` : ''}` : null;
   const into = `into ${job.baseBranch}`;
   const unpushed = links.branchUnpushed;
-  const prNumber = job.prUrl ? /\/pull\/(\d+)\/?$/.exec(job.prUrl)?.[1] : undefined;
+  const pr = prNumber(job.prUrl);
   const delivery = [
     <span key="repo">{job.repo}</span>,
     job.ticketId !== null && (
@@ -570,7 +570,7 @@ function JobHeader({ detail, error }: { detail: JobDetailView; error: string | n
       )),
     job.prUrl && (
       <PrLink key="pr" url={job.prUrl} pr={links.pr}>
-        {prNumber ? `PR #${prNumber}` : 'PR'}
+        {pr ? `PR #${pr}` : 'PR'}
       </PrLink>
     ),
     // The CI chip already says "CI running/failing", with the head; don't repeat it.

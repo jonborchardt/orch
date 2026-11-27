@@ -36,7 +36,7 @@ import {
   StatusChip,
   Supersession,
 } from './Status.tsx';
-import { ago, byAttention, elapsedCell, repoLabels, reviewRollup } from './format.ts';
+import { ago, byAttention, elapsedCell, prNumber, repoLabels, reviewRollup } from './format.ts';
 import { weight } from './theme.ts';
 
 function openJob(id: string): void {
@@ -296,9 +296,7 @@ const COLUMNS: Column[] = [
           useFlexGap
           sx={{ alignItems: 'center', flexWrap: 'wrap' }}
         >
-          <Link href={r.pr.url} target="_blank" rel="noreferrer noopener">
-            PR ({r.pr.state})
-          </Link>
+          <PrNumberLink url={r.pr.url} />
           {/* The CI chip already says "CI running/failing", with the head; don't repeat it. */}
           {r.pr.phase !== 'ci-running' && r.pr.phase !== 'ci-failing' && (
             <PhaseCell row={r} onChanged={onChanged} />
@@ -311,12 +309,28 @@ const COLUMNS: Column[] = [
           ) && <CiChip ci={r.ci} compact secondary={r.outcome !== null} />}
         </Stack>
       ) : (
-        <Typography variant="caption" color="text.secondary">
-          no PR
+        // role="img" so assistive technology reads the label instead of the dash.
+        <Typography variant="caption" color="text.secondary" role="img" aria-label="no PR">
+          —
         </Typography>
       ),
   },
 ];
+
+/** The board's PR link: `#<n>`, named `PR #<n>`; plain `PR` when the URL carries no number. */
+function PrNumberLink({ url }: { url: string }) {
+  const n = prNumber(url);
+  return (
+    <Link
+      href={url}
+      target="_blank"
+      rel="noreferrer noopener"
+      aria-label={n ? `PR #${n}` : undefined}
+    >
+      {n ? `#${n}` : 'PR'}
+    </Link>
+  );
+}
 
 /** CSS-only width hiding for a column's header and body cells (see `Column.hideBelow`). */
 function narrow(c: Column): object | undefined {
