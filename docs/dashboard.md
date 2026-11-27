@@ -280,8 +280,17 @@ Nothing archives automatically.
 
 **Job detail** (`#/jobs/<id>`) has twelve tabs, in this order (`TABS` in `web/src/tabs.ts`):
 Overview, Spec, Build, Reviews, Findings, Decision, Artifacts, Events, Session (the Claude Code
-transcripts), Git, Verification, and PR. It shows the next step and agents from the plan, the request, and tabs for the
-spec, build summary, review history per round (the job's current round is labelled
+transcripts), Git, Verification, and PR. The Overview reads top-down as a summary: the request,
+then three outcome lines, then Progress and the Timeline, then the agent's plan. **Reviews** is
+`Round N of M` with the current round's rollup chip (the board's `reviewRollup`, from that round
+only), the rework count (the timeline's `back` entries), and the newest consolidated round's
+blocking count when above zero; `No review round yet` before round 1; absent for a fast job.
+**Verification** is the latest run's status and tested HEAD (a commit link when known) with
+`valid for HEAD` or `stale: <reason>` from `plan.verification`, or `Not verified yet`; absent
+without a plan. **Delivery**, only once a PR is recorded, is the PR link, the PR phase chip, and
+the CI line verbatim. Last, in muted text under **For the agent session**, come the plan's next
+step and agents and the models drawn (or the `Plan unavailable` warning). Beyond the Overview
+there are tabs for the spec, build summary, review history per round (the job's current round is labelled
 `Round N (current)`; one collapsed panel per reviewer whose header shows the reviewer, verdict,
 and summary; expand it for the full review text; each round with reviewers has **Expand all** and
 **Collapse all** for its own panels, disabled when they would change nothing), consolidated
@@ -307,20 +316,23 @@ text, with `not pushed yet` in its tooltip. The owner session and its lease (`le
 whenever an owner is recorded, live or lapsed. Details also always has a visible branch line,
 `Branch <branch> into <base>` (with `, not pushed yet` when the header tooltip says so) or
 `Base branch <base>` before a branch exists, so nothing in a header tooltip is reachable only by
-hovering. The update time is a `<time datetime>` element. The Overview tab ends with a
-**Progress** section: every step in order with the same state as the strip and the times the
+hovering. The update time is a `<time datetime>` element. The Overview's
+**Progress** section is: every step in order with the same state as the strip and the times the
 timeline knows (`started …`, `completed …`, or `completed earlier …` for a step the current pass
 has not redone), with the spec challenge as a sub-item under Spec when there is one (`Spec
 challenge: pending`, `changes requested`, or `passed`, plus ` (spec revised)`, with the `▶`, `■`,
 or `✓` glyph), then the **Timeline**. Times read relatively (`5m ago`), with the local date and
 time, zone included, in the tooltip (the `When` component; its `<time datetime>` keeps the ISO
-value). The timeline is built by `timelineOf` in `src/server/status.ts` from
-`stage.started`, `stage.completed` (with the review round and whether it requested changes),
+value). The timeline is built by `timelineOf` in `src/server/status.ts` from every event of the
+types in `TIMELINE_TYPES`, uncapped: `stage.started`, `stage.completed` (with the review round and whether it requested changes),
 `stage.failed`, `job.blocked`, `job.resumed`, `job.reworked`, `job.interrupted`, `job.cancelled`,
 and `job.completed`, oldest first, each with its time and a plain label. Going back (changes
 requested, rework from PR or CI, resume to an earlier stage) is a new entry, never an edit to an
-earlier one. The detail loads the newest 500 events; when it reaches that cap the timeline says
-"Earlier history not shown", and the step states, which never read the timeline, are unaffected.
+earlier one. An entry whose step has a tab (`STEP_TAB` in `web/src/tabs.ts`: Spec; Build and
+Simplify to Build; Review to Reviews; Approve to Decision; PR, CI, and Done to PR) is a link-styled
+button named `Open <tab> tab: <label>` that selects that tab, but only while the tab is available;
+otherwise the entry is plain text. The Events tab alone loads the newest 500 events
+(`eventsCapped` on the detail says when it hit that cap).
 The tab labels say what each tab holds, one meaning per count, and the count is part of the tab's
 accessible name: `Reviews (N rounds)` counts review rounds (never reviews), `Findings (N
 blocking)` is the newest consolidated round's validated `BLOCKING` marker (plain `Findings` when

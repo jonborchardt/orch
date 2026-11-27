@@ -1,4 +1,4 @@
-import type { JobDetailView, RoundView } from '../../src/server/types.ts';
+import type { JobDetailView, RoundView, StepId } from '../../src/server/types.ts';
 
 /** The job detail's sections, in display order. Ids and panels are keyed by these names. */
 export const TABS = [
@@ -69,13 +69,31 @@ export function detailTabs(detail: JobDetailView): DetailTab[] {
         : counted('Findings', latest.blocking, `${String(latest.blocking)} blocking`, false),
     plain('Decision', !has('decision.md'), 'Decision needs decision.md (approve stage).'),
     counted('Artifacts', detail.artifacts.length),
-    counted('Events', events, detail.timeline.truncated ? `${String(events)}+` : String(events)),
+    counted('Events', events, detail.eventsCapped ? `${String(events)}+` : String(events)),
     // Empty without a claude-code session, but reachable: its panel says how to attach one.
     plain('Session', detail.claudeSessions.length === 0),
     plain('Git', !detail.plan?.worktree && !detail.merge),
     plain('Verification', !detail.plan?.verification && detail.verificationRuns.length === 0),
     plain('PR', !detail.job.prUrl && !has('pr.md'), 'PR needs an opened PR or pr.md (pr stage).'),
   ];
+}
+
+/** The tab with more about a timeline entry's step. */
+export const STEP_TAB: Record<StepId, TabName> = {
+  spec: 'Spec',
+  build: 'Build',
+  simplify: 'Build',
+  review: 'Reviews',
+  approve: 'Decision',
+  pr: 'PR',
+  ci: 'PR',
+  done: 'PR',
+};
+
+/** The tab a timeline entry of `step` links to, or null without a step or when it is unavailable. */
+export function stepTab(tabs: readonly DetailTab[], step: StepId | null): TabName | null {
+  const tab = step ? tabs.find((t) => t.name === STEP_TAB[step]) : undefined;
+  return tab?.unavailable === null ? tab.name : null;
 }
 
 /** `wanted` when that tab can be opened for this detail, otherwise the Overview fallback. */

@@ -137,10 +137,9 @@ export interface TimelineEntry {
   label: string;
 }
 
+/** Every stage entry and exit of the job, uncapped. */
 export interface Timeline {
   entries: TimelineEntry[];
-  /** The events cap was reached, so earlier history is not shown. */
-  truncated: boolean;
 }
 
 /**
@@ -239,7 +238,10 @@ export interface JobDetailView {
   /** Markdown content of registered artifacts, keyed by relative path (size-capped). */
   contents: Record<string, string>;
   rounds: RoundView[];
+  /** The newest events, at most `TIMELINE_EVENTS` of them, oldest first. */
   events: Event[];
+  /** `events` hit its cap, so older events are not loaded (the Events tab says `N+`). */
+  eventsCapped: boolean;
   plan: Plan | null;
   planError: string | null;
   /**

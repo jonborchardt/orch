@@ -531,8 +531,21 @@ function position(
   };
 }
 
-/** The detail view loads at most this many newest events; the timeline says when it hit the cap. */
+/** The detail's Events tab loads at most this many newest events; `eventsCapped` says when. */
 export const TIMELINE_EVENTS = 500;
+
+/** The event types `timelineOf` reads; the detail loads every one of them, uncapped. */
+export const TIMELINE_TYPES = [
+  'stage.started',
+  'stage.completed',
+  'stage.failed',
+  'job.blocked',
+  'job.resumed',
+  'job.reworked',
+  'job.interrupted',
+  'job.cancelled',
+  'job.completed',
+] as const;
 
 const stepName = (stage: unknown): string =>
   STEPS.find((s) => s.id === stage)?.label ?? (typeof stage === 'string' ? stage : '?');
@@ -607,5 +620,5 @@ export function timelineOf(events: readonly Event[]): Timeline {
         break;
     }
   }
-  return { entries, truncated: events.length >= TIMELINE_EVENTS };
+  return { entries };
 }

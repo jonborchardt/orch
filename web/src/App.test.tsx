@@ -230,6 +230,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     },
     rounds: [{ round: 1, reviews: [], consolidated: 'round-1/consolidated.md', blocking: 0 }],
     events: [],
+    eventsCapped: false,
     plan: null,
     planError: 'config broken',
     verificationRuns: [],
@@ -240,7 +241,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     },
     ci: noCi(),
     progress: progress(4, 'stopped', 'Approve, needs human'),
-    timeline: { entries: [], truncated: false },
+    timeline: { entries: [] },
     prPhase: 'no-pr',
     actions: ['approve', 'request-review', 'request-rework', 'cancel'],
     choices: null,
@@ -747,8 +748,8 @@ describe('App board', () => {
       liveness: 'idle',
       blocker: null,
       progress: progress(1, 'current', 'Build'),
+      eventsCapped: true,
       timeline: {
-        truncated: true,
         entries: [
           { at: at(1), step: 'build', kind: 'started', label: 'Build started' },
           { at: at(2), step: 'build', kind: 'completed', label: 'Build completed' },
@@ -794,7 +795,8 @@ describe('App board', () => {
       'Build started',
     ]);
     expect(timelineRows[0]?.cells[0]).toHaveTextContent(/ ago$/);
-    expect(within(section).getByText(/Earlier history not shown/)).toBeInTheDocument();
+    // The timeline is complete (ticket 0016): no "earlier history" note, even at the events cap.
+    expect(within(section).queryByText(/Earlier history/)).toBeNull();
     // No spec challenge to show: no sub-item.
     expect(within(section).queryByTestId('spec-challenge')).toBeNull();
   });
@@ -3926,9 +3928,9 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
       (t) => t.name === 'Reviews',
     );
     expect(reviews?.label).toBe('Reviews (1 round)');
-    const truncated = detailTabs(
-      fresh({ events: events(500), timeline: { entries: [], truncated: true } }),
-    ).find((t) => t.name === 'Events');
+    const truncated = detailTabs(fresh({ events: events(500), eventsCapped: true })).find(
+      (t) => t.name === 'Events',
+    );
     expect(truncated).toMatchObject({ label: 'Events (500+)', count: 500 });
   });
 
@@ -3962,7 +3964,7 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
     expect(panel).toHaveAttribute('aria-labelledby', 'tab-Reviews');
     expect(panel).toHaveAccessibleName('Reviews (2 rounds)');
     cleanup();
-    await show(done({ events: events(500), timeline: { entries: [], truncated: true } }));
+    await show(done({ events: events(500), eventsCapped: true }));
     expect(tab('Events (500+)')).toBeInTheDocument();
   });
 
@@ -5445,5 +5447,188 @@ describe('App help', () => {
       expect(screen.queryByRole('dialog', { name: 'Help' })).not.toBeInTheDocument();
     });
     expect(button).toHaveFocus();
+  });
+});
+
+describe('Job detail: Overview summary (ticket 0016)', () => {
+  const at = (m: number) => `2026-11-13T08:${String(m).padStart(2, '0')}:00.000Z`;
+  const review = (id: number, round: number, verdict: 'pass' | 'changes') => ({
+    id,
+    jobId: 'job-00000003',
+    round,
+    artifactId: id,
+    head: 'abc',
+    model: null,
+    sameAsAuthor: null,
+    reviewer: `r${String(id)}`,
+    verdict,
+    summary: null,
+    path: null,
+    createdAt: at(10),
+    completedAt: at(11),
+  });
+  const verified = (run: { status: string; head: string } | null, valid: boolean, reason = '') =>
+    ({
+      step: 'run-agent',
+      reason: 'Build the thing',
+      agents: [{ agent: 'factory-builder', model: 'opus' }],
+      artifacts: [],
+      worktree: null,
+      verification: {
+        configured: true,
+        policy: {
+          source: 'baseline',
+          head: null,
+          fingerprint: 'fp',
+          checks: ['check'],
+          authorization: 'not-needed',
+          candidateError: null,
+        },
+        run: run && { id: 4, checks: [], ...run },
+        valid,
+        reason: valid ? null : reason,
+        queue: null,
+      },
+      sensitive: null,
+      integration: null,
+    }) as unknown as JobDetailView['plan'];
+  /** Round 1 asked for changes and went back to Build; round 2 (current) passed. */
+  function twoRounds(over: Partial<JobDetailView> = {}): JobDetailView {
+    const b = detail();
+    return detail({
+      job: { ...b.job, stage: 'approve', status: 'pending', round: 2 },
+      liveness: 'idle',
+      blocker: null,
+      progress: progress(4, 'current', 'Approve'),
+      rounds: [
+        {
+          round: 1,
+          reviews: [review(1, 1, 'changes'), review(2, 1, 'pass')],
+          consolidated: 'round-1/consolidated.md',
+          blocking: 0,
+        },
+        {
+          round: 2,
+          reviews: [review(3, 2, 'pass'), review(4, 2, 'pass')],
+          consolidated: 'round-2/consolidated.md',
+          blocking: 2,
+        },
+      ],
+      timeline: {
+        entries: [
+          { at: at(1), step: 'spec', kind: 'completed', label: 'Spec completed' },
+          {
+            at: at(2),
+            step: 'review',
+            kind: 'back',
+            label: 'Review round 1: changes requested, back to Build',
+          },
+          { at: at(3), step: 'review', kind: 'completed', label: 'Review round 2 passed' },
+        ],
+      },
+      plan: verified({ status: 'passed', head: '1234567890abcdef' }, true),
+      planError: null,
+      ...over,
+    });
+  }
+  async function view(d: JobDetailView) {
+    mockFetch();
+    data.detail = d;
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+  }
+  const line = (id: string) => screen.queryByTestId(`summary-${id}`);
+  const before = (a: Element, b: Element) => {
+    expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  };
+
+  it('reads Request, summary lines, Progress, Timeline, then the muted agent block (AC1)', async () => {
+    await view(twoRounds());
+    const panel = screen.getByRole('tabpanel');
+    const request = within(panel).getByTestId('overview-request');
+    expect(request).toHaveTextContent('Do the thing');
+    const summary = within(panel).getByTestId('overview-summary');
+    const progressSection = within(panel).getByTestId('progress-section');
+    const timeline = within(progressSection).getByRole('table', { name: 'Timeline' });
+    const agent = within(panel).getByRole('region', { name: 'For the agent session' });
+    before(request, summary);
+    before(summary, progressSection);
+    before(within(progressSection).getByRole('list', { name: 'Workflow steps' }), timeline);
+    before(timeline, agent);
+    expect(within(agent).getByRole('heading', { name: 'For the agent session' })).toBeVisible();
+    expect(agent).toHaveTextContent('Next step: run-agent — Build the thing');
+    expect(agent).toHaveTextContent('Agents: factory-builder (opus)');
+    expect(within(agent).getByTestId('drawn-models')).toBeInTheDocument();
+    // Muted: the block is the theme's text.secondary, unlike the Request.
+    const muted = theme.palette.text.secondary;
+    expect(getComputedStyle(agent).color).toBe(muted);
+    expect(getComputedStyle(request).color).not.toBe(muted);
+  });
+
+  it('summarises the current round only, the reworks, and the newest blocking count (AC2)', async () => {
+    await view(twoRounds());
+    const reviews = must(line('reviews'));
+    expect(reviews).toHaveTextContent('Reviews: Round 2 of 3 2/2 pass 1 rework 2 blocking');
+    expect(reviews).not.toHaveTextContent('changes');
+    const chip = within(reviews).getByText('2/2 pass').closest('.MuiChip-root');
+    expect(chip).toHaveClass('MuiChip-colorSuccess');
+    expect(reviewRollup(twoRounds().rounds[1]?.reviews ?? [])?.color).toBe('success');
+    cleanup();
+    await view(twoRounds({ job: { ...detail().job, round: 0 }, rounds: [] }));
+    expect(line('reviews')).toHaveTextContent('Reviews: No review round yet');
+    cleanup();
+    await view(twoRounds({ job: { ...detail().job, round: 2, mode: 'fast' } }));
+    expect(line('reviews')).toBeNull();
+  });
+
+  it('states the latest run, its tested HEAD, and its validity from plan.verification (AC3)', async () => {
+    await view(twoRounds());
+    expect(line('verification')).toHaveTextContent(
+      'Verification: passed at 1234567890, valid for HEAD',
+    );
+    cleanup();
+    await view(
+      twoRounds({
+        plan: verified({ status: 'passed', head: '1234567890abcdef' }, false, 'HEAD moved'),
+      }),
+    );
+    expect(line('verification')).toHaveTextContent('passed at 1234567890, stale: HEAD moved');
+    cleanup();
+    await view(twoRounds({ plan: verified(null, false, 'no verification run recorded') }));
+    expect(line('verification')).toHaveTextContent('Verification: Not verified yet');
+    cleanup();
+    await view(twoRounds({ plan: null, planError: 'no worktree' }));
+    expect(line('verification')).toBeNull();
+  });
+
+  it('shows the PR, its phase chip, and the CI line verbatim once a PR is recorded (AC4)', async () => {
+    await view(twoRounds());
+    expect(line('delivery')).toBeNull();
+    cleanup();
+    const pr = 'https://github.com/acme/alpha/pull/7';
+    await view(
+      twoRounds({
+        job: { ...twoRounds().job, prUrl: pr, prState: 'draft' },
+        links: { ...detail().links, pr },
+        prPhase: 'draft',
+        ci: noCi({ line: 'PR created; CI not yet observed.' }),
+      }),
+    );
+    const delivery = must(line('delivery'));
+    expect(within(delivery).getByRole('link', { name: pr })).toHaveAttribute('href', pr);
+    expect(delivery.querySelector('[data-phase="draft"]')).not.toBeNull();
+    expect(delivery).toHaveTextContent('PR created; CI not yet observed.');
+  });
+
+  it('links timeline entries to an available tab and leaves the rest plain (AC7)', async () => {
+    await view(twoRounds());
+    // No spec.md registered: the Spec tab is unavailable, so its entry is plain text.
+    expect(screen.queryByRole('button', { name: /^Open Spec tab/ })).toBeNull();
+    const timeline = screen.getByRole('table', { name: 'Timeline' });
+    expect(within(timeline).getByText('Spec completed').closest('button')).toBeNull();
+    const entry = screen.getByRole('button', { name: 'Open Reviews tab: Review round 2 passed' });
+    fireEvent.click(entry);
+    expect(screen.getByRole('tab', { name: /^Reviews/ })).toHaveAttribute('aria-selected', 'true');
   });
 });
