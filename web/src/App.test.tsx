@@ -2770,7 +2770,7 @@ describe('Job detail: reviews', () => {
       id,
       round,
       reviewer,
-      verdict: 'pass',
+      verdict: 'pass' as const,
       path: null,
     });
     const base = detail();
