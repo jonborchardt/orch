@@ -644,8 +644,8 @@ server validates.
 - **The list** opens with the highest-priority ready ticket and the number ready ("No ticket is
   ready." when none is). That is the head of the queue, not a promise: the controller passes over
   a repository without the merge opt-in. The list itself reads three routes per poll
-  (`/api/tickets?view=all`, `?view=order`, `/api/jobs`), never `/api/runner`. It has Queue, ID, Title, Repository, Priority, Effort (days), State, Area / Type,
-  Created (local date and time), Job, and Blocked by. Queue is the ticket's position in `GET /api/tickets?view=order`, the server's proposed
+  (`/api/tickets?view=all`, `?view=order`, `/api/jobs`), never `/api/runner`. It has Queue, ID, Title, Repository, Priority, Effort (h) (hours with one decimal; the stored days on hover), State, Area / Type,
+  Created (the short local date-time, `1/2 12:48pm`; the full local date-time on hover, the ISO string on the `<time>` element), Job, and Blocked by. Queue is the ticket's position in `GET /api/tickets?view=order`, the server's proposed
   order of the open tickets; an open row's Up, Down, and Top buttons post the `move` action and
   read the queue again. They move within the global order, not the filtered rows, as
   `orch ticket move` does, so with a filter on a click may pass a hidden ticket. An open row's
