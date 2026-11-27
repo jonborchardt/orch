@@ -466,6 +466,23 @@ test('every board action is reachable at 800px', async ({ page }) => {
   await archiveFromRow(page);
 });
 
+test('the board loads without a 404 or console error and has an inline icon', async ({ page }) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('response', (r) => {
+    if (r.status() === 404) missing.push(r.url());
+  });
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  await page.goto('/#/');
+  await expect(page.getByRole('table', { name: 'Factory jobs' })).toBeVisible();
+  await expect(page).toHaveTitle(/orch$/);
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', /^data:image\/svg\+xml,/);
+  expect(missing).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
 test('board controls appear only on the board', async ({ page }) => {
   const { ids } = state();
   await page.goto('/');
