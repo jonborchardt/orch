@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import type { JobDetailView } from '../../src/server/types.ts';
-import { elapsed, elapsedCell, eventSummary, localTime, preciseDuration } from './format.ts';
+import {
+  effortHours,
+  elapsed,
+  elapsedCell,
+  eventSummary,
+  localTime,
+  preciseDuration,
+  shortDateTime,
+} from './format.ts';
 
 type Event = JobDetailView['events'][number];
 const ev = (type: string, payload: unknown): Event => ({
@@ -206,5 +214,31 @@ describe('localTime', () => {
     // A zone marker after the time: an abbreviation (UTC, CST) or an offset (GMT-6).
     expect(text).toMatch(/\d{1,2}:\d{2}.*\s[A-Z]{2,5}([+-]\d{1,2}(:\d{2})?)?$/);
     expect(localTime('not a date')).toBe('not a date');
+  });
+});
+
+describe('effortHours (ticket 0120)', () => {
+  it('is the stored days as hours with one decimal', () => {
+    expect(effortHours(0.05)).toBe('1.2 h');
+    expect(effortHours(0.075)).toBe('1.8 h');
+    expect(effortHours(0.25)).toBe('6.0 h');
+    expect(effortHours(1)).toBe('24.0 h');
+  });
+});
+
+describe('shortDateTime (ticket 0120)', () => {
+  // Built from local-time constructors, so the expectations hold in any time zone.
+  const local = (month: number, day: number, h: number, m: number, s = 0) =>
+    new Date(2026, month - 1, day, h, m, s).toISOString();
+
+  it('is local M/D h:mm with a lowercase am/pm, no year, no seconds, no leading zeros', () => {
+    expect(shortDateTime(local(1, 2, 12, 48, 24))).toBe('1/2 12:48pm');
+    expect(shortDateTime(local(11, 20, 8, 5))).toBe('11/20 8:05am');
+    expect(shortDateTime(local(3, 4, 0, 0))).toBe('3/4 12:00am');
+    expect(shortDateTime(local(3, 4, 13, 7))).toBe('3/4 1:07pm');
+  });
+
+  it('returns an unparseable input unchanged', () => {
+    expect(shortDateTime('not a date')).toBe('not a date');
   });
 });

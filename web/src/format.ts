@@ -196,6 +196,21 @@ export function localTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { timeZoneName: 'short' });
 }
 
+/** An effort stored in days as hours with one decimal: 0.25 is `6.0 h`. */
+export function effortHours(days: number): string {
+  return `${(days * 24).toFixed(1)} h`;
+}
+
+/** Local `M/D h:mm` + `am`/`pm` in any locale (`1/2 12:48pm`); the input when it is no date. */
+export function shortDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const h = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const date = `${String(d.getMonth() + 1)}/${String(d.getDate())}`;
+  return `${date} ${String(h % 12 || 12)}:${minutes}${h < 12 ? 'am' : 'pm'}`;
+}
+
 /** One line for an event: its type, then its `eventDetail` when there is any. Never throws. */
 export function eventSummary(e: JobDetailView['events'][number]): string {
   const detail = eventDetail(e);

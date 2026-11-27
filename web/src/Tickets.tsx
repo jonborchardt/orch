@@ -38,7 +38,7 @@ import {
   fetchTickets,
   ticketAction,
 } from './api.ts';
-import { STATE, repoLabels } from './format.ts';
+import { STATE, effortHours, localTime, repoLabels, shortDateTime } from './format.ts';
 import {
   EFFORTS,
   PRIORITIES,
@@ -501,7 +501,7 @@ export function TicketsPage({
                 <TableCell>Title</TableCell>
                 <TableCell>Repository</TableCell>
                 <TableCell>Priority</TableCell>
-                <TableCell>Effort</TableCell>
+                <TableCell>Effort (h)</TableCell>
                 <TableCell>State</TableCell>
                 <TableCell>Area / Type</TableCell>
                 <TableCell>Created</TableCell>
@@ -577,7 +577,9 @@ export function TicketsPage({
                         ))}
                       </Box>
                     </TableCell>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{String(t.effort)} d</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }} title={`${String(t.effort)} d`}>
+                      {effortHours(t.effort)}
+                    </TableCell>
                     <TableCell>
                       <Chip
                         label={state.label}
@@ -591,8 +593,8 @@ export function TicketsPage({
                       {t.area} / {t.type}
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                      <time dateTime={t.createdAt} title={t.createdAt}>
-                        {new Date(t.createdAt).toLocaleString()}
+                      <time dateTime={t.createdAt} title={localTime(t.createdAt)}>
+                        {shortDateTime(t.createdAt)}
                       </time>
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>

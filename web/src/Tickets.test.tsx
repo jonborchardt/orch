@@ -21,6 +21,7 @@ import type {
   TicketView,
 } from '../../src/server/types.ts';
 import { App } from './App.tsx';
+import { localTime, shortDateTime } from './format.ts';
 import { theme } from './theme.ts';
 
 // The full suite runs ~20 process-heavy files in parallel; the 1 s default flakes under that load.
@@ -416,7 +417,7 @@ describe('ticket list', () => {
       'Title',
       'Repository',
       'Priority',
-      'Effort',
+      'Effort (h)',
       'State',
       'Area / Type',
       'Created',
@@ -445,18 +446,22 @@ describe('ticket list', () => {
       '#/tickets/1',
     );
     expect(cells(2)[3]).toHaveTextContent('beta');
-    expect(cells(1)[5]).toHaveTextContent(/^1 d$/);
-    expect(cells(2)[5]).toHaveTextContent(/^0\.5 d$/);
+    // Effort reads in hours; the stored days are the hover text.
+    expect(cells(1)[5]).toHaveTextContent(/^24\.0 h$/);
+    expect(cells(1)[5]).toHaveAttribute('title', '1 d');
+    expect(cells(2)[5]).toHaveTextContent(/^12\.0 h$/);
+    expect(cells(2)[5]).toHaveAttribute('title', '0.5 d');
     expect(cells(1)[7]).toHaveTextContent('core / bug');
-    // Created is the local date-time, with the exact ISO string kept on the <time> element.
+    // Created is the short local date-time; the full one is the hover text and the exact ISO
+    // string stays on the <time> element.
     for (const [n, iso] of [
       [1, '2026-11-20T08:00:00.000Z'],
       [2, '2026-11-21T17:45:30.000Z'],
     ] as const) {
       const time = cells(n)[8]?.querySelector('time');
       expect(time).toHaveAttribute('dateTime', iso);
-      expect(time).toHaveAttribute('title', iso);
-      expect(time).toHaveTextContent(new Date(iso).toLocaleString());
+      expect(time).toHaveAttribute('title', localTime(iso));
+      expect(time?.textContent).toBe(shortDateTime(iso));
     }
     // The blocker is the server's sentence, with the ticket it names as a link.
     expect(cells(2)[10]).toHaveTextContent('depends on 0003, which is in-progress');
