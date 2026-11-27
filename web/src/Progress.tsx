@@ -12,7 +12,7 @@ import {
 } from '@mui/material';
 
 import type { Progress, StepState, Timeline } from '../../src/server/types.ts';
-import { ago } from './format.ts';
+import { ago, localTime } from './format.ts';
 import { textSize, weight } from './theme.ts';
 
 /** Glyph and words per step state, so colour is never the only cue. */
@@ -133,10 +133,10 @@ export function RoundIndicator({
   );
 }
 
-/** Relative time like the rest of the dashboard, with the exact timestamp kept in the markup. */
+/** Relative time; the tooltip is the local date and time with zone, `datetime` the ISO value. */
 export function When({ iso }: { iso: string }) {
   return (
-    <time dateTime={iso} title={iso}>
+    <time dateTime={iso} title={localTime(iso)}>
       {ago(iso)}
     </time>
   );

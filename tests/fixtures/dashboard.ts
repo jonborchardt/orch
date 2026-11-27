@@ -17,6 +17,7 @@ import {
   createJob,
   getJob,
   recordCi,
+  recordEvent,
   recordPr,
   recordReview,
   registerArtifact,
@@ -330,6 +331,12 @@ export function seedDashboard(
     // Completion released the job; the session comes back to observe CI and still holds it.
     const later = claimJob(store, id, { session: 'claude-20261112-1500-9f1e' }).token;
     recordCi(store, id, { token: later, ciStatus: 'failing', head: 'f1e2d3c4b5a69788' });
+    // A long payload with unbroken tokens, for the Events tab's overflow test (ticket 0018).
+    recordEvent(store, id, { token: later }, 'job.note', {
+      kind: 'long-payload',
+      note: 'unbroken-'.repeat(60),
+      nested: { path: `${'very-long-directory-name/'.repeat(20)}file.ts`, lines: [1, 2, 3] },
+    });
     clearWorktree(store, id, { token: later }, 'delivered');
   }
 

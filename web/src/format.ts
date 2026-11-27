@@ -177,6 +177,92 @@ export function sha7(sha: string | null | undefined): string {
   return sha ? sha.slice(0, 7) : '?';
 }
 
+/** Local date and time with the zone (a tooltip's absolute time); the input when it is no date. */
+export function localTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { timeZoneName: 'short' });
+}
+
+/**
+ * One line for an event: its type, then the fields that type records (the same choices as the
+ * status mail's `describe`). Payloads are untyped JSON, so a missing or wrong-typed field is left
+ * out; an unknown type lists its short scalar fields. Never throws.
+ */
+export function eventSummary(e: JobDetailView['events'][number]): string {
+  const raw: unknown = e.payload;
+  const p = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  /** A non-empty string or a number, on one line; anything else is absent. */
+  const str = (key: string): string | null => {
+    const v = p[key];
+    if (typeof v === 'number') return String(v);
+    return typeof v === 'string' && v.trim() !== '' ? v.trim().replace(/\s+/g, ' ') : null;
+  };
+  const with_ = (label: string, key: string) => {
+    const v = str(key);
+    return v === null ? null : `${label} ${v}`;
+  };
+  const at = () => (typeof p['head'] === 'string' && p['head'] ? `@${sha7(p['head'])}` : null);
+  const join = (...xs: (string | null)[]) => xs.filter(Boolean).join(' ') || null;
+  const type = e.type;
+  let parts: (string | null)[];
+  switch (type) {
+    case 'stage.started':
+    case 'stage.completed':
+    case 'stage.failed':
+      parts = [str('stage'), with_('round', 'round'), str('reason')];
+      break;
+    case 'job.blocked':
+    case 'job.resumed':
+    case 'job.reworked':
+    case 'job.cancelled':
+    case 'job.interrupted':
+      parts = [str('stage'), with_('from', 'from'), with_('to', 'to'), str('reason')];
+      break;
+    case 'ci.observed':
+      parts = [join(str('outcome') ?? str('ciStatus'), at()), with_('poll', 'polls')];
+      break;
+    case 'verification.completed':
+      parts = [with_('run', 'runId'), str('status')];
+      break;
+    case 'review.recorded': {
+      const reviewer = str('reviewer');
+      const verdict = str('verdict') ?? 'pending';
+      parts = [with_('round', 'round'), reviewer === null ? verdict : `${reviewer}: ${verdict}`];
+      break;
+    }
+    case 'artifact.registered':
+    case 'artifact.replaced':
+      parts = [str('path')];
+      break;
+    case 'pr.recorded':
+    case 'pr.merged':
+    case 'pr.observed': {
+      const merge = p['ok'] === true ? 'merged' : p['ok'] === false ? 'merge refused' : null;
+      parts = [join(str('state') ?? merge, at()), str('error')];
+      break;
+    }
+    case 'branch.pushed':
+      parts = [join(str('branch'), at())];
+      break;
+    case 'session.attached':
+      // A UUID or a session link: the first eight characters of its last path segment.
+      parts = [str('provider'), str('ref')?.split('/').pop()?.slice(0, 8) ?? null];
+      break;
+    case 'runner.session':
+    case 'runner.stopped':
+      parts = [str('outcome'), str('code'), with_('exit', 'exitCode'), str('reason')];
+      break;
+    default:
+      parts = Object.entries(p).map(([k, v]) =>
+        typeof v === 'boolean' || typeof v === 'number' || (typeof v === 'string' && v.length <= 60)
+          ? `${k}=${String(v)}`
+          : null,
+      );
+  }
+  const text = parts.filter(Boolean).join(', ');
+  return text ? `${type}: ${text}` : type;
+}
+
 /**
  * Short labels for the distinct repository identities on the board: the basename, or the
  * shortest unique trailing path when basenames collide, else the full identity. Empty when

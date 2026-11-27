@@ -286,8 +286,9 @@ whenever an owner is recorded, live or lapsed. Details also always has a visible
 hovering. The update time is a `<time datetime>` element. The Overview tab ends with a
 **Progress** section: every step in order with the same state as the strip and the times the
 timeline knows (`started …`, `completed …`, or `completed earlier …` for a step the current pass
-has not redone), then the **Timeline**. Times read relatively (`5m ago`), with the exact timestamp
-in the tooltip. The timeline is built by `timelineOf` in `src/server/status.ts` from
+has not redone), then the **Timeline**. Times read relatively (`5m ago`), with the local date and
+time, zone included, in the tooltip (the `When` component; its `<time datetime>` keeps the ISO
+value). The timeline is built by `timelineOf` in `src/server/status.ts` from
 `stage.started`, `stage.completed` (with the review round and whether it requested changes),
 `stage.failed`, `job.blocked`, `job.resumed`, `job.reworked`, `job.interrupted`, `job.cancelled`,
 and `job.completed`, oldest first, each with its time and a plain label. Going back (changes
@@ -310,6 +311,22 @@ otherwise, decided on every render, so a tab that becomes unavailable on a poll 
 falls back to Overview and returns when it is available again. `web/src/tabs.ts` holds these
 rules (`detailTabs`, `resolveTab`); deep links to tabs must use those two functions, never a rule
 of their own.
+
+The **Events** tab lists every loaded event, newest first, in a fixed-layout table that cannot
+widen the page: Time (relative, with the local date and time and its zone in the tooltip), Type,
+Actor (one line, cut with an ellipsis, the full value in its tooltip), and Summary. The summary is
+one line built on the client by `eventSummary` in `web/src/format.ts` from the type and the fields
+that type records, shown after the Type column without repeating the type: `passing @92e988a,
+poll 5` for a `ci.observed`, the stage and round for `stage.*`, from, to and reason for `job.*`,
+the run and status for `verification.completed`, `round 1, security: changes` for a review, the
+path for an artifact, the state for `pr.*`, the branch and head for `branch.pushed`, the provider
+and short ref for `session.attached`, the outcome and code for `runner.*`; any other type lists
+its short scalar fields, and an event with nothing to summarise reads `payload`. The summary is
+the handle of a collapsed expander (a native `<details>`) holding the raw payload as
+pretty-printed JSON, which scrolls sideways inside its own cell. A **Type** select above the
+table offers `All types` (the default, which hides nothing) and each type present with its count
+(`stage.completed (4)`); choosing one shows only those rows. Nothing is dropped or merged: under
+`All types` there is one row per loaded event.
 
 The **Session** tab, after Events, shows what the job's Claude Code session and its subagents are
 doing and have done, read directly from Claude Code's transcripts (decision
@@ -350,7 +367,7 @@ changed in the last five minutes, `not finished` when the meta file says `finish
 transcript is older than that (for example a subagent inside one long tool call, such as a
 verification run, which writes nothing until it returns), and `status unknown`, with a short
 explanation, only when there is no meta file or it has no readable boolean `finished` field, each
-with when it was last active; the merged timeline newest first (relative time with the exact time in a tooltip, and a
+with when it was last active; the merged timeline newest first (relative time with the local time and zone in a tooltip, and a
 `main` or `<agent type>: <description>` label); "Earlier activity not shown" with the number of
 entries shown when a file was cut or a cap was hit; and earlier claude-code sessions with their
 `claude --resume <ref>` (not read). Long text collapses with Show more / Show less, a button with
