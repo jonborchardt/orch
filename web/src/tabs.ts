@@ -79,7 +79,7 @@ export function detailTabs(detail: JobDetailView): DetailTab[] {
 }
 
 /** The tab with more about a timeline entry's step. */
-export const STEP_TAB: Record<StepId, TabName> = {
+const STEP_TAB: Record<StepId, TabName> = {
   spec: 'Spec',
   build: 'Build',
   simplify: 'Build',
