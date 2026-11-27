@@ -27,7 +27,14 @@ import {
 import { stripControl } from '../core/flake.ts';
 import type { FindingAnswer } from '../core/findings.ts';
 import { jobArtifactDir } from '../core/paths.ts';
-import { DEFAULT_CONFIG, drawModels, drawnModelsOf, type FactoryConfig } from '../core/roles.ts';
+import {
+  DEFAULT_CONFIG,
+  drawModels,
+  drawnModelsOf,
+  type FactoryConfig,
+  fallbacksOf,
+  judgeAt,
+} from '../core/roles.ts';
 import { SESSION_EVENT, type SessionRef } from '../core/session.ts';
 import type { Authority } from '../core/verification.ts';
 import {
@@ -759,9 +766,14 @@ export function recordReview(store: Store, id: string, input: ReviewInput): Revi
       }).id;
     }
     const head = input.verdict ? (input.head ?? null) : null;
-    const drawn = drawnModelsOf(eventsOfTypes(tx, id, ['models.drawn']))?.[input.reviewer];
-    const model = drawn?.model ?? null;
-    const sameAsAuthor = drawn?.sameAsAuthor ?? null;
+    // The model the reviewer has now: its draw, or its latest fallback (decision
+    // 2026-11-26-per-model-limit-falls-back), compared with its author's model now.
+    const modelEvents = eventsOfTypes(tx, id, ['models.drawn', 'models.fallback']);
+    const { model, sameAsAuthor } = judgeAt(
+      drawnModelsOf(modelEvents),
+      fallbacksOf(modelEvents),
+      input.reviewer,
+    );
     const review = tx
       .insert(reviews)
       .values({

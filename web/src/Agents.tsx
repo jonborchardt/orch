@@ -111,14 +111,16 @@ function AgentTable<R extends Row>({
 const percent = (r: number | null) =>
   r === null ? UNAVAILABLE : `${String(Math.round(r * 100))}%`;
 const mean = (x: number | null) => (x === null ? UNAVAILABLE : String(Math.round(x * 100) / 100));
-const model = (m: string | null) => m ?? 'not recorded';
+/** The model that ran; "fell back" marks rows of jobs where a role left its drawn model. */
+const model = (r: { model: string | null; fellBack: boolean }) =>
+  (r.model ?? 'not recorded') + (r.fellBack ? ' (fell back)' : '');
 const author = (same: boolean | null) => (same === null ? 'n/a' : same ? 'same' : 'different');
 const objections = (r: { objections: number; objectionRate: number | null }) =>
   `${String(r.objections)} (${percent(r.objectionRate)})`;
 
 const MODEL_COLUMNS: [string, (r: ChallengerModelRow) => string][] = [
   ['Role', (r) => r.role],
-  ['Model', (r) => model(r.model)],
+  ['Model', model],
   ['Author model', (r) => author(r.sameAsAuthor)],
   ['Reviews', (r) => String(r.reviews)],
   ['Objections', objections],
@@ -145,7 +147,7 @@ const REVIEWER_MODEL_COLUMNS: [string, (r: ReviewerModelRow) => string][] = [
 
 const BUILDER_MODEL_COLUMNS: [string, (r: BuilderModelRow) => string][] = [
   ['Role', (r) => r.role],
-  ['Model', (r) => model(r.model)],
+  ['Model', model],
   ['Jobs', (r) => String(r.jobs)],
   ['First-pass verification', (r) => percent(r.firstPassRate)],
   ['Review rounds', (r) => mean(r.meanRounds)],
@@ -256,7 +258,7 @@ function ByModel({ data }: { data: AgentsView }) {
         rows={data.byModel.builders}
         columns={BUILDER_MODEL_COLUMNS}
         notes={[
-          "Tokens are whole-job (every agent in the job) under the role's drawn model, over jobs with recorded sessions.",
+          "Tokens are whole-job (every agent in the job) under the role's model, over jobs with recorded sessions.",
         ]}
       />
       <Box sx={{ mb: 3 }}>

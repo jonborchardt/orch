@@ -183,6 +183,7 @@ orch job list      [--repo <path|identity>] [--status <s>] [--stage <s>]
 orch job show      <id>
 orch job events    <id> [--limit <n>]
 orch job usage     <id>                 # measured durations per stage, reviewer, verification, CI; no token counts
+orch job limit     <id> --model <m> --text "<message>" --token <t>   # a subagent hit that model's limit (models.limit)
 orch job claim     <id> --session <name> [--lease <minutes>] [--force]
 orch job release   <id> --token <t>
 orch job resume    <id> --session <name> [--to <stage>] [--force]

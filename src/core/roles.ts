@@ -240,15 +240,143 @@ export function drawnModelsOf(
   return roles && typeof roles === 'object' ? (roles as DrawnModels) : null;
 }
 
-/** Roles with a job's models: its recorded draw, else (legacy jobs) a draw from the config. */
+/**
+ * Models with an allowance of their own, apart from the account's. Only their limit is
+ * model-specific (decision 2026-11-26-per-model-limit-falls-back); any other is account-wide.
+ */
+export const OWN_ALLOWANCE_MODELS: readonly Model[] = ['fable'];
+
+/**
+ * The model a role runs when `drawn` may be exhausted: `drawn` itself while it is not, else the
+ * next model after it in the pool (wrapping) that is not exhausted, else null (no alternative).
+ */
+export function fallbackModel(
+  pool: readonly Model[],
+  drawn: Model,
+  exhausted: ReadonlySet<Model>,
+): Model | null {
+  if (!exhausted.has(drawn)) return drawn;
+  const start = pool.indexOf(drawn) + 1;
+  for (let i = 0; i < pool.length; i++) {
+    const m = pool[(start + i) % pool.length];
+    if (m !== undefined && !exhausted.has(m)) return m;
+  }
+  return null;
+}
+
+/**
+ * The models whose own allowance is spent at `now`: `models.limit` payloads whose `until` (an ISO
+ * time) is still ahead, plus `session`, the limits with no known reset the controller remembers.
+ */
+export function exhaustedModels(
+  records: readonly { model?: unknown; until?: unknown }[],
+  now: string,
+  session: Iterable<Model> = [],
+): Set<Model> {
+  const out = new Set<Model>(session);
+  for (const r of records) {
+    const { model, until } = r;
+    if (typeof until !== 'string' || until <= now) continue;
+    if (OWN_ALLOWANCE_MODELS.includes(model as Model)) out.add(model as Model);
+  }
+  return out;
+}
+
+/** One recorded `models.fallback` event: from when (`at`) `role` runs `to` instead of `from`. */
+export interface Fallback {
+  role: string;
+  from: Model;
+  to: Model;
+  at: string;
+}
+
+/** A job's `models.fallback` events, oldest first, whatever order `events` is in. */
+export function fallbacksOf(
+  events: readonly {
+    id: number;
+    type: string;
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }[],
+): Fallback[] {
+  return events
+    .filter((e) => e.type === 'models.fallback')
+    .sort((a, b) => a.id - b.id)
+    .map((e) => ({
+      role: String(e.payload['role']),
+      from: e.payload['from'] as Model,
+      to: e.payload['to'] as Model,
+      at: e.createdAt,
+    }));
+}
+
+/**
+ * The model `role` had at time `at` (now when omitted): its drawn one before its first fallback,
+ * then the latest fallback's `to`. Null when nothing is recorded (legacy jobs).
+ */
+export function modelAt(
+  drawn: DrawnModels | null,
+  fallbacks: readonly Fallback[],
+  role: string,
+  at?: string,
+): Model | null {
+  const last = fallbacks.filter((f) => f.role === role && (at === undefined || f.at <= at)).at(-1);
+  return last?.to ?? drawn?.[role]?.model ?? null;
+}
+
+/**
+ * A judging role's model at `at` and whether it was its author's then. A job without fallbacks
+ * keeps the draw's own `sameAsAuthor`.
+ */
+export function judgeAt(
+  drawn: DrawnModels | null,
+  fallbacks: readonly Fallback[],
+  role: string,
+  at?: string,
+): { model: Model | null; sameAsAuthor: boolean | null } {
+  const model = modelAt(drawn, fallbacks, role, at);
+  if (fallbacks.length === 0) return { model, sameAsAuthor: drawn?.[role]?.sameAsAuthor ?? null };
+  const r = ROLES.find((x) => x.name === role);
+  const author = r ? authorOf(r) : null;
+  return {
+    model,
+    sameAsAuthor:
+      model !== null && author !== null ? model === modelAt(drawn, fallbacks, author, at) : null,
+  };
+}
+
+/**
+ * The fallbacks a job needs while `exhausted` holds, all or nothing: one per role whose model is
+ * exhausted, or null when any such role has no other model in its pool (the account-wide path).
+ * `roles` carry the job's effective models (`resolveRoles`), already narrowed to its mode.
+ */
+export function planFallbacks(
+  roles: readonly Role[],
+  models: FactoryConfig['models'],
+  exhausted: ReadonlySet<Model>,
+): { role: string; from: Model; to: Model }[] | null {
+  const out: { role: string; from: Model; to: Model }[] = [];
+  for (const r of roles) {
+    const to = fallbackModel(poolFor(models, r), r.model, exhausted);
+    if (to === null) return null;
+    if (to !== r.model) out.push({ role: r.name, from: r.model, to });
+  }
+  return out;
+}
+
+/**
+ * Roles with a job's models: its recorded draw, else (legacy jobs) a draw from the config; then
+ * the recorded fallbacks, the latest per role winning.
+ */
 export function resolveRoles(
   config: FactoryConfig,
   jobId: string,
   drawn: DrawnModels | null = null,
+  fallbacks: readonly Fallback[] = [],
 ): Role[] {
   return ROLES.map((r) => ({
     ...r,
-    model: drawn?.[r.name]?.model ?? drawModel(jobId, r.name, poolFor(config.models, r)),
+    model: modelAt(drawn, fallbacks, r.name) ?? drawModel(jobId, r.name, poolFor(config.models, r)),
   }));
 }
 

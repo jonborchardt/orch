@@ -65,8 +65,12 @@ the end `stage.completed`, `stage.failed`, `job.blocked`, `job.reworked`, `job.c
 
 Below them the Agents tab compares models within each role (`byModel` and `notes`, decision
 [2026-11-25-attributed-findings](decisions/2026-11-25-attributed-findings.md)); rows are keyed by
-role, model (`not recorded` for a job without a `models.drawn` event), and whether the model matched
-its author's. **Reviewers by model** counts reviews, objections (CHANGES) and their rate, rounds
+role, model (`not recorded` for a job without a `models.drawn` event), whether the model matched
+its author's, and `fellBack`. The model is the one the role ran: its draw, or after a
+`models.fallback` event the fallback (decision
+[2026-11-26-per-model-limit-falls-back](decisions/2026-11-26-per-model-limit-falls-back.md)); rows
+from a job with such an event are separate and their Model cell ends "(fell back)", so they can be
+left out of a comparison. **Reviewers by model** counts reviews, objections (CHANGES) and their rate, rounds
 where the reviewer was the only objector, and its attributed blocking findings: real catches
 (fixed, and it passed the next round), fixed but changes again, unresolved (fixed, no next-round
 verdict), false alarms (declined, overruled by an APPROVE, vanished), and escapes (it passed, then a
