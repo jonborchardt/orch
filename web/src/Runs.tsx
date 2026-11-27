@@ -20,13 +20,21 @@ export const UNAVAILABLE = 'Unavailable';
  * Fetch now and every `refreshMs` while the tab is visible; the last good value stays shown. A
  * null fetcher polls nothing. A response from a superseded fetcher is dropped. `error` is the raw
  * rejection, cleared by the next good response; `reload()` resolves to the fresh value, or null.
+ * `updatedAt` is the time of the latest good response, null before the first.
  */
 export function usePolled<T>(
   fetcher: (() => Promise<T>) | null,
   refreshMs: number,
-): { data: T | null; error: unknown; loading: boolean; reload: () => Promise<T | null> } {
+): {
+  data: T | null;
+  error: unknown;
+  loading: boolean;
+  updatedAt: number | null;
+  reload: () => Promise<T | null>;
+} {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [inFlight, setInFlight] = useState(0);
   const current = useRef(fetcher);
   const reload = useCallback(async () => {
@@ -37,6 +45,7 @@ export function usePolled<T>(
       if (current.current !== fetcher) return null;
       setData(d);
       setError(null);
+      setUpdatedAt(Date.now());
       return d;
     } catch (err) {
       if (current.current === fetcher) setError(err);
@@ -56,7 +65,7 @@ export function usePolled<T>(
       clearInterval(timer);
     };
   }, [fetcher, reload, refreshMs]);
-  return { data, error, loading: inFlight > 0, reload };
+  return { data, error, loading: inFlight > 0, updatedAt, reload };
 }
 
 /** Loading bar before the first answer, the error above whatever was last shown. */

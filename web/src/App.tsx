@@ -12,8 +12,9 @@ import {
 } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
 
-import type { BoardRow, RunnerStatus } from '../../src/server/types.ts';
+import type { BoardRow } from '../../src/server/types.ts';
 import { AgentsPage } from './Agents.tsx';
+import { FactoryStatus } from './FactoryStatus.tsx';
 import { JobBoard } from './JobBoard.tsx';
 import { type DetailActivity, JobDetail } from './JobDetail.tsx';
 import { RunsPage, usePolled } from './Runs.tsx';
@@ -109,7 +110,6 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const [text, setText] = useState('');
   const [detailActivity, setDetailActivity] = useState<DetailActivity>('loading');
   const [ticketFilters, setTicketFilters] = useState<TicketFilters>(NO_FILTERS);
-  const [build, setBuild] = useState<RunnerStatus['build']>(null);
   const ticketMatch = /^#\/tickets(?:\/(\d{1,9}))?\/?$/.exec(hash);
   const runsMatch = /^#\/runs\/?$/.test(hash);
   const agentsMatch = /^#\/agents\/?$/.test(hash);
@@ -146,16 +146,11 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
   const now = board.data?.now ?? 0;
   const error = board.error === null ? null : failureText(board.error);
 
-  // Whether the installed build lags its checkout; checked on load and on every section change.
-  // A failed request shows nothing: this is advice, never an error.
-  useEffect(() => {
-    fetchRunner().then(
-      (r) => {
-        setBuild(r.build);
-      },
-      () => undefined,
-    );
-  }, [section]);
+  // The shared header's one runner poll, on every section: the Factory status box and whether
+  // the installed build lags its checkout. A failed request shows no build warning: that is
+  // advice, never an error.
+  const runner = usePolled(fetchRunner, refreshMs);
+  const build = runner.data?.build ?? null;
 
   // `?choose=<n>` (the mail's and terminal's per-choice link) only opens that choice's confirm.
   const jobMatch = /^#\/jobs\/(job-[0-9a-f]{8})(?:\?choose=(\d{1,2}))?$/.exec(hash);
@@ -284,6 +279,12 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
           {refreshing && <LinearProgress aria-label="Refreshing" sx={{ height: 4 }} />}
         </Box>
       </AppBar>
+      <FactoryStatus
+        runner={runner.data}
+        error={runner.error}
+        updatedAt={runner.updatedAt}
+        refreshMs={refreshMs}
+      />
       {build?.stale && (
         <Alert severity="warning" sx={{ m: 1 }}>
           {build.message}

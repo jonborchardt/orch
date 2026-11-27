@@ -56,7 +56,11 @@ beforeEach(() => {
     vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
       gets.push(url);
-      const body = url.startsWith('/api/usage') ? VIEW : [];
+      const body = url.startsWith('/api/usage')
+        ? VIEW
+        : url === '/api/runner'
+          ? { controllers: [], last: null, build: null, waiting: [] }
+          : [];
       return Promise.resolve(
         new Response(JSON.stringify(body), {
           status: 200,
@@ -94,10 +98,14 @@ describe('Usage section', () => {
     expect(link('Usage')).toHaveAttribute('href', '#/usage');
     expect(link('Usage')).toHaveAttribute('aria-current', 'page');
     await screen.findByRole('table', { name: 'Usage total' });
-    // Wait past several poll intervals: Usage loads once, and the board never. The app-wide
-    // installed-build warning reads the runner once per section change.
+    // Wait past several poll intervals: Usage loads once and the board never; the shared
+    // header's runner poll is every other request, and it keeps polling.
     await new Promise((r) => setTimeout(r, 200));
-    expect(gets).toEqual(['/api/usage?hours=24', '/api/runner']);
+    expect(gets.filter((g) => g === '/api/usage?hours=24')).toHaveLength(1);
+    expect(gets).not.toContain('/api/jobs');
+    const rest = gets.filter((g) => g !== '/api/usage?hours=24');
+    expect(rest.every((g) => g === '/api/runner')).toBe(true);
+    expect(rest.length).toBeGreaterThan(1);
     expect(screen.queryByLabelText('Summary')).toBeNull();
     expect(screen.queryByRole('searchbox', { name: 'Filter' })).toBeNull();
   });
