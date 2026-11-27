@@ -219,6 +219,7 @@ const COLUMNS: Column[] = [
   {
     id: 'round',
     label: 'Round',
+    hint: 'Review rounds used of the most allowed (N / M). The repairs line under it counts CI repairs used of the most allowed.',
     hideable: true,
     hideBelow: COMPACT,
     align: 'center',
@@ -237,6 +238,7 @@ const COLUMNS: Column[] = [
   {
     id: 'reviews',
     label: 'Reviews',
+    hint: "The current round's verdict rollup across reviewers, and the blocking count from its consolidated findings.",
     hideable: true,
     hideBelow: COMPACT,
     // The blocking count folded into this column; sorting by it keeps that capability.
@@ -275,6 +277,7 @@ const COLUMNS: Column[] = [
   {
     id: 'updated',
     label: 'Updated',
+    hint: "When the job row last changed, not the session's last activity.",
     hideable: true,
     hideBelow: COMPACT,
     sortValue: (r) => r.updatedAt,
@@ -284,6 +287,7 @@ const COLUMNS: Column[] = [
   {
     id: 'pr',
     label: 'PR / CI',
+    hint: "The PR phase and CI as orch last recorded them, not GitHub's live state. The board's poll never re-reads GitHub; from the dashboard only Merge or Refresh PR refresh it.",
     hideable: true,
     sortValue: (r) => r.pr.phase,
     // Wraps only on a compact board; the chips stay on one line where there is room.

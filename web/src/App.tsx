@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { BoardRow } from '../../src/server/types.ts';
 import { AgentsPage } from './Agents.tsx';
 import { FactoryStatus } from './FactoryStatus.tsx';
+import { Help } from './Help.tsx';
 import { JobBoard } from './JobBoard.tsx';
 import { type DetailActivity, JobDetail } from './JobDetail.tsx';
 import { RunsPage, usePolled } from './Runs.tsx';
@@ -208,6 +209,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
               </Button>
             ))}
           </Box>
+          <Help refreshMs={refreshMs} />
           {/* Job counts and filters belong to the Jobs section only. */}
           {!other && (
             <Stack direction="row" spacing={0.5} aria-label="Summary">
@@ -331,12 +333,6 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
             onChanged={() => void board.reload()}
           />
         )}
-      </Box>
-      <Box component="footer" sx={{ p: 1, borderTop: 1, borderColor: 'divider' }}>
-        <Typography variant="caption" color="text.secondary">
-          Read from the shared orch database every {String(refreshMs / 1000)}s. &quot;running&quot;
-          means a session renewed its lease recently, not that a process is alive right now.
-        </Typography>
       </Box>
     </Box>
   );

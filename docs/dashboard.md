@@ -31,6 +31,15 @@ change, and from its Refresh button; the shared header's runner poll still runs 
 section. A further section is one entry in `SECTIONS` in `web/src/App.tsx` and one branch
 where the page body is chosen.
 
+**Help.** After the Sections nav, on every section, a `?` button (accessible name `Help`,
+`web/src/Help.tsx`) opens a short popover: the refresh interval (`every 4s` by default, from `refreshMs`),
+then **Stages** (the eight progress-strip steps; needs human is a pause, not a stage),
+**Statuses** (every status chip's glyph, label, and `describe` text, read from `STATE` in
+`web/src/format.ts`, so the wording is the chips' own), **Leases and stale**, **Review rounds and
+CI repairs** (what `N / M` and `repairs n/m` count and that a spent budget escalates to needs
+human), and **What the dashboard does not do**. Escape or a click outside closes it and returns
+focus to the button. It has no links.
+
 **Shared header.** Under the app bar, on every section, `App` renders one **Factory status** box
 (`web/src/FactoryStatus.tsx`) from one `usePolled(fetchRunner, refreshMs)`: what `orch status`
 prints, from `GET /api/runner` (`runnerStatus`, read-only; the body is described under Tickets
@@ -175,6 +184,13 @@ not shown on the board (they stay in the detail view's Reviews and Findings tabs
 reads `-` before the first review round and `N / M` from round 1 on (round N of at most M); its
 tooltip says so in words ("Review round 2 of at most 3", "No review round yet (at most 3)"), and
 the same words are the text assistive technology reads.
+
+Header tooltips (on hover or focus of the sort button, as its description, so its name stays the
+label) define Elapsed and Started as above, and four more: **Round** (review rounds used of the
+most allowed, and the repairs line as CI repairs), **Reviews** (the current round's rollup and its
+blocking count), **Updated** (when the job row last changed, not session activity), and **PR / CI**
+(orch's recorded view, not GitHub's live state; from the dashboard only Merge or Refresh PR
+refresh it).
 
 The Stage column is the workflow position, shown as a **progress strip**: eight steps in order,
 Spec, Build, Simplify, Review, Approve, PR, CI, Done, each drawn with a glyph for its state (`✓` done, `▶`
