@@ -302,7 +302,7 @@ that round has none), `Artifacts (N)` counts registered artifacts, and `Events (
 events loaded (`Events (500+)` at the cap). A tab whose empty state is useful stays reachable and
 says so in its label: `Reviews (0 rounds)`, `Findings (empty)` before any consolidation,
 `Artifacts (0)`, `Events (0)`, `Git (empty)` without a worktree or merge, and `Verification
-(empty)` without verification state; it is also set in italics. Spec, Build, Decision, and PR
+(empty)` with neither verification state nor a recorded run; it is also set in italics. Spec, Build, Decision, and PR
 cannot have content until `spec.md`, `build.md`, `decision.md`, or a PR URL or `pr.md` exists:
 they are `aria-disabled`, and one line under the tab strip (`Not available yet: …`) gives each
 one's reason, which is also the tab's accessible description. Activating one changes nothing,
@@ -311,6 +311,19 @@ otherwise, decided on every render, so a tab that becomes unavailable on a poll 
 falls back to Overview and returns when it is available again. `web/src/tabs.ts` holds these
 rules (`detailTabs`, `resolveTab`); deep links to tabs must use those two functions, never a rule
 of their own.
+
+The **Verification** tab shows the latest run expanded: its id, status, tested HEAD, and checks
+table (check, command, status, exit, duration, log). Every earlier run of the job
+(`verificationRuns` on the detail, newest first) is listed below it collapsed; its summary shows
+`#<id>`, the status, when it completed (relative, exact time in the tooltip), how long it took,
+and the commit it tested, and opening it shows its checks table with its log links. Only the
+latest run carries a validity statement (`valid for HEAD` or `stale: <reason>`, from the plan);
+an earlier run is history, so its status chip is never green and it says nothing about HEAD.
+Without a worktree there is no plan state to judge a run against: the recorded runs are still
+listed, the newest expanded, with no validity statement at all, and the tab says
+`No worktree; nothing verified.` only when no run was recorded either. Durations read to the
+second: `<1s` under a second, then `42s`, `9m 06s`, `1h 02m 03s`. A command's directory is named
+(`in web`) only when it is not the worktree root.
 
 The **Events** tab lists every loaded event, newest first, in a fixed-layout table that cannot
 widen the page: Time (relative, with the local date and time and its zone in the tooltip), Type,

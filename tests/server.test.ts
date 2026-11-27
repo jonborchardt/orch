@@ -39,7 +39,7 @@ import {
   transitionJob,
 } from '../src/storage/jobs.ts';
 import { jobs } from '../src/storage/schema.ts';
-import { recordCheck, startRun } from '../src/storage/verification.ts';
+import { finishRun, recordCheck, startRun } from '../src/storage/verification.ts';
 import { seedDashboard, type SeededJobs } from './fixtures/dashboard.ts';
 import { orchAsync, tempDir, type TempStore, tempStore } from './helpers.ts';
 import { mainTranscript, U, user, writeAgent, writeSession } from './transcript-fixture.ts';
@@ -1668,13 +1668,84 @@ describe('recorded logs on the artifact route (todo 0019)', () => {
     own.db.update(jobs).set({ ciHead: 'abcdef0123456789' }).where(eq(jobs.id, a.id)).run();
     const route = (p: string) => `/api/jobs/${a.id}/artifacts/${p}`;
     const logs = detail(own, a.id).links.logs;
+    // The recorded verification log needs no plan (ticket 0027): it comes from the run rows.
     expect(logs).toEqual({
+      [verifyLog]: route(verifyLog),
       [ciLog]: route(ciLog),
       'ci/fedcba9/test.log': route('ci/fedcba9/test.log'),
       'ci/1234567/gone.log': route('ci/1234567/gone.log'),
     });
     for (const bad of ['notes.txt', 'ci/x/../../secret.log', '42', 'ci/abcdef0/../../../x.log'])
       expect(logs[bad]).toBeUndefined();
+  });
+
+  it('sends every verification run with its checks, newest first, and each run log (ticket 0027)', () => {
+    const c = mk('logs C');
+    expect(detail(own, c.id).verificationRuns).toEqual([]);
+    const auth = { token: c.token };
+    const ts = new Date().toISOString();
+    /** One finished run with one check per `[checkId, outputPath]`; the path may not be log-shaped. */
+    const record = (status: 'passed' | 'failed', outputs: (run: number) => [string, string][]) => {
+      const started = startRun(own, c.id, {
+        ...auth,
+        head: 'abcdef0123456789',
+        tree: 't',
+        dirty: [],
+        configFingerprint: 'fp',
+        policySource: 'baseline',
+        policyHead: null,
+        checks: outputs(0).map(([id]) => ({
+          id,
+          command: 'node',
+          args: [],
+          cwd: '.',
+          required: true,
+          timeoutMs: 1000,
+        })),
+      });
+      outputs(started.run.id).forEach(([, outputPath], i) => {
+        recordCheck(own, c.id, auth, (started.checks[i] ?? { id: -1 }).id, {
+          status,
+          startedAt: ts,
+          completedAt: ts,
+          durationMs: 1,
+          exitCode: 0,
+          signal: null,
+          outputPath,
+          outputSha256: null,
+          truncated: false,
+          error: null,
+        });
+      });
+      finishRun(own, c.id, auth, started.run.id, status);
+      return started.run.id;
+    };
+    const log = (run: number, check: string) => `verification/${String(run)}/${check}.log`;
+    const first = record('failed', (n) => [
+      ['check', log(n, 'check')],
+      ['odd', '/abs/x.log'],
+    ]);
+    const second = record('passed', (n) => [['check', log(n, 'check')]]);
+    expect(second).toBeGreaterThan(first);
+
+    const d = detail(own, c.id);
+    expect(d.verificationRuns.map((r) => [r.id, r.status])).toEqual([
+      [second, 'passed'],
+      [first, 'failed'],
+    ]);
+    expect(d.verificationRuns.map((r) => r.checks.map((k) => [k.runId, k.checkId]))).toEqual([
+      [[second, 'check']],
+      [
+        [first, 'check'],
+        [first, 'odd'],
+      ],
+    ]);
+    // The earlier run's log is linked as well; a path that is not log-shaped never is.
+    const route = (p: string) => `/api/jobs/${c.id}/artifacts/${p}`;
+    expect(d.links.logs).toEqual({
+      [log(second, 'check')]: route(log(second, 'check')),
+      [log(first, 'check')]: route(log(first, 'check')),
+    });
   });
 });
 

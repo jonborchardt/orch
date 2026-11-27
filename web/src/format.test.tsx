@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { JobDetailView } from '../../src/server/types.ts';
-import { eventSummary, localTime } from './format.ts';
+import { elapsed, elapsedCell, eventSummary, localTime, preciseDuration } from './format.ts';
 
 type Event = JobDetailView['events'][number];
 const ev = (type: string, payload: unknown): Event => ({
@@ -176,6 +176,24 @@ describe('eventSummary (ticket 0018)', () => {
         expect(line).not.toMatch(/\n|\[object|undefined|null/);
       }
     }
+  });
+});
+
+describe('preciseDuration (ticket 0027)', () => {
+  it('reads to the second, padded under the largest unit, and empty when unknown', () => {
+    expect(preciseDuration(546218)).toBe('9m 06s');
+    expect(preciseDuration(42000)).toBe('42s');
+    expect(preciseDuration(999)).toBe('<1s');
+    expect(preciseDuration(0)).toBe('<1s');
+    expect(preciseDuration(3723000)).toBe('1h 02m 03s');
+    expect(preciseDuration(null)).toBe('');
+  });
+
+  it('leaves the coarse board helpers as they were', () => {
+    expect(elapsed(546218)).toBe('9m');
+    expect(elapsed(3723000)).toBe('1h 2m');
+    expect(elapsedCell(999)).toBe('<1s');
+    expect(elapsedCell(null)).toBe('Unknown');
   });
 });
 

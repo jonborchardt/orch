@@ -7,7 +7,14 @@ import type { Choice, Completion, PrPhase } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
 import type { Plan } from '../ops/factory.ts';
 import type { MergeView } from '../ops/merge-view.ts';
-import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
+import type {
+  Artifact,
+  Event,
+  Job,
+  Review,
+  VerificationCheck,
+  VerificationRun,
+} from '../storage/schema.ts';
 
 export type SafeJob = Omit<Job, 'ownerToken'>;
 export type { Flake };
@@ -235,6 +242,12 @@ export interface JobDetailView {
   events: Event[];
   plan: Plan | null;
   planError: string | null;
+  /**
+   * Every verification run recorded for the job with its checks, newest first; read from the
+   * database, so it is listed without a worktree. History only: whether a run is evidence for
+   * HEAD is `plan.verification.valid`, about `plan.verification.run` alone.
+   */
+  verificationRuns: (VerificationRun & { checks: VerificationCheck[] })[];
   blocker: Blocker | null;
   ci: CiView;
   progress: Progress;
@@ -276,7 +289,8 @@ export interface JobDetailView {
    * null for any other remote; commit links are built from it alone. `branchUnpushed` is true
    * when a github.com job has no PR and no `branch.pushed` event, so `branch` has no link yet.
    * `pushedHeads` is the string `head` of every `branch.pushed` event, newest first. These three
-   * come from the job's full event history, not the timeline cap. `logs` maps each log-shaped verification check `outputPath` and CI failure `log` to its
+   * come from the job's full event history, not the timeline cap. `logs` maps each log-shaped
+   * check `outputPath` of every run in `verificationRuns` and each CI failure `log` to its
    * artifact route; a path missing from it is not served and is shown as text.
    */
   links: {
