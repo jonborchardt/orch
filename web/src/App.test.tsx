@@ -30,6 +30,7 @@ import {
   prParts,
   repoLabels,
   reviewRollup,
+  STATE,
 } from './format.ts';
 import { Markdown } from './Markdown.tsx';
 import { RUNNING_WINDOW_MS, subagentState } from './SessionLog.tsx';
@@ -635,6 +636,36 @@ describe('App board', () => {
     expect(
       [...document.querySelectorAll('[data-job-id]')].map((e) => e.getAttribute('data-job-id')),
     ).toEqual(['job-00000002', 'job-00000003', 'job-00000001']);
+  });
+
+  it('defines Round, Reviews, Updated, and PR / CI in header tooltips', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    const tipOf = async (name: string) => {
+      const sort = screen.getByRole('button', { name });
+      sort.focus();
+      const tip = await screen.findByRole('tooltip');
+      const text = tip.textContent;
+      sort.blur();
+      await waitFor(() => {
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+      });
+      return text;
+    };
+    const round = await tipOf('Round');
+    expect(round).toMatch(/review rounds/i);
+    expect(round).toMatch(/repairs line/);
+    expect(round).toMatch(/CI repairs/);
+    const reviews = await tipOf('Reviews');
+    expect(reviews).toMatch(/rollup/);
+    expect(reviews).toMatch(/blocking count/);
+    const updated = await tipOf('Updated');
+    expect(updated).toMatch(/job row last changed/);
+    expect(updated).toMatch(/not the session's last activity/);
+    const pr = await tipOf('PR / CI');
+    expect(pr).toMatch(/as orch last recorded/);
+    expect(pr).toMatch(/only Merge or Refresh PR/);
   });
 
   it('shows Started as a local date and time or —, and sorts unstarted jobs last', async () => {
@@ -5275,5 +5306,76 @@ describe('Fast jobs', () => {
       'title',
       expect.stringContaining('Fast job'),
     );
+  });
+});
+
+describe('App help', () => {
+  it('shows a ? Help button in the shared app bar on every section, and no footer', async () => {
+    mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    expect(screen.getByRole('button', { name: 'Help' })).toHaveTextContent(/^\?$/);
+    window.location.hash = '#/tickets';
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Tickets' })).toHaveAttribute('aria-current', 'page');
+    });
+    expect(screen.getByRole('button', { name: 'Help' })).toHaveTextContent(/^\?$/);
+    expect(document.querySelector('footer')).toBeNull();
+    expect(screen.queryByText(/Read from the shared orch database/)).toBeNull();
+  });
+
+  it('opens a grouped glossary with the refresh interval, and Escape returns focus to Help', async () => {
+    mockFetch();
+    mount(7000);
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    const button = screen.getByRole('button', { name: 'Help' });
+    // A real click focuses the button first; jsdom's synthetic click does not.
+    button.focus();
+    fireEvent.click(button);
+    await waitFor(() => {
+      expect(button).not.toHaveFocus();
+    });
+    const help = await screen.findByRole('dialog', { name: 'Help' });
+    for (const name of [
+      'Stages',
+      'Statuses',
+      'Leases and stale',
+      'Review rounds and CI repairs',
+      'What the dashboard does not do',
+    ]) {
+      expect(within(help).getByRole('heading', { name })).toBeInTheDocument();
+    }
+    const group = (name: string) =>
+      must(within(help).getByRole('heading', { name }).closest('section'));
+    expect(help).toHaveTextContent('every 7s');
+    const stages = group('Stages');
+    expect([...stages.querySelectorAll('li')].map((li) => li.textContent)).toEqual(STEP_LABELS);
+    expect(stages).toHaveTextContent(/needs human is a pause .*not a stage/);
+    const statuses = [...group('Statuses').querySelectorAll('li')].map((li) => li.textContent);
+    expect(statuses).toEqual(
+      Object.values(STATE).map((s) => `${s.glyph} ${s.label}: ${s.describe}`),
+    );
+    expect(help).toHaveTextContent(STATE.stale.describe);
+    const leases = group('Leases and stale');
+    expect(leases).toHaveTextContent(/live lease is not proof that a process is alive/);
+    expect(leases).toHaveTextContent(/lease lapsed without renewal/);
+    const budgets = group('Review rounds and CI repairs');
+    expect(budgets).toHaveTextContent(/Round r of max/);
+    expect(budgets).toHaveTextContent(/Repairs n of max/);
+    expect(budgets.textContent.match(/escalates to needs human/g)).toHaveLength(2);
+    const nots = group('What the dashboard does not do');
+    const bullets = [...nots.querySelectorAll('li')].map((li) => li.textContent);
+    expect(bullets.length).toBeGreaterThanOrEqual(3);
+    expect(bullets.length).toBeLessThanOrEqual(5);
+    expect(nots).toHaveTextContent(/Start, stop, or resume the factory controller/);
+    expect(nots).toHaveTextContent(/Message/);
+    expect(nots).toHaveTextContent(/Skip a gate, or merge without verification/);
+    expect(nots).toHaveTextContent(/needs-human job waits for a person/);
+    expect(help.querySelector('a')).toBeNull();
+    fireEvent.keyDown(help, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Help' })).not.toBeInTheDocument();
+    });
+    expect(button).toHaveFocus();
   });
 });
