@@ -37,11 +37,8 @@ import {
   Supersession,
 } from './Status.tsx';
 import { ago, byAttention, elapsedCell, prNumber, repoLabels, reviewRollup } from './format.ts';
+import { jobHref } from './tabs.ts';
 import { weight } from './theme.ts';
-
-function openJob(id: string): void {
-  window.location.hash = `#/jobs/${id}`;
-}
 
 /** True when a row event came from the row's own cells, not an inner control or a portal (Snackbar, tooltip). */
 function fromRowBody(e: { target: EventTarget; currentTarget: HTMLElement }): boolean {
@@ -402,11 +399,14 @@ function ReviewsCell({ row }: { row: BoardRow }) {
             </div>
           ))}
         >
+          {/* A link to the current round on the detail's Reviews tab (ticket 0007). */}
           <Chip
+            component="a"
+            href={jobHref(row.id, 'Reviews', row.round)}
+            clickable
             label={rollup.label}
             color={rollup.color}
             variant={rollup.color === 'default' ? 'outlined' : 'filled'}
-            tabIndex={0}
           />
         </Tooltip>
       )}
@@ -430,7 +430,16 @@ function readHidden(): string[] {
   }
 }
 
-type Sort = { id: string; dir: 'asc' | 'desc' } | null;
+export type Sort = { id: string; dir: 'asc' | 'desc' } | null;
+
+/** A URL `sort` value (`<columnId>:asc|desc`); null unless the column exists and is sortable. */
+export function parseSort(v: string | null): Sort {
+  const m = /^([a-z]+):(asc|desc)$/.exec(v ?? '');
+  const id = m?.[1];
+  const dir = m?.[2];
+  if (!id || (dir !== 'asc' && dir !== 'desc')) return null;
+  return COLUMNS.some((c) => c.id === id && c.sortValue) ? { id, dir } : null;
+}
 
 function sorted(rows: BoardRow[], sort: Sort): BoardRow[] {
   const key = COLUMNS.find((c) => c.id === sort?.id)?.sortValue;
@@ -450,15 +459,26 @@ export function JobBoard({
   total,
   now,
   onChanged,
+  sort = null,
+  onSort,
+  beforeOpen,
 }: {
   rows: BoardRow[];
   /** Jobs before the Show, Repository, and Filter controls; tells "none yet" from "none match". */
   total: number;
   now: number;
   onChanged: () => void;
+  /** The column sort; App session state, kept in the board URL. Null: attention order. */
+  sort?: Sort;
+  onSort?: (s: Sort) => void;
+  /** Runs before a row opens its job, so a pending board URL write lands first. */
+  beforeOpen?: () => void;
 }) {
   const [hidden, setHidden] = useState<string[]>(readHidden);
-  const [sort, setSort] = useState<Sort>(null);
+  const openJob = (id: string) => {
+    beforeOpen?.();
+    window.location.hash = jobHref(id);
+  };
   const [menu, setMenu] = useState<HTMLElement | null>(null);
   const [target, setTarget] = useState<BoardRow | null>(null);
   // After archive/unarchive the trigger row usually leaves the view; move focus somewhere stable.
@@ -560,7 +580,7 @@ export function JobBoard({
                             active={active}
                             direction={active ? sort.dir : 'asc'}
                             onClick={() => {
-                              setSort({
+                              onSort?.({
                                 id: c.id,
                                 dir: active && sort.dir === 'asc' ? 'desc' : 'asc',
                               });

@@ -55,7 +55,7 @@ import {
   reviewRollup,
   verdictColor,
 } from './format.ts';
-import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
+import { type TabName, detailTabs, jobHref, newestConsolidated, resolveTab } from './tabs.ts';
 import { ticketHref, ticketKey } from './ticketState.ts';
 import { fonts, textSize, weight } from './theme.ts';
 
@@ -74,12 +74,20 @@ export type DetailActivity = 'loading' | 'refreshing' | 'idle';
 export function JobDetail({
   id,
   choose = null,
+  tab: linked = 'Overview',
+  round = null,
+  reviewer = null,
   refreshMs = 4000,
   onActivity,
 }: {
   id: string;
   /** `#/jobs/<id>?choose=<n>`: open choice n's confirm dialog (it acts only on Confirm). */
   choose?: number | null;
+  /** The URL's tab (`#/jobs/<id>/<tab>`); a click pushes the new tab's URL. */
+  tab?: TabName;
+  /** `#/jobs/<id>/reviews/<round>[/<reviewer>]`: scroll to that round and expand that reviewer. */
+  round?: number | null;
+  reviewer?: string | null;
   refreshMs?: number;
   onActivity?: (a: DetailActivity) => void;
 }) {
@@ -90,9 +98,40 @@ export function JobDetail({
   const detail = polled.data;
   const error = polled.error === null ? null : failureText(polled.error);
   // What the user last picked; the rendered tab is resolveTab() of it, so it can come back.
-  const [selected, setSelected] = useState<TabName>('Overview');
+  // A URL change (Back, Forward, a link) picks the URL's tab.
+  const [selected, setSelected] = useState<TabName>(linked);
+  const [seenTab, setSeenTab] = useState<TabName>(linked);
+  if (seenTab !== linked) {
+    setSeenTab(linked);
+    setSelected(linked);
+  }
   const [openReviews, setOpenReviews] = useState<Record<number, boolean>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
+  // A round link is followed once per link (job, round, reviewer), never again on a poll, so a
+  // linked report the user collapses stays collapsed.
+  const link = round === null ? null : JSON.stringify([id, round, reviewer]);
+  const [followed, setFollowed] = useState<string | null>(null);
+  if (link === null && followed !== null) setFollowed(null);
+  if (polled.data && link !== null && followed !== link) {
+    setFollowed(link);
+    const rv = polled.data.rounds
+      .find((r) => r.round === round)
+      ?.reviews.find((x) => x.reviewer === reviewer);
+    if (rv) setOpenReviews((s) => ({ ...s, [rv.id]: true }));
+  }
+  // Runs once per followed link: `round` changes only with `followed`.
+  useEffect(() => {
+    if (followed === null || round === null) return;
+    // Partial: jsdom has no scrollIntoView.
+    const el: Partial<HTMLElement> | null = document.getElementById(
+      `review-round-${String(round)}`,
+    );
+    el?.scrollIntoView?.({ block: 'start' });
+  }, [followed, round]);
+  const openTab = (t: TabName) => {
+    setSelected(t);
+    window.location.hash = jobHref(id, t);
+  };
 
   const loaded = detail !== null;
   const busy = polled.loading;
@@ -276,7 +315,7 @@ export function JobDetail({
         onChange={(_e, v: TabName) => {
           // aria-disabled (unlike `disabled`) keeps the tab focusable, so clicks and Enter/Space
           // still arrive here.
-          if (!tabs.find((t) => t.name === v)?.unavailable) setSelected(v);
+          if (!tabs.find((t) => t.name === v)?.unavailable) openTab(v);
         }}
         variant="scrollable"
         scrollButtons="auto"
@@ -352,7 +391,7 @@ export function JobDetail({
               onOpen={(t) => {
                 // The Overview unmounts with the focused entry; keep focus on the tab it opened.
                 flushSync(() => {
-                  setSelected(t);
+                  openTab(t);
                 });
                 document.getElementById(`tab-${t}`)?.focus();
               }}
@@ -400,7 +439,7 @@ export function JobDetail({
             <Typography color="text.secondary">No review rounds yet.</Typography>
           ) : (
             detail.rounds.map((r) => (
-              <Box key={r.round} sx={{ mb: 3 }}>
+              <Box key={r.round} id={`review-round-${String(r.round)}`} sx={{ mb: 3 }}>
                 <Stack
                   direction="row"
                   spacing={1}
@@ -451,6 +490,14 @@ export function JobDetail({
                     expanded={openReviews[rv.id] === true}
                     onChange={(_e, open) => {
                       setOpenReviews((s) => ({ ...s, [rv.id]: open }));
+                      // Expanding names the report in the URL; no history entry, no hashchange.
+                      if (open) {
+                        window.history.replaceState(
+                          window.history.state,
+                          '',
+                          jobHref(job.id, 'Reviews', r.round, rv.reviewer),
+                        );
+                      }
                     }}
                     slotProps={{ transition: { unmountOnExit: true } }}
                   >

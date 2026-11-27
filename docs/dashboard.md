@@ -24,7 +24,13 @@ on Windows) and it keeps serving; a pipe that closes at once (`echo | orch ui`) 
 **Sections.** The app bar has five: **Jobs** (`#/`, and `#/jobs/<id>` for one job), **Tickets**
 (`#/tickets`, and `#/tickets/<id>` for one ticket), **Runs** (`#/runs`), **Agents** (`#/agents`),
 and **Usage** (`#/usage`). Each is a link, so every view can be opened, reloaded, and bookmarked by
-its URL. The job counts, the job filters, and the board's error alert show only in Jobs; a section
+its URL. The board's Show, Repository, Filter, and sort live in
+`#/?show=&repo=&q=&sort=<column>:asc|desc` (defaults omitted, so the default board is `#/`), a job's
+tab in `#/jobs/<id>/<tab>`, and a review round and reviewer in
+`#/jobs/<id>/reviews/<round>[/<reviewer>]`; a board change replaces the URL (the Filter after a
+400 ms pause), a tab click pushes one, and a `hashchange` to a bare `#/` keeps the current board
+settings, so only a fresh load of `#/` shows the defaults. The job counts, the job filters, and the
+board's error alert show only in Jobs; a section
 polls only what it shows, so the ticket queue is not read while Jobs is open and the job board
 rests while any other section is. Usage does not poll its own data: it loads on open, on a range
 change, and from its Refresh button; the shared header's runner poll still runs there, as on every

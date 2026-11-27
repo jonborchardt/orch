@@ -100,3 +100,21 @@ export function stepTab(tabs: readonly DetailTab[], step: StepId | null): TabNam
 export function resolveTab(detail: JobDetailView, wanted: TabName): TabName {
   return detailTabs(detail).find((t) => t.name === wanted)?.unavailable ? 'Overview' : wanted;
 }
+
+/** A URL tab segment (the lower-case `TABS` name, any case accepted) as its tab; Overview if unknown. */
+export function tabOf(segment: string | undefined): TabName {
+  const s = segment?.toLowerCase();
+  return TABS.find((t) => t.toLowerCase() === s) ?? 'Overview';
+}
+
+/**
+ * A job's detail URL: `#/jobs/<id>` for Overview, `#/jobs/<id>/<tab>` otherwise, and for Reviews
+ * optionally `/<round>[/<reviewer>]`, the reviewer percent-encoded.
+ */
+export function jobHref(id: string, tab: TabName = 'Overview', round?: number, reviewer?: string) {
+  if (tab === 'Overview') return `#/jobs/${id}`;
+  const base = `#/jobs/${id}/${tab.toLowerCase()}`;
+  if (tab !== 'Reviews' || round === undefined) return base;
+  const at = `${base}/${String(round)}`;
+  return reviewer === undefined ? at : `${at}/${encodeURIComponent(reviewer)}`;
+}
