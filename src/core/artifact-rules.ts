@@ -22,7 +22,7 @@ export interface ArtifactRule {
 }
 
 /** The spec challenger's verdicts; also how the Agents read model counts its runs. */
-export const SPEC_REVIEW_PATH = /^spec-review-[1-3]\.md$/; // the slots of CHALLENGE in workflow.ts
+export const SPEC_REVIEW_PATH = /^spec-review-([1-3])\.md$/; // the slots up to LAST_CHALLENGE_SLOT in workflow.ts
 
 export const ARTIFACT_RULES: readonly ArtifactRule[] = [
   { path: /^spec\.md$/, stage: 'spec', headings: ['Goal', 'Scope', 'Acceptance criteria'] },

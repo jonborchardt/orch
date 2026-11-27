@@ -5,6 +5,7 @@
  * registered results, and returns the new job fields plus the events to append. It performs no
  * I/O. `src/storage/jobs.ts` applies the result inside a transaction.
  */
+import { SPEC_REVIEW_PATH } from './artifact-rules.ts';
 import { UsageError, WorkflowError } from './errors.ts';
 import { ROLES } from './roles.ts';
 import type { Authority } from './verification.ts';
@@ -340,14 +341,12 @@ export const SPEC_CHALLENGER =
   ROLES.find((r) => r.kind === 'spec-challenge')?.agent ?? 'spec challenger';
 /** The last spec challenge slot; a CHANGES there goes to a human. */
 export const LAST_CHALLENGE_SLOT = 3;
-const CHALLENGE = /^spec-review-([1-3])\.md$/;
-/** Any spec-review-N.md name; only the three CHALLENGE slots may be registered. */
+/** Any spec-review-N.md name; only the three SPEC_REVIEW_PATH slots may be registered. */
 const CHALLENGE_NAME = /^spec-review-\d+\.md$/;
-const ORDINAL = ['', 'first', 'second', 'third'];
 
 /** The challenge slot (1 to 3) of `path`, or 0 when it is not a spec challenge. */
 export function challengeSlot(path: string): number {
-  return Number(CHALLENGE.exec(path)?.[1] ?? 0);
+  return Number(SPEC_REVIEW_PATH.exec(path)?.[1] ?? 0);
 }
 
 export function isSpecChallenge(path: string): boolean {
@@ -387,7 +386,7 @@ export function challengeSpecHash(path: string, artifacts: readonly Artifact[]):
     const before = `spec-review-${String(slot - 1)}.md`;
     if (artifacts.find((a) => a.path === before)?.marker !== 'changes') {
       throw new WorkflowError(
-        `${path} is only for a ${ORDINAL[slot] ?? ''} challenge after ${before} says CHANGES; register ${before} instead (--replace to re-challenge a revised spec).`,
+        `${path} is only accepted after ${before} says CHANGES; register ${before} instead (--replace to re-challenge a revised spec).`,
       );
     }
   }

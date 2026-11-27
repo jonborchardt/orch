@@ -321,10 +321,10 @@ describe('jobs: artifacts', () => {
     writeArtifact(dir, 'spec.md');
     const spec = reg('spec.md');
     writeArtifact(dir, 'spec-review-2.md');
-    expect(() => reg('spec-review-2.md')).toThrow(/only for a second challenge/);
+    expect(() => reg('spec-review-2.md')).toThrow(/only accepted after spec-review-1.md/);
     writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md', 'PASS'));
     expect(reg('spec-review-1.md').specSha256).toBe(spec.sha256);
-    expect(() => reg('spec-review-2.md')).toThrow(/only for a second challenge/);
+    expect(() => reg('spec-review-2.md')).toThrow(/only accepted after spec-review-1.md/);
     // The PASS is evidence only while its file is unchanged on disk.
     writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md') + '\nedited\n');
     expect(() => go(id, token, 'complete')).toThrow(/spec-review-1.md changed on disk/);
@@ -354,7 +354,7 @@ describe('jobs: artifacts', () => {
     };
     reg('spec.md');
     expect(() => reg('spec-review-3.md', fixture('spec-review-3.md', 'PASS'))).toThrow(
-      /only for a third challenge after spec-review-2.md says CHANGES/,
+      /only accepted after spec-review-2.md says CHANGES/,
     );
     reg('spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
     reg('spec.md', fixture('spec.md') + '\nrevised\n', true);
