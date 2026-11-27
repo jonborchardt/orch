@@ -23,6 +23,7 @@ import {
   Typography,
 } from '@mui/material';
 import { Fragment, useCallback, useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 
 import type { JobDetailView } from '../../src/server/types.ts';
 import { Actions } from './Actions.tsx';
@@ -45,7 +46,15 @@ import {
   nextAction,
 } from './Status.tsx';
 import { failureText, fetchDetail } from './api.ts';
-import { STATE, ago, eventDetail, preciseDuration, prNumber, verdictColor } from './format.ts';
+import {
+  STATE,
+  ago,
+  eventDetail,
+  preciseDuration,
+  prNumber,
+  reviewRollup,
+  verdictColor,
+} from './format.ts';
 import { type TabName, detailTabs, newestConsolidated, resolveTab } from './tabs.ts';
 import { ticketHref, ticketKey } from './ticketState.ts';
 import { fonts, textSize, weight } from './theme.ts';
@@ -313,35 +322,13 @@ export function JobDetail({
       <Box role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} sx={{ pt: 2 }}>
         {tab === 'Overview' && (
           <Stack spacing={1}>
-            {detail.plan ? (
-              <>
-                <Typography>
-                  <b>Next step:</b> {detail.plan.step} —{' '}
-                  <PrText text={detail.plan.reason} pr={detail.links.pr} />
-                </Typography>
-                {detail.plan.agents.length > 0 && (
-                  <Typography variant="body2">
-                    Agents: {detail.plan.agents.map((a) => `${a.agent} (${a.model})`).join(', ')}
-                  </Typography>
-                )}
-              </>
-            ) : (
-              <Alert severity="warning">Plan unavailable: {detail.planError}</Alert>
-            )}
-            <Typography variant="body2" data-testid="drawn-models">
-              Models drawn:{' '}
-              {detail.models
-                ? Object.entries(detail.models)
-                    .map(([role, m]) => `${role} ${modelText(m.model, m.sameAsAuthor)}`)
-                    .join(', ')
-                : 'not recorded'}
-            </Typography>
             {job.description && (
-              <>
-                <Divider />
-                <Typography variant="subtitle2">Request</Typography>
+              <Box data-testid="overview-request">
+                <Typography variant="subtitle2" component="h2">
+                  Request
+                </Typography>
                 <Typography sx={{ whiteSpace: 'pre-wrap' }}>{job.description}</Typography>
-              </>
+              </Box>
             )}
             {detail.plan && detail.plan.artifacts.some((a) => !a.ok) && (
               <Alert severity="error">
@@ -352,8 +339,58 @@ export function JobDetail({
                   .join('; ')}
               </Alert>
             )}
+            <Stack spacing={0.5} data-testid="overview-summary">
+              <ReviewsLine detail={detail} />
+              <VerificationLine detail={detail} />
+              <DeliveryLine detail={detail} />
+            </Stack>
             <Divider />
-            <ProgressSection progress={detail.progress} timeline={detail.timeline} />
+            <ProgressSection
+              progress={detail.progress}
+              timeline={detail.timeline}
+              tabs={tabs}
+              onOpen={(t) => {
+                // The Overview unmounts with the focused entry; keep focus on the tab it opened.
+                flushSync(() => {
+                  setSelected(t);
+                });
+                document.getElementById(`tab-${t}`)?.focus();
+              }}
+            />
+            <Divider />
+            <Stack
+              spacing={0.5}
+              component="section"
+              aria-labelledby="agent-session-heading"
+              sx={{ color: 'text.secondary' }}
+            >
+              <Typography variant="subtitle2" component="h2" id="agent-session-heading">
+                For the agent session
+              </Typography>
+              {detail.plan ? (
+                <>
+                  <Typography variant="body2">
+                    <b>Next step:</b> {detail.plan.step} —{' '}
+                    <PrText text={detail.plan.reason} pr={detail.links.pr} />
+                  </Typography>
+                  {detail.plan.agents.length > 0 && (
+                    <Typography variant="body2">
+                      Agents: {detail.plan.agents.map((a) => `${a.agent} (${a.model})`).join(', ')}
+                    </Typography>
+                  )}
+                </>
+              ) : (
+                <Alert severity="warning">Plan unavailable: {detail.planError}</Alert>
+              )}
+              <Typography variant="body2" data-testid="drawn-models">
+                Models drawn:{' '}
+                {detail.models
+                  ? Object.entries(detail.models)
+                      .map(([role, m]) => `${role} ${modelText(m.model, m.sameAsAuthor)}`)
+                      .join(', ')
+                  : 'not recorded'}
+              </Typography>
+            </Stack>
           </Stack>
         )}
         {tab === 'Spec' && content('spec.md')}
@@ -520,6 +557,78 @@ export function JobDetail({
         )}
       </Box>
     </Box>
+  );
+}
+
+/**
+ * The current round with its rollup (the board's chip, from that round only), the reworks so far
+ * (`back` timeline entries), and the newest consolidated round's blocking count. None for fast.
+ */
+function ReviewsLine({ detail }: { detail: JobDetailView }) {
+  const { job } = detail;
+  if (job.mode === 'fast') return null;
+  if (job.round < 1) {
+    return (
+      <Typography data-testid="summary-reviews">
+        <b>Reviews:</b> No review round yet
+      </Typography>
+    );
+  }
+  const current = detail.rounds.find((r) => r.round === job.round);
+  const rollup = current ? reviewRollup(current.reviews) : null;
+  const reworks = detail.timeline.entries.filter((e) => e.kind === 'back').length;
+  const blocking = newestConsolidated(detail)?.blocking ?? 0;
+  return (
+    <Typography component="div" data-testid="summary-reviews">
+      <b>Reviews:</b> Round {job.round} of {job.maxRounds}{' '}
+      {rollup && (
+        <Chip
+          size="small"
+          label={rollup.label}
+          color={rollup.color}
+          variant={rollup.color === 'default' ? 'outlined' : 'filled'}
+        />
+      )}{' '}
+      {reworks} rework{reworks === 1 ? '' : 's'}
+      {blocking > 0 && (
+        <>
+          {' '}
+          <Chip size="small" label={`${String(blocking)} blocking`} color="error" />
+        </>
+      )}
+    </Typography>
+  );
+}
+
+/** The latest run's status and tested HEAD, and its validity, from `plan.verification` only. */
+function VerificationLine({ detail }: { detail: JobDetailView }) {
+  if (!detail.plan) return null;
+  const v = detail.plan.verification;
+  if (!v?.run) {
+    return (
+      <Typography data-testid="summary-verification">
+        <b>Verification:</b> Not verified yet
+      </Typography>
+    );
+  }
+  return (
+    <Typography component="div" data-testid="summary-verification">
+      <b>Verification:</b>{' '}
+      <Chip size="small" label={v.run.status} color={v.valid ? 'success' : 'default'} /> at{' '}
+      {commitRef(detail)(v.run.head, 10)}, {v.valid ? 'valid for HEAD' : `stale: ${v.reason ?? ''}`}
+    </Typography>
+  );
+}
+
+/** The recorded PR, its phase, and the CI line verbatim; nothing before a PR exists. */
+function DeliveryLine({ detail }: { detail: JobDetailView }) {
+  const { job, links } = detail;
+  if (!job.prUrl) return null;
+  return (
+    <Typography component="div" data-testid="summary-delivery">
+      <b>Delivery:</b> <PrLink url={job.prUrl} pr={links.pr} />{' '}
+      <PrPhaseChip phase={detail.prPhase} /> <PrText text={detail.ci.line} pr={links.pr} />
+    </Typography>
   );
 }
 

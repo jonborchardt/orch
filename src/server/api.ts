@@ -76,6 +76,7 @@ import {
   progressOf,
   resumeOf,
   TIMELINE_EVENTS,
+  TIMELINE_TYPES,
   timelineOf,
 } from './status.ts';
 import { readTokenUsage, spanEnd, USAGE_RANGES } from './token-usage.ts';
@@ -953,13 +954,15 @@ export function detail(store: Store, id: string): JobDetailView {
     contents,
     rounds: rounds(reviews, artifacts),
     events,
+    eventsCapped: events.length >= TIMELINE_EVENTS,
     plan,
     planError,
     verificationRuns,
     blocker: blockerOf(job, state, evidence),
     ci,
     progress: progressOf(job, evidence.events, artifacts),
-    timeline: timelineOf(events),
+    // Uncapped, oldest first: the first stage survives any number of later events.
+    timeline: timelineOf(eventsOfTypes(store.db, id, TIMELINE_TYPES).reverse()),
     flake: plan ? plan.flake : (currentFlakes(store).get(id) ?? null),
     prPhase: prPhase(job, ci.completion),
     actions,

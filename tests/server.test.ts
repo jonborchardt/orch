@@ -301,7 +301,7 @@ describe('seeded board and detail', () => {
     // The detail's step states equal the board's.
     expect(d.progress).toEqual(by(ids.ciExhausted).progress);
     expect(d.progress.specChallenge).toEqual(passed);
-    expect(d.timeline.truncated).toBe(false);
+    expect(d.eventsCapped).toBe(false);
     const labels = d.timeline.entries.map((e) => e.label);
     const rework = labels.indexOf('Rework from CI: back to Build');
     expect(rework).toBeGreaterThan(labels.indexOf('CI started'));
@@ -491,6 +491,32 @@ describe('seeded board and detail', () => {
         head: 42,
       });
       expect(detail(own, odd.id).links.pushedHeads).toEqual([]);
+    } finally {
+      own.cleanup();
+    }
+  });
+
+  it('builds the timeline from every stage event, uncapped and oldest first (ticket 0016)', () => {
+    const own = tempStore();
+    try {
+      const job = createJob(own, {
+        title: 'uncapped',
+        description: 'uncapped',
+        repo: 'github.com/acme/alpha',
+        repoPath: tempDir('uncapped-'),
+        baseBranch: 'main',
+      });
+      const { token } = claimJob(own, job.id, { session: 'claude-uncapped' });
+      recordEvent(own, job.id, { token }, 'stage.started', { stage: 'spec' });
+      for (let i = 0; i <= TIMELINE_EVENTS; i++)
+        recordEvent(own, job.id, { token }, 'test.noise', { i });
+      recordEvent(own, job.id, { token }, 'stage.completed', { stage: 'spec', round: 0 });
+      const d = detail(own, job.id);
+      expect(d.events).toHaveLength(TIMELINE_EVENTS);
+      expect(d.events.some((e) => e.type === 'stage.started')).toBe(false);
+      expect(d.eventsCapped).toBe(true);
+      expect(d.timeline.entries.map((e) => e.label)).toEqual(['Spec started', 'Spec completed']);
+      expect('truncated' in d.timeline).toBe(false);
     } finally {
       own.cleanup();
     }

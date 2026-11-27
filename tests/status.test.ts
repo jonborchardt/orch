@@ -7,6 +7,7 @@ import {
   ciSummary,
   outcomeOf,
   progressOf,
+  TIMELINE_TYPES,
   timelineOf,
 } from '../src/server/status.ts';
 import type { CiView, Progress } from '../src/server/types.ts';
@@ -130,7 +131,6 @@ describe('progressOf and timelineOf', () => {
     expect(labels.lastIndexOf('Build started')).toBe(rework + 1);
     expect(labels.filter((l) => l === 'Build started')).toHaveLength(3);
     expect(t.entries.map((x) => x.at)).toEqual(events.map((x) => x.createdAt));
-    expect(t.truncated).toBe(false);
   });
 
   it('labels a last-round escalation and a cancel outside any step without inventing a step', () => {
@@ -177,10 +177,13 @@ describe('progressOf and timelineOf', () => {
     expect([at('build'), at('simplify'), at('review')]).toEqual([1, 2, 3]);
   });
 
-  it('(j) exactly 500 events marks the timeline truncated; step states never read it', () => {
-    const many = Array.from({ length: 500 }, () => ev('stage.started', { stage: 'build' }));
-    expect(timelineOf(many).truncated).toBe(true);
-    expect(timelineOf(many.slice(1)).truncated).toBe(false);
+  it('(j) TIMELINE_TYPES is exactly what timelineOf reads, and the timeline has no cap flag', () => {
+    const t = timelineOf(TIMELINE_TYPES.map((type) => ev(type, { stage: 'build', from: 'build' })));
+    expect(t.entries).toHaveLength(TIMELINE_TYPES.length);
+    expect(timelineOf([ev('test.noise'), ev('artifact.registered')]).entries).toEqual([]);
+    const many = Array.from({ length: 600 }, () => ev('stage.started', { stage: 'build' }));
+    expect(Object.keys(timelineOf(many))).toEqual(['entries']);
+    expect(timelineOf(many).entries).toHaveLength(600);
   });
 
   it('never names needs-human or completed as a step: always the same eight, in order', () => {
