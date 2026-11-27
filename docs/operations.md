@@ -116,7 +116,10 @@ GitHub cannot be read or gives no answer (`github-unreadable`, `merge-no-answer`
 refuses the merge call (`github-refused`). A `usage-limit` stop leaves the session unfinished
 with its ticket in flight: the summary names the limit and its reset time when Claude printed
 one, and `orch resume` continues the same ticket and job once the limit has reset (decision
-2026-11-24-usage-limit-ends-run-resumably). The same holds when `orch` was rebuilt since the
+2026-11-24-usage-limit-ends-run-resumably). A limit on `fable`, which has an allowance of its
+own, does not end the run while every role of the job drawn `fable` has another model in its
+pool: the controller records `models.fallback` on the job and launches again on that model
+(decision 2026-11-26-per-model-limit-falls-back). The same holds when `orch` was rebuilt since the
 controller started (`orch-rebuilt`) or `factory.json` fails validation (`bad-config`), both
 checked before each ticket and each Claude launch; a stop before a ticket leaves none in flight,
 and `orch resume` then takes a stranded in-progress ticket first (decision
@@ -508,7 +511,7 @@ failure the skill escalated. End to end:
      `approve`, `pr`, or `ci`, or on a completed job's open PR, **Fix merge conflicts**;
    - or the CLI: `orch factory resume <job> --to <stage>`. With `--to` the resume gives the job
      up again at once (`token: null`), so `orch do` can continue it; `--release` is redundant but
-     accepted. For a spec the challenger rejected twice, edit
+     accepted. For a spec the challenger rejected three times, edit
      `<artifactDir>/spec.md` first and resume at `spec`; the next plan registers the edit and
      re-challenges it.
 5. Continue: `orch do <ticket>` runs the same job from the chosen stage; `orch start` afterwards
@@ -551,7 +554,7 @@ flowchart TD
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------- |
 | review rejects a round             | `maxRounds`, default 3 (1–10 in `factory.json`, `--max-rounds` per job); base-integration rework, CI repair, a human resume to build/simplify/review, and a scope rework raise the limit instead of spending it; then `needs-human` | job row (`round`, `maxRounds`)              | yes, durable                              |
 | scope gap (`REWORK-BUILD`/`-SPEC`) | one automatic rework, then `needs-human`                                                                                                                                                                                            | job row (`scopeReworks`)                    | yes, durable                              |
-| spec challenge says CHANGES        | one revision; a second CHANGES escalates (a bound set by the plan, not a code cap)                                                                                                                                                  | the registered `spec-review-N.md` files     | yes, durable                              |
+| spec challenge says CHANGES        | two revisions; a third CHANGES escalates (a bound set by the plan, not a code cap)                                                                                                                                                  | the registered `spec-review-N.md` files     | yes, durable                              |
 | `orch verify` fails                | the builder gets the failing log once, then the skill fails the stage and escalates; the gate never opens without a passing run                                                                                                     | the factory session (skill rule)            | not counted                               |
 | CI fails                           | one re-run per head, then `maxCiRepairs`, default 2 (0–10), then `needs-human`                                                                                                                                                      | job row (`ciRepairs`) and `ci.rerun` events | yes, durable                              |
 | PR conflicts at merge              | one re-land job; a second conflict blocks with `second-conflict`                                                                                                                                                                    | job rows (`supersededBy`)                   | yes, durable                              |

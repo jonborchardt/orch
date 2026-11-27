@@ -37,6 +37,7 @@ import {
   Supersession,
 } from './Status.tsx';
 import { ago, byAttention, elapsedCell, repoLabels, reviewRollup } from './format.ts';
+import { weight } from './theme.ts';
 
 function openJob(id: string): void {
   window.location.hash = `#/jobs/${id}`;
@@ -103,7 +104,7 @@ const COLUMNS: Column[] = [
     sx: { minWidth: 220, [below(COMPACT)]: { minWidth: 160 } },
     cell: (r, _now, repoLabel) => (
       <>
-        <Link href={`#/jobs/${r.id}`} underline="hover" sx={{ fontWeight: 600 }}>
+        <Link href={`#/jobs/${r.id}`} underline="hover" sx={{ fontWeight: weight.semibold }}>
           {r.title}
         </Link>
         <Typography component="div" variant="caption" color="text.secondary">

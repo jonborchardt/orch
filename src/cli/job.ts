@@ -2,6 +2,7 @@
 
 import { UsageError } from '../core/errors.ts';
 import { jobArtifactDir } from '../core/paths.ts';
+import { type Model, MODELS } from '../core/roles.ts';
 import { ticketKey } from '../core/tickets.ts';
 import {
   type Action,
@@ -22,6 +23,7 @@ import { postNotice, supersede } from '../ops/actions.ts';
 import { addArtifact, recordVerdict, transitionGuarded } from '../ops/gates.ts';
 import { loadConfig } from '../ops/factory.ts';
 import { mergeJob, type MergeResult } from '../ops/merge.ts';
+import { reportLimit } from '../ops/model-limit.ts';
 import { findJobs, jobRepository } from '../ops/repo.ts';
 import { jobUsage } from '../ops/usage.ts';
 import { repointRepo } from '../ops/worktree.ts';
@@ -67,6 +69,8 @@ export interface JobOptions {
   cwd?: string;
   message?: string;
   through?: string;
+  model?: string;
+  text?: string;
   choice?: string[];
 }
 
@@ -79,7 +83,7 @@ export const JOB_HELP = `Usage: orch job <command> [options]
   show <id>
   events <id> [--limit <n>]
   usage <id>                                time per stage visit, reviewer run, verification, and CI;
-                                            drawn models; token counts are not measured
+                                            models (after any fallback); token counts are not measured
   claim <id> --session <name> [--lease <minutes>] [--force]
   release <id> --token <t>
   resume <id> --session <name> [--to <stage>] [--force]
@@ -112,6 +116,9 @@ export const JOB_HELP = `Usage: orch job <command> [options]
             next orch factory next|status shows it until the owner acknowledges it
   notice ack <id> --through <event-id> --token <t>
             acknowledge every posted notice up to that event id (the plan's noticeAck)
+  limit <id> --model <${MODELS.join('|')}> --text "<message>" --token <t>
+            record that a subagent hit that model's limit (models.limit); the controller then
+            falls back to another pool model or ends the run
 
 --token defaults to $ORCH_TOKEN, --session to $ORCH_SESSION. Add --json for machine output.
 `;
@@ -294,6 +301,13 @@ export function runJob(store: Store, args: string[], o: JobOptions, env = proces
       }
       const through = need(int(o.through, '--through', 1), '--through <event-id>');
       return summary(ackNotice(store, jobId, auth, through), store, { through });
+    }
+    case 'limit': {
+      const model = need(oneOf<Model>(o.model, MODELS, '--model'), '--model');
+      if (o.text === undefined || o.text.trim() === '') {
+        throw new UsageError('limit needs a non-blank --text "<the limit message>"');
+      }
+      return summary(reportLimit(store, id(), auth, { model, text: o.text }), store);
     }
     case undefined:
       throw new UsageError(JOB_HELP);

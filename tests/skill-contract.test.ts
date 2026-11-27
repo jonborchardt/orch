@@ -128,6 +128,7 @@ describe('skill', () => {
       'orch job transition',
       'orch job review record',
       'orch job artifact add',
+      'orch job limit <id> --model',
       'orch gh pr status',
       'orch gh ci',
     ]) {
@@ -280,5 +281,9 @@ describe('the todo skills use the ticket commands that exist', () => {
     expect(existsSync(join(root, '.claude', 'skills', 'log-todo', 'index.mjs'))).toBe(false);
     // The manual path starts a ticket's job with `orch factory start ... --ticket <id>`.
     expect(FACTORY_HELP).toContain('--ticket <id>');
+  });
+
+  it('log-todo names no path that exists only in the orch repository', () => {
+    expect(skill('log-todo')).not.toMatch(/docs\/|src\/|todo\//);
   });
 });

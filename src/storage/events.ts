@@ -40,6 +40,15 @@ export function eventsOfTypes(db: Db, jobId: string, types: readonly string[]): 
     .all();
 }
 
+/**
+ * Every event of one type over all jobs, oldest first.
+ * ponytail: a scan of the events table (no index on type), once per child launch; add an index
+ * when that shows up.
+ */
+export function eventsOfType(db: Db, type: string): Event[] {
+  return db.select().from(events).where(eq(events.type, type)).orderBy(events.id).all();
+}
+
 /** Newest event of each listed type per job, for a board that explains jobs without N queries. */
 export function latestEventsByJob(
   db: Db,

@@ -30,7 +30,7 @@ How a ticket becomes merged software, in order. Each step links to its detailed 
    The job gets an isolated worktree on `factory/<id>-<slug>` ([Worktrees](#worktrees)).
 6. **Specification.** `factory-spec-writer` writes `spec.md` (Goal, Scope, Acceptance criteria).
 7. **Specification challenge.** `factory-spec-challenger` judges it against the request and the
-   repository's conventions; one revision on `CHANGES`, and a second `CHANGES` escalates
+   repository's conventions; up to two revisions on `CHANGES`, and a third `CHANGES` escalates
    ([Spec challenge](#workflow)).
 8. **Build.** `factory-builder` implements in the worktree and commits.
 9. **Verification.** `orch verify` runs the repository's committed `factory.json` checks in the
@@ -135,6 +135,20 @@ A job created before pools has no `models.drawn` event: its plan draws from the 
 before, its review rows store `model` and `sameAsAuthor` as null, and the receipt and dashboard
 say "not recorded". Nothing is backfilled. The model orch records is the one it asked for; which
 model actually ran is not observable.
+
+A model with an allowance of its own (`OWN_ALLOWANCE_MODELS` in `src/core/roles.ts`: `fable`) can
+run out while the account still works. The controller then records `models.fallback` (role, from,
+to, the limit text, `until`) for every role of the job on that model and launches again; the plan
+applies those events after the draw, so the role runs the next model in its configured pool. It
+learns of the limit from the child's stderr or error result, or from a `models.limit` event the
+session recorded with `orch job limit <id> --model <m> --text "<message>" --token <t>` when a
+subagent hit it. The rule is all or nothing: when one affected role has no other model in its
+pool, nothing is recorded and the run ends with `usage-limit` as for any other limit. A limit
+whose text carried an epoch reset is honoured by every controller until then, for new jobs too;
+one without is remembered only by the controller process that saw it. `models.drawn` is never
+rewritten: review rows, the Agents tab, and `orch job usage` credit the model the role had when
+the work was recorded and flag the job as fell back (decision
+[2026-11-26-per-model-limit-falls-back](decisions/2026-11-26-per-model-limit-falls-back.md)).
 
 ## Workflow
 
@@ -243,17 +257,17 @@ Required artifacts, relative to the job's artifact directory and registered with
 Registration checks the file is inside the artifact directory (no absolute paths or `..`), is
 `.md`, exists, is non-empty, and has the structure its path requires (`src/core/artifact-rules.ts`):
 
-| Artifact                     | Required headings                | Marker line (exactly once)                                        |
-| ---------------------------- | -------------------------------- | ----------------------------------------------------------------- |
-| `spec.md`                    | Goal, Scope, Acceptance criteria |                                                                   |
-| `spec-review-1.md`, `-2.md`  | Findings                         | `VERDICT: PASS` or `CHANGES`                                      |
-| `build.md`                   | Summary, Validation              |                                                                   |
-| `round-N/simplify-review.md` | Findings                         |                                                                   |
-| `round-N/simplify.md`        | Applied, Declined, Validation    |                                                                   |
-| `round-N/review-<name>.md`   | Findings                         | `VERDICT: PASS` or `CHANGES`                                      |
-| `round-N/consolidated.md`    | Findings                         | `BLOCKING: <count>`                                               |
-| `decision.md`                | Rationale                        | `DECISION: APPROVE`, `ESCALATE`, `REWORK-BUILD`, or `REWORK-SPEC` |
-| `pr.md`                      | Validation, Known limitations    |                                                                   |
+| Artifact                      | Required headings                | Marker line (exactly once)                                        |
+| ----------------------------- | -------------------------------- | ----------------------------------------------------------------- |
+| `spec.md`                     | Goal, Scope, Acceptance criteria |                                                                   |
+| `spec-review-1.md` to `-3.md` | Findings                         | `VERDICT: PASS` or `CHANGES`                                      |
+| `build.md`                    | Summary, Validation              |                                                                   |
+| `round-N/simplify-review.md`  | Findings                         |                                                                   |
+| `round-N/simplify.md`         | Applied, Declined, Validation    |                                                                   |
+| `round-N/review-<name>.md`    | Findings                         | `VERDICT: PASS` or `CHANGES`                                      |
+| `round-N/consolidated.md`     | Findings                         | `BLOCKING: <count>`                                               |
+| `decision.md`                 | Rationale                        | `DECISION: APPROVE`, `ESCALATE`, `REWORK-BUILD`, or `REWORK-SPEC` |
+| `pr.md`                       | Validation, Known limitations    |                                                                   |
 
 Headings match case-insensitively at any level. The marker is stored on the artifact row and the
 workflow reads it: `review record --verdict pass` is refused if the file says `CHANGES`, and
@@ -277,18 +291,22 @@ per round (`round-N/`) and are never overwritten by later rounds.
 **Spec challenge.** In `spec`, after `spec.md` is registered, `factory-spec-challenger` (an
 independent subagent, Sonnet by default, role `spec-challenger` in `factory.json` `models`)
 reviews it against the request and the repository's conventions and writes `spec-review-1.md`.
-Registering a challenge is refused before `spec.md` is registered, and `spec-review-2.md` is
-refused unless `spec-review-1.md` says `CHANGES`; no other `spec-review-N.md` is accepted. The
+Registering a challenge is refused before `spec.md` is registered, `spec-review-2.md` is refused
+unless `spec-review-1.md` says `CHANGES`, and `spec-review-3.md` unless `spec-review-2.md` says
+`CHANGES`; no other `spec-review-N.md` is accepted. The
 challenge row records the sha256 of the `spec.md` registered at that moment. `complete` from
 `spec`, and `resume` from a `needs-human` that was escalated from `spec` to any other stage, are
 refused unless the highest-numbered challenge says `PASS` and was bound to the `spec.md` registered
 now; both also re-read `spec.md` and the challenge files, so an edited file is refused as changed
 on disk.
-On a first `CHANGES` the plan has the writer revise `spec.md` once (`--replace`) and a second
-challenger run writes `spec-review-2.md`; a second `CHANGES` makes the plan `escalate`, keeping
-the objections in the registered file. A challenge whose spec was replaced is challenged again
-(`--replace` on the same file). The loop bound is the plan's, not a code cap; see
-[the decision](decisions/2026-11-17-spec-challenger-gates-the-spec.md).
+On a `CHANGES` in `spec-review-1.md` or `spec-review-2.md` the plan has the writer revise
+`spec.md` (`--replace`) and the next challenger run writes the next slot; a `CHANGES` in
+`spec-review-3.md` makes the plan `escalate` ("spec challenger requested changes three times"),
+keeping the objections in the registered file. Two automatic revisions are the only bound; nothing
+judges the findings. A challenge whose spec was replaced is challenged again (`--replace` on the
+same file). The loop bound is the plan's, not a code cap; see
+[the decision](decisions/2026-11-17-spec-challenger-gates-the-spec.md) and
+[the third slot](decisions/2026-11-26-third-spec-challenge-slot.md).
 
 **Simplify.** Completing `build` increments the round and enters `simplify`, every time: the first
 build, a review rework, a CI repair, and a base-integration rework. `factory-simplifier` (read-only,
@@ -568,7 +586,7 @@ rework, Request review, Accept policy, which also returns the job to the stage i
 from unless that is spec, Accept delivery, Cancel) and runs `orch do <ticket>`, which
 continues the same job; `orch start` afterwards goes on with the queue. Deciding with
 `orch factory resume <job> --to <stage>` instead works the same way: it gives the job up again at
-once (`token: null`, `--release` is redundant but accepted), so `orch do` can continue it. To continue a spec the challenger rejected twice, edit
+once (`token: null`, `--release` is redundant but accepted), so `orch do` can continue it. To continue a spec the challenger rejected three times, edit
 `<artifactDir>/spec.md`, choose Resume at spec (or `orch factory resume <job> --to spec --release`),
 and run `orch do <ticket>`: after a human resume to spec, a spec.md that differs from its
 registered content is registered by the next plan and challenged again.

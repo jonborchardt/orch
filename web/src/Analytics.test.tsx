@@ -13,7 +13,7 @@ import type {
   StageRow,
 } from '../../src/server/types.ts';
 import { App } from './App.tsx';
-import { theme } from './main.tsx';
+import { theme } from './theme.ts';
 
 configure({ asyncUtilTimeout: 10_000 });
 
@@ -72,7 +72,14 @@ beforeEach(() => {
     vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : '';
       gets.push(url);
-      const body = url === '/api/runs' ? RUNS : url === '/api/agents' ? AGENTS : [];
+      const body =
+        url === '/api/runs'
+          ? RUNS
+          : url === '/api/agents'
+            ? AGENTS
+            : url === '/api/runner'
+              ? { controllers: [], last: null, build: null, waiting: [] }
+              : [];
       return Promise.resolve(
         new Response(JSON.stringify(body), {
           status: 200,
@@ -194,6 +201,7 @@ describe('Runs and Agents sections', () => {
       role: 'security',
       model: 'opus',
       sameAsAuthor: true,
+      fellBack: false,
       reviews: 41,
       objections: 2,
       objectionRate: 2 / 41,
@@ -209,6 +217,7 @@ describe('Runs and Agents sections', () => {
       role: 'builder',
       model,
       sameAsAuthor: null,
+      fellBack: model === 'sonnet',
       jobs: 4,
       firstPassRate: 0.5,
       meanRounds: 1.5,
@@ -222,7 +231,11 @@ describe('Runs and Agents sections', () => {
       byModel: {
         challengers: [],
         reviewers: [reviewerModel, { ...reviewerModel, model: null, sameAsAuthor: null }],
-        builders: [builderModel('opus', 1500), builderModel('fable', null)],
+        builders: [
+          builderModel('opus', 1500),
+          builderModel('fable', null),
+          builderModel('sonnet', 9),
+        ],
         authorTotals: [],
       },
       notes: [
@@ -272,5 +285,8 @@ describe('Runs and Agents sections', () => {
         ?.querySelectorAll('td');
     expect(tokens('opus')?.[6]?.textContent).toBe('1,500 (2 of 4 jobs)');
     expect(tokens('fable')?.[6]?.textContent).toBe('Unavailable');
+    // A row from jobs where a role left its drawn model says so (ticket 0179).
+    expect(tokens('sonnet')?.[0]?.textContent).toBe('sonnet (fell back)');
+    expect(tokens('opus')?.[0]?.textContent).toBe('opus');
   });
 });

@@ -242,7 +242,8 @@ through the opt-in [recovery worker](workflow.md#recovery-worker).
 ## The dashboard
 
 `orch ui` is a loopback-only view over the same database: the job board and job detail, the
-Tickets section with the queue and each ticket's detail, a read-only factory status strip, and the
+Tickets section with the queue and each ticket's detail, a read-only factory status box on every
+section, and the
 human decisions the workflow allows. It never starts, stops, or resumes the controller and never
 messages a session. Details: [dashboard.md](dashboard.md).
 

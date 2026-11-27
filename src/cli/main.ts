@@ -171,6 +171,8 @@ export async function main(argv: string[]): Promise<number> {
         // job notice
         message: str,
         through: str,
+        // job limit (with --text)
+        model: str,
         // worktree / gh / checkout
         path: str,
         all: bool,

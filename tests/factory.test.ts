@@ -92,7 +92,7 @@ describe('factory start and spec stage', () => {
     ]);
   });
 
-  it('plans the spec challenge, one revision, a second challenge, then escalation', () => {
+  it('plans the spec challenge, two revisions, three challenges, then escalation', () => {
     const c = start();
     const reg = (rel: string, body = fixture(rel), replace = false) => {
       writeArtifact(c.dir, rel, body);
@@ -121,9 +121,17 @@ describe('factory start and spec stage', () => {
     expect(plan.agents).toEqual([{ ...challenger, artifact: 'spec-review-2.md' }]);
     reg('spec-review-2.md', fixture('spec-review-2.md', 'CHANGES'));
     plan = next(c.id);
+    expect(plan.agents).toEqual([{ ...writer, artifact: 'spec.md' }]);
+    expect(plan.commands).toEqual([add('spec.md', true), `orch factory next ${c.id}`]);
+    reg('spec.md', fixture('spec.md') + '\nrevised again\n', true);
+    plan = next(c.id);
+    expect(plan.agents).toEqual([{ ...challenger, artifact: 'spec-review-3.md' }]);
+    expect(plan.commands).toEqual([add('spec-review-3.md'), `orch factory next ${c.id}`]);
+    reg('spec-review-3.md', fixture('spec-review-3.md', 'CHANGES'));
+    plan = next(c.id);
     expect(plan.agents).toEqual([]);
     expect(plan.commands).toEqual([
-      `orch job transition ${c.id} escalate --reason "spec challenger requested changes twice; see spec-review-2.md" --token <token>`,
+      `orch job transition ${c.id} escalate --reason "spec challenger requested changes three times; see spec-review-3.md" --token <token>`,
     ]);
     // The json CLI names the same challenger and model.
     const d = start('Second request');

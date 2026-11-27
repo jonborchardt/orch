@@ -39,6 +39,7 @@ import { usePolled } from './Runs.tsx';
 import { ApiFailure, errorText, fetchTicket, fetchTicketHistory, ticketAction } from './api.ts';
 import { ago, httpsHref } from './format.ts';
 import { EFFORTS, PRIORITIES, TYPES, ticketHref, ticketKey, ticketState } from './ticketState.ts';
+import { fonts, weight } from './theme.ts';
 
 /** A native select: compact, labelled, and the same control in every ticket form. */
 export function Pick({
@@ -154,7 +155,7 @@ export function TicketFields({
             ? undefined
             : 'Checklist items are plain Markdown: - [ ] open, - [x] done. A merge does not close a ticket while one is unchecked.'
         }
-        slotProps={{ htmlInput: { style: { fontFamily: 'monospace' } } }}
+        slotProps={{ htmlInput: { style: { fontFamily: fonts.mono } } }}
       />
     </>
   );
@@ -251,7 +252,7 @@ function eventText(payload: Record<string, unknown>): string {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Box component="section" aria-label={title} sx={{ mt: 2 }}>
-      <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 600 }}>
+      <Typography variant="subtitle1" component="h2" sx={{ fontWeight: weight.semibold }}>
         {title}
       </Typography>
       {children}

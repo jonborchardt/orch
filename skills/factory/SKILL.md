@@ -183,6 +183,13 @@ Request: <job description>
 plus the stage-specific inputs listed in [reference.md](reference.md). Wait for every agent to
 finish before registering anything.
 
+If an agent ends because its model's usage limit was reached (its result or error says so, for
+example "Fable limit reached"), do not launch it again and do not do its work yourself. Record it
+once with `orch job limit <id> --model <plan.agents[].model> --text "<the limit message>" --token
+<t>`, then end your turn. Under `orch start` the controller reads that record: when the model has
+an allowance of its own and the role's pool has another model, the next session's plan names that
+model; otherwise the run stops until the limit resets. In a session a person started, tell them.
+
 ### Bug tickets
 
 For a job linked to a `bug` ticket, the builder adds a test that fails before the fix and passes
@@ -211,8 +218,8 @@ is only for a ticket stranded in progress before that).
 
 ### Spec stage
 
-The plan walks the spec stage one step at a time: write `spec.md`, challenge it, revise once,
-challenge again, then `complete` or `escalate`. Run `orch factory next` after each registration.
+The plan walks the spec stage one step at a time: write `spec.md`, challenge it, and on
+`CHANGES` revise and challenge again, at most twice, then `complete` or `escalate`. Run `orch factory next` after each registration.
 Launch `factory-spec-challenger` as its own fresh subagent, never the spec writer's session or
 yourself, and give it the request, not your summary of the spec. `orch` refuses to leave `spec`
 without a `VERDICT: PASS` bound to the registered `spec.md`.

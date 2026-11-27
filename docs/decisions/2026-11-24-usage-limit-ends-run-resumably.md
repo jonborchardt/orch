@@ -15,3 +15,6 @@ ticket until the queue was empty (ticket 0130). Waiting until the reported reset
 continuing was left out: the reset text comes in several unconfirmed formats (an epoch, or a
 local time such as "3pm" with or without a zone), and waiting would make the foreground
 controller sleep for hours. A form the detector misses falls back to the old behaviour.
+
+A limit on a model with its own allowance (`fable`) is the exception: see
+[2026-11-26-per-model-limit-falls-back](2026-11-26-per-model-limit-falls-back.md).
