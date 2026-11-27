@@ -136,6 +136,20 @@ before, its review rows store `model` and `sameAsAuthor` as null, and the receip
 say "not recorded". Nothing is backfilled. The model orch records is the one it asked for; which
 model actually ran is not observable.
 
+A model with an allowance of its own (`OWN_ALLOWANCE_MODELS` in `src/core/roles.ts`: `fable`) can
+run out while the account still works. The controller then records `models.fallback` (role, from,
+to, the limit text, `until`) for every role of the job on that model and launches again; the plan
+applies those events after the draw, so the role runs the next model in its configured pool. It
+learns of the limit from the child's stderr or error result, or from a `models.limit` event the
+session recorded with `orch job limit <id> --model <m> --text "<message>" --token <t>` when a
+subagent hit it. The rule is all or nothing: when one affected role has no other model in its
+pool, nothing is recorded and the run ends with `usage-limit` as for any other limit. A limit
+whose text carried an epoch reset is honoured by every controller until then, for new jobs too;
+one without is remembered only by the controller process that saw it. `models.drawn` is never
+rewritten: review rows, the Agents tab, and `orch job usage` credit the model the role had when
+the work was recorded and flag the job as fell back (decision
+[2026-11-26-per-model-limit-falls-back](decisions/2026-11-26-per-model-limit-falls-back.md)).
+
 ## Workflow
 
 ```

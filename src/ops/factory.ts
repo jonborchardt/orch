@@ -17,6 +17,7 @@ import { CHECKLIST_DELIMITER, openChecklist, ticketKey } from '../core/tickets.t
 import {
   detectUi,
   drawnModelsOf,
+  fallbacksOf,
   type FactoryConfig,
   parseConfig,
   resolveRoles,
@@ -433,11 +434,9 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const job = detail.job;
   const config = loadConfig(store);
   // The job's recorded draw; a job from before pools draws from the current config, as before.
-  const roles = resolveRoles(
-    config,
-    id,
-    drawnModelsOf(eventsOfTypes(store.db, id, ['models.drawn'])),
-  );
+  // Then its recorded fallbacks (decision 2026-11-26-per-model-limit-falls-back).
+  const modelEvents = eventsOfTypes(store.db, id, ['models.drawn', 'models.fallback']);
+  const roles = resolveRoles(config, id, drawnModelsOf(modelEvents), fallbacksOf(modelEvents));
   const ts = now();
   const { worktree: wt } = showWorktree(store, id);
   const worktree = wt.exists && wt.isWorktree ? { ...wt, fingerprint: fingerprint(wt) } : null;

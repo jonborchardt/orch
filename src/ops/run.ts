@@ -22,6 +22,7 @@ import { claudeLimit } from '../core/claude-limit.ts';
 import { runForeground } from '../core/exec.ts';
 import { installRoot, jobArtifactDir } from '../core/paths.ts';
 import { leaseExpired } from '../core/ownership.ts';
+import { OWN_ALLOWANCE_MODELS } from '../core/roles.ts';
 import { orderTickets, ticketKey } from '../core/tickets.ts';
 import {
   endsRun,
@@ -39,7 +40,7 @@ import {
 import type { TokenCounts } from '../server/types.ts';
 import { listArtifacts } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
-import { latestEventsByJob, listEvents } from '../storage/events.ts';
+import { eventsAfter, latestEventsByJob, listEvents, maxEventId } from '../storage/events.ts';
 import {
   attachSession,
   claimJob,
@@ -61,6 +62,7 @@ import { buildStamp, type InstallBuild, installBuild, REBUILD_STEPS } from './in
 import { mailWatermark, reportJobMail, reportRunMail } from './mail.ts';
 import { mergeAuthorized, mergeJob } from './merge.ts';
 import { mergedHead } from './merge-view.ts';
+import { type LimitRecord, limitRecord, neededFallbacks } from './model-limit.ts';
 import { runnerScope, scopesOverlap, ticketRunnerScope } from './repo.ts';
 import {
   acquireRunnerLock,
@@ -219,6 +221,11 @@ interface Run {
   pollMs: number;
   ciMaxPolls: number;
   githubBackoff: readonly number[];
+  /**
+   * Own-allowance limits with no known reset, remembered for this controller process only
+   * (decision 2026-11-26-per-model-limit-falls-back); ones with a reset time are read from events.
+   */
+  limits: LimitRecord[];
   /** Whether this controller still holds the lock it took. */
   owned(): boolean;
   /**
@@ -287,6 +294,62 @@ function leaveJob(run: Run, jobId: string, note?: (job: Job) => Note | null): vo
   run.assertOwned();
   const problem = leave(run.store, jobId, note);
   if (problem !== null) run.log(`  job ${jobId}: could not be recorded and released: ${problem}`);
+}
+
+/**
+ * Record `models.*` events on a job as its owner, in one claim, then release it. False when it
+ * could not be done (another session holds the job): the caller then changes nothing.
+ */
+function recordModelEvents(
+  run: Run,
+  jobId: string,
+  events: { type: string; payload: Record<string, unknown> }[],
+): boolean {
+  run.assertOwned();
+  try {
+    const { token } = claimJob(run.store, jobId, { session: RUNNER_SESSION });
+    try {
+      for (const e of events) recordEvent(run.store, jobId, { token }, e.type, e.payload);
+    } finally {
+      releaseJob(run.store, jobId, { token });
+    }
+    return true;
+  } catch (err) {
+    if (!(err instanceof OrchError)) throw err;
+    run.log(`  job ${jobId}: model events not recorded: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Record `models.fallback` for every role of the job whose model is exhausted. True when at least
+ * one was recorded; false when none is needed, when a role has no other model in its pool (all or
+ * nothing: the account-wide path), or when the job could not be written.
+ */
+function fallBack(run: Run, jobId: string): boolean {
+  const needed = neededFallbacks(run.store, jobId, run.limits);
+  if (needed === null || needed.length === 0) return false;
+  if (
+    !recordModelEvents(
+      run,
+      jobId,
+      needed.map((payload) => ({ type: 'models.fallback', payload })),
+    )
+  ) {
+    return false;
+  }
+  for (const f of needed) {
+    run.log(
+      `  job ${jobId}: ${String(f['role'])} falls back from ${String(f['from'])} to ${String(f['to'])}`,
+    );
+  }
+  return true;
+}
+
+/** The line of what the child left that `claudeLimit` reads as a limit. */
+function limitLine(exit: ChildExit): string {
+  const lines = [exit.stderrTail ?? '', exit.result?.result ?? ''].flatMap((t) => t.split(/\r?\n/));
+  return lines.find((l) => claudeLimit(l, null) !== null) ?? '';
 }
 
 /** Events that follow a stop without anything having happened to the job. */
@@ -489,6 +552,9 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
     }
     const env = run.environment();
     if (env !== null) return env;
+    // A role drawn as a model whose own allowance is spent runs the next one in its pool.
+    fallBack(run, jobId);
+    const mark = maxEventId(store.db);
     const before = progressOf(store, job);
     const startedMs = Date.now();
     const { exit, stopped, pid, sessionId } = await runChild(run, job);
@@ -526,12 +592,29 @@ export async function runJob(run: Run, jobId: string): Promise<JobRun> {
     // A spent account would fail every ticket the same way: end the run, resumably, before the
     // exit counts as idle (decision 2026-11-24-usage-limit-ends-run-resumably).
     const limit = claudeLimit(exit.stderrTail, exit.result);
-    if (limit !== null) {
-      const resets = limit.resetsAt === null ? '' : ` (resets ${limit.resetsAt})`;
+    // Limits the session reported for a subagent (`orch job limit`) while this child ran, and the
+    // child's own when it names a model: recorded here, since the child could not.
+    const hits = eventsAfter(store.db, jobId, mark, ['models.limit']).map(
+      (e) => e.payload as unknown as LimitRecord,
+    );
+    if (limit !== null && limit.model !== null) {
+      const own = limitRecord(limit.model, limitLine(exit));
+      recordModelEvents(run, jobId, [{ type: 'models.limit', payload: { ...own } }]);
+      hits.push(own);
+    }
+    if (limit !== null || hits.length > 0) {
+      // Only a model with an allowance of its own falls back, and only when every affected role
+      // has another model (decision 2026-11-26-per-model-limit-falls-back); else the run ends.
+      // (`limit?.model` is undefined when only the session reported one.)
+      if (limit?.model !== null && hits.every((h) => OWN_ALLOWANCE_MODELS.includes(h.model))) {
+        run.limits.push(...hits.filter((h) => h.until === null));
+        if (fallBack(run, jobId)) continue;
+      }
+      const resets = limit?.resetsAt == null ? '' : ` (resets ${limit.resetsAt})`;
       return {
         kind: 'blocked',
         code: USAGE_LIMIT,
-        reason: `Claude ${limit.limit} reached${resets}; orch resume continues the session`,
+        reason: `Claude ${limit?.limit ?? 'usage limit'} reached${resets}; orch resume continues the session`,
       };
     }
     run.log(
@@ -1096,6 +1179,7 @@ async function drive(
     pollMs: opts.pollMs ?? POLL_MS,
     ciMaxPolls: opts.ciMaxPolls ?? CI_MAX_POLLS,
     githubBackoff: opts.githubBackoff ?? GITHUB_BACKOFF_SECONDS,
+    limits: [],
     owned: () => lock.owned(),
     assertOwned: () => {
       if (!lock.owned()) throw new LostLockError(slotPid(paths, slot));

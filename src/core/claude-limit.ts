@@ -4,14 +4,29 @@
  * Code is known to print, and a form missed here falls back to an ordinary idle exit.
  */
 
+import { type Model, OWN_ALLOWANCE_MODELS } from './roles.ts';
+
 export interface ClaudeLimit {
   /** A short label: "usage limit" or "rate limit". */
   limit: string;
   /** The reset time exactly as printed, or null when none was given. */
   resetsAt: string | null;
+  /**
+   * The model whose own allowance ran out, when the text names one of `OWN_ALLOWANCE_MODELS`
+   * (decision 2026-11-26-per-model-limit-falls-back); null for an account-wide limit.
+   */
+  model: Model | null;
 }
 
+const OWN = OWN_ALLOWANCE_MODELS.join('|');
+/** "Fable limit reached", "You've hit your fable limit". */
+const MODEL_FORM = new RegExp(
+  `\\b(${OWN}) limit reached|you(?:'|’)?ve hit your (${OWN}) limit`,
+  'i',
+);
+
 const FORMS: readonly { limit: string; re: RegExp }[] = [
+  { limit: 'usage limit', re: MODEL_FORM },
   {
     limit: 'usage limit',
     re: /usage limit reached|\b\d+-hour limit reached|weekly limit reached|you(?:'|’)?ve hit your (?:usage )?limit/i,
@@ -22,8 +37,8 @@ const FORMS: readonly { limit: string; re: RegExp }[] = [
   },
 ];
 
-/** `|<epoch>` right after the usage-limit text, or what follows "resets" on the line. */
-const RESET = /usage limit reached\|(\d+)|\bresets\s+(.+)$/i;
+/** `|<epoch>` right after the limit text, or what follows "resets" on the line. */
+const RESET = /limit reached\|(\d+)|\bresets\s+(.+)$/i;
 
 function find(text: string): ClaudeLimit | null {
   for (const line of text.split(/\r?\n/)) {
@@ -31,7 +46,13 @@ function find(text: string): ClaudeLimit | null {
     if (form === undefined) continue;
     const m = RESET.exec(line);
     const reset = (m?.[1] ?? m?.[2])?.trim();
-    return { limit: form.limit, resetsAt: reset === undefined || reset === '' ? null : reset };
+    const named = MODEL_FORM.exec(line);
+    const model = (named?.[1] ?? named?.[2])?.toLowerCase() as Model | undefined;
+    return {
+      limit: form.limit,
+      resetsAt: reset === undefined || reset === '' ? null : reset,
+      model: model ?? null,
+    };
   }
   return null;
 }
@@ -48,4 +69,10 @@ export function claudeLimit(
     find(stderrTail ?? '') ??
     (result?.isError === true && result.result !== null ? find(result.result) : null)
   );
+}
+
+/** The ISO time a limit lifts: only the epoch form (`limit reached|<epoch>`) is a known time. */
+export function limitUntil(resetsAt: string | null | undefined): string | null {
+  if (resetsAt == null || !/^\d{9,11}$/.test(resetsAt)) return null;
+  return new Date(Number(resetsAt) * 1000).toISOString();
 }

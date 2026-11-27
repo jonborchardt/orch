@@ -5,7 +5,7 @@
  * measured here, and the report says so instead of estimating; the dashboard Usage section sums
  * tokens from transcripts.
  */
-import { drawnModelsOf, resolveRoles } from '../core/roles.ts';
+import { drawnModelsOf, type Fallback, fallbacksOf, resolveRoles } from '../core/roles.ts';
 import type { JobMode, Stage } from '../core/workflow.ts';
 import type { Store } from '../storage/client.ts';
 import { listEvents } from '../storage/events.ts';
@@ -30,8 +30,8 @@ export interface ReviewerRun {
   round: number;
   reviewer: string;
   /**
-   * The role's drawn model (the job's `models.drawn` event; legacy jobs: the current config). The
-   * model that actually ran is not recorded.
+   * The model the review row recorded (the role's draw, or its fallback at the time); for a row
+   * without one, the role's current model.
    */
   configuredModel: string | null;
   verdict: string | null;
@@ -55,8 +55,10 @@ export interface UsageReport {
   ci: { repairs: number; reruns: number; observations: number };
   /** What is not measured, stated rather than estimated. */
   tokens: { measured: false; reason: string };
-  /** Role to drawn model, for reading the durations as cost drivers. */
+  /** Role to its model now: the draw, or its latest fallback. */
   models: Record<string, string>;
+  /** The job's `models.fallback` events, oldest first; empty when every role ran its draw. */
+  fallbacks: Fallback[];
 }
 
 /** Events that close a stage visit. */
@@ -96,7 +98,8 @@ export function visits(events: Event[]): StageVisit[] {
 export function jobUsage(store: Store, id: string): UsageReport {
   const job = getJob(store.db, id);
   const events = listEvents(store.db, id, 10_000);
-  const roles = resolveRoles(loadConfig(store), id, drawnModelsOf(events));
+  const fallbacks = fallbacksOf(events);
+  const roles = resolveRoles(loadConfig(store), id, drawnModelsOf(events), fallbacks);
   const models = Object.fromEntries(roles.map((r) => [r.name, r.model]));
   const stages = visits(events);
   const stageMs: Partial<Record<Stage, number>> = {};
@@ -106,7 +109,7 @@ export function jobUsage(store: Store, id: string): UsageReport {
   const reviews: ReviewerRun[] = listReviews(store.db, id).map((r) => ({
     round: r.round,
     reviewer: r.reviewer,
-    configuredModel: models[r.reviewer] ?? null,
+    configuredModel: r.model ?? models[r.reviewer] ?? null,
     verdict: r.verdict,
     startedAt: r.createdAt,
     completedAt: r.completedAt,
@@ -145,5 +148,6 @@ export function jobUsage(store: Store, id: string): UsageReport {
         '2026-11-24-dashboard-token-usage-from-transcripts under docs/decisions/.',
     },
     models,
+    fallbacks,
   };
 }

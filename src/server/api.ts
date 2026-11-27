@@ -18,7 +18,14 @@ import {
 import { type RateGroup, rateNotes, tokenNotes } from '../core/model-notes.ts';
 import { leaseExpired } from '../core/ownership.ts';
 import { claudeHome, jobArtifactDir } from '../core/paths.ts';
-import { drawnModelsOf, ROLES, type RoleKind } from '../core/roles.ts';
+import {
+  drawnModelsOf,
+  fallbacksOf,
+  judgeAt,
+  modelAt,
+  ROLES,
+  type RoleKind,
+} from '../core/roles.ts';
 import { SESSION_EVENT, sessionLinks, UUID } from '../core/session.ts';
 import {
   cannotRefreshPr,
@@ -352,6 +359,7 @@ export function agents(store: Store): AgentsView {
 /** Events the per-model metrics read (decision 2026-11-25-attributed-findings). */
 const MODEL_EVENTS = [
   'models.drawn',
+  'models.fallback',
   'job.reworked',
   'job.blocked',
   'artifact.registered',
@@ -371,7 +379,7 @@ interface BuilderAcc extends ModelKey {
   tokens: number;
 }
 
-const keyOf = (k: ModelKey) => JSON.stringify([k.role, k.model, k.sameAsAuthor]);
+const keyOf = (k: ModelKey) => JSON.stringify([k.role, k.model, k.sameAsAuthor, k.fellBack]);
 const rateOf = (x: number, n: number) => (n === 0 ? null : x / n);
 const roleIndex = (role: string) => ROLES.findIndex((r) => r.name === role);
 function ordered<T extends ModelKey>(rows: Iterable<T>): T[] {
@@ -379,7 +387,8 @@ function ordered<T extends ModelKey>(rows: Iterable<T>): T[] {
     (a, b) =>
       roleIndex(a.role) - roleIndex(b.role) ||
       String(a.model).localeCompare(String(b.model)) ||
-      String(a.sameAsAuthor).localeCompare(String(b.sameAsAuthor)),
+      String(a.sameAsAuthor).localeCompare(String(b.sameAsAuthor)) ||
+      Number(a.fellBack) - Number(b.fellBack),
   );
 }
 
@@ -422,8 +431,9 @@ function answersOf(events: readonly Event[]): Map<string, { answer: Answer; at: 
 
 /**
  * The Agents section's per-model rows and notes: reviews and findings by each review row's
- * recorded model, spec challenges and job outcomes by the job's draw. Artifacts are parsed here, at
- * read time; nothing is stored.
+ * recorded model, spec challenges and job outcomes by the model the role had then (its draw, or
+ * a fallback: `modelAt`). Rows from a job with a fallback are keyed `fellBack`. Artifacts are
+ * parsed here, at read time; nothing is stored.
  */
 function modelMetrics(
   store: Store,
@@ -455,15 +465,18 @@ function modelMetrics(
       medianMs: null,
       ms: [],
     }));
-  const keyIn = (r: Review): ModelKey => ({
-    role: r.reviewer,
-    model: r.model,
-    sameAsAuthor: r.sameAsAuthor,
-  });
 
   for (const job of jobs) {
     const events = eventsOf.get(job.id) ?? [];
     const drawn = drawnModelsOf(events);
+    const fallbacks = fallbacksOf(events);
+    const fellBack = fallbacks.length > 0;
+    const keyIn = (r: Review): ModelKey => ({
+      role: r.reviewer,
+      model: r.model,
+      sameAsAuthor: r.sameAsAuthor,
+      fellBack,
+    });
     const artifacts = artifactsOf.get(job.id) ?? [];
     const reviews = reviewsOf.get(job.id) ?? [];
     const judged = reviews.filter((r) => r.verdict !== null);
@@ -505,7 +518,7 @@ function modelMetrics(
           const credit = creditOf(outcome, nextVerdict);
           if (!credit) continue;
           const row = reviewerRow(
-            raised ? keyIn(raised) : { role: name, model: null, sameAsAuthor: null },
+            raised ? keyIn(raised) : { role: name, model: null, sameAsAuthor: null, fellBack },
           );
           if (credit === 'real-catch') row.realCatches += 1;
           else if (credit === 'fixed' || credit === 'unresolved') row[credit] += 1;
@@ -546,13 +559,12 @@ function modelMetrics(
     }
 
     // The spec challenger records no review row: its verdicts are the spec reviews.
-    const ch = drawn?.['spec-challenger'];
     for (const a of artifacts) {
       if (!SPEC_REVIEW_PATH.test(a.path) || a.marker === null) continue;
       const k = {
         role: 'spec-challenger',
-        model: ch?.model ?? null,
-        sameAsAuthor: ch?.sameAsAuthor ?? null,
+        ...judgeAt(drawn, fallbacks, 'spec-challenger', a.createdAt),
+        fellBack,
       };
       const row = getOr(challengers, keyOf(k), () => ({
         ...k,
@@ -564,10 +576,12 @@ function modelMetrics(
       if (a.marker === 'changes') row.objections += 1;
     }
 
-    // Job outcomes by the building roles' drawn models; tokens are whole-job.
+    // Job outcomes by the building roles' models: the spec writer's when spec.md was registered,
+    // the builder's at the job's end; tokens are whole-job.
+    const specAt = artifacts.find((a) => a.path === 'spec.md')?.createdAt;
     const roles = [
       job.mode === 'fast' ? 'fast-builder' : 'builder',
-      ...(artifacts.some((a) => a.path === 'spec.md') ? ['spec-writer'] : []),
+      ...(specAt === undefined ? [] : ['spec-writer']),
     ];
     // listRuns is newest first, so the last finished run is the job's first.
     const first = listRuns(store.db, job.id)
@@ -577,7 +591,8 @@ function modelMetrics(
     const roundCount = new Set(reviews.map((r) => r.round)).size;
     const blocked = events.filter((e) => e.type === 'job.blocked').length;
     for (const role of roles) {
-      const k = { role, model: drawn?.[role]?.model ?? null, sameAsAuthor: null };
+      const at = role === 'spec-writer' ? specAt : undefined;
+      const k = { role, model: modelAt(drawn, fallbacks, role, at), sameAsAuthor: null, fellBack };
       const acc = getOr(builders, keyOf(k), () => ({
         ...k,
         jobs: 0,
@@ -615,6 +630,7 @@ function modelMetrics(
     role: a.role,
     model: a.model,
     sameAsAuthor: null,
+    fellBack: a.fellBack,
     jobs: a.jobs,
     firstPassRate: rateOf(a.firstPass, a.verified),
     meanRounds: rateOf(a.rounds, a.jobs),

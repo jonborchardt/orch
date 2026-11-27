@@ -116,7 +116,10 @@ GitHub cannot be read or gives no answer (`github-unreadable`, `merge-no-answer`
 refuses the merge call (`github-refused`). A `usage-limit` stop leaves the session unfinished
 with its ticket in flight: the summary names the limit and its reset time when Claude printed
 one, and `orch resume` continues the same ticket and job once the limit has reset (decision
-2026-11-24-usage-limit-ends-run-resumably). The same holds when `orch` was rebuilt since the
+2026-11-24-usage-limit-ends-run-resumably). A limit on `fable`, which has an allowance of its
+own, does not end the run while every role of the job drawn `fable` has another model in its
+pool: the controller records `models.fallback` on the job and launches again on that model
+(decision 2026-11-26-per-model-limit-falls-back). The same holds when `orch` was rebuilt since the
 controller started (`orch-rebuilt`) or `factory.json` fails validation (`bad-config`), both
 checked before each ticket and each Claude launch; a stop before a ticket leaves none in flight,
 and `orch resume` then takes a stranded in-progress ticket first (decision

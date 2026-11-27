@@ -455,11 +455,15 @@ export interface StageRow extends AgentTiming {
   interrupted: number;
 }
 
-/** A per-model row's key: `model` null = not recorded (legacy); `sameAsAuthor` null = no author. */
+/**
+ * A per-model row's key: `model` null = not recorded (legacy); `sameAsAuthor` null = no author.
+ * `model` is the one that ran; `fellBack` rows come from jobs with a `models.fallback` event.
+ */
 export interface ModelKey {
   role: string;
   model: string | null;
   sameAsAuthor: boolean | null;
+  fellBack: boolean;
 }
 
 /** Objections of a judging role's group; `objectionRate` null when it has no reviews. */
@@ -487,7 +491,7 @@ export interface ReviewerModelRow extends ModelKey, RateRow {
   medianMs: number | null;
 }
 
-/** A building role (builder, fast-builder, spec-writer) per drawn model, over its jobs. */
+/** A building role (builder, fast-builder, spec-writer) per model it ran, over its jobs. */
 export interface BuilderModelRow extends ModelKey {
   jobs: number;
   /** Jobs whose first finished verification run passed, over jobs with one; null when none. */

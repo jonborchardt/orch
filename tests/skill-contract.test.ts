@@ -128,6 +128,7 @@ describe('skill', () => {
       'orch job transition',
       'orch job review record',
       'orch job artifact add',
+      'orch job limit <id> --model',
       'orch gh pr status',
       'orch gh ci',
     ]) {

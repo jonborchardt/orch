@@ -412,6 +412,7 @@ describe('GET /api/agents per model (ticket 0169, AC4)', () => {
       role,
       model,
       sameAsAuthor: same,
+      fellBack: false,
       reviews: n,
       objections: x,
       objectionRate: x / n,
@@ -455,6 +456,7 @@ describe('GET /api/agents per model (ticket 0169, AC4)', () => {
       role: 'builder',
       model,
       sameAsAuthor: null,
+      fellBack: false,
       firstPassRate: 1,
       ...over,
     });
