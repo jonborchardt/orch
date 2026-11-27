@@ -366,6 +366,35 @@ export function latestChallenge(artifacts: readonly Artifact[]): Artifact | unde
     .reduce<Artifact | undefined>((best, a) => (!best || num(a) > num(best) ? a : best), undefined);
 }
 
+/** The spec challenge as the progress display shows it, under the Spec step. */
+export interface SpecChallengeState {
+  /** `pending` while the current spec.md has no challenge, else the newest challenge's verdict. */
+  verdict: 'pending' | 'changes' | 'pass';
+  /** A challenge reviewed an earlier spec.md, or spec-review-2.md (or later) exists. */
+  revised: boolean;
+}
+
+/**
+ * The spec challenge's state from the job's artifact rows, or null when there is none to show: a
+ * fast job, no spec.md yet, or a job past spec with no challenge (older than the challenge).
+ * Agrees with the plan's `case 'spec'`: pending while the newest challenge is not of this spec.
+ */
+export function specChallengeState(
+  artifacts: readonly Artifact[],
+  job: Pick<Job, 'stage'> & Partial<Pick<Job, 'mode'>>,
+): SpecChallengeState | null {
+  const spec = artifacts.find((a) => a.path === 'spec.md');
+  if (job.mode === 'fast' || !spec?.sha256) return null;
+  const challenges = artifacts.filter((a) => isSpecChallenge(a.path));
+  const revised = challenges.some((c) => c.specSha256 !== spec.sha256 || challengeSlot(c.path) > 1);
+  const latest = latestChallenge(artifacts);
+  if (job.stage === 'spec' && latest?.specSha256 !== spec.sha256) {
+    return { verdict: 'pending', revised };
+  }
+  if (!latest) return null;
+  return { verdict: latest.marker === 'pass' ? 'pass' : 'changes', revised };
+}
+
 /**
  * The spec.md hash a challenge registered at `path` binds to. Refused for any spec-review-N.md
  * other than 1 to 3, before spec.md is registered, and for spec-review-N.md (N > 1) unless

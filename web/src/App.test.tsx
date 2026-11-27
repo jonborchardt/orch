@@ -53,6 +53,7 @@ function progress(position: number, at: 'current' | 'stopped', label: string): P
     })),
     position,
     label,
+    specChallenge: null,
   };
 }
 
@@ -794,6 +795,73 @@ describe('App board', () => {
     ]);
     expect(timelineRows[0]?.cells[0]).toHaveTextContent(/ ago$/);
     expect(within(section).getByText(/Earlier history not shown/)).toBeInTheDocument();
+    // No spec challenge to show: no sub-item.
+    expect(within(section).queryByTestId('spec-challenge')).toBeNull();
+  });
+
+  it('shows the spec challenge under Spec in the strip and the Progress section (ticket 0081)', async () => {
+    mockFetch();
+    const withChallenge = (
+      position: number,
+      label: string,
+      specChallenge: Progress['specChallenge'],
+    ): Progress => ({ ...progress(position, 'current', label), specChallenge });
+    data.rows = [
+      row({
+        id: 'job-00000001',
+        progress: withChallenge(1, 'Build', { verdict: 'pass', revised: true }),
+      }),
+    ];
+    data.detail = detail({
+      job: { ...detail().job, stage: 'spec', status: 'running', returnStage: null },
+      liveness: 'idle',
+      blocker: null,
+      progress: withChallenge(0, 'Spec', { verdict: 'pending', revised: false }),
+    });
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    const strip = within(boardRowOf('job-00000001')).getByRole('img', {
+      name: /^Progress: Build\./,
+    });
+    // The existing text stays; the challenge follows the Spec step's state. Still eight glyphs.
+    expect(strip).toHaveAccessibleName(
+      'Progress: Build. Spec: done, spec challenge passed after a revision, Build: current, Simplify: not started, Review: not started, Approve: not started, PR: not started, CI: not started, Done: not started',
+    );
+    expect(strip.querySelectorAll('[data-step]')).toHaveLength(8);
+    strip.focus();
+    const tip = await screen.findByRole('tooltip');
+    const lines = [...tip.querySelectorAll('div')].filter((d) => d.children.length === 0);
+    expect(lines[0]?.textContent).toBe('✓ Spec: done, spec challenge passed after a revision');
+    expect(lines[1]?.textContent).toBe('▶ Build: current');
+    cleanup();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    expect(screen.getByRole('img', { name: /^Progress: Spec\./ })).toHaveAccessibleName(
+      /^Progress: Spec\. Spec: current, spec challenge pending, Build: not started,/,
+    );
+    const section = screen.getByTestId('progress-section');
+    const sub = within(section).getByTestId('spec-challenge');
+    // Under the Spec item, with a glyph and the words, never colour alone.
+    expect(sub.closest('[data-step]')).toHaveAttribute('data-step', 'spec');
+    expect(sub).toHaveTextContent('▶Spec challenge: pending');
+    expect(sub).not.toHaveTextContent('spec revised');
+    data.detail = detail({
+      progress: withChallenge(1, 'Build', { verdict: 'changes', revised: true }),
+    });
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId('progress-section')).getByTestId('spec-challenge'),
+      ).toHaveTextContent('■Spec challenge: changes requested (spec revised)');
+    });
+    data.detail = detail({
+      progress: withChallenge(1, 'Build', { verdict: 'pass', revised: false }),
+    });
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId('progress-section')).getByTestId('spec-challenge'),
+      ).toHaveTextContent(/^✓Spec challenge: passed$/);
+    });
   });
 
   it('labels sections, tabs, and control buttons in sentence case, never uppercase (ticket 0166)', async () => {

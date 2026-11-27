@@ -8,8 +8,14 @@ import {
   reportSubject,
   stageLines,
 } from '../src/core/mail-report.ts';
-import { STAGES, STATUSES, type Stage, type Status } from '../src/core/workflow.ts';
-import type { Event } from '../src/storage/schema.ts';
+import {
+  specChallengeState,
+  STAGES,
+  STATUSES,
+  type Stage,
+  type Status,
+} from '../src/core/workflow.ts';
+import type { Artifact, Event } from '../src/storage/schema.ts';
 
 const { success: OK, failure: FAIL, waiting: WAIT, progress: RUN, cancelled: STOP } = EMOJI;
 const PEND = EMOJI.pending;
@@ -120,6 +126,34 @@ describe('reportBody stage section', () => {
     expect(stages(body)).toEqual(STAGES.map((s) => [OK, s, 'done']));
     expect(body).not.toContain('current');
     expect(body.startsWith(OK)).toBe(true);
+  });
+});
+
+describe('reportBody spec challenge line', () => {
+  const lines = (challenge: Parameters<typeof reportBody>[4]) =>
+    reportBody(job('build', 'running'), [], null, null, challenge).split('\n');
+
+  it('prints one indented line directly after the spec stage line', () => {
+    for (const [challenge, text] of [
+      [{ verdict: 'pass', revised: true }, '    spec challenge: PASS (spec revised)'],
+      [{ verdict: 'pass', revised: false }, '    spec challenge: PASS'],
+      [{ verdict: 'changes', revised: false }, '    spec challenge: CHANGES'],
+      [{ verdict: 'pending', revised: true }, '    spec challenge: PENDING (spec revised)'],
+    ] as const) {
+      const body = lines(challenge);
+      const spec = body.indexOf(`${OK} spec  done`);
+      expect(body.slice(spec + 1, spec + 3)).toEqual([text, `${RUN} build  current`]);
+      expect(body.filter((l) => l.includes('spec challenge'))).toHaveLength(1);
+    }
+  });
+
+  it('is absent when there is no challenge to show (a fast job)', () => {
+    const spec = { path: 'spec.md', sha256: 's1' } as Artifact;
+    const fast = specChallengeState([spec], { stage: 'build', mode: 'fast' });
+    expect(fast).toBeNull();
+    const body = lines(fast);
+    expect(body.some((l) => l.includes('spec challenge'))).toBe(false);
+    expect(body.join('\n')).toBe(reportBody(job('build', 'running'), []));
   });
 });
 

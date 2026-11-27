@@ -189,7 +189,7 @@ export function board(store: Store, filter: { repo?: string | undefined } = {}):
       archivedAt: job.archivedAt,
       supersedes: predecessors.get(job.id) ?? [],
       ci,
-      progress: progressOf(job, evidence.events),
+      progress: progressOf(job, evidence.events, artifacts),
       flake: flakes.get(job.id) ?? null,
     };
   });
@@ -958,7 +958,7 @@ export function detail(store: Store, id: string): JobDetailView {
     verificationRuns,
     blocker: blockerOf(job, state, evidence),
     ci,
-    progress: progressOf(job, evidence.events),
+    progress: progressOf(job, evidence.events, artifacts),
     timeline: timelineOf(events),
     flake: plan ? plan.flake : (currentFlakes(store).get(id) ?? null),
     prPhase: prPhase(job, ci.completion),

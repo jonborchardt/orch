@@ -34,19 +34,19 @@ const states = (p: Progress) => p.steps.map((s) => `${s.label}:${s.state}`).join
 
 describe('progressOf and timelineOf', () => {
   it('(a) a pending spec job is at Spec; (b) review round 2 after changes is at Review', () => {
-    const a = progressOf(row('spec', 'pending'), new Map());
+    const a = progressOf(row('spec', 'pending'), new Map(), []);
     expect(states(a)).toBe(
       'Spec:current Build:not-started Simplify:not-started Review:not-started Approve:not-started PR:not-started CI:not-started Done:not-started',
     );
     expect(a.label).toBe('Spec');
-    const b = progressOf(row('review', 'running'), new Map());
+    const b = progressOf(row('review', 'running'), new Map(), []);
     expect(b.steps.map((s) => s.state).slice(0, 4)).toEqual(['done', 'done', 'done', 'current']);
     expect(b.label).toBe('Review');
   });
 
   it('(c) a CI escalation after repairs ran out is stopped at CI, not at its return stage', () => {
     const blocked = ev('job.blocked', { from: 'ci', reason: 'max CI repair cycles reached' });
-    const p = progressOf(row('needs-human', 'blocked', 'build'), newest(blocked));
+    const p = progressOf(row('needs-human', 'blocked', 'build'), newest(blocked), []);
     expect(p.label).toBe('CI, needs human');
     expect(states(p)).toBe(
       'Spec:done Build:done Simplify:done Review:done Approve:done PR:done CI:stopped Done:not-started',
@@ -57,38 +57,43 @@ describe('progressOf and timelineOf', () => {
     const d = progressOf(
       row('needs-human', 'blocked', 'approve'),
       newest(ev('job.blocked', { from: 'approve' })),
+      [],
     );
     expect(d.steps[4]).toMatchObject({ label: 'Approve', state: 'stopped' });
     expect(d.label).toBe('Approve, needs human');
     // Without the event, the return stage still places it.
-    expect(progressOf(row('needs-human', 'blocked', 'approve'), new Map()).position).toBe(4);
-    const e = progressOf(row('build', 'interrupted'), new Map());
+    expect(progressOf(row('needs-human', 'blocked', 'approve'), new Map(), []).position).toBe(4);
+    const e = progressOf(row('build', 'interrupted'), new Map(), []);
     expect(e.label).toBe('Build, interrupted');
     expect(e.steps[1]?.state).toBe('stopped');
-    const f = progressOf(row('review', 'cancelled'), new Map());
+    const f = progressOf(row('review', 'cancelled'), new Map(), []);
     expect(f.label).toBe('Review, cancelled');
     expect(f.steps[3]?.state).toBe('stopped');
     expect(f.steps[7]?.state).toBe('not-started');
-    const g = progressOf(row('completed', 'completed'), new Map());
+    const g = progressOf(row('completed', 'completed'), new Map(), []);
     expect(g.steps.every((s) => s.state === 'done')).toBe(true);
     expect(g.label).toBe('Done');
   });
 
   it('a fast job has only Build, PR, CI, and Done steps', () => {
     const fast = { ...row('pr', 'running'), mode: 'fast' as const };
-    expect(states(progressOf(fast, new Map()))).toBe(
+    expect(states(progressOf(fast, new Map(), []))).toBe(
       'Build:done PR:current CI:not-started Done:not-started',
     );
     const blocked = { ...row('needs-human', 'blocked', 'build'), mode: 'fast' as const };
-    const p = progressOf(blocked, newest(ev('job.blocked', { from: 'ci' })));
+    const p = progressOf(blocked, newest(ev('job.blocked', { from: 'ci' })), []);
     expect(p).toMatchObject({ position: 2, label: 'CI, needs human' });
-    const done = progressOf({ ...row('completed', 'completed'), mode: 'fast' as const }, new Map());
+    const done = progressOf(
+      { ...row('completed', 'completed'), mode: 'fast' as const },
+      new Map(),
+      [],
+    );
     expect(done).toMatchObject({ position: 4, label: 'Done' });
     expect(done.steps.map((s) => s.id)).toEqual(['build', 'pr', 'ci', 'done']);
   });
 
   it('(h) a rework from ci shows the current pass, and the timeline the loop in order', () => {
-    const p = progressOf(row('build', 'pending'), new Map());
+    const p = progressOf(row('build', 'pending'), new Map(), []);
     expect(states(p)).toBe(
       'Spec:done Build:current Simplify:not-started Review:not-started Approve:not-started PR:not-started CI:not-started Done:not-started',
     );
@@ -150,17 +155,17 @@ describe('progressOf and timelineOf', () => {
   });
 
   it('(i) an escalation with no recorded stage marks no step and says "Needs human"', () => {
-    const p = progressOf(row('needs-human', 'blocked', null), new Map());
+    const p = progressOf(row('needs-human', 'blocked', null), new Map(), []);
     expect(p.position).toBe(-1);
     expect(p.label).toBe('Needs human');
     expect(p.steps.every((s) => s.state === 'not-started')).toBe(true);
     // Neither needs-human nor completed is ever a usable return stage.
-    expect(progressOf(row('needs-human', 'blocked', 'completed'), new Map()).position).toBe(-1);
+    expect(progressOf(row('needs-human', 'blocked', 'completed'), new Map(), []).position).toBe(-1);
   });
 
   it('a simplify-stage job marks Simplify current', () => {
     for (const status of ['pending', 'running'] as const) {
-      const p = progressOf(row('simplify', status), new Map());
+      const p = progressOf(row('simplify', status), new Map(), []);
       expect(states(p)).toBe(
         'Spec:done Build:done Simplify:current Review:not-started Approve:not-started PR:not-started CI:not-started Done:not-started',
       );
@@ -168,7 +173,7 @@ describe('progressOf and timelineOf', () => {
       expect(p.label).not.toMatch(/Unknown/);
     }
     // The board sorts the Stage column by position: Simplify falls between Build and Review.
-    const at = (stage: Row['stage']) => progressOf(row(stage, 'pending'), new Map()).position;
+    const at = (stage: Row['stage']) => progressOf(row(stage, 'pending'), new Map(), []).position;
     expect([at('build'), at('simplify'), at('review')]).toEqual([1, 2, 3]);
   });
 
@@ -206,6 +211,7 @@ describe('progressOf and timelineOf', () => {
           const p = progressOf(
             row(stage as Row['stage'], status as Row['status'], 'needs-human'),
             events,
+            [],
           );
           expect(p.steps.map((s) => s.label)).toEqual([
             'Spec',
@@ -225,7 +231,7 @@ describe('progressOf and timelineOf', () => {
       }
     }
     // A cancelled job never shows Done as reached.
-    expect(progressOf(row('ci', 'cancelled'), new Map()).steps[7]?.state).toBe('not-started');
+    expect(progressOf(row('ci', 'cancelled'), new Map(), []).steps[7]?.state).toBe('not-started');
   });
 });
 
