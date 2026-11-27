@@ -605,24 +605,43 @@ describe('transition: the spec challenge gate', () => {
     expect(run(fromBuild, 'resume', { ...none, to: 'review' }).patch.stage).toBe('review');
   });
 
-  it('counts only spec-review-1.md and spec-review-2.md as challenges', () => {
-    // A stray spec-review-3.md row can neither satisfy nor wedge the gate.
-    expect(() => complete([spec(), challenge(3, 'pass')])).toThrow(/no spec challenge/);
-    expect(complete([spec(), challenge(1, 'pass'), challenge(3, 'changes')]).patch.stage).toBe(
+  it('counts only spec-review-1.md to spec-review-3.md as challenges', () => {
+    // A stray spec-review-4.md row can neither satisfy nor wedge the gate.
+    expect(() => complete([spec(), challenge(4, 'pass')])).toThrow(/no spec challenge/);
+    expect(complete([spec(), challenge(1, 'pass'), challenge(4, 'changes')]).patch.stage).toBe(
       'build',
     );
-    expect(latestChallenge([challenge(1, 'pass'), challenge(3, 'changes')])?.path).toBe(
+    expect(latestChallenge([challenge(1, 'pass'), challenge(4, 'changes')])?.path).toBe(
       'spec-review-1.md',
     );
-    expect([1, 2, 3, 10].map((n) => challengeSlot(`spec-review-${String(n)}.md`))).toEqual([
-      1, 2, 0, 0,
+    expect([1, 2, 3, 4, 10].map((n) => challengeSlot(`spec-review-${String(n)}.md`))).toEqual([
+      1, 2, 3, 0, 0,
     ]);
-    expect(() => challengeSpecHash('spec-review-3.md', [spec()])).toThrow(
+    expect(() => challengeSpecHash('spec-review-4.md', [spec()])).toThrow(
       /not a spec challenge slot/,
     );
     expect(() => challengeSpecHash('spec-review-2.md', [spec(), challenge(1, 'pass')])).toThrow(
       /register spec-review-1.md instead/,
     );
+    expect(() => challengeSpecHash('spec-review-3.md', [spec(), challenge(1, 'changes')])).toThrow(
+      /register spec-review-2.md instead/,
+    );
+    expect(
+      challengeSpecHash('spec-review-3.md', [
+        spec(),
+        challenge(1, 'changes'),
+        challenge(2, 'changes'),
+      ]),
+    ).toBe('s1');
+    // The highest slot decides, now including slot 3.
+    const three = [spec(), challenge(1, 'changes'), challenge(2, 'changes')];
+    expect(() => complete([...three, challenge(3, 'changes')])).toThrow(
+      /spec-review-3.md .* says CHANGES/,
+    );
+    expect(() => complete([spec('s2'), ...three.slice(1), challenge(3, 'pass')])).toThrow(
+      /passed an earlier spec.md/,
+    );
+    expect(complete([...three, challenge(3, 'pass')]).patch.stage).toBe('build');
   });
 });
 

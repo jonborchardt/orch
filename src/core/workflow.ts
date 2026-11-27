@@ -332,14 +332,20 @@ export function reviewArtifact(round: number, reviewer: string): string {
   return `round-${String(round)}/review-${reviewer}.md`;
 }
 
-/** The independent spec challenge: `spec-review-1.md`, then `spec-review-2.md` after a revision. */
+/**
+ * The independent spec challenge: `spec-review-1.md`, then `spec-review-2.md` and
+ * `spec-review-3.md`, each after a revision answering a CHANGES (two automatic revisions).
+ */
 export const SPEC_CHALLENGER =
   ROLES.find((r) => r.kind === 'spec-challenge')?.agent ?? 'spec challenger';
-const CHALLENGE = /^spec-review-([12])\.md$/;
-/** Any spec-review-N.md name; only the two CHALLENGE slots may be registered. */
+/** The last spec challenge slot; a CHANGES there goes to a human. */
+export const LAST_CHALLENGE_SLOT = 3;
+const CHALLENGE = /^spec-review-([1-3])\.md$/;
+/** Any spec-review-N.md name; only the three CHALLENGE slots may be registered. */
 const CHALLENGE_NAME = /^spec-review-\d+\.md$/;
+const ORDINAL = ['', 'first', 'second', 'third'];
 
-/** The challenge slot (1 or 2) of `path`, or 0 when it is not a spec challenge. */
+/** The challenge slot (1 to 3) of `path`, or 0 when it is not a spec challenge. */
 export function challengeSlot(path: string): number {
   return Number(CHALLENGE.exec(path)?.[1] ?? 0);
 }
@@ -363,24 +369,25 @@ export function latestChallenge(artifacts: readonly Artifact[]): Artifact | unde
 
 /**
  * The spec.md hash a challenge registered at `path` binds to. Refused for any spec-review-N.md
- * other than 1 and 2, before spec.md is registered, and for spec-review-2.md unless
- * spec-review-1.md asked for changes.
+ * other than 1 to 3, before spec.md is registered, and for spec-review-N.md (N > 1) unless
+ * spec-review-(N-1).md asked for changes.
  */
 export function challengeSpecHash(path: string, artifacts: readonly Artifact[]): string {
-  if (!isSpecChallenge(path)) {
+  const slot = challengeSlot(path);
+  if (slot === 0) {
     throw new WorkflowError(
-      `${path} is not a spec challenge slot; only spec-review-1.md and spec-review-2.md are accepted.`,
+      `${path} is not a spec challenge slot; only spec-review-1.md, spec-review-2.md and spec-review-3.md are accepted.`,
     );
   }
   const spec = artifacts.find((a) => a.path === 'spec.md');
   if (!spec?.sha256) {
     throw new WorkflowError(`${path} reviews spec.md; register spec.md first.`);
   }
-  if (path === 'spec-review-2.md') {
-    const first = artifacts.find((a) => a.path === 'spec-review-1.md');
-    if (first?.marker !== 'changes') {
+  if (slot > 1) {
+    const before = `spec-review-${String(slot - 1)}.md`;
+    if (artifacts.find((a) => a.path === before)?.marker !== 'changes') {
       throw new WorkflowError(
-        'spec-review-2.md is only for a second challenge after spec-review-1.md says CHANGES; register spec-review-1.md instead (--replace to re-challenge a revised spec).',
+        `${path} is only for a ${ORDINAL[slot] ?? ''} challenge after ${before} says CHANGES; register ${before} instead (--replace to re-challenge a revised spec).`,
       );
     }
   }

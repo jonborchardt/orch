@@ -1,7 +1,7 @@
 /**
- * Todo 0107: a spec the challenger rejected twice is continued by a human editing spec.md and
- * resuming to spec (`--release` leaves the job free for `orch do`); the next plan registers the
- * edit and re-challenges it instead of escalating again.
+ * Todo 0107: a spec the challenger rejected three times (ticket 0176) is continued by a human
+ * editing spec.md and resuming to spec (`--release` leaves the job free for `orch do`); the next
+ * plan registers the edit and re-challenges it instead of escalating again.
  */
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,8 +23,9 @@ const reg = (c: Ctx, rel: string, body = fixture(rel), replace = false) => {
 };
 const add = (c: Ctx, rel: string, replace = false) =>
   `orch job artifact add ${c.id} ${rel}${replace ? ' --replace' : ''} --token <token>`;
+const THRICE = 'spec challenger requested changes three times; see spec-review-3.md';
 const escalate = (c: Ctx) =>
-  `orch job transition ${c.id} escalate --reason "spec challenger requested changes twice; see spec-review-2.md" --token <token>`;
+  `orch job transition ${c.id} escalate --reason "${THRICE}" --token <token>`;
 
 /** A job for a ticket, so the steps end in `orch do <key>`. */
 function ticketJob(): Ctx & { key: string } {
@@ -34,14 +35,19 @@ function ticketJob(): Ctx & { key: string } {
   return { id: r.job.id, token: r.token, dir: r.plan.artifactDir, wt, plan: r.plan, key: t.key };
 }
 
-/** spec, CHANGES, revise, CHANGES: the plan now says escalate. */
-function twiceRejected(c: Ctx) {
+/** spec, CHANGES, revise, CHANGES, revise, CHANGES: the plan now says escalate. */
+function thriceRejected(c: Ctx) {
   go(c, 'start');
   reg(c, 'spec.md');
   reg(c, 'spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
   reg(c, 'spec.md', fixture('spec.md') + '\nrevised\n', true);
   reg(c, 'spec-review-2.md', fixture('spec-review-2.md', 'CHANGES'));
-  expect(next(c.id).commands).toEqual([escalate(c)]);
+  expect(next(c.id).commands.join('\n')).not.toContain('escalate');
+  reg(c, 'spec.md', fixture('spec.md') + '\nrevised again\n', true);
+  reg(c, 'spec-review-3.md', fixture('spec-review-3.md', 'CHANGES'));
+  const plan = next(c.id);
+  expect(plan.agents).toEqual([]);
+  expect(plan.commands).toEqual([escalate(c)]);
 }
 
 /** Escalate and leave the job, as the controller does with a job waiting in needs-human. */
@@ -52,7 +58,7 @@ function escalateFree(c: Ctx, reason: string) {
 
 /** Escalate, then a human resumes to spec from a terminal and leaves the job free. */
 function escalateAndResume(c: Ctx) {
-  escalateFree(c, 'spec challenger requested changes twice; see spec-review-2.md');
+  escalateFree(c, THRICE);
   const r = resumeFactoryJob(store, c.id, { session: HUMAN, to: 'spec', release: true });
   expect([r.released, r.token, r.job.ownerSession]).toEqual([true, null, null]);
 }
@@ -70,10 +76,46 @@ function expectSteps(reason: string, c: Ctx, key: string) {
   expect(reason).not.toContain('orch job release');
 }
 
+describe('spec challenge slots', () => {
+  it('CHANGES, CHANGES, PASS reaches build with no escalate in any plan', () => {
+    const c = start();
+    go(c, 'start');
+    reg(c, 'spec.md');
+    const plans = [];
+    reg(c, 'spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
+    plans.push(next(c.id));
+    reg(c, 'spec.md', fixture('spec.md') + '\nrevised\n', true);
+    plans.push(next(c.id));
+    reg(c, 'spec-review-2.md', fixture('spec-review-2.md', 'CHANGES'));
+    plans.push(next(c.id));
+    reg(c, 'spec.md', fixture('spec.md') + '\nrevised again\n', true);
+    plans.push(next(c.id));
+    expect(plans.map((p) => p.agents.map((a) => [a.agent, a.artifact]))).toEqual([
+      [['factory-spec-writer', 'spec.md']],
+      [['factory-spec-challenger', 'spec-review-2.md']],
+      [['factory-spec-writer', 'spec.md']],
+      [['factory-spec-challenger', 'spec-review-3.md']],
+    ]);
+    expect(plans.flatMap((p) => p.commands).join('\n')).not.toContain('escalate');
+    reg(c, 'spec-review-3.md', fixture('spec-review-3.md', 'PASS'));
+    expect(next(c.id).commands).toEqual([`orch job transition ${c.id} complete --token <token>`]);
+    expect(go(c, 'complete').stage).toBe('build');
+  });
+
+  it('refuses spec-review-4.md after a third CHANGES', () => {
+    const c = start();
+    thriceRejected(c);
+    writeArtifact(c.dir, 'spec-review-4.md', fixture('spec-review-4.md', 'PASS'));
+    expect(() => addArtifact(store, c.id, 'spec-review-4.md', { token: c.token })).toThrow(
+      /not a spec challenge slot/,
+    );
+  });
+});
+
 describe('spec escalation resumed by a human edit', () => {
   it('registers the edited spec.md after a human resume, re-challenges it, and completes', () => {
     const c = start();
-    twiceRejected(c);
+    thriceRejected(c);
     escalateAndResume(c);
     writeArtifact(c.dir, 'spec.md', fixture('spec.md') + '\nhuman edit\n');
     claim(c);
@@ -93,16 +135,16 @@ describe('spec escalation resumed by a human edit', () => {
     addArtifact(store, c.id, 'spec.md', { token: c.token, replace: true });
     plan = next(c.id);
     expect(plan.agents.map((a) => [a.agent, a.artifact])).toEqual([
-      ['factory-spec-challenger', 'spec-review-2.md'],
+      ['factory-spec-challenger', 'spec-review-3.md'],
     ]);
-    expect(plan.commands).toEqual([add(c, 'spec-review-2.md', true), `orch factory next ${c.id}`]);
-    reg(c, 'spec-review-2.md', fixture('spec-review-2.md', 'PASS'), true);
+    expect(plan.commands).toEqual([add(c, 'spec-review-3.md', true), `orch factory next ${c.id}`]);
+    reg(c, 'spec-review-3.md', fixture('spec-review-3.md', 'PASS'), true);
     expect(go(c, 'complete').stage).toBe('build');
   });
 
   it('escalates again when the edit has no human resume after the latest challenge', () => {
     const c = start();
-    twiceRejected(c);
+    thriceRejected(c);
     // The session edits spec.md itself: no human resume, so the plan still escalates.
     writeArtifact(c.dir, 'spec.md', fixture('spec.md') + '\nagent edit\n');
     expect(next(c.id).commands).toEqual([escalate(c)]);
@@ -110,9 +152,9 @@ describe('spec escalation resumed by a human edit', () => {
 
   it('escalates again when spec.md is unchanged after the human resume; texts name the steps', () => {
     const c = ticketJob();
-    twiceRejected(c);
+    thriceRejected(c);
     expectSteps(next(c.id).reason, c, c.key);
-    escalateFree(c, 'spec challenger requested changes twice; see spec-review-2.md');
+    escalateFree(c, THRICE);
     const waiting = next(c.id);
     expect(waiting.step).toBe('needs-human');
     expectSteps(waiting.reason, c, c.key);
@@ -125,9 +167,26 @@ describe('spec escalation resumed by a human edit', () => {
     expectSteps(plan.reason, c, c.key);
   });
 
+  it('a job that escalated after spec-review-2.md CHANGES still waits for a human', () => {
+    const c = ticketJob();
+    go(c, 'start');
+    reg(c, 'spec.md');
+    reg(c, 'spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
+    reg(c, 'spec.md', fixture('spec.md') + '\nrevised\n', true);
+    reg(c, 'spec-review-2.md', fixture('spec-review-2.md', 'CHANGES'));
+    // Escalated under the old two-slot bound.
+    escalateFree(c, 'spec challenger requested changes twice; see spec-review-2.md');
+    const waiting = next(c.id);
+    expect(waiting.step).toBe('needs-human');
+    expect(waiting.commands.join('\n')).not.toContain('artifact add');
+    expectSteps(waiting.reason, c, c.key);
+    const job = getJob(store.db, c.id);
+    expect([job.stage, job.status]).toEqual(['needs-human', 'blocked']);
+  });
+
   it('keeps the needs-human text for other stages; /factory when there is no ticket', () => {
     const c = start();
-    twiceRejected(c);
+    thriceRejected(c);
     expect(next(c.id).reason).toContain(`3. run /factory ${c.id}`);
     const d = start('Other stage');
     runStage(d, 'spec.md');
