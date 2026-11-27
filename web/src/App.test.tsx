@@ -26,6 +26,7 @@ import {
   ciColor,
   commitHref,
   httpsHref,
+  localTime,
   prParts,
   repoLabels,
   reviewRollup,
@@ -740,11 +741,13 @@ describe('App board', () => {
         .getAllByRole('listitem')
         .map((li) => li.getAttribute('data-step-state')),
     ).toEqual(['done', 'current', ...Array<string>(6).fill('not-started')]);
-    // Times read as elsewhere on the dashboard ("… ago"); the exact timestamp stays in the markup.
+    // Times read as elsewhere on the dashboard ("… ago"); the ISO value stays in `datetime`, and
+    // the tooltip is the local date and time with zone (ticket 0018).
     const build = within(steps).getAllByRole('listitem')[1];
     expect(build).toHaveTextContent(/started .* ago/);
     expect(build?.querySelector('time')).toHaveAttribute('datetime', at(5));
-    expect(build?.querySelector('time')).toHaveAttribute('title', at(5));
+    expect(build?.querySelector('time')).toHaveAttribute('title', localTime(at(5)));
+    expect(localTime(at(5))).not.toBe(at(5));
     const timeline = within(section).getByRole('table', { name: 'Timeline' });
     const timelineRows = within(timeline).getAllByRole<HTMLTableRowElement>('row');
     expect(timelineRows.map((r) => r.querySelector('time')?.getAttribute('datetime'))).toEqual(
@@ -3877,6 +3880,125 @@ describe('Job detail: tab counts, empty, and unavailable tabs (todo 0015)', () =
   });
 });
 
+describe('Job detail: Events tab (ticket 0018)', () => {
+  const HEAD = '92e988a0c1d2e3f4';
+  const ACTOR = 'claude-20261113-0800-1d2e-a-very-long-session-name';
+  const at = (m: number) => `2026-11-13T08:${String(m).padStart(2, '0')}:00.000Z`;
+  /** Oldest first, as the server sends them. */
+  const events: JobDetailView['events'] = (
+    [
+      ['stage.started', { stage: 'build' }],
+      ['stage.completed', { stage: 'build', round: 1 }],
+      ['branch.pushed', { branch: 'factory/job-00000003-gamma', head: HEAD }],
+      ['ci.observed', { ciStatus: 'pending', head: HEAD, outcome: 'pending', polls: 4 }],
+      ['ci.observed', { ciStatus: 'passing', head: HEAD, outcome: 'passing', polls: 5 }],
+      ['stage.completed', { stage: 'ci', round: 1 }],
+      ['job.note', {}],
+    ] as const
+  ).map(([type, payload], i) => ({
+    id: i + 1,
+    jobId: 'job-00000003',
+    type,
+    payload,
+    actor: i === 4 ? ACTOR : null,
+    createdAt: at(i + 1),
+  }));
+  const open = async () => {
+    data.detail = detail({ events });
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Events (7)' }));
+    return screen.getByRole('table', { name: 'Events' });
+  };
+  const bodyRows = (table: HTMLElement) =>
+    within(table).getAllByRole<HTMLTableRowElement>('row').slice(1);
+
+  it('shows every event newest first, each with a summary line and a collapsed payload (AC3, AC8)', async () => {
+    const table = await open();
+    const rows = bodyRows(table);
+    // No event dropped or merged: one row per event, newest first.
+    expect(rows).toHaveLength(events.length);
+    expect(rows.map((r) => r.querySelector('time')?.getAttribute('datetime'))).toEqual(
+      events.map((e) => e.createdAt).reverse(),
+    );
+    expect(rows.map((r) => r.cells[1]?.textContent)).toEqual(events.map((e) => e.type).reverse());
+    const summaries = rows.map((r) => r.querySelector('summary')?.textContent);
+    expect(summaries).toEqual([
+      'payload',
+      'ci, round 1',
+      'passing @92e988a, poll 5',
+      'pending @92e988a, poll 4',
+      'factory/job-00000003-gamma @92e988a',
+      'build, round 1',
+      'build',
+    ]);
+    // Collapsed by default; opened, the payload is pretty-printed, one key per indented line.
+    const row = must(rows[2]);
+    const details = must(row.querySelector('details'));
+    const pre = must(details.querySelector('pre'));
+    for (const d of table.querySelectorAll('details')) expect(d.open).toBe(false);
+    expect(pre).not.toBeVisible();
+    // jsdom does not toggle a <details> on a click of its <summary>; a browser does (e2e).
+    details.open = true;
+    expect(pre).toBeVisible();
+    expect(pre.textContent).toContain('\n  "outcome": "passing",\n  "polls": 5\n');
+    expect(pre.textContent).toBe(JSON.stringify(events[4]?.payload, null, 2));
+  });
+
+  it('keeps every cell inside a fixed layout, the actor on one line with its full value (AC4)', async () => {
+    const table = await open();
+    expect(getComputedStyle(table).tableLayout).toBe('fixed');
+    const widths = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => getComputedStyle(h).width);
+    expect(widths.slice(0, 3)).toEqual(['14%', '22%', '18%']);
+    const row = must(bodyRows(table)[2]);
+    const actor = must(row.cells[2]);
+    expect(actor).toHaveTextContent(ACTOR);
+    expect(actor).toHaveAttribute('title', ACTOR);
+    const style = getComputedStyle(actor);
+    expect([style.whiteSpace, style.overflow, style.textOverflow]).toEqual([
+      'nowrap',
+      'hidden',
+      'ellipsis',
+    ]);
+    expect(getComputedStyle(must(row.querySelector('pre'))).overflowX).toBe('auto');
+    expect(getComputedStyle(must(row.cells[3])).overflowWrap).toBe('anywhere');
+  });
+
+  it('reads times relatively, with the local time and zone in the tooltip (AC6)', async () => {
+    const table = await open();
+    const time = must(bodyRows(table)[0]?.querySelector('time'));
+    expect(time).toHaveTextContent(/ ago$/);
+    expect(time).toHaveAttribute('datetime', at(7));
+    expect(time).toHaveAttribute('title', localTime(at(7)));
+    expect(time.getAttribute('title')).not.toBe(at(7));
+  });
+
+  it('filters by type, with a count per type and All types by default (AC7)', async () => {
+    const table = await open();
+    const select = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Type' });
+    expect(select).toHaveDisplayValue('All types');
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      'All types',
+      'branch.pushed (1)',
+      'ci.observed (2)',
+      'job.note (1)',
+      'stage.completed (2)',
+      'stage.started (1)',
+    ]);
+    await choose('Type', 'stage.completed (2)');
+    expect(bodyRows(table).map((r) => r.querySelector('summary')?.textContent)).toEqual([
+      'ci, round 1',
+      'build, round 1',
+    ]);
+    await choose('Type', 'All types');
+    expect(bodyRows(table)).toHaveLength(events.length);
+  });
+});
+
 describe('Job detail: Session tab (todo 0074)', () => {
   const OLDER = '33333333-4444-4555-8666-777777777777';
   const t = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
@@ -4057,7 +4179,10 @@ describe('Job detail: Session tab (todo 0074)', () => {
     expect(items[0]).toHaveTextContent('main');
     expect(items[1]).toHaveTextContent('builder: Build round 1');
     const time = must(items[1]?.querySelector('time'));
-    expect(time).toHaveAttribute('title', data.sessionLog.entries[1]?.at);
+    const at = must(data.sessionLog.entries[1]?.at);
+    expect(time).toHaveAttribute('datetime', at);
+    expect(time).toHaveAttribute('title', localTime(at));
+    expect(localTime(at)).not.toBe(at);
     expect(time).toHaveTextContent('2m ago');
     const subs = screen.getByTestId('session-subagents');
     const sub = (id: string) => must(subs.querySelector(`[data-agent-id="${id}"]`));
