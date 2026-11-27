@@ -64,7 +64,7 @@ describe('artifact rules', () => {
     ).toThrow(/exactly one/);
   });
 
-  it('spec challenges: spec-review-1.md and -2.md only, Findings plus one VERDICT', () => {
+  it('spec challenges: spec-review-1.md to -3.md only, Findings plus one VERDICT', () => {
     expect(checkArtifact('spec-review-1.md', fixture('spec-review-1.md'))).toBe('pass');
     expect(checkArtifact('spec-review-2.md', fixture('spec-review-2.md', 'CHANGES'))).toBe(
       'changes',
@@ -80,7 +80,12 @@ describe('artifact rules', () => {
     expect(() => checkArtifact('spec-review-2.md', '## Findings\nVERDICT: MAYBE\n')).toThrow(
       ValidationError,
     );
-    expect(ruleFor('spec-review-3.md')).toBeUndefined();
+    expect(checkArtifact('spec-review-3.md', fixture('spec-review-3.md', 'CHANGES'))).toBe(
+      'changes',
+    );
+    expect(() => checkArtifact('spec-review-3.md', '## Findings\nnone\n')).toThrow(/exactly one/);
+    expect(ruleFor('spec-review-4.md')).toBeUndefined();
+    expect(ruleFor('spec-review-10.md')).toBeUndefined();
     expect(ruleFor('round-1/spec-review-1.md')).toBeUndefined();
   });
 

@@ -321,10 +321,10 @@ describe('jobs: artifacts', () => {
     writeArtifact(dir, 'spec.md');
     const spec = reg('spec.md');
     writeArtifact(dir, 'spec-review-2.md');
-    expect(() => reg('spec-review-2.md')).toThrow(/only for a second challenge/);
+    expect(() => reg('spec-review-2.md')).toThrow(/only accepted after spec-review-1.md/);
     writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md', 'PASS'));
     expect(reg('spec-review-1.md').specSha256).toBe(spec.sha256);
-    expect(() => reg('spec-review-2.md')).toThrow(/only for a second challenge/);
+    expect(() => reg('spec-review-2.md')).toThrow(/only accepted after spec-review-1.md/);
     // The PASS is evidence only while its file is unchanged on disk.
     writeArtifact(dir, 'spec-review-1.md', fixture('spec-review-1.md') + '\nedited\n');
     expect(() => go(id, token, 'complete')).toThrow(/spec-review-1.md changed on disk/);
@@ -345,14 +345,41 @@ describe('jobs: artifacts', () => {
     expect(go(id, token, 'complete').stage).toBe('build');
   });
 
-  it('refuses spec-review-N.md outside the two challenge slots', () => {
+  it('accepts spec-review-3.md only after spec-review-2.md says CHANGES', () => {
+    const { id, token, dir } = setup();
+    go(id, token, 'start');
+    const reg = (rel: string, body?: string, replace = false) => {
+      writeArtifact(dir, rel, body);
+      return registerArtifact(store, id, rel, { token, replace });
+    };
+    reg('spec.md');
+    expect(() => reg('spec-review-3.md', fixture('spec-review-3.md', 'PASS'))).toThrow(
+      /only accepted after spec-review-2.md says CHANGES/,
+    );
+    reg('spec-review-1.md', fixture('spec-review-1.md', 'CHANGES'));
+    reg('spec.md', fixture('spec.md') + '\nrevised\n', true);
+    reg('spec-review-2.md', fixture('spec-review-2.md', 'PASS'));
+    expect(() => reg('spec-review-3.md', fixture('spec-review-3.md', 'PASS'))).toThrow(
+      WorkflowError,
+    );
+    reg('spec-review-2.md', fixture('spec-review-2.md', 'CHANGES'), true);
+    const spec = reg('spec.md', fixture('spec.md') + '\nrevised again\n', true);
+    expect(reg('spec-review-3.md', fixture('spec-review-3.md', 'CHANGES')).specSha256).toBe(
+      spec.sha256,
+    );
+    expect(() => go(id, token, 'complete')).toThrow(/spec-review-3.md .* says CHANGES/);
+    reg('spec-review-3.md', fixture('spec-review-3.md', 'PASS'), true);
+    expect(go(id, token, 'complete').stage).toBe('build');
+  });
+
+  it('refuses spec-review-N.md outside the three challenge slots', () => {
     const { id, token, dir } = setup();
     go(id, token, 'start');
     writeArtifact(dir, 'spec.md');
     registerArtifact(store, id, 'spec.md', { token });
-    writeArtifact(dir, 'spec-review-3.md', fixture('spec-review-1.md', 'CHANGES'));
-    expect(() => registerArtifact(store, id, 'spec-review-3.md', { token })).toThrow(
-      /not a spec challenge slot/,
+    writeArtifact(dir, 'spec-review-4.md', fixture('spec-review-1.md', 'CHANGES'));
+    expect(() => registerArtifact(store, id, 'spec-review-4.md', { token })).toThrow(
+      /not a spec challenge slot; only spec-review-1.md, spec-review-2.md and spec-review-3.md/,
     );
     expect(jobDetail(store, id).artifacts.map((a) => a.path)).toEqual(['spec.md']);
     // Nothing was registered, so a PASS in slot 1 still completes the stage.

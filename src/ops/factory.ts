@@ -28,6 +28,7 @@ import {
   describeNext,
   challengeSlot,
   ciCarriesThroughIntegration,
+  LAST_CHALLENGE_SLOT,
   latestChallenge,
   now,
   prPhase,
@@ -617,7 +618,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
 
   switch (job.stage) {
     case 'spec': {
-      // Write, challenge, revise once, challenge again; a second CHANGES goes to a human.
+      // Write, challenge, revise and challenge again up to the last slot; a CHANGES there goes to a human.
       const spec = detail.artifacts.find((a) => a.path === 'spec.md');
       const latest = latestChallenge(detail.artifacts);
       const reviewed = latest?.path ?? '';
@@ -638,12 +639,12 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       } else if (current && latest.marker === 'pass') {
         plan.reason = `${reviewed} passes the current spec.md; complete the stage.`;
         plan.commands = [...start, complete];
-      } else if (current && n < 2) {
+      } else if (current && n < LAST_CHALLENGE_SLOT) {
         plan.agents = taskFor('spec', 'spec.md');
-        plan.reason = `Revise spec.md once to answer the material objections in ${reviewed}, then it is challenged again.`;
+        plan.reason = `Revise spec.md to answer the material objections in ${reviewed}, then it is challenged again.`;
         plan.commands = [...start, add('spec.md', true), next];
       } else if (current && humanSpecEdit(detail.events, reviewed, plan.artifacts)) {
-        // A human resumed to spec after the second CHANGES and edited spec.md: register it so
+        // A human resumed to spec after the last CHANGES and edited spec.md: register it so
         // the next plan re-challenges it. An agent's own edit has no newer human resume.
         plan.agents = taskFor('spec', 'spec.md');
         plan.reason =
@@ -652,15 +653,17 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         plan.commands = [...start, add('spec.md', true), next];
       } else if (current) {
         plan.reason =
-          `The spec challenger asked for changes twice; escalate with the objections in ${reviewed}. ` +
+          `The spec challenger asked for changes three times; escalate with the objections in ${reviewed}. ` +
           `To continue, a human: ${specResumeSteps(id, detail.artifactDir, job.ticketId)}. ` +
           'The next plan registers the edit and re-challenges it.';
         plan.commands = [
-          `orch job transition ${id} escalate --reason "spec challenger requested changes twice; see ${reviewed}"${tok}`,
+          `orch job transition ${id} escalate --reason "spec challenger requested changes three times; see ${reviewed}"${tok}`,
         ];
       } else {
-        // No challenge yet, or the latest one reviewed an earlier spec.md.
-        const slot = n === 2 || (n === 1 && latest?.marker === 'changes') ? 2 : 1;
+        // No challenge yet, or the latest one reviewed an earlier spec.md: a CHANGES moves to the
+        // next slot, anything else (or the last slot) is re-challenged in place.
+        const slot =
+          latest?.marker === 'changes' && n < LAST_CHALLENGE_SLOT ? n + 1 : Math.max(n, 1);
         const artifact = `spec-review-${String(slot)}.md`;
         plan.agents = taskFor('spec-challenge', artifact);
         plan.reason = `Independent challenge of spec.md against the request and the repository's conventions: write ${artifact} with VERDICT: PASS or CHANGES.`;
