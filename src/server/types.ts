@@ -7,14 +7,8 @@ import type { Choice, Completion, PrPhase } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
 import type { Plan } from '../ops/factory.ts';
 import type { MergeView } from '../ops/merge-view.ts';
-import type {
-  Artifact,
-  Event,
-  Job,
-  Review,
-  VerificationCheck,
-  VerificationRun,
-} from '../storage/schema.ts';
+import type { VerificationStatus } from '../ops/verify.ts';
+import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 
 export type SafeJob = Omit<Job, 'ownerToken'>;
 export type { Flake };
@@ -247,7 +241,7 @@ export interface JobDetailView {
    * database, so it is listed without a worktree. History only: whether a run is evidence for
    * HEAD is `plan.verification.valid`, about `plan.verification.run` alone.
    */
-  verificationRuns: (VerificationRun & { checks: VerificationCheck[] })[];
+  verificationRuns: NonNullable<VerificationStatus['run']>[];
   blocker: Blocker | null;
   ci: CiView;
   progress: Progress;
