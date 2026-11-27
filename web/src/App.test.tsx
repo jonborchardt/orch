@@ -2928,7 +2928,7 @@ describe('PR phase, Merge, and Refresh PR', () => {
       const cell = must(link.closest('td'));
       expect(must(cell.querySelector('[data-phase]'))).toHaveAttribute('data-phase', phase);
       // The state comes from the phase chip alone: it is in the cell once, in the chip.
-      expect(cell.textContent?.split(phase)).toHaveLength(2);
+      expect(cell.textContent.split(phase)).toHaveLength(2);
       expect(cell.textContent).not.toContain('PR (');
     }
     expect(
