@@ -412,6 +412,11 @@ export const tokenUsage = sqliteTable(
     firstHour: integer(),
     lastHour: integer(),
     hours: text({ mode: 'json' }).$type<HourUsage[]>().notNull(),
+    /**
+     * The same counts split per agent: a `ROLES` name, `coordinator` (the main transcript), or
+     * `other`. Null on rows recorded before the split existed; never filled in later.
+     */
+    agents: text({ mode: 'json' }).$type<Record<string, Omit<HourUsage, 'hour'>>>(),
     recordedAt: text().notNull(),
   },
   (t) => [index('token_usage_hours_idx').on(t.lastHour, t.firstHour)],

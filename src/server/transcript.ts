@@ -279,7 +279,7 @@ function list(dir: string): string[] {
 }
 
 /** A meta file's fields; empty when it is absent, larger than `max`, or not a JSON object. */
-function readMeta(path: string, root: string, max: number): Obj {
+export function readMeta(path: string, root: string, max: number): Obj {
   // At most `max` bytes are read; a file larger than that is ignored, never parsed in part.
   const read = readConfined(path, root, max);
   if (!read || read.size > max) return {};

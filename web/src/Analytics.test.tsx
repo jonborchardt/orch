@@ -28,7 +28,7 @@ const RUNS: RunsView = {
   completedPerHour: null,
 };
 
-const timed = { unmeasured: 0, averageMs: null, medianMs: null };
+const timed = { unmeasured: 0, averageMs: null, medianMs: null, totalMs: null, tokens: null };
 const stage = (over: Partial<StageRow> & { role: string }): StageRow => ({
   runs: 0,
   completed: 0,
@@ -50,6 +50,9 @@ const reviewer = (over: Partial<ReviewerRow> & { role: string }): ReviewerRow =>
 const NO_MODELS = {
   byModel: { challengers: [], reviewers: [], builders: [], authorTotals: [] },
   notes: [],
+  coordinator: null,
+  other: null,
+  attributed: { sessions: 0, of: 0 },
 };
 let AGENTS: AgentsView;
 const SOME_UNMEASURED: AgentsView = {
@@ -59,7 +62,15 @@ const SOME_UNMEASURED: AgentsView = {
     reviewer({ role: 'security' }),
   ],
   stages: [
-    stage({ role: 'spec-writer', runs: 2, completed: 2, averageMs: 60_000, medianMs: 60_000 }),
+    stage({
+      role: 'spec-writer',
+      runs: 2,
+      completed: 2,
+      averageMs: 60_000,
+      medianMs: 60_000,
+      totalMs: 120_000,
+      tokens: { input: 1000, output: 100, cacheRead: 0, cacheCreation: 0 },
+    }),
   ],
 };
 
@@ -146,7 +157,16 @@ describe('Runs and Agents sections', () => {
       within(t)
         .getAllByRole('columnheader')
         .map((h) => h.textContent);
-    expect(headers(reviewers)).toEqual(['Role', 'Runs', 'Pass', 'Changes', 'Average', 'Median']);
+    expect(headers(reviewers)).toEqual([
+      'Role',
+      'Runs',
+      'Pass',
+      'Changes',
+      'Average',
+      'Median',
+      'Total time',
+      'Tokens',
+    ]);
     expect(headers(stages)).toEqual([
       'Role',
       'Runs',
@@ -158,6 +178,8 @@ describe('Runs and Agents sections', () => {
       'Interrupted',
       'Average',
       'Median',
+      'Total time',
+      'Tokens',
     ]);
     const cells = (t: HTMLElement, role: string) => {
       const r = within(t).getByRole('rowheader', { name: role }).closest('tr');
@@ -170,10 +192,33 @@ describe('Runs and Agents sections', () => {
       '1 (33%)',
       'Unavailable',
       'Unavailable',
+      'Unavailable',
+      'Unavailable',
     ]);
-    expect(cells(reviewers, 'security')).toEqual(['0', '0', '0', 'Unavailable', 'Unavailable']);
+    expect(cells(reviewers, 'security')).toEqual([
+      '0',
+      '0',
+      '0',
+      'Unavailable',
+      'Unavailable',
+      'Unavailable',
+      'Unavailable',
+    ]);
     expect(within(stages).queryByRole('rowheader', { name: 'spec-challenger' })).toBeNull();
-    expect(cells(stages, 'spec-writer')).toEqual(['2', '2', '0', '0', '0', '0', '0', '1m', '1m']);
+    // Tokens are the Usage weight: 1000 input x 1 + 100 output x 5.
+    expect(cells(stages, 'spec-writer')).toEqual([
+      '2',
+      '2',
+      '0',
+      '0',
+      '0',
+      '0',
+      '0',
+      '1m',
+      '1m',
+      '2m',
+      (1500).toLocaleString(),
+    ]);
     for (const old of ['Invocations', 'Measured', 'Open', 'Success', 'Failure', 'Other']) {
       expect(screen.queryByRole('columnheader', { name: old })).toBeNull();
     }
@@ -183,6 +228,26 @@ describe('Runs and Agents sections', () => {
     expect(screen.getAllByText(/^Runs without a duration/).map((c) => c.textContent)).toEqual([
       'Runs without a duration, left out of Average and Median: spec-challenger 3.',
     ]);
+  });
+
+  it('names the coordinator and other totals and the attributed share', async () => {
+    AGENTS = {
+      ...SOME_UNMEASURED,
+      coordinator: { input: 200, output: 0, cacheRead: 0, cacheCreation: 0 },
+      other: { input: 0, output: 1, cacheRead: 0, cacheCreation: 0 },
+      attributed: { sessions: 3, of: 7 },
+    };
+    mount('#/agents');
+    const caption = await screen.findByText(/tokens attributed for/);
+    expect(caption.textContent).toContain('coordinator 200, other 5;');
+    expect(caption.textContent).toContain('tokens attributed for 3 of 7 recorded sessions.');
+  });
+
+  it('reads Unavailable for coordinator and other before any session is attributed', async () => {
+    mount('#/agents');
+    const caption = await screen.findByText(/tokens attributed for/);
+    expect(caption.textContent).toContain('coordinator Unavailable, other Unavailable;');
+    expect(caption.textContent).toContain('tokens attributed for 0 of 0 recorded sessions.');
   });
 
   it('shows no unmeasured caption when every run has a duration', async () => {

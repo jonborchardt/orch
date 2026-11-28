@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BackfillReport } from '../src/ops/token-usage.ts';
 import { tokenUsage } from '../src/server/api.ts';
 import { createJob } from '../src/storage/jobs.ts';
-import { jobs } from '../src/storage/schema.ts';
+import { jobs, tokenUsage as usageRows } from '../src/storage/schema.ts';
 import { recordedRefs } from '../src/storage/usage.ts';
 import { orch, tempDir, type TempStore, tempStore } from './helpers.ts';
 import { at, U, usage, user, writeSession } from './transcript-fixture.ts';
@@ -93,6 +93,10 @@ describe('orch usage backfill', () => {
     expect(first.orphans).toEqual([{ ref: U3, cwd: orphan }]);
     expect(first.skipped).toEqual([]);
     expect(recordedRefs(store.db)).toEqual(new Set([U]));
+    // Ticket 0083: a session newly recorded by backfill carries its per-agent split.
+    expect(store.db.select().from(usageRows).where(eq(usageRows.ref, U)).get()?.agents).toEqual({
+      coordinator: { input: 5, output: 0, cacheRead: 0, cacheCreation: 0 },
+    });
     // The job with no session.attached now shows in the Usage view.
     expect(tokenUsage(store, '24', NOW).jobs).toMatchObject([
       { id: a.id, input: 5, missing: null },

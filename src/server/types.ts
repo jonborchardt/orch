@@ -456,10 +456,20 @@ export interface AgentTiming {
   unmeasured: number;
   averageMs: number | null;
   medianMs: number | null;
+  /** Sum of the measured durations; null when none is measured. */
+  totalMs: number | null;
+}
+
+/**
+ * A role's tokens over attributed recorded sessions (its subagent files only, never the
+ * coordinator's); null when no recorded session is attributed.
+ */
+export interface RoleTokens {
+  tokens: TokenCounts | null;
 }
 
 /** A reviewer: runs = pass + changes; runs with no verdict yet are not counted. */
-export interface ReviewerRow extends AgentTiming {
+export interface ReviewerRow extends AgentTiming, RoleTokens {
   role: string;
   runs: number;
   pass: number;
@@ -467,7 +477,7 @@ export interface ReviewerRow extends AgentTiming {
 }
 
 /** A stage role: runs = the sum of the six end columns; visits with no end are not counted. */
-export interface StageRow extends AgentTiming {
+export interface StageRow extends AgentTiming, RoleTokens {
   role: string;
   runs: number;
   completed: number;
@@ -549,6 +559,11 @@ export interface AgentsView {
     authorTotals: AuthorTotalRow[];
   };
   notes: ModelNoteView[];
+  /** Tokens of main transcripts, and of subagents no role names, over attributed sessions. */
+  coordinator: TokenCounts | null;
+  other: TokenCounts | null;
+  /** Recorded sessions carrying a per-agent split, of all recorded sessions. */
+  attributed: { sessions: number; of: number };
 }
 
 /** Token counts of the four kinds Claude Code reports per assistant message. */

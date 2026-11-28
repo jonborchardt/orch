@@ -10,12 +10,13 @@ import type { Db, Store } from './client.ts';
 import { type HourUsage, tokenUsage, type TokenUsageRow } from './schema.ts';
 
 /**
- * Store session `ref`'s per-hour counts (sorted by hour) on `jobId`. A ref already stored is
- * left as it is.
+ * Store session `ref`'s per-hour counts (sorted by hour) and per-agent split on `jobId`. A ref
+ * already stored is left as it is; without `agents` the split is null, as on old rows.
  */
 export function insertUsage(
   store: Store,
-  row: { ref: string; jobId: string; source: TokenUsageRow['source']; hours: HourUsage[] },
+  row: Pick<TokenUsageRow, 'ref' | 'jobId' | 'source'> &
+    Partial<Pick<TokenUsageRow, 'agents'>> & { hours: HourUsage[] },
 ): void {
   store.db
     .insert(tokenUsage)
@@ -47,6 +48,15 @@ export function usageInRange(db: Db, first: number, last: number): TokenUsageRow
     .from(tokenUsage)
     .where(and(gte(tokenUsage.lastHour, first), lte(tokenUsage.firstHour, last)))
     .all();
+}
+
+/** Every recorded session's per-agent split; null for a row recorded before the split. */
+export function agentSplits(db: Db): TokenUsageRow['agents'][] {
+  return db
+    .select({ agents: tokenUsage.agents })
+    .from(tokenUsage)
+    .all()
+    .map((r) => r.agents);
 }
 
 /** Every recorded session of `jobId`. */

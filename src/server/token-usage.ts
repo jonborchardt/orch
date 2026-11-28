@@ -78,9 +78,18 @@ export interface HourCounts extends TokenCounts {
   hour: number;
 }
 
-/** What reading one session gave: its records in read order and the first problem, if any. */
+/** A session's usage record and the subagent id of the file it was read from (null: main). */
+export interface SessionRecord extends UsageRecord {
+  agent: string | null;
+}
+
+/**
+ * What reading one session gave: its records in read order and the first problem, if any, and
+ * the real subagents directory ('' when absent or refused).
+ */
 export interface SessionRead {
-  recs: UsageRecord[];
+  recs: SessionRecord[];
+  sub: string;
   problem: string | null;
   /** Bytes read, for the caller's budget. */
   bytes: number;
@@ -99,7 +108,7 @@ export function readSessionUsage(
   since: number | null,
   budget: number,
 ): SessionRead {
-  const recs: UsageRecord[] = [];
+  const recs: SessionRecord[] = [];
   let problem: string | null = null;
   let bytes = 0;
   const miss = (reason: string) => {
@@ -107,27 +116,33 @@ export function readSessionUsage(
   };
   const found = discoverSession(claudeDir, ref);
   if (found === 'no-projects') {
-    return { recs, problem: `No Claude Code projects directory under ${claudeDir}.`, bytes };
+    return {
+      recs,
+      sub: '',
+      problem: `No Claude Code projects directory under ${claudeDir}.`,
+      bytes,
+    };
   }
   if (found === 'not-found') {
-    return { recs, problem: `Transcript ${ref}.jsonl was not found.`, bytes };
+    return { recs, sub: '', problem: `Transcript ${ref}.jsonl was not found.`, bytes };
   }
   if (found.subRefused)
     miss(`The subagents directory of ${ref} is outside the projects directory.`);
-  const names = found.agents.map((a) => a.name).sort();
+  const ids = new Map(found.agents.map((a) => [a.name, a.id]));
+  const names = [...ids.keys()].sort();
   if (names.length > L.USAGE_SUBAGENT_FILES) {
     miss(`Session ${ref} has more than ${String(L.USAGE_SUBAGENT_FILES)} subagent files.`);
   }
-  const files: { file: Found | null; name: string; root: string; sidechain: boolean }[] = [
-    { file: found.main, name: `${ref}.jsonl`, root: found.projects, sidechain: false },
+  const files: { file: Found | null; name: string; root: string; agent: string | null }[] = [
+    { file: found.main, name: `${ref}.jsonl`, root: found.projects, agent: null },
     ...names.slice(0, L.USAGE_SUBAGENT_FILES).map((name) => ({
       file: confined(join(found.sub, name), found.sub),
       name,
       root: found.sub,
-      sidechain: true,
+      agent: ids.get(name) ?? null,
     })),
   ];
-  for (const { file, name, root, sidechain } of files) {
+  for (const { file, name, root, agent } of files) {
     if (!file) {
       miss(`${name} is outside its directory or not a regular file.`);
       continue;
@@ -147,9 +162,10 @@ export function readSessionUsage(
       continue;
     }
     bytes += got.buf.length;
-    recs.push(...parseUsage(got.buf.toString('utf8'), sidechain));
+    for (const r of parseUsage(got.buf.toString('utf8'), agent !== null))
+      recs.push({ ...r, agent });
   }
-  return { recs, problem, bytes };
+  return { recs, sub: found.sub, problem, bytes };
 }
 
 /** Records summed per hour, the last record for a message id counted; hours in order. */
