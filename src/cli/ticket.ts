@@ -47,6 +47,9 @@ export interface TicketOptions {
   top?: boolean;
   before?: string;
   position?: string;
+  boxes?: string;
+  hold?: boolean;
+  'tick-all'?: boolean;
 }
 
 export const TICKET_HELP = `Usage: orch ticket <command> [options]
@@ -82,9 +85,16 @@ order are global. Ids are numbers (85, 0085, #85 all name the same ticket).
   note <id> <text>            Append a dated note to the history
   start <id> [--note <n>]     open -> in-progress, without a job (for a job, use
                               orch factory start --ticket <id> or orch factory dispatch --ticket <id>)
-  done <id> [--note <n>]      Close as done (refused while a job is still working on it)
+  done <id> [--tick-all] [--note <n>]
+                              Close as done (refused while a job is still working on it);
+                              --tick-all ticks every unticked box in the same write
+  split <id> [--boxes <n,...>] [--hold] [--area <a>] [--priority <p>] [--repo <path>]
+      [--note <n>]            Move unticked boxes (numbered 1..n in body order; all without
+                              --boxes) to a new follow-up ticket and close this one as done.
+                              --hold files the follow-up as a question, which no controller
+                              picks up; area, priority, and repository default to this ticket's
   drop <id> [--note <n>]      Close as dropped
-  reopen <id> [--note <n>]    Back to open
+  reopen <id> [--note <n>]    Back to open (rework: orch start or orch do gives it a new job)
   duplicate <id> --of <id> [--note <n>]
   dep add|remove <id> <depends-on-id>      <id> waits until <depends-on-id> is done
   related add|remove <id> <other-id>       informational; never affects readiness
@@ -187,8 +197,21 @@ export function runTicket(
     }
     case 'note':
       return act(id(), 'note', { text: rest.slice(1).join(' ') || o.note });
-    case 'start':
     case 'done':
+      return act(id(), cmd, { note: o.note, tickAll: o['tick-all'] });
+    case 'split':
+      if (o.boxes !== undefined && !/^\d+(,\d+)*$/.test(o.boxes)) {
+        throw new UsageError('--boxes takes box numbers separated by commas, such as 1,3');
+      }
+      return act(id(), cmd, {
+        boxes: o.boxes,
+        hold: o.hold,
+        area: o.area,
+        priority: o.priority,
+        repo: o.repo,
+        note: o.note,
+      });
+    case 'start':
     case 'drop':
     case 'reopen':
       return act(id(), cmd, { note: o.note });

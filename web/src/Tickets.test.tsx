@@ -17,6 +17,7 @@ import type {
   ControllerStatus,
   RunnerStatus,
   TicketEvent,
+  TicketFinish,
   TicketJob,
   TicketView,
 } from '../../src/server/types.ts';
@@ -112,6 +113,8 @@ let db: {
   jobs: Record<number, TicketJob[]>;
   /** Merge receipts the server computed, by ticket. */
   receipts: Record<number, { jobId: string; markdown: string }>;
+  /** What the server says is left of a merged ticket, by ticket; served only while in progress. */
+  finish: Record<number, TicketFinish>;
   history: TicketEvent[];
   /** Every POST, in order. */
   posts: { url: string; body: Record<string, unknown> }[];
@@ -123,6 +126,7 @@ let db: {
 const STATUS_AFTER = {
   start: 'in-progress',
   done: 'done',
+  split: 'done',
   drop: 'dropped',
   duplicate: 'duplicate',
   reopen: 'open',
@@ -207,6 +211,7 @@ function mockFetch() {
         assets: [],
         assetDir: '/assets',
         receipt: db.receipts[t.id] ?? null,
+        finish: t.status === 'in-progress' && !t.activeJob ? (db.finish[t.id] ?? null) : null,
       });
     }
     return json(404, { error: { type: 'NotFoundError', message: `no ${url}` } });
@@ -340,6 +345,7 @@ beforeEach(() => {
       },
     ],
     receipts: {},
+    finish: {},
     posts: [],
     refuse: null,
     gets: [],
@@ -1222,5 +1228,238 @@ describe('ticket detail', () => {
       'Job job-00000003 is still working on ticket 0003; let it finish or cancel it first.',
     );
     expect(stateOf(screen.getByTestId('ticket-header'))).toBe('running');
+  });
+});
+
+describe('finishing a merged ticket', () => {
+  const FINISH = [
+    'Move to a follow-up and close',
+    'Hold a follow-up for a person and close',
+    'They are done, close',
+    'Rework',
+  ];
+  const offered = () => FINISH.filter((name) => screen.queryByRole('button', { name }) !== null);
+  const left: TicketFinish = {
+    jobId: 'job-00000006',
+    prUrl: 'https://github.com/acme/alpha/pull/6',
+    remaining: ['run the benchmark', 'tell support', 'update the runbook'],
+    knownGaps: 'Not measured on **Windows**.',
+  };
+  const open = async (hash = '#/tickets/6') => {
+    mount(hash);
+    await header();
+    return screen.findByRole('region', { name: 'Needs a person' });
+  };
+  beforeEach(() => {
+    db.finish = { 6: left };
+  });
+
+  it('offers the four ways to finish only when the server says something is left', async () => {
+    const section = await open();
+    expect(offered()).toEqual(FINISH);
+    for (const item of left.remaining) expect(section).toHaveTextContent(`“${item}”`);
+    expect(within(section).getByTestId('known-gaps')).toHaveTextContent('Not measured on Windows.');
+    expect(within(section).getByRole('link', { name: 'job-00000006' })).toHaveAttribute(
+      'href',
+      '#/jobs/job-00000006',
+    );
+    expect(db.posts).toEqual([]);
+
+    // An open ticket, a done one, and an in-progress one with a job working on it: none.
+    db.finish = { 1: left, 4: left, 3: left, 6: left };
+    for (const [n, title] of [
+      [1, 'Fix the race'],
+      [4, 'Old thing'],
+      [3, 'Refactor store'],
+      [8, 'By hand'],
+    ] as const) {
+      go(`#/tickets/${String(n)}`);
+      await waitFor(() => {
+        expect(screen.getByTestId('ticket-header')).toHaveTextContent(title);
+      });
+      expect(screen.queryByRole('region', { name: 'Needs a person' })).not.toBeInTheDocument();
+      expect(offered(), title).toEqual([]);
+    }
+  });
+
+  it('moves the selected boxes to a follow-up, held or not, with the revision on screen', async () => {
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'Move to a follow-up and close' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Move unticked boxes of ticket 0006 to a follow-up?',
+    });
+    expect(db.posts).toEqual([]);
+    const hold = within(dialog).getByRole('checkbox', { name: 'Hold for a person' });
+    expect(hold).not.toBeChecked();
+    expect(dialog).toHaveTextContent('The controller never picks up a question');
+    // Box 2 stays behind; the follow-up goes to another area and priority.
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'tell support' }));
+    fireEvent.change(within(dialog).getByLabelText('Area'), { target: { value: 'core' } });
+    fireEvent.change(within(dialog).getByLabelText('Priority'), { target: { value: 'P1' } });
+    fireEvent.change(within(dialog).getByLabelText('Repository'), { target: { value: '/r/beta' } });
+    fireEvent.click(hold);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move and close' }));
+    await waitFor(() => {
+      expect(stateOf(screen.getByTestId('ticket-header'))).toBe('done');
+    });
+    expect(db.posts).toHaveLength(1);
+    expect(lastPost()).toEqual({
+      url: '/api/tickets/6/actions',
+      body: {
+        action: 'split',
+        boxes: [1, 3],
+        hold: true,
+        repo: '/r/beta',
+        area: 'core',
+        priority: 'P1',
+        revision: 1,
+      },
+    });
+    expect(offered()).toEqual([]);
+  });
+
+  it('the hold button opens the same confirm with hold ticked; nothing selected cannot be sent', async () => {
+    await open();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Hold a follow-up for a person and close' }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('checkbox', { name: 'Hold for a person' })).toBeChecked();
+    expect(
+      within(dialog).getByRole('checkbox', { name: 'Hold for a person' }),
+    ).toHaveAccessibleDescription(/The controller never picks up a question/);
+    const confirm = within(dialog).getByRole('button', { name: 'Move and close' });
+    expect(dialog).not.toHaveTextContent('Select at least one box to move.');
+    for (const item of left.remaining) {
+      fireEvent.click(within(dialog).getByRole('checkbox', { name: item }));
+    }
+    expect(confirm).toBeDisabled();
+    expect(dialog).toHaveTextContent('Select at least one box to move.');
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'run the benchmark' }));
+    fireEvent.click(confirm);
+    await waitFor(() => {
+      expect(db.posts).toHaveLength(1);
+    });
+    expect(lastPost()?.body).toEqual({ action: 'split', boxes: [1], hold: true, revision: 1 });
+  });
+
+  it('a cancelled split leaves nothing behind for the next confirm', async () => {
+    await open();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Hold a follow-up for a person and close' }),
+    );
+    let dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'tell support' }));
+    fireEvent.change(within(dialog).getByLabelText('Priority'), { target: { value: 'P1' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Move to a follow-up and close' }));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move and close' }));
+    await waitFor(() => {
+      expect(db.posts).toHaveLength(1);
+    });
+    expect(lastPost()?.body).toEqual({
+      action: 'split',
+      boxes: [1, 2, 3],
+      hold: false,
+      revision: 1,
+    });
+  });
+
+  it('closes with every box ticked, or reopens for rework, each after its own confirm', async () => {
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'They are done, close' }));
+    const close = await screen.findByRole('dialog', {
+      name: 'Close ticket 0006 with every box ticked?',
+    });
+    expect(close).toHaveTextContent('Ticks all 3 unticked box(es)');
+    expect(db.posts).toEqual([]);
+    fireEvent.click(within(close).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(db.posts).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'They are done, close' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Tick all and close' }));
+    await waitFor(() => {
+      expect(stateOf(screen.getByTestId('ticket-header'))).toBe('done');
+    });
+    expect(lastPost()?.body).toEqual({ action: 'done', tickAll: true, revision: 1 });
+
+    cleanup();
+    db.posts = [];
+    const t = db.tickets.find((x) => x.id === 6);
+    if (t) Object.assign(t, { status: 'in-progress', revision: 7 });
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'Rework' }));
+    const rework = await screen.findByRole('dialog', { name: 'Rework ticket 0006?' });
+    expect(rework).toHaveTextContent('Nothing starts now');
+    expect(rework).toHaveTextContent('orch do 0006');
+    fireEvent.click(within(rework).getByRole('button', { name: 'Reopen for rework' }));
+    await waitFor(() => {
+      expect(db.posts).toHaveLength(1);
+    });
+    expect(lastPost()?.body).toEqual({
+      action: 'reopen',
+      note: 'rework: boxes left unticked after job-00000006',
+      revision: 7,
+    });
+  });
+
+  it('a ?finish= link opens that confirm and posts nothing; elsewhere it opens nothing', async () => {
+    for (const [option, name] of [
+      ['split', 'Move unticked boxes of ticket 0006 to a follow-up?'],
+      ['close', 'Close ticket 0006 with every box ticked?'],
+      ['rework', 'Rework ticket 0006?'],
+    ] as const) {
+      mount(`#/tickets/6?finish=${option}`);
+      expect(await screen.findByRole('dialog', { name })).toBeInTheDocument();
+      expect(db.posts, option).toEqual([]);
+      cleanup();
+    }
+    // An unknown option, and a ticket with nothing to finish: the page, no dialog, no POST.
+    for (const hash of ['#/tickets/6?finish=bogus', '#/tickets/1?finish=close']) {
+      mount(hash);
+      await header();
+      await screen.findByRole('button', { name: 'Edit' });
+      expect(screen.queryByRole('dialog'), hash).not.toBeInTheDocument();
+      expect(db.posts, hash).toEqual([]);
+      cleanup();
+    }
+    // A link the ticket cannot honour yet is dropped: becoming finishable later opens nothing.
+    db.finish = {};
+    mount('#/tickets/6?finish=close');
+    await header();
+    await screen.findByRole('button', { name: 'Edit' });
+    db.finish = { 6: left };
+    await screen.findByRole('region', { name: 'Needs a person' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(db.posts).toEqual([]);
+  });
+
+  it('shows a 409 refusal, re-reads the ticket, and never retries', async () => {
+    await open();
+    db.refuse = {
+      status: 409,
+      type: 'OwnershipError',
+      message: 'Stale revision: expected 1, ticket 0006 is at 2.',
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'They are done, close' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Tick all and close' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Ticket 0006 was changed elsewhere, so nothing was saved',
+    );
+    const reads = () => db.gets.filter((u) => u === '/api/tickets/6').length;
+    const before = reads();
+    await waitFor(() => {
+      expect(reads()).toBeGreaterThan(before);
+    });
+    expect(db.posts).toHaveLength(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(stateOf(screen.getByTestId('ticket-header'))).not.toBe('done');
+    expect(offered()).toEqual(FINISH);
   });
 });

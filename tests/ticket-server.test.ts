@@ -1,13 +1,15 @@
 /** Ticket HTTP API: the same operations as the CLI behind the dashboard's guards. */
 import { get as httpGet } from 'node:http';
 
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { requestStop, writeSession } from '../src/ops/runner-state.ts';
 import type { TicketDetail, TicketList, TicketView } from '../src/ops/tickets.ts';
 import { type RunningServer, startServer } from '../src/server/http.ts';
-import type { ApiError, BoardRow, RunnerStatus } from '../src/server/types.ts';
+import type { ApiError, BoardRow, JobDetailView, RunnerStatus } from '../src/server/types.ts';
 import { createJob } from '../src/storage/jobs.ts';
+import { jobs } from '../src/storage/schema.ts';
 import { makeRepo, tempDir, type TempStore, tempStore } from './helpers.ts';
 
 let store: TempStore;
@@ -309,5 +311,85 @@ describe('ticket API', () => {
     expect(await only('P0')).toEqual([top.id]);
     expect((await get('/api/tickets?priority=P6')).status).toBe(422);
     expect((await act(low.id, 'edit', { priority: 'P6' })).status).toBe(422);
+  });
+
+  it('finishes a merged ticket with unticked boxes: split, held split, tick all, rework', async () => {
+    const pr = 'https://github.com/acme/alpha/pull/9';
+    const merged = async (title: string) => {
+      const t = await body<TicketView>(
+        post('/api/tickets', { title, repo: alpha, body: '- [ ] a\n- [ ] b\n' }),
+        201,
+      );
+      const job = createJob(store, {
+        title: 'j',
+        description: 'd',
+        repo: t.repo,
+        repoPath: alpha,
+        baseBranch: 'main',
+        ticketId: t.id,
+      });
+      // Not merged yet: a job is working on it, so there is nothing to finish.
+      expect((await body<TicketDetail>(get(`/api/tickets/${String(t.id)}`))).finish).toBeNull();
+      store.db
+        .update(jobs)
+        .set({ stage: 'completed', status: 'completed', prUrl: pr, prState: 'merged' })
+        .where(eq(jobs.id, job.id))
+        .run();
+      const d = await body<TicketDetail>(get(`/api/tickets/${String(t.id)}`));
+      expect(d.finish).toEqual({
+        jobId: job.id,
+        prUrl: pr,
+        remaining: ['a', 'b'],
+        knownGaps: null,
+      });
+      // The merged job's own page carries the same view.
+      const detail = await body<JobDetailView>(get(`/api/jobs/${job.id}`));
+      expect(detail.finish).toEqual(d.finish);
+      return { id: t.id, revision: d.ticket.revision };
+    };
+    const finishOf = async (id: number) =>
+      (await body<TicketDetail>(get(`/api/tickets/${String(id)}`))).finish;
+
+    const one = await merged('Split');
+    const stale = await body<ApiError>(
+      act(one.id, 'split', { boxes: [2], revision: one.revision - 1 }),
+      409,
+    );
+    expect(stale.error.type).toBe('OwnershipError');
+    expect((await act(one.id, 'split', { boxes: [3] })).status).toBe(422);
+    expect(await finishOf(one.id)).not.toBeNull();
+    const split = await body<TicketView & { followUp: number }>(
+      act(one.id, 'split', { boxes: [2], revision: one.revision }),
+    );
+    expect(split).toMatchObject({ status: 'done' });
+    expect(split.body).toContain('- [ ] a\n- [x] b (moved to ');
+    const followUp = await body<TicketDetail>(get(`/api/tickets/${String(split.followUp)}`));
+    expect(followUp.ticket).toMatchObject({ status: 'open', type: 'feature', related: [one.id] });
+    expect(followUp.finish).toBeNull();
+    expect(await finishOf(one.id)).toBeNull();
+
+    const two = await merged('Held');
+    const held = await body<TicketView & { followUp: number }>(
+      act(two.id, 'split', { hold: true, revision: two.revision }),
+    );
+    expect(held.status).toBe('done');
+    expect(
+      (await body<TicketDetail>(get(`/api/tickets/${String(held.followUp)}`))).ticket,
+    ).toMatchObject({ type: 'question', ready: false });
+
+    const three = await merged('Close');
+    await body<ApiError>(
+      act(three.id, 'done', { tickAll: true, revision: three.revision + 1 }),
+      409,
+    );
+    expect(
+      await body<TicketView>(act(three.id, 'done', { tickAll: true, revision: three.revision })),
+    ).toMatchObject({ status: 'done', body: '- [x] a\n- [x] b\n' });
+
+    const four = await merged('Rework');
+    expect(
+      await body<TicketView>(act(four.id, 'reopen', { note: 'rework', revision: four.revision })),
+    ).toMatchObject({ status: 'open', body: '- [ ] a\n- [ ] b\n' });
+    expect(await finishOf(four.id)).toBeNull();
   });
 });

@@ -7,11 +7,14 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
+  FormHelperText,
   IconButton,
   LinearProgress,
   Link,
@@ -30,6 +33,7 @@ import type {
   Area,
   BlockReason,
   BoardRow,
+  TicketFinish,
   TicketStatus,
   TicketSummary,
   TicketView,
@@ -260,8 +264,58 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+/**
+ * The `?finish=` values: each opens one confirm of the "needs a person" section. Keep equal to
+ * the `finish` keys of `FINISH_OPTIONS` in src/ops/tickets.ts, which writes the links.
+ */
+export const FINISH_OPTIONS = ['split', 'close', 'rework'] as const;
+export type FinishOption = (typeof FINISH_OPTIONS)[number];
+
+/** The buttons of that section: label, the confirm it opens, and whether "Hold for a person" starts ticked. */
+const FINISH_BUTTONS: readonly (readonly [string, FinishOption, boolean])[] = [
+  ['Move to a follow-up and close', 'split', false],
+  ['Hold a follow-up for a person and close', 'split', true],
+  ['They are done, close', 'close', false],
+  ['Rework', 'rework', false],
+];
+
+/** Each confirm's title (given the ticket key) and the label of its confirming button. */
+const FINISH_TEXT: Record<FinishOption, { title: (key: string) => string; confirm: string }> = {
+  split: {
+    title: (key) => `Move unticked boxes of ticket ${key} to a follow-up?`,
+    confirm: 'Move and close',
+  },
+  close: {
+    title: (key) => `Close ticket ${key} with every box ticked?`,
+    confirm: 'Tick all and close',
+  },
+  rework: { title: (key) => `Rework ticket ${key}?`, confirm: 'Reopen for rework' },
+};
+
+/** What a merged ticket still needs: its unticked boxes, quoted, and the merged job's known gaps. */
+export function Remaining({ finish }: { finish: TicketFinish }) {
+  return (
+    <>
+      <Box component="ol" sx={{ my: 0.5, pl: 3 }} aria-label="Unticked boxes">
+        {finish.remaining.map((item, i) => (
+          <li key={i}>“{item}”</li>
+        ))}
+      </Box>
+      {finish.knownGaps !== null && (
+        <Box data-testid="known-gaps">
+          <Typography sx={{ fontWeight: weight.semibold }}>
+            Known gaps of {finish.jobId} (build.md)
+          </Typography>
+          <Markdown text={finish.knownGaps} />
+        </Box>
+      )}
+    </>
+  );
+}
+
 export function TicketDetail({
   id,
+  finish = null,
   tickets,
   jobs,
   areas,
@@ -269,6 +323,11 @@ export function TicketDetail({
   onChanged,
 }: {
   id: number;
+  /**
+   * `#/tickets/<id>?finish=<option>`: open that option's confirm on mount when the ticket has
+   * something to finish. Opening posts nothing; only its Confirm does. The caller keys by it.
+   */
+  finish?: FinishOption | null;
   /** The list, for the titles of linked tickets. */
   tickets: readonly TicketSummary[];
   /** Each ticket's job from the board, for its liveness. */
@@ -295,9 +354,15 @@ export function TicketDetail({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirm, setConfirm] = useState<'drop' | 'duplicate' | null>(null);
   const [duplicateOf, setDuplicateOf] = useState('');
+  const [finishing, setFinishing] = useState<FinishOption | null>(finish);
+  // The follow-up as the split confirm has it; an empty field means "as this ticket".
+  const [kept, setKept] = useState<readonly number[]>([]);
+  const [hold, setHold] = useState(false);
+  const [followUp, setFollowUp] = useState({ repo: '', area: '', priority: '' });
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState(false);
   const linkRowId = useId();
+  const holdHelpId = useId();
 
   const back = (
     <Link href="#/tickets" underline="hover">
@@ -409,6 +474,32 @@ export function TicketDetail({
         setBusy(false);
         void onChanged();
       });
+  };
+
+  const left = detail.finish;
+  const boxCount = left?.remaining.length ?? 0;
+  const moved = (left?.remaining ?? []).flatMap((_, i) => (kept.includes(i + 1) ? [] : [i + 1]));
+  // A `?finish=` request this ticket cannot honour is dropped, so no later poll opens its confirm.
+  if (finishing !== null && left === null) setFinishing(null);
+  const openFinish = (option: FinishOption, held = false) => {
+    setKept([]);
+    setFollowUp({ repo: '', area: '', priority: '' });
+    setHold(held);
+    setFinishing(option);
+  };
+  const confirmFinish = () => {
+    const option = finishing;
+    setFinishing(null);
+    if (option === 'split') {
+      const over = Object.fromEntries(Object.entries(followUp).filter(([, v]) => v !== ''));
+      void act({ action: 'split', boxes: moved, hold, ...over });
+    } else if (option === 'close') void act({ action: 'done', tickAll: true });
+    else if (option === 'rework') {
+      void act({
+        action: 'reopen',
+        note: `rework: boxes left unticked after ${left?.jobId ?? 'the merge'}`,
+      });
+    }
   };
 
   const link = (kind: 'dep' | 'related', add: boolean, n: number | string) =>
@@ -532,6 +623,40 @@ export function TicketDetail({
           }}
         >
           {error}
+        </Alert>
+      )}
+
+      {left && !draft && (
+        <Alert
+          severity="warning"
+          role="region"
+          aria-label="Needs a person"
+          sx={{ mt: 1 }}
+          data-testid="ticket-finish"
+        >
+          <Typography sx={{ fontWeight: weight.semibold }}>
+            Needs a person:{' '}
+            <Link href={`#/jobs/${left.jobId}`} color="inherit">
+              {left.jobId}
+            </Link>{' '}
+            merged, but {String(boxCount)} box(es) are not ticked, so the ticket stays in progress.
+          </Typography>
+          <Remaining finish={left} />
+          <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap' }}>
+            {FINISH_BUTTONS.map(([label, option, held]) => (
+              <Button
+                key={label}
+                variant="outlined"
+                color="inherit"
+                disabled={busy}
+                onClick={() => {
+                  openFinish(option, held);
+                }}
+              >
+                {label}
+              </Button>
+            ))}
+          </Stack>
         </Alert>
       )}
 
@@ -749,6 +874,127 @@ export function TicketDetail({
             }}
           >
             {confirm === 'drop' ? 'Drop ticket' : 'Mark duplicate'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={finishing !== null && left !== null}
+        onClose={() => {
+          setFinishing(null);
+        }}
+        aria-labelledby="ticket-finish-title"
+      >
+        <DialogTitle id="ticket-finish-title">
+          {finishing && FINISH_TEXT[finishing].title(key)}
+        </DialogTitle>
+        <DialogContent>
+          {finishing === 'split' && left && (
+            <Stack spacing={1.5}>
+              <Typography>
+                A new ticket “Follow-up of {key}: {t.title}” takes the selected boxes. Here they are
+                ticked as “(moved to …)” and this ticket closes as done.
+              </Typography>
+              <Box role="group" aria-label="Boxes to move">
+                {left.remaining.map((item, i) => (
+                  <FormControlLabel
+                    key={i}
+                    sx={{ display: 'flex' }}
+                    control={
+                      <Checkbox
+                        checked={!kept.includes(i + 1)}
+                        onChange={(e) => {
+                          setKept(
+                            e.target.checked ? kept.filter((n) => n !== i + 1) : [...kept, i + 1],
+                          );
+                        }}
+                      />
+                    }
+                    label={item}
+                  />
+                ))}
+                {moved.length === 0 && (
+                  <FormHelperText>Select at least one box to move.</FormHelperText>
+                )}
+              </Box>
+              <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', rowGap: 2 }}>
+                <Pick
+                  label="Repository"
+                  value={followUp.repo}
+                  onChange={(repo) => {
+                    setFollowUp({ ...followUp, repo });
+                  }}
+                  all={`${t.repo} (this ticket's)`}
+                  options={[...new Map(tickets.map((x) => [x.repoPath, x.repo]))]
+                    .filter(([path]) => path !== t.repoPath)
+                    .map(([value, label]) => ({ value, label }))}
+                  width={200}
+                />
+                <Pick
+                  label="Area"
+                  value={followUp.area || t.area}
+                  onChange={(area) => {
+                    setFollowUp({ ...followUp, area: area === t.area ? '' : area });
+                  }}
+                  options={[...new Set([...areas.map((a) => a.name), t.area])]}
+                />
+                <Pick
+                  label="Priority"
+                  value={followUp.priority || t.priority}
+                  onChange={(priority) => {
+                    setFollowUp({ ...followUp, priority: priority === t.priority ? '' : priority });
+                  }}
+                  options={PRIORITIES}
+                  width={90}
+                />
+              </Stack>
+              <Box>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={hold}
+                      slotProps={{ input: { 'aria-describedby': holdHelpId } }}
+                      onChange={(e) => {
+                        setHold(e.target.checked);
+                      }}
+                    />
+                  }
+                  label="Hold for a person"
+                />
+                <FormHelperText id={holdHelpId}>
+                  Files the follow-up as a question. The controller never picks up a question, so it
+                  waits until a person changes its type.
+                </FormHelperText>
+              </Box>
+            </Stack>
+          )}
+          {finishing === 'close' && (
+            <Typography>
+              Ticks all {String(boxCount)} unticked box(es) and closes the ticket as done, in one
+              write. Use this when the boxes are in fact done.
+            </Typography>
+          )}
+          {finishing === 'rework' && (
+            <Typography>
+              Puts the ticket back in the open queue with its boxes unticked. Nothing starts now:
+              the controller (orch start) or orch do {key} gives it a new job.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setFinishing(null);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            disabled={busy || (finishing === 'split' && moved.length === 0)}
+            onClick={confirmFinish}
+          >
+            {finishing && FINISH_TEXT[finishing].confirm}
           </Button>
         </DialogActions>
       </Dialog>

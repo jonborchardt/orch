@@ -108,7 +108,8 @@ in `src/core/workflow.ts`): `workflow-changed` (next step: Merge on the dashboar
 `not-authorized`, `head-changed`, `pr-closed`, `pr-draft`, `second-conflict`, and `base-moving`
 (decision 2026-11-23-queue-passes-over-person-merge-blocks). So is every other ticket that ends `blocked`
 or `refused` for a reason of its own, such as a merge that left a checklist box open
-(`ticket-open`; next step: tick or move the remaining boxes, then `orch ticket done <id>`), an
+(`ticket-open`; next step: one dashboard link per way to finish it, `#/tickets/<id>?finish=split`,
+`close`, or `rework`, each with its `orch ticket` command), an
 unverified merge, or a job that made no progress. The run ends when no ready ticket is left,
 when `orch stop next` was requested, or at the first ticket whose outcome would hit every ticket:
 claude cannot start (`claude-failed`), Claude's usage or rate limit is still reached after the

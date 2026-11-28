@@ -159,6 +159,25 @@ number of jobs over time (a cancelled attempt, a re-land), and jobs without a ti
   touched. A ticket is never marked done and reopened: tick what was delivered and run
   `orch job merge <job>` again, or `orch ticket done`
   ([workflow.md](workflow.md#verified-integration-and-reconciliation)).
+- A ticket left in progress that way (its newest job finished with a merged PR, boxes still
+  unticked, no job working on it) needs a person, and `showTicket` says so in `finish`:
+  `{ jobId, prUrl, remaining, knownGaps }`, the unticked boxes in order and the `## Known gaps`
+  section of that job's registered `build.md` (null when there is none or it cannot be read).
+  There are three ways to finish it, each one revision-checked transaction (decision
+  2026-11-27-finish-a-merged-ticket):
+  - `orch ticket split <id>` files a follow-up ticket (`splitTicket`): title
+    `Follow-up of NNNN: <title>`, a body naming this ticket and its PR followed by the moved
+    boxes as `- [ ]` items, `related` to this ticket, in the same repository, area, and
+    priority unless `--repo`, `--area`, or `--priority` says otherwise, with this ticket's type,
+    or `question` with `--hold` (a question is never picked up by the controller). The moved
+    boxes are ticked here as `- [x] <item> (moved to NNNN)` and this ticket closes as done
+    (`ticket.completed`, its note naming the PR and the follow-up). `--boxes 1,3` picks boxes by
+    number, 1..n in the order the unticked boxes appear in the body; without it every one
+    moves. A closed ticket, a job still working on it, no unticked box, or a number that is
+    not one refuses the whole thing: no follow-up, nothing changed.
+  - `orch ticket done <id> --tick-all` ticks every unticked box and closes, in one write.
+  - `orch ticket reopen <id>` is rework: the ticket is open again with its boxes, and
+    `orch start` or `orch do <id>` gives it a new job as for any open ticket.
 - The factory's approve stage ticks the boxes: the approver's `decision.md` lists every unchecked
   box under `## Ticket checklist`, item text verbatim, as `- [x] <item> — <evidence>` (delivered)
   or `- [ ] <item> — <reason>` (not delivered), and the factory session ticks the delivered ones
@@ -202,6 +221,8 @@ orch ticket edit 85 --effort 2 --body-file -    # Markdown body from stdin
 orch ticket dep add 85 62
 orch ticket move 85 --top                       # also --up, --down, --before <id>, --position <n>; edit --rank <n|none>
 orch ticket done 85 --note "merged https://github.com/o/r/pull/7"
+orch ticket split 85 --boxes 1,3 --hold         # move boxes to a follow-up question, close 85
+orch ticket done 85 --tick-all                  # the boxes are done: tick them and close
 ```
 
 ## HTTP API
@@ -210,14 +231,14 @@ orch ticket done 85 --note "merged https://github.com/o/r/pull/7"
 `src/ops/tickets.ts`) under the dashboard's guards: loopback only, Host check, and for writes a
 same-origin `Origin`, `Content-Type: application/json`, and the CSRF token from `/api/session`.
 
-| request                          | does                                                                                                                                                                                                                                                                       |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/tickets`               | list; query `view=all\|order\|ready\|blocked`, `repo`, `status`, `priority`, `area`, `type`, `limit`, `offset`                                                                                                                                                             |
-| `POST /api/tickets`              | create: `{title, repo, type?, area?, priority?, effort?, classified?, body?, dependsOn?, related?}`; `repo` is a path inside the repository                                                                                                                                |
-| `GET /api/tickets/<id>`          | the ticket, dependents, jobs, asset names                                                                                                                                                                                                                                  |
-| `GET /api/tickets/<id>/history`  | its history                                                                                                                                                                                                                                                                |
-| `POST /api/tickets/<id>/actions` | `{action, revision?, ...}`: `edit` (fields, `rank`), `move` (one of `up`, `down`, `top`: `true`, or `before: <id>`), `note` (`text`), `start`, `done`, `drop`, `reopen` (`note?`), `duplicate` (`of`), `dep-add`, `dep-remove`, `related-add`, `related-remove` (`target`) |
-| `GET /api/tickets/areas`         | list areas                                                                                                                                                                                                                                                                 |
+| request                          | does                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/tickets`               | list; query `view=all\|order\|ready\|blocked`, `repo`, `status`, `priority`, `area`, `type`, `limit`, `offset`                                                                                                                                                                                                                                                                                   |
+| `POST /api/tickets`              | create: `{title, repo, type?, area?, priority?, effort?, classified?, body?, dependsOn?, related?}`; `repo` is a path inside the repository                                                                                                                                                                                                                                                      |
+| `GET /api/tickets/<id>`          | the ticket, dependents, jobs, asset names, and `finish` (what is left of a merged ticket, or null)                                                                                                                                                                                                                                                                                               |
+| `GET /api/tickets/<id>/history`  | its history                                                                                                                                                                                                                                                                                                                                                                                      |
+| `POST /api/tickets/<id>/actions` | `{action, revision?, ...}`: `edit` (fields, `rank`), `move` (one of `up`, `down`, `top`: `true`, or `before: <id>`), `note` (`text`), `start`, `done` (`tickAll?`), `drop`, `reopen` (`note?`), `split` (`boxes?`, `hold?`, `area?`, `priority?`, `repo?`, `note?`; answers the ticket plus `followUp`), `duplicate` (`of`), `dep-add`, `dep-remove`, `related-add`, `related-remove` (`target`) |
+| `GET /api/tickets/areas`         | list areas                                                                                                                                                                                                                                                                                                                                                                                       |
 
 Errors use the dashboard's mapping: 404 no such ticket, 422 invalid input, 409 a refused status
 change or a stale `revision`. Creating a job for a ticket and attaching assets are CLI only.
@@ -225,7 +246,8 @@ change or a stale `revision`. Creating a job for a ticket and attaching assets a
 Two read-only additions serve the dashboard's Tickets section: `GET /api/runner` returns what
 `orch status` prints (there is no route that starts, stops, or resumes the controller), and each
 row of `GET /api/jobs` carries its `ticketId`, so a ticket's job is found without a request per
-ticket.
+ticket. `GET /api/jobs/<id>` carries the same `finish` as its ticket when that job is the merged
+one it names.
 
 ## Assets and privacy
 

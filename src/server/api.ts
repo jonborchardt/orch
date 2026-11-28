@@ -49,6 +49,7 @@ import {
 import { planJob } from '../ops/factory.ts';
 import { gradedReadiness } from '../ops/init.ts';
 import { mergeView } from '../ops/merge-view.ts';
+import { jobFinish } from '../ops/tickets.ts';
 import { jobTokens, storedUsage } from '../ops/token-usage.ts';
 import { ENDS, visits } from '../ops/usage.ts';
 import { currentFlakes } from '../ops/verify.ts';
@@ -969,6 +970,7 @@ export function detail(store: Store, id: string): JobDetailView {
     choices: human?.choices ?? null,
     needed: human?.needed ?? null,
     afterAction: human === null ? null : afterAction(store, job),
+    finish: jobFinish(store, job),
     conflicts,
     links: {
       vscode: job.worktreePath ? vscodeLink(job.worktreePath) : null,
