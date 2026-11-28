@@ -1,11 +1,12 @@
 /** The ticket readiness repository check: per-call budget and the timeout memo (ticket 0101). */
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { ToolError } from '../src/core/errors.ts';
+import { CheckoutTimeoutError, ToolError, ValidationError } from '../src/core/errors.ts';
 import { blockReasons } from '../src/core/tickets.ts';
 import { commonGitDir, commonGitDirWithin } from '../src/git/repo.ts';
 import {
   addTicket,
+  DISPATCH_REPO_CHECK_BUDGET_MS,
   listTickets,
   REPO_CHECK_BUDGET_MS,
   REPO_TIMEOUT_TTL_MS,
@@ -101,7 +102,7 @@ describe('timeout memo', () => {
     expect(git.calls.map((c) => c.path)).toEqual([slow]);
   });
 
-  it('a remembered timeout blocks the ticket in listTickets and ticketJobRequest', () => {
+  it('a remembered timeout blocks the ticket in listTickets; ticketJobRequest asks Git itself', () => {
     const s = tempStore();
     store = s;
     const repo = makeRepo('git@github.com:acme/slow.git');
@@ -113,7 +114,45 @@ describe('timeout memo', () => {
     expect(row).toMatchObject({ id: t.id, ready: false });
     expect(row?.blockedBy[0]?.kind).toBe('repository');
     expect(row?.blockedBy[0]?.detail).toMatch(/did not answer Git in time/);
-    expect(() => ticketJobRequest(s, t.id, undefined)).toThrow(/cannot be started/);
+    // The dispatch path ignores the memo: its own lookup, with its own budget, answers.
+    expect(ticketJobRequest(s, t.id, undefined).path).toBe(t.repoPath);
+    const git = fakeGit([]);
+    ticketJobRequest(s, t.id, undefined, git.lookup);
+    expect(git.calls).toEqual([{ path: t.repoPath, timeoutMs: DISPATCH_REPO_CHECK_BUDGET_MS }]);
+    // And it leaves the memo alone: the list is still blocked.
+    expect(listTickets(s, { view: 'ready' }).tickets).toEqual([]);
+  });
+});
+
+describe('ticketJobRequest', () => {
+  it('a timeout is a CheckoutTimeoutError that is not memoized; missing and wrong target stay ValidationErrors', () => {
+    const s = tempStore();
+    store = s;
+    const repo = makeRepo('git@github.com:acme/dispatch.git');
+    const t = addTicket(s, { title: 'Dispatched', repo });
+    const thrown = (fn: () => unknown): unknown => {
+      try {
+        fn();
+      } catch (e) {
+        return e;
+      }
+      return undefined;
+    };
+
+    const slow = thrown(() => ticketJobRequest(s, t.id, undefined, () => ({ timedOut: true })));
+    expect(slow).toBeInstanceOf(CheckoutTimeoutError);
+    expect(slow).not.toBeInstanceOf(ValidationError);
+    expect((slow as Error).message).toMatch(/did not answer Git within 30 s\. Nothing was created/);
+    // Not written to the list's memo: the ticket is still ready there.
+    expect(listTickets(s, { view: 'ready' }).tickets.map((x) => x.id)).toEqual([t.id]);
+
+    const missing = thrown(() => ticketJobRequest(s, t.id, undefined, () => undefined));
+    expect(missing).toBeInstanceOf(ValidationError);
+    expect((missing as Error).message).toMatch(/is not available here.*Nothing was created/);
+
+    const elsewhere = thrown(() => ticketJobRequest(s, t.id, makeRepo()));
+    expect(elsewhere).toBeInstanceOf(ValidationError);
+    expect((elsewhere as Error).message).toMatch(/another repository.*Nothing was created/);
   });
 });
 

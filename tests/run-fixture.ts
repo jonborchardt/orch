@@ -168,12 +168,13 @@ export const MIN = 60_000;
 
 /**
  * A fake sleep that records what it was asked to wait while the session showed a limit wait
- * (`RunnerSession.wait`): the total, each distinct wait, and the live controller's status at the
- * first one. `during` runs on every such sleep.
+ * (`RunnerSession.wait`): the total, each sleep, each distinct wait, and the live controller's
+ * status at the first one. `during` runs on every such sleep.
  */
 export function sleeper(during?: (w: NonNullable<RunnerSession['wait']>) => void) {
   const seen = {
     waitMs: 0,
+    sleeps: [] as number[],
     waits: [] as NonNullable<RunnerSession['wait']>[],
     status: null as ControllerStatus | null,
   };
@@ -181,6 +182,7 @@ export function sleeper(during?: (w: NonNullable<RunnerSession['wait']>) => void
     const w = lastSession()?.wait ?? null;
     if (w !== null) {
       seen.waitMs += ms;
+      seen.sleeps.push(ms);
       if (seen.waits.at(-1)?.until !== w.until) seen.waits.push(w);
       seen.status ??= runnerStatus(store).controllers.find((c) => c.pid !== null) ?? null;
       during?.(w);

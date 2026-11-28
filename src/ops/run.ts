@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import {
+  CheckoutTimeoutError,
   LostLockError,
   OrchError,
   OwnershipError,
@@ -125,21 +126,35 @@ export const LIMIT_WAITS: LimitWaits = {
   probeSeconds: 30 * 60,
   backoffSeconds: [60, 120, 240, 480, 900],
 };
+/**
+ * How the controller waits for a ticket's checkout that did not answer Git at dispatch
+ * (`CheckoutTimeoutError`) before dispatching the same ticket again: the n-th wait in a row (the
+ * last one repeats), at most `boundSeconds` in total, then the run stops resumably (decision
+ * 2026-11-27-controller-waits-for-slow-git).
+ */
+export const CHECKOUT_WAITS = {
+  boundSeconds: 30 * 60,
+  backoffSeconds: [15, 30, 60, 120] as readonly number[],
+};
+export type CheckoutWaits = typeof CHECKOUT_WAITS;
 const POLL_MS = 2000;
 const BEAT_MS = 30_000;
 /** The stop code of a child that hit a Claude usage or rate limit; the run stays resumable. */
 const USAGE_LIMIT = 'usage-limit';
 /** The stop code of a child that could not reach the Claude API past the wait's bound. */
 const API_UNREACHABLE = 'api-unreachable';
+/** The stop code of a ticket whose checkout did not answer Git past the checkout wait's bound. */
+const CHECKOUT_TIMEOUT = 'checkout-timeout';
 export const REBUILT_REASON = 'orch was rebuilt since this controller started; run orch resume';
 /**
  * Run-wide stops that leave the session unfinished with its ticket in flight, for `orch resume`
  * (decisions 2026-11-24-usage-limit-ends-run-resumably, 2026-11-25-environment-stops-are-resumable,
- * 2026-11-26-controller-waits-for-limits).
+ * 2026-11-26-controller-waits-for-limits, 2026-11-27-controller-waits-for-slow-git).
  */
 const RESUMABLE_CODES: readonly string[] = [
   USAGE_LIMIT,
   API_UNREACHABLE,
+  CHECKOUT_TIMEOUT,
   'orch-rebuilt',
   'bad-config',
 ];
@@ -175,6 +190,8 @@ export interface RunOptions {
   githubBackoff?: readonly number[] | undefined;
   /** The limit and outage waits; tests shorten them. Defaults to `LIMIT_WAITS`. */
   limitWaits?: Partial<LimitWaits> | undefined;
+  /** The slow-checkout waits at dispatch; tests shorten them. Defaults to `CHECKOUT_WAITS`. */
+  checkoutWaits?: Partial<CheckoutWaits> | undefined;
   /** The installed build's identity (`buildStamp`); tests replace it. */
   build?: (() => string | null) | undefined;
   /** How often the session heartbeat runs; tests shorten it. Defaults to `BEAT_MS`. */
@@ -252,6 +269,7 @@ interface Run {
   ciMaxPolls: number;
   githubBackoff: readonly number[];
   limitWaits: LimitWaits;
+  checkoutWaits: CheckoutWaits;
   /**
    * Own-allowance limits with no known reset, remembered for this controller process only
    * (decision 2026-11-26-per-model-limit-falls-back); ones with a reset time are read from events.
@@ -938,22 +956,61 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
   if (job === undefined) {
     const refused = mergeNotEnabled(store, ticket);
     if (refused !== null) return out('refused', refused, null);
-    run.assertOwned();
-    try {
-      job = dispatchJob(store, {
-        ticket: ticketId,
-        session: RUNNER_SESSION,
-        cwd: ticket.repoPath,
-        mode: fast ? 'fast' : 'full',
-      }).job;
-    } catch (err) {
-      if (!(err instanceof OrchError)) throw err;
-      // Losing the claim to another process is an ordinary outcome: its job is the ticket's job.
-      const other = showTicket(store, ticketId).ticket.activeJob;
-      if (other !== null) return out('claimed', `job ${other} was created for it meanwhile`, other);
-      const bad = configProblem(store);
-      if (bad !== null) return out('blocked', bad, null, 'orch resume', 'bad-config');
-      return out('refused', err.message, null);
+    // Seconds waited in a row for a checkout that did not answer Git, and how many waits.
+    let waited = 0;
+    let waits = 0;
+    while (job === undefined) {
+      run.assertOwned();
+      try {
+        job = dispatchJob(store, {
+          ticket: ticketId,
+          session: RUNNER_SESSION,
+          cwd: ticket.repoPath,
+          mode: fast ? 'fast' : 'full',
+        }).job;
+      } catch (err) {
+        if (!(err instanceof OrchError)) throw err;
+        // A slow Git answer is the machine's state, not the ticket's: keep the ticket, wait, and
+        // dispatch it again (decision 2026-11-27-controller-waits-for-slow-git).
+        if (err instanceof CheckoutTimeoutError) {
+          const cw = run.checkoutWaits;
+          const seconds = cw.backoffSeconds[Math.min(waits, cw.backoffSeconds.length - 1)] ?? 0;
+          if (waited + seconds > cw.boundSeconds) {
+            return out(
+              'blocked',
+              `${err.message} orch resume continues the session`,
+              null,
+              'orch resume',
+              CHECKOUT_TIMEOUT,
+            );
+          }
+          const wait = {
+            reason: 'the repository checkout to answer Git',
+            until: new Date(Date.now() + seconds * 1000).toISOString(),
+          };
+          run.log(`  ticket ${key}: ${err.message} Waiting until ${wait.until}`);
+          if (await waitOut(run, wait, seconds)) {
+            return out(
+              'stopped',
+              'stopped on request; nothing was dispatched',
+              null,
+              'orch resume',
+            );
+          }
+          waited += seconds;
+          waits += 1;
+          const env = run.environment();
+          if (env !== null) return out('blocked', env.reason, null, 'orch resume', env.code);
+          continue;
+        }
+        // Losing the claim to another process is an ordinary outcome: its job is the ticket's job.
+        const other = showTicket(store, ticketId).ticket.activeJob;
+        if (other !== null)
+          return out('claimed', `job ${other} was created for it meanwhile`, other);
+        const bad = configProblem(store);
+        if (bad !== null) return out('blocked', bad, null, 'orch resume', 'bad-config');
+        return out('refused', err.message, null);
+      }
     }
     run.log(`  job ${job.id}: dispatched${job.mode === 'fast' ? ' (fast)' : ''}`);
   } else {
@@ -1297,6 +1354,7 @@ async function drive(
     ciMaxPolls: opts.ciMaxPolls ?? CI_MAX_POLLS,
     githubBackoff: opts.githubBackoff ?? GITHUB_BACKOFF_SECONDS,
     limitWaits: { ...LIMIT_WAITS, ...opts.limitWaits },
+    checkoutWaits: { ...CHECKOUT_WAITS, ...opts.checkoutWaits },
     limits: [],
     owned: () => lock.owned(),
     assertOwned: () => {

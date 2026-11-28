@@ -1344,6 +1344,7 @@ describe('endsRun: only run-wide outcomes end the queue', () => {
       [
         'api-unreachable',
         'bad-config',
+        'checkout-timeout',
         'claude-failed',
         'orch-rebuilt',
         'github-refused',
