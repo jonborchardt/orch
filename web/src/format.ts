@@ -3,9 +3,23 @@ import type {
   BoardRow,
   JobDetailView,
   Liveness,
+  TokenCounts,
   Verdict,
 } from '../../src/server/types.ts';
 import { statusColor } from './theme.ts';
+
+/** Approximate API price ratios, in plain-input-token equivalents. Not real prices. */
+export const WEIGHTS: TokenCounts = { input: 1, cacheCreation: 1.25, cacheRead: 0.1, output: 5 };
+
+/** A token count's cost weight: each kind times its WEIGHTS ratio. */
+export const weight = (c: TokenCounts) =>
+  c.input * WEIGHTS.input +
+  c.output * WEIGHTS.output +
+  c.cacheRead * WEIGHTS.cacheRead +
+  c.cacheCreation * WEIGHTS.cacheCreation;
+
+/** The one display rule for a weight: a whole number. */
+export const w = (x: number) => x.toLocaleString(undefined, { maximumFractionDigits: 0 });
 
 export function elapsed(ms: number): string {
   const s = Math.floor(ms / 1000);

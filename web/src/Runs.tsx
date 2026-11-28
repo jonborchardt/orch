@@ -2,17 +2,20 @@ import {
   Alert,
   Box,
   LinearProgress,
+  Link,
   Table,
   TableBody,
   TableCell,
   TableContainer,
+  TableHead,
   TableRow,
   Typography,
 } from '@mui/material';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import type { MergedTicketRow, RunsView, TokenCounts, TrustRow } from '../../src/server/types.ts';
 import { errorText, fetchRuns } from './api.ts';
-import { elapsedCell } from './format.ts';
+import { elapsedCell, w, weight } from './format.ts';
 
 export const UNAVAILABLE = 'Unavailable';
 
@@ -98,6 +101,105 @@ export function Polled({
 
 export const duration = (ms: number | null) => (ms === null ? UNAVAILABLE : elapsedCell(ms));
 
+const pct = (x: number | null) => (x === null ? UNAVAILABLE : `${(x * 100).toFixed(1)}%`);
+const num = (x: number | null) => (x === null ? UNAVAILABLE : String(x));
+const seconds = (s: number | null) => duration(s === null ? null : s * 1000);
+/** A ticket's tokens as their cost weight (the Usage section's rule); Unavailable when null. */
+const cost = (c: TokenCounts | null) => (c === null ? UNAVAILABLE : w(weight(c)));
+
+const TRUST_ROWS: [string, (r: TrustRow) => string][] = [
+  ['Finished jobs', (r) => String(r.finishedJobs)],
+  ['Escalation rate (escalated / finished)', (r) => pct(r.escalationRate)],
+  ['First-pass rate (first pass / merged)', (r) => pct(r.firstPassRate)],
+  ['Rounds (median)', (r) => num(r.rounds.median)],
+  ['Rounds (max)', (r) => num(r.rounds.max)],
+  ['CI repairs (median)', (r) => num(r.ciRepairs.median)],
+  ['CI repairs (max)', (r) => num(r.ciRepairs.max)],
+  ['Elapsed (median)', (r) => duration(r.elapsedMs)],
+  ['Agent time (median)', (r) => seconds(r.agentSeconds)],
+  [
+    'Tokens (median, plain total, not weighted)',
+    (r) => (r.tokens === null ? UNAVAILABLE : w(r.tokens)),
+  ],
+];
+
+const TICKET_COLUMNS: [string, (t: MergedTicketRow) => React.ReactNode][] = [
+  ['Ticket', (t) => `${t.ticketKey} ${t.title}`],
+  ['Job', (t) => <Link href={`#/jobs/${t.jobId}`}>{t.jobId}</Link>],
+  ['Mode', (t) => t.mode],
+  ['Jobs', (t) => String(t.jobCount)],
+  ['Rounds', (t) => String(t.rounds)],
+  ['CI repairs', (t) => String(t.ciRepairs)],
+  ['Escalated', (t) => (t.escalated ? 'Yes' : 'No')],
+  ['Elapsed', (t) => duration(t.elapsedMs)],
+  ['Agent time', (t) => seconds(t.agentSeconds)],
+  ['Weight', (t) => cost(t.tokens)],
+];
+
+function TrustTables({ data }: { data: RunsView }) {
+  const recorded = data.tickets.filter((t) => t.tokens !== null).length;
+  return (
+    <>
+      <Typography variant="subtitle1" component="h2" sx={{ mt: 3 }}>
+        Trust and cost
+      </Typography>
+      <TableContainer>
+        <Table size="small" aria-label="Trust and cost">
+          <TableHead>
+            <TableRow>
+              <TableCell>Metric</TableCell>
+              <TableCell align="right">Full</TableCell>
+              <TableCell align="right">Fast</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {TRUST_ROWS.map(([k, f]) => (
+              <TableRow key={k}>
+                <TableCell component="th" scope="row">
+                  {k}
+                </TableCell>
+                <TableCell align="right">{f(data.trust.full)}</TableCell>
+                <TableCell align="right">{f(data.trust.fast)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 1 }}>
+        {`Per-ticket medians and maxima cover the merged tickets with a recorded value; tokens recorded for ${String(recorded)} of ${String(data.tickets.length)} merged tickets.`}
+      </Typography>
+      <Typography variant="subtitle1" component="h2" sx={{ mt: 3 }}>
+        Merged tickets
+      </Typography>
+      <TableContainer>
+        <Table size="small" aria-label="Merged tickets">
+          <TableHead>
+            <TableRow>
+              {TICKET_COLUMNS.map(([name]) => (
+                <TableCell key={name}>{name}</TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {data.tickets.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={TICKET_COLUMNS.length}>No merged tickets yet.</TableCell>
+              </TableRow>
+            )}
+            {data.tickets.map((t) => (
+              <TableRow key={t.jobId}>
+                {TICKET_COLUMNS.map(([name, f]) => (
+                  <TableCell key={name}>{f(t)}</TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </>
+  );
+}
+
 export function RunsPage({ refreshMs = 4000 }: { refreshMs?: number }) {
   const { data, error } = usePolled(fetchRuns, refreshMs);
   const rows: [string, string][] = data
@@ -106,10 +208,7 @@ export function RunsPage({ refreshMs = 4000 }: { refreshMs?: number }) {
         ['Completed', String(data.completed)],
         ['Cancelled', String(data.cancelled)],
         ['Active', String(data.active)],
-        [
-          'Completion rate (completed / finished)',
-          data.completionRate === null ? UNAVAILABLE : `${(data.completionRate * 100).toFixed(1)}%`,
-        ],
+        ['Completion rate (completed / finished)', pct(data.completionRate)],
         ['Average duration (completed)', duration(data.durationMs.average)],
         ['Median duration (completed)', duration(data.durationMs.median)],
         ['Completed jobs with unknown duration', String(data.durationUnknown)],
@@ -135,6 +234,7 @@ export function RunsPage({ refreshMs = 4000 }: { refreshMs?: number }) {
           </TableBody>
         </Table>
       </TableContainer>
+      {data && <TrustTables data={data} />}
     </Polled>
   );
 }

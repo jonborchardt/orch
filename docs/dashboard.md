@@ -83,6 +83,27 @@ the newest `job.completed` or `job.cancelled` event); completed jobs with no kno
 counted in `durationUnknown`. `completedPerHour` is completed jobs divided by the hours from the
 earliest `createdAt` of any job to the latest finish of a completed job, over the whole history.
 
+Below them, **Trust and cost** compares `full` and `fast` jobs (`trust.full`, `trust.fast`), and
+**Merged tickets** (`tickets`) lists every ticket the factory merged, newest merge first, both over
+the whole history. A merged job has `prState = 'merged'`; a merged ticket has at least one merged
+job with its `ticketId`, and its merged job is the one with the newest finish (ties by job id),
+which also gives the ticket's mode, `rounds` (`jobs.round`), and `ciRepairs` (`jobs.ciRepairs`).
+Per mode, `finishedJobs` counts completed and cancelled jobs; `escalationRate` is finished jobs
+with a `job.blocked` event / finished jobs; `firstPassRate` is merged jobs with `round <= 1` and no
+`job.reworked` or `job.blocked` event / merged jobs (ticket or not). Each rate is null with no
+denominator. `jobs.round` also rises on base-integration rework, so the first-pass rate is
+conservative. A ticket's `escalated` is true when any of its jobs has `job.blocked`, and
+`jobCount` counts all its jobs. Cost sums every job of the ticket that has a recorded value, the
+cancelled ones included: Elapsed is the sum of each job's `createdAt` to finish (as above), Agent
+time the sum of its `runner.session` `seconds`, and tokens the sum of its recorded sessions, with
+`tokenJobs` the jobs that had any; a ticket with no recorded value reads Unavailable, never zero.
+The Merged tickets table shows tokens as the Usage section's weight, in its Weight column, and
+reads "No merged tickets yet." when there are none. The mode's medians and
+maxima of rounds, CI repairs, Elapsed, Agent time, and tokens are over its merged tickets with a
+value, and null (Unavailable) when none has one; the token median is plain total tokens (input +
+output + cache read + cache creation), not weighted. The caption counts the merged tickets with
+recorded tokens.
+
 **Agents** (`GET /api/agents`, `agents` in `src/server/api.ts`) shows two tables, Reviewers and
 Stages; every role in `ROLES` (`src/core/roles.ts`) is in exactly one, in `ROLES` order. Only
 finished runs count, so in every row Runs is the sum of its outcome columns. Average and Median

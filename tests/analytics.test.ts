@@ -6,6 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ROLES } from '../src/core/roles.ts';
+import { ticketKey } from '../src/core/tickets.ts';
 import { MAX_ROUNDS_REASON } from '../src/core/workflow.ts';
 import { cancelJob } from '../src/ops/actions.ts';
 import { jobUsage } from '../src/ops/usage.ts';
@@ -64,6 +65,17 @@ function seedJob(
   return job.id;
 }
 
+const NO_TRUST: RunsView['trust']['full'] = {
+  finishedJobs: 0,
+  escalationRate: null,
+  firstPassRate: null,
+  rounds: { median: null, max: null },
+  ciRepairs: { median: null, max: null },
+  elapsedMs: null,
+  agentSeconds: null,
+  tokens: null,
+};
+
 function seedRuns() {
   seedJob({ status: 'completed', createdAt: at(0), completedAt: at(HOUR) }); // 1h
   seedJob({ status: 'completed', createdAt: at(HOUR), completedAt: at(3 * HOUR) }); // 2h
@@ -105,6 +117,8 @@ describe('GET /api/runs', () => {
       durationUnknown: 1,
       // Earliest creation T0 to the latest completed finish T0+9h; the cancelled 10h is ignored.
       completedPerHour: 4 / 9,
+      trust: { full: { ...NO_TRUST, finishedJobs: 5, escalationRate: 0 }, fast: NO_TRUST },
+      tickets: [],
     });
   });
 
@@ -118,7 +132,107 @@ describe('GET /api/runs', () => {
       durationMs: { average: null, median: null },
       durationUnknown: 0,
       completedPerHour: null,
+      trust: { full: NO_TRUST, fast: NO_TRUST },
+      tickets: [],
     });
+  });
+
+  it('reports trust and cost per merged ticket, fast against full (ticket 0084 AC1-AC3)', async () => {
+    const ticket = (title: string) =>
+      createTicket(store, { title, type: 'feature', body: 'b', repo: 'r', repoPath: '/r' }).id;
+    const a = ticket('Two jobs');
+    const b = ticket('First pass');
+    const tokens = (jobId: string, input: number, output: number) => {
+      insertUsage(store, {
+        ref: `ref-${jobId}`,
+        jobId,
+        source: 'runner',
+        hours: [{ hour: T0, input, output, cacheRead: 0, cacheCreation: 0 }],
+      });
+    };
+    const session = (jobId: string, seconds: number) =>
+      appendEvent(store.db, jobId, 'runner.session', { seconds }, null, at(0));
+    // Ticket A: a cancelled, escalated job, then a reworked round-2 job that merged.
+    const a1 = seedJob({
+      ticketId: a,
+      status: 'cancelled',
+      createdAt: at(0),
+      completedAt: at(HOUR),
+    });
+    appendEvent(store.db, a1, 'job.blocked', {}, null, at(HOUR / 2));
+    tokens(a1, 100, 10);
+    session(a1, 60);
+    const a2 = seedJob({
+      ticketId: a,
+      status: 'completed',
+      prState: 'merged',
+      round: 2,
+      ciRepairs: 1,
+      createdAt: at(2 * HOUR),
+      completedAt: at(4 * HOUR),
+    });
+    appendEvent(store.db, a2, 'job.reworked', {}, null, at(3 * HOUR));
+    tokens(a2, 200, 20);
+    session(a2, 120);
+    // Ticket B: first pass, merged last, nothing recorded.
+    const b1 = seedJob({
+      ticketId: b,
+      status: 'completed',
+      prState: 'merged',
+      round: 1,
+      createdAt: at(0),
+      completedAt: at(5 * HOUR),
+    });
+    // A merged job with no ticket counts in the job rates only; it escalated.
+    const c = seedJob({ status: 'completed', prState: 'merged', round: 1, createdAt: at(0) });
+    appendEvent(store.db, c, 'job.blocked', {}, null, at(HOUR));
+    // Fast: one finished job that never merged, one active job on a ticket.
+    seedJob({ status: 'completed', createdAt: at(0), completedAt: at(HOUR) }, 'fast');
+    seedJob({ ticketId: ticket('Open'), status: 'running', createdAt: at(0) }, 'fast');
+
+    const r = await json<RunsView>('/api/runs');
+    expect(r.trust.full).toEqual({
+      finishedJobs: 4,
+      escalationRate: 2 / 4,
+      firstPassRate: 1 / 3,
+      rounds: { median: 1.5, max: 2 },
+      ciRepairs: { median: 0.5, max: 1 },
+      elapsedMs: 4 * HOUR,
+      agentSeconds: 180,
+      tokens: 330,
+    });
+    // No merged fast job: every per-ticket figure and the first-pass rate are null.
+    expect(r.trust.fast).toEqual({ ...NO_TRUST, finishedJobs: 1, escalationRate: 0 });
+    expect(r.tickets).toEqual([
+      {
+        ticketKey: ticketKey(b),
+        title: 'First pass',
+        jobId: b1,
+        mode: 'full',
+        jobCount: 1,
+        rounds: 1,
+        ciRepairs: 0,
+        escalated: false,
+        elapsedMs: 5 * HOUR,
+        agentSeconds: null,
+        tokens: null,
+        tokenJobs: 0,
+      },
+      {
+        ticketKey: ticketKey(a),
+        title: 'Two jobs',
+        jobId: a2,
+        mode: 'full',
+        jobCount: 2,
+        rounds: 2,
+        ciRepairs: 1,
+        escalated: true,
+        elapsedMs: 3 * HOUR,
+        agentSeconds: 180,
+        tokens: { input: 300, output: 30, cacheRead: 0, cacheCreation: 0 },
+        tokenJobs: 2,
+      },
+    ]);
   });
 });
 

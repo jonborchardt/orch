@@ -26,6 +26,58 @@ const RUNS: RunsView = {
   durationMs: { average: 2 * 3_600_000, median: null },
   durationUnknown: 1,
   completedPerHour: null,
+  trust: {
+    full: {
+      finishedJobs: 4,
+      escalationRate: 0.25,
+      firstPassRate: 0.5,
+      rounds: { median: 1.5, max: 2 },
+      ciRepairs: { median: 0, max: 1 },
+      elapsedMs: 3_600_000,
+      agentSeconds: 90,
+      tokens: 330,
+    },
+    fast: {
+      finishedJobs: 0,
+      escalationRate: null,
+      firstPassRate: null,
+      rounds: { median: null, max: null },
+      ciRepairs: { median: null, max: null },
+      elapsedMs: null,
+      agentSeconds: null,
+      tokens: null,
+    },
+  },
+  tickets: [
+    {
+      ticketKey: '0007',
+      title: 'Export CSV',
+      jobId: 'job-0000abcd',
+      mode: 'full',
+      jobCount: 2,
+      rounds: 2,
+      ciRepairs: 1,
+      escalated: true,
+      elapsedMs: 2 * 3_600_000,
+      agentSeconds: 180,
+      tokens: { input: 300, output: 30, cacheRead: 0, cacheCreation: 0 },
+      tokenJobs: 2,
+    },
+    {
+      ticketKey: '0008',
+      title: 'Plain',
+      jobId: 'job-0000abce',
+      mode: 'full',
+      jobCount: 1,
+      rounds: 1,
+      ciRepairs: 0,
+      escalated: false,
+      elapsedMs: null,
+      agentSeconds: null,
+      tokens: null,
+      tokenJobs: 0,
+    },
+  ],
 };
 
 const timed = { unmeasured: 0, averageMs: null, medianMs: null, totalMs: null, tokens: null };
@@ -55,6 +107,7 @@ const NO_MODELS = {
   attributed: { sessions: 0, of: 0 },
 };
 let AGENTS: AgentsView;
+let runs: RunsView;
 const SOME_UNMEASURED: AgentsView = {
   ...NO_MODELS,
   reviewers: [
@@ -78,6 +131,7 @@ let gets: string[];
 beforeEach(() => {
   gets = [];
   AGENTS = SOME_UNMEASURED;
+  runs = RUNS;
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
@@ -85,7 +139,7 @@ beforeEach(() => {
       gets.push(url);
       const body =
         url === '/api/runs'
-          ? RUNS
+          ? runs
           : url === '/api/agents'
             ? AGENTS
             : url === '/api/runner'
@@ -145,6 +199,94 @@ describe('Runs and Agents sections', () => {
     expect(screen.queryByLabelText('Summary')).toBeNull();
     expect(screen.queryByRole('searchbox', { name: 'Filter' })).toBeNull();
     expect(gets).not.toContain('/api/jobs');
+  });
+
+  it('renders Trust and cost, Full against Fast, with its coverage caption (ticket 0084 AC4)', async () => {
+    mount('#/runs');
+    const table = await screen.findByRole('table', { name: 'Trust and cost' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent),
+    ).toEqual(['Metric', 'Full', 'Fast']);
+    expect(
+      within(table)
+        .getAllByRole('rowheader')
+        .map((h) => h.textContent),
+    ).toEqual([
+      'Finished jobs',
+      'Escalation rate (escalated / finished)',
+      'First-pass rate (first pass / merged)',
+      'Rounds (median)',
+      'Rounds (max)',
+      'CI repairs (median)',
+      'CI repairs (max)',
+      'Elapsed (median)',
+      'Agent time (median)',
+      'Tokens (median, plain total, not weighted)',
+    ]);
+    const cells = (label: string) =>
+      [
+        ...(within(table)
+          .getByRole('rowheader', { name: label })
+          .closest('tr')
+          ?.querySelectorAll('td') ?? []),
+      ].map((c) => c.textContent);
+    expect(cells('First-pass rate (first pass / merged)')).toEqual(['50.0%', 'Unavailable']);
+    expect(cells('Tokens (median, plain total, not weighted)')).toEqual(['330', 'Unavailable']);
+    expect(screen.getByText(/tokens recorded for 1 of 2 merged tickets/)).toHaveTextContent(
+      /medians and maxima cover the merged tickets with a recorded value/,
+    );
+  });
+
+  it('renders Merged tickets with a job link and weighted tokens (ticket 0084 AC5)', async () => {
+    mount('#/runs');
+    const table = await screen.findByRole('table', { name: 'Merged tickets' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent),
+    ).toEqual([
+      'Ticket',
+      'Job',
+      'Mode',
+      'Jobs',
+      'Rounds',
+      'CI repairs',
+      'Escalated',
+      'Elapsed',
+      'Agent time',
+      'Weight',
+    ]);
+    const rows = within(table).getAllByRole('row').slice(1);
+    const cells = (r: HTMLElement) => [...r.querySelectorAll('td')].map((c) => c.textContent);
+    // 300 * 1 + 30 * 5 = 450 by the Usage section's WEIGHTS.
+    expect(rows.map(cells)).toEqual([
+      ['0007 Export CSV', 'job-0000abcd', 'full', '2', '2', '1', 'Yes', '2h 0m', '3m', '450'],
+      [
+        '0008 Plain',
+        'job-0000abce',
+        'full',
+        '1',
+        '1',
+        '0',
+        'No',
+        'Unavailable',
+        'Unavailable',
+        'Unavailable',
+      ],
+    ]);
+    expect(within(table).getByRole('link', { name: 'job-0000abcd' })).toHaveAttribute(
+      'href',
+      '#/jobs/job-0000abcd',
+    );
+  });
+
+  it('says so when no ticket has merged yet', async () => {
+    runs = { ...RUNS, tickets: [] };
+    mount('#/runs');
+    const table = await screen.findByRole('table', { name: 'Merged tickets' });
+    expect(within(table).getByText('No merged tickets yet.')).toBeInTheDocument();
   });
 
   it('renders Reviewers and Stages tables with plain outcome columns', async () => {

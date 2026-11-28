@@ -22,8 +22,8 @@ import type {
   TokenCounts,
 } from '../../src/server/types.ts';
 import { duration, Polled, UNAVAILABLE, usePolled } from './Runs.tsx';
-import { w, weight } from './Usage.tsx';
 import { fetchAgents } from './api.ts';
+import { w, weight } from './format.ts';
 
 type Row = AgentTiming & RoleTokens & { role: string; runs: number };
 
