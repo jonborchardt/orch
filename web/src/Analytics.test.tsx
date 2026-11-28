@@ -223,7 +223,9 @@ describe('Runs and Agents sections', () => {
       expect(screen.queryByRole('columnheader', { name: old })).toBeNull();
     }
     expect(screen.queryByText('Not recorded')).toBeNull();
-    expect(screen.getByText('Stage time includes coordinator work.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Stage time includes coordinator work; stage Tokens do not.'),
+    ).toBeInTheDocument();
     // Only the Reviewers table has runs without a duration.
     expect(screen.getAllByText(/^Runs without a duration/).map((c) => c.textContent)).toEqual([
       'Runs without a duration, left out of Average and Median: spec-challenger 3.',
@@ -338,7 +340,7 @@ describe('Runs and Agents sections', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Tokens per review are not measured: a session's tokens are recorded per job, not per agent.",
+        'Tokens per model are not measured for reviewers; the per-role Tokens above are.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByText(/orch records no Git revert/)).toBeInTheDocument();

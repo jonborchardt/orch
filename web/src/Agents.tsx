@@ -250,7 +250,7 @@ function ByModel({ data }: { data: AgentsView }) {
         notes={[
           'Findings count attributed blocking findings each reviewer raised; open ones and rounds consolidated before attribution are left out.',
           'Escapes count a revert only when a ticket titled "revert" names the job or its PR: orch records no Git revert.',
-          "Tokens per review are not measured: a session's tokens are recorded per job, not per agent.",
+          'Tokens per model are not measured for reviewers; the per-role Tokens above are.',
         ]}
       />
       <ModelTable
@@ -306,14 +306,14 @@ export function AgentsPage({ refreshMs = 4000 }: { refreshMs?: number }) {
         label="Stages"
         rows={data?.stages ?? []}
         columns={STAGE_COLUMNS}
-        note="Stage time includes coordinator work."
+        note="Stage time includes coordinator work; stage Tokens do not."
       />
       {data && (
         <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 3 }}>
-          Tokens are a role&apos;s subagent transcripts as a cost weight (see Usage), never the
-          coordinator&apos;s: coordinator {cost(data.coordinator)}, other {cost(data.other)}; tokens
-          attributed for {String(data.attributed.sessions)} of {String(data.attributed.of)} recorded
-          sessions.
+          Tokens are a role&apos;s subagent transcripts, shown as a cost weight (see Usage), never
+          the coordinator&apos;s. Cost weight outside the roles: coordinator{' '}
+          {cost(data.coordinator)}, other {cost(data.other)}; tokens attributed for{' '}
+          {String(data.attributed.sessions)} of {String(data.attributed.of)} recorded sessions.
         </Typography>
       )}
       {data && <ByModel data={data} />}

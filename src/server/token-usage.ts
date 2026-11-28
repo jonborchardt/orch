@@ -128,18 +128,17 @@ export function readSessionUsage(
   }
   if (found.subRefused)
     miss(`The subagents directory of ${ref} is outside the projects directory.`);
-  const ids = new Map(found.agents.map((a) => [a.name, a.id]));
-  const names = [...ids.keys()].sort();
-  if (names.length > L.USAGE_SUBAGENT_FILES) {
+  const subs = [...found.agents].sort((a, b) => (a.name < b.name ? -1 : 1));
+  if (subs.length > L.USAGE_SUBAGENT_FILES) {
     miss(`Session ${ref} has more than ${String(L.USAGE_SUBAGENT_FILES)} subagent files.`);
   }
   const files: { file: Found | null; name: string; root: string; agent: string | null }[] = [
     { file: found.main, name: `${ref}.jsonl`, root: found.projects, agent: null },
-    ...names.slice(0, L.USAGE_SUBAGENT_FILES).map((name) => ({
+    ...subs.slice(0, L.USAGE_SUBAGENT_FILES).map(({ name, id }) => ({
       file: confined(join(found.sub, name), found.sub),
       name,
       root: found.sub,
-      agent: ids.get(name) ?? null,
+      agent: id,
     })),
   ];
   for (const { file, name, root, agent } of files) {
