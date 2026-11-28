@@ -336,7 +336,8 @@ describe('ci stage: every page of checks is read', () => {
     expect(r.evaluation.failed.map((x) => x.name)).toEqual(['test']);
     expect(r.outcome).not.toBe('passing');
     const api = shim.read().calls.filter((x) => x[0] === 'api');
-    const runs = api.filter((x) => x[1]?.includes('check-runs?'));
+    // The head's runs in one call (the base tip's are read separately, ticket 0228).
+    const runs = api.filter((x) => x[1]?.includes(`${sha}/check-runs?`));
     expect(runs).toHaveLength(1);
     expect(runs[0]).toEqual(expect.arrayContaining(['--paginate', '--slurp']));
     expect(api.find((x) => x[1]?.includes('/status?'))).toEqual(
