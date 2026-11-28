@@ -1032,6 +1032,95 @@ describe('Shared header (ticket 0136)', () => {
   });
 });
 
+describe('Browser tab title (ticket 0030)', () => {
+  const blocked = (id: string) => row({ id, liveness: 'blocked', status: 'blocked' });
+
+  it('counts the jobs that need a human on the board, and says orch before the first response', async () => {
+    const first = Promise.withResolvers<undefined>();
+    hold.board = first.promise;
+    data.rows = [blocked('job-0000000a'), blocked('job-0000000b'), blocked('job-0000000c')];
+    mockFetch();
+    document.title = 'stale';
+    mount();
+    await waitFor(() => {
+      expect(document.title).toBe('orch');
+    });
+    hold = {};
+    first.resolve(undefined);
+    await waitFor(() => {
+      expect(document.title).toBe('(3) orch');
+    });
+    data.rows = [row({})];
+    await waitFor(() => {
+      expect(document.title).toBe('orch');
+    });
+  });
+
+  it("names the loaded job, never the previous one's, and restores the board title on leaving", async () => {
+    mockFetch();
+    window.location.hash = '#/jobs/job-00000003';
+    mount();
+    await waitFor(() => {
+      expect(document.title).toBe('Gamma blocked · orch');
+    });
+    const next = Promise.withResolvers<undefined>();
+    hold.detail = next.promise;
+    const base = detail();
+    data.detail = { ...base, job: { ...base.job, id: 'job-00000004', title: 'Delta cancelled' } };
+    window.location.hash = '#/jobs/job-00000004';
+    await waitFor(() => {
+      expect(document.title).toBe('orch');
+    });
+    hold = {};
+    next.resolve(undefined);
+    await waitFor(() => {
+      expect(document.title).toBe('Delta cancelled · orch');
+    });
+    window.location.hash = '#/';
+    // One of the fixture rows is blocked.
+    await waitFor(() => {
+      expect(document.title).toBe('(1) orch');
+    });
+  });
+
+  it('shows the section name elsewhere, ticket detail included', async () => {
+    for (const [hash, title] of [
+      ['#/tickets', 'Tickets · orch'],
+      ['#/tickets/1', 'Tickets · orch'],
+      ['#/runs', 'Runs · orch'],
+      ['#/agents', 'Agents · orch'],
+      ['#/usage', 'Usage · orch'],
+    ] as const) {
+      mockFetch();
+      window.location.hash = hash;
+      document.title = 'stale';
+      mount();
+      await waitFor(() => {
+        expect(document.title).toBe(title);
+      });
+      cleanup();
+    }
+  });
+
+  it('adds no request: the board and a job page fetch only their existing routes', async () => {
+    const f = mockFetch();
+    mount();
+    await screen.findByRole('table', { name: 'Factory jobs' });
+    window.location.hash = '#/jobs/job-00000003';
+    await screen.findByRole('heading', { name: 'Gamma blocked' });
+    await waitFor(() => {
+      expect(document.title).toBe('Gamma blocked · orch');
+    });
+    const urls = new Set((f.mock.calls as [string][]).map(([u]) => u.replace(/\?.*$/, '')));
+    expect([...urls].sort()).toEqual([
+      '/api/jobs',
+      '/api/jobs/job-00000003',
+      '/api/repos',
+      '/api/runner',
+    ]);
+  });
+});
+
 describe('Job detail', () => {
   it('renders long findings, the plan error, and a working Resume at <stage> action', async () => {
     const f = mockFetch();

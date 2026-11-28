@@ -139,6 +139,11 @@ export function JobDetail({
   useEffect(() => {
     onActivity?.(!loaded ? 'loading' : busy ? 'refreshing' : 'idle');
   }, [loaded, busy, onActivity]);
+  // The tab title on a job page (App leaves it alone here); never the previous job's.
+  const jobTitle = detail?.job.id === id ? detail.job.title : null;
+  useEffect(() => {
+    document.title = jobTitle === null ? 'orch' : `${jobTitle} · orch`;
+  }, [jobTitle]);
   // The next detail page starts in its first load.
   useEffect(
     () => () => {

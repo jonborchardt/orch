@@ -34,7 +34,10 @@ board's error alert show only in Jobs; a section
 polls only what it shows, so the ticket queue is not read while Jobs is open and the job board
 rests while any other section is. Usage does not poll its own data: it loads on open, on a range
 change, and from its Refresh button; the shared header's runner poll still runs there, as on every
-section. A further section is one entry in `SECTIONS` in `web/src/App.tsx` and one branch
+section. The tab title is `(<n>) orch` on the board when `n` jobs need a human (else `orch`), the
+job's title then ` · orch` on a loaded job page (`orch` while it loads), and `<Section> · orch`
+elsewhere, ticket detail included; the icon is an inline SVG, so nothing requests `/favicon.ico`.
+A further section is one entry in `SECTIONS` in `web/src/App.tsx` and one branch
 where the page body is chosen.
 
 **Help.** After the Sections nav, on every section, a `?` button (accessible name `Help`,

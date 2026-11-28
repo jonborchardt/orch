@@ -317,6 +317,19 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
       ) as Record<StatusFilter, number>),
     [rows],
   );
+  // The tab title; JobDetail is its only writer on a job page, so the board poll behind it
+  // never puts a count there.
+  const needHuman = counts?.['needs human'] ?? 0;
+  const onJob = jobMatch !== null;
+  useEffect(() => {
+    if (onJob) return;
+    document.title =
+      section !== 'Jobs'
+        ? `${section} · orch`
+        : needHuman > 0
+          ? `(${String(needHuman)}) orch`
+          : 'orch';
+  }, [section, onJob, needHuman]);
   // A background poll after the first load; never shown alongside a first-load bar.
   const boardPolling = board.loading && rows !== null;
   const refreshing = other
