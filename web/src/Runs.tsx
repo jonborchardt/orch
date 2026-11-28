@@ -13,7 +13,7 @@ import {
 } from '@mui/material';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { RunsView, TokenCounts, TrustRow } from '../../src/server/types.ts';
+import type { MergedTicketRow, RunsView, TokenCounts, TrustRow } from '../../src/server/types.ts';
 import { errorText, fetchRuns } from './api.ts';
 import { elapsedCell, w, weight } from './format.ts';
 
@@ -123,7 +123,7 @@ const TRUST_ROWS: [string, (r: TrustRow) => string][] = [
   ],
 ];
 
-const TICKET_COLUMNS: [string, (t: RunsView['tickets'][number]) => React.ReactNode][] = [
+const TICKET_COLUMNS: [string, (t: MergedTicketRow) => React.ReactNode][] = [
   ['Ticket', (t) => `${t.ticketKey} ${t.title}`],
   ['Job', (t) => <Link href={`#/jobs/${t.jobId}`}>{t.jobId}</Link>],
   ['Mode', (t) => t.mode],

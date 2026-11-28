@@ -273,7 +273,7 @@ export function runs(store: Store): RunsView {
   };
 }
 
-const total = (c: TokenCounts) => c.input + c.output + c.cacheRead + c.cacheCreation;
+const tokenTotal = (c: TokenCounts) => c.input + c.output + c.cacheRead + c.cacheCreation;
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const ratio = (n: number, of: number) => (of === 0 ? null : n / of);
 const sumOrNull = (xs: readonly (number | null)[]) => {
@@ -346,7 +346,7 @@ function trust(
       ciRepairs: medianMax(pick((t) => t.ciRepairs)),
       elapsedMs: median(pick((t) => t.elapsedMs)),
       agentSeconds: median(pick((t) => t.agentSeconds)),
-      tokens: median(pick((t) => (t.tokens === null ? null : total(t.tokens)))),
+      tokens: median(pick((t) => (t.tokens === null ? null : tokenTotal(t.tokens)))),
     };
   };
   return { trust: { full: row('full'), fast: row('fast') }, tickets };
@@ -715,7 +715,7 @@ function modelMetrics(
       acc.blocked += blocked;
       if (t) {
         acc.tokenJobs += 1;
-        acc.tokens += t.input + t.output + t.cacheRead + t.cacheCreation;
+        acc.tokens += tokenTotal(t);
       }
     }
   }
