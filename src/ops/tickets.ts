@@ -7,7 +7,7 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join } from 'node:path';
 
-import { NotFoundError, ValidationError } from '../core/errors.ts';
+import { CheckoutTimeoutError, NotFoundError, ValidationError } from '../core/errors.ts';
 import { findProjectRoot, ticketAssetDir } from '../core/paths.ts';
 import {
   type Area,
@@ -161,11 +161,19 @@ function ticketRepository(path: string): { repo: string; repoPath: string } {
 
 /** Total time one ticket read may spend asking Git about recorded checkouts. */
 export const REPO_CHECK_BUDGET_MS = 2000;
+/**
+ * What one dispatch (`ticketJobRequest`) gives the same lookup: it runs once, not on a poll, so it
+ * can outwait a disk kept busy by a worktree removal (decision
+ * 2026-11-27-controller-waits-for-slow-git).
+ */
+export const DISPATCH_REPO_CHECK_BUDGET_MS = 30_000;
 /** How long a checkout whose Git lookup timed out is reported as timed out without asking again. */
 export const REPO_TIMEOUT_TTL_MS = 60_000;
 // ponytail: per-process memo of timed-out checkouts only (path -> expiry); not shared between
 // processes, and successful or missing results are recomputed on every call.
 const timedOutUntil = new Map<string, number>();
+const missingCheckout = (p: string): string =>
+  `its repository checkout ${p} is not available here (restore it, or orch ticket edit <id> --repo <path>)`;
 
 /**
  * Why a ticket's recorded checkout cannot be used here, memoized per distinct `repoPath` for one
@@ -185,7 +193,7 @@ export function repoProblemOf(
     const until = timedOutUntil.get(p);
     if (until !== undefined && now() < until) return timedOut(p);
     timedOutUntil.delete(p);
-    const missing = `its repository checkout ${p} is not available here (restore it, or orch ticket edit <id> --repo <path>)`;
+    const missing = missingCheckout(p);
     if (!existsSync(p)) return missing;
     const remaining = REPO_CHECK_BUDGET_MS - (now() - start);
     if (remaining <= 0) {
@@ -500,15 +508,17 @@ export interface TicketJobRequest {
  * What a job for `ticketId` is created from. `target` is where the caller wants the job (an
  * explicit --repo, or the session's cwd): it must be the ticket's repository. Without one the
  * ticket's recorded checkout is used. The claim itself happens in `createJob`'s transaction.
+ * The recorded checkout gets `DISPATCH_REPO_CHECK_BUDGET_MS` and never the list's timeout memo; a
+ * timeout is a `CheckoutTimeoutError`. `lookup` exists for tests.
  */
 export function ticketJobRequest(
   store: Store,
   ticketId: unknown,
   target: string | undefined,
+  lookup: typeof commonGitDirWithin = commonGitDirWithin,
 ): TicketJobRequest {
   const ticket = getLinkedTicket(store.db, parseTicketId(ticketId));
   const key = ticketKey(ticket.id);
-  const problem = repoProblemOf()(ticket);
   let path = ticket.repoPath;
   if (target !== undefined) {
     // The ticket decides the repository; a caller standing anywhere else is told where to go.
@@ -520,8 +530,19 @@ export function ticketJobRequest(
       );
     }
     path = target;
-  } else if (problem !== null) {
-    throw new ValidationError(`Ticket ${key} cannot be started: ${problem}. Nothing was created.`);
+  } else {
+    const found = existsSync(path) ? lookup(path, DISPATCH_REPO_CHECK_BUDGET_MS) : undefined;
+    if (typeof found === 'object') {
+      throw new CheckoutTimeoutError(
+        `Ticket ${key} cannot be started yet: its repository checkout ${path} did not answer Git ` +
+          `within ${String(DISPATCH_REPO_CHECK_BUDGET_MS / 1000)} s. Nothing was created.`,
+      );
+    }
+    if (found === undefined) {
+      throw new ValidationError(
+        `Ticket ${key} cannot be started: ${missingCheckout(path)}. Nothing was created.`,
+      );
+    }
   }
   return {
     ticket,

@@ -546,6 +546,8 @@ by itself (decision 2026-11-24-default-needs-human-choices). Only an
 outcome that would hit every ticket ends the whole session there: `claude-failed`, `usage-limit`
 or `api-unreachable` (after the controller's bounded wait, decision
 2026-11-26-controller-waits-for-limits; left unfinished, so `orch resume` continues the same ticket),
+`checkout-timeout` (the ticket's checkout did not answer Git at dispatch past the controller's
+bounded wait, decision 2026-11-27-controller-waits-for-slow-git; also left unfinished),
 `github-unreadable`, `merge-no-answer`, `github-refused`, or, also left unfinished,
 `orch-rebuilt` and `bad-config` (`RUN_ENDING_CODES` in `src/core/workflow.ts`; decision
 2026-11-25-environment-stops-are-resumable; any other code continues, decision

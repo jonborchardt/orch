@@ -65,7 +65,10 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   bounded wait for a Claude usage limit, a rate limit, or an unreachable API (`LIMIT_WAITS` in
   `ops/run.ts`, at most 12 hours in a row, decision
   [2026-11-26-controller-waits-for-limits](docs/decisions/2026-11-26-controller-waits-for-limits.md)),
-  both inside its foreground command.
+  and its bounded wait for a ticket's checkout that did not answer Git at dispatch
+  (`CHECKOUT_WAITS` in `ops/run.ts`, at most 30 minutes in a row, decision
+  [2026-11-27-controller-waits-for-slow-git](docs/decisions/2026-11-27-controller-waits-for-slow-git.md)),
+  all inside its foreground command.
 - `skills/factory/` and `agents/` are prose for Claude, linked into `~/.claude` by `orch install`.
   They must only call `orch` commands; any rule that matters is enforced in TypeScript first and
   described in prose second. `tests/skill-contract.test.ts` keeps roles, agent frontmatter, and the
@@ -104,9 +107,10 @@ npm run web:dev          # Vite dev server for web/, proxying /api to a running 
   session (decision 2026-11-16-opt-in-recovery-worker); and the factory controller
   (`orch start`, `orch do`, `orch resume`), a foreground process that exists only while its
   command runs; one per repository may run at a time, each in its own terminal (decision
-  2026-11-25-one-controller-per-repository). Its only waits are the bounded GitHub backoff and the
-  bounded limit and outage wait, inside that command (decision
-  2026-11-26-controller-waits-for-limits).
+  2026-11-25-one-controller-per-repository). Its only waits are the bounded GitHub backoff, the
+  bounded limit and outage wait, and the bounded wait for a checkout that did not answer Git at
+  dispatch, inside that command (decisions 2026-11-26-controller-waits-for-limits,
+  2026-11-27-controller-waits-for-slow-git).
 - Only the factory controller starts a Claude process, and only through `launchClaude` in
   `src/integrations/claude-session.ts`: one headless `/factory <job>` child at a time, for the
   ticket it is working on (decision 2026-11-21-foreground-factory-runner). There is at most one

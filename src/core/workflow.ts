@@ -979,6 +979,7 @@ export const RUN_ENDING_CODES: readonly string[] = [
   'github-refused',
   'orch-rebuilt',
   'bad-config',
+  'checkout-timeout',
 ];
 
 /** Whether a ticket that ended with `code` ends the controller's run; no code never does. */
