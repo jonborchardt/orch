@@ -12,6 +12,7 @@ import {
   reportSubject,
 } from '../core/mail-report.ts';
 import { DEFAULT_PORT } from '../core/paths.ts';
+import { ticketKey } from '../core/tickets.ts';
 import { type SpecChallengeState, specChallengeState } from '../core/workflow.ts';
 import { type MailConfig, mailConfig, sendReport } from '../integrations/mail.ts';
 import { BLOCKER_EVENTS, blockerOf, ciView, liveness, resumeOf } from '../server/status.ts';
@@ -30,6 +31,7 @@ import { allowedActions, choiceLine, choiceLinks, needsHuman } from './actions.t
 import { planJob } from './factory.ts';
 import type { RunSummary } from './run.ts';
 import { costLine, formatSummary, runSubject } from './run-report.ts';
+import { finishLines, jobFinish } from './tickets.ts';
 import { jobSeconds, jobTokens } from './token-usage.ts';
 
 export interface JobMailOutcome {
@@ -67,7 +69,7 @@ function neededOf(store: Store, job: Job): Needed | null {
   const ci = ciView(job, evidence.events, plan?.worktree?.head ?? undefined);
   const state = liveness(job);
   const blocker = blockerOf(job, state, evidence);
-  if (!blocker) return null;
+  if (!blocker) return finishNeeded(store, job);
   const next: string[] = [];
   let lead: string[] | undefined;
   if (state === 'blocked') {
@@ -96,6 +98,24 @@ function neededOf(store: Store, job: Job): Needed | null {
   }
   if (blocker.kind === 'ci') next.push(ci.guidance);
   return { summary: blocker.summary, detail: blocker.detail, next, lead };
+}
+
+/** A merged job whose ticket stays in-progress: the unticked boxes, then one link per way to finish it. */
+function finishNeeded(store: Store, job: Job): Needed | null {
+  const finish = jobFinish(store, job);
+  if (finish === null || job.ticketId === null) return null;
+  const key = ticketKey(job.ticketId);
+  return {
+    lead: [
+      `Merged, but ticket ${key} stays in-progress: ${String(finish.remaining.length)} unticked box(es) remain:`,
+      ...finish.remaining.map((b) => `  - [ ] ${b}`),
+      'Options:',
+      ...finishLines(job.ticketId).map((l) => `  ${l}`),
+    ],
+    summary: `Ticket ${key} needs a person to finish it (run orch ui for the links above)`,
+    detail: null,
+    next: [],
+  };
 }
 
 /** The block is help, not a requirement: a failure to derive it never stops the mail. */

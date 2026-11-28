@@ -331,4 +331,37 @@ describe('orch ticket', () => {
     });
     expect(orch(h, outside, ['ticket', '--help']).out).toContain('--priority P0|P1|P2|P3|P4|P5');
   });
+
+  it('split moves boxes to a follow-up and closes; done --tick-all ticks and closes', () => {
+    const h = tempDir();
+    const t = (...args: string[]) => orch(h, alpha, ['ticket', ...args, '--json']);
+    const boxes = '- [ ] a\n- [ ] b\n';
+    expect(json<TicketView>(t('add', 'Split me', `--body=${boxes}`, '--area', 'web')).id).toBe(1);
+
+    // Usage versus validation, and a stale revision: nothing is created.
+    expect(t('split', '1', '--boxes', 'one').code).toBe(2);
+    expect(t('split', '1', '--boxes', '3').code).toBe(1);
+    const stale = t('split', '1', '--boxes', '1', '--revision', '9');
+    expect(stale.code).toBe(4);
+    expect(stale.err).toContain('OwnershipError');
+    expect(json<TicketList>(t('list')).total).toBe(1);
+
+    const split = json<TicketView & { followUp: number }>(
+      t('split', '1', '--boxes', '1', '--hold', '--revision', '1'),
+    );
+    expect(split).toMatchObject({ id: 1, status: 'done', followUp: 2 });
+    expect(split.body).toBe('- [x] a (moved to 0002)\n- [ ] b\n');
+    const followUp = json<TicketDetail>(t('show', '2')).ticket;
+    expect(followUp).toMatchObject({ type: 'question', area: 'web', related: [1] });
+    expect(followUp.body).toContain('- [ ] a');
+    expect(json<TicketList>(t('ready')).tickets.map((x) => x.id)).not.toContain(2);
+
+    expect(json<TicketView>(t('add', 'Close me', `--body=${boxes}`)).id).toBe(3);
+    expect(t('done', '3', '--tick-all', '--revision', '9').code).toBe(4);
+    const done = json<TicketView>(t('done', '3', '--tick-all', '--note', 'checked by hand'));
+    expect(done).toMatchObject({ status: 'done', body: '- [x] a\n- [x] b\n' });
+    const help = orch(h, outside, ['ticket', '--help']).out;
+    expect(help).toContain('split <id> [--boxes <n,...>] [--hold]');
+    expect(help).toContain('done <id> [--tick-all]');
+  });
 });

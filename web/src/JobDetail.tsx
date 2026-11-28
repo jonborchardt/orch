@@ -56,6 +56,7 @@ import {
   verdictColor,
 } from './format.ts';
 import { type TabName, detailTabs, jobHref, newestConsolidated, resolveTab } from './tabs.ts';
+import { Remaining } from './TicketDetail.tsx';
 import { ticketHref, ticketKey } from './ticketState.ts';
 import { fonts, textSize, weight } from './theme.ts';
 
@@ -305,6 +306,18 @@ export function JobDetail({
       </Paper>
 
       {job.stage === 'needs-human' && <Escalation detail={detail} />}
+      {detail.finish && job.ticketId !== null && (
+        <Alert severity="warning" role="region" aria-label="Needs a person" sx={{ mt: 2 }}>
+          <Typography sx={{ fontWeight: weight.semibold }}>
+            Needs a person: this job merged, but ticket {ticketKey(job.ticketId)} stays in progress
+            with {String(detail.finish.remaining.length)} box(es) not ticked.
+          </Typography>
+          <Remaining finish={detail.finish} />
+          <Link href={ticketHref(job.ticketId)}>
+            Finish ticket {ticketKey(job.ticketId)}: move the boxes to a follow-up, close, or rework
+          </Link>
+        </Alert>
+      )}
 
       <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }}>
         <Typography variant="subtitle2">Controls</Typography>

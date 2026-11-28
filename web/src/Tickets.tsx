@@ -29,7 +29,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { Area, BoardRow, TicketSummary, TicketView } from '../../src/server/types.ts';
 import { usePolled } from './Runs.tsx';
-import { Pick, Reasons, TicketDetail, TicketFields } from './TicketDetail.tsx';
+import { type FinishOption, Pick, Reasons, TicketDetail, TicketFields } from './TicketDetail.tsx';
 import {
   createTicket,
   errorText,
@@ -294,12 +294,15 @@ interface Data {
 
 export function TicketsPage({
   id,
+  finish = null,
   refreshMs = 4000,
   filters,
   onFilters,
 }: {
   /** The ticket of `#/tickets/<id>`; null for the list. */
   id: number | null;
+  /** `?finish=<option>` of a ticket URL: that ticket page opens the option's confirm. */
+  finish?: FinishOption | null;
   refreshMs?: number;
   /** Kept by the caller, so they survive a visit to a ticket or a job. */
   filters: TicketFilters;
@@ -356,8 +359,9 @@ export function TicketsPage({
   if (id !== null) {
     return (
       <TicketDetail
-        key={id}
+        key={`${String(id)}:${String(finish)}`}
         id={id}
+        finish={finish}
         tickets={tickets}
         jobs={jobs}
         areas={areas}

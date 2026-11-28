@@ -7,6 +7,7 @@ import type { Choice, Completion, PrPhase, SpecChallengeState } from '../core/wo
 import type { DashboardAction } from '../ops/actions.ts';
 import type { Plan } from '../ops/factory.ts';
 import type { MergeView } from '../ops/merge-view.ts';
+import type { TicketFinish } from '../ops/tickets.ts';
 import type { VerificationStatus } from '../ops/verify.ts';
 import type { Artifact, Event, Job, Review } from '../storage/schema.ts';
 
@@ -17,6 +18,7 @@ export type { Area, BlockReason, Priority, TicketStatus, TicketType } from '../c
 export type { ControllerStatus, RunnerStatus } from '../ops/run.ts';
 export type {
   TicketDetail,
+  TicketFinish,
   TicketJob,
   TicketList,
   TicketSummary,
@@ -277,6 +279,11 @@ export interface JobDetailView {
    * continues it" or the command a person runs; null otherwise.
    */
   afterAction: string | null;
+  /**
+   * This job's PR merged but its ticket stays in-progress with unticked boxes (`ticketFinish`):
+   * what is left; the ticket page finishes it. Null otherwise.
+   */
+  finish: TicketFinish | null;
   /**
    * What reports merge conflicts with the base (approve, pr, ci, or a completed job with an open
    * PR not yet superseded): files from the local base ref probe and/or GitHub's last recorded

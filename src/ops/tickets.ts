@@ -4,17 +4,18 @@
  * core/tickets.ts and are applied by storage/tickets.ts; this layer adds what needs Git or the
  * filesystem: which repository a ticket belongs to and whether it is available here.
  */
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join } from 'node:path';
 
 import { CheckoutTimeoutError, NotFoundError, ValidationError } from '../core/errors.ts';
-import { findProjectRoot, ticketAssetDir } from '../core/paths.ts';
+import { DEFAULT_PORT, findProjectRoot, jobArtifactDir, ticketAssetDir } from '../core/paths.ts';
 import {
   type Area,
   type BlockReason,
   blockReasons,
   LIFECYCLE_ACTIONS,
   type LifecycleAction,
+  markdownSection,
   type MoveTo,
   orderTickets,
   parseTicketId,
@@ -22,7 +23,10 @@ import {
   TICKET_STATUSES,
   TICKET_TYPES,
   ticketKey,
+  uncheckedItems,
 } from '../core/tickets.ts';
+import { TERMINAL_STATUSES } from '../core/workflow.ts';
+import { findArtifact } from '../storage/artifacts.ts';
 import type { Store } from '../storage/client.ts';
 import type { Job, Ticket, TicketEvent } from '../storage/schema.ts';
 import {
@@ -41,6 +45,7 @@ import {
   moveTicket,
   recordTicketEvent,
   setTicketLink,
+  splitTicket,
   ticketJobs,
   ticketLifecycle,
 } from '../storage/tickets.ts';
@@ -130,6 +135,26 @@ function idList(raw: Raw, key: string): number[] | undefined {
       ? v.split(/[\s,]+/).filter(Boolean)
       : [v];
   return parts.map((p) => parseTicketId(p, key));
+}
+
+const flag = (raw: Raw, key: string): boolean => raw[key] === true || raw[key] === 'true';
+
+/** `[1, 3]`, `"1,3"` -> box numbers; absent means every box. Range is checked against the body. */
+function boxList(raw: Raw): number[] | undefined {
+  const v = raw['boxes'];
+  if (v === undefined || v === null) return undefined;
+  const parts: unknown[] = Array.isArray(v)
+    ? v
+    : typeof v === 'string'
+      ? v.split(/[\s,]+/).filter(Boolean)
+      : [v];
+  return parts.map((p) => {
+    const n = typeof p === 'string' && /^\d{1,9}$/.test(p) ? Number(p) : p;
+    if (typeof n !== 'number' || !Number.isInteger(n)) {
+      throw new ValidationError(`boxes must be box numbers such as 1,3 (got ${JSON.stringify(p)})`);
+    }
+    return n;
+  });
 }
 
 function fields(raw: Raw) {
@@ -356,6 +381,63 @@ export interface TicketDetail {
   assetDir: string;
   /** Merge receipt of the ticket's newest completed job; null until a job completes. */
   receipt: { jobId: string; markdown: string } | null;
+  /** What is left when the ticket's PR merged with boxes unticked; null otherwise. */
+  finish: TicketFinish | null;
+}
+
+/** A merged ticket that needs a person: its PR is in, boxes are not ticked, and no job is working on it. */
+export interface TicketFinish {
+  /** The ticket's newest job, whose PR merged. */
+  jobId: string;
+  prUrl: string | null;
+  /** The unticked boxes, numbered 1..n in this order for `split`. */
+  remaining: string[];
+  /** The `## Known gaps` section of that job's registered build.md; null when there is none. */
+  knownGaps: string | null;
+}
+
+/**
+ * Non-null only for an in-progress ticket whose newest job is finished with a merged PR while
+ * unticked boxes remain. A view: the actions it leads to are checked again when they run.
+ */
+export function ticketFinish(store: Store, id: number): TicketFinish | null {
+  const ticket = getTicket(store.db, id);
+  const job = ticketJobs(store.db, id).at(-1);
+  const remaining = uncheckedItems(ticket.body);
+  if (ticket.status !== 'in-progress' || remaining.length === 0) return null;
+  if (job?.prState !== 'merged' || !TERMINAL_STATUSES.includes(job.status)) return null;
+  let knownGaps: string | null = null;
+  try {
+    if (findArtifact(store.db, job.id, 'build.md')) {
+      const build = readFileSync(join(jobArtifactDir(job.id, store.paths), 'build.md'), 'utf8');
+      knownGaps = markdownSection(build, 'Known gaps');
+    }
+  } catch {
+    /* a missing or unreadable build.md is no known gaps, never an error */
+  }
+  return { jobId: job.id, prUrl: job.prUrl, remaining, knownGaps };
+}
+
+/** `ticketFinish` of the job's ticket when `job` is the merged job it names; else null. */
+export function jobFinish(store: Store, job: Pick<Job, 'id' | 'ticketId'>): TicketFinish | null {
+  const finish = job.ticketId === null ? null : ticketFinish(store, job.ticketId);
+  return finish?.jobId === job.id ? finish : null;
+}
+
+/** The ways to finish such a ticket: the `?finish=` value, its label, and the same thing as a command. */
+export const FINISH_OPTIONS = [
+  { finish: 'split', label: 'Move to a follow-up and close', command: 'split', flags: '' },
+  { finish: 'close', label: 'They are done, close', command: 'done', flags: ' --tick-all' },
+  { finish: 'rework', label: 'Rework', command: 'reopen', flags: '' },
+] as const;
+
+/** One line per option: its dashboard link, which only opens that option's confirm, and its command. */
+export function finishLines(id: number): string[] {
+  const key = ticketKey(id);
+  return FINISH_OPTIONS.map(
+    (o) =>
+      `${o.label}: http://127.0.0.1:${String(DEFAULT_PORT)}/#/tickets/${key}?finish=${o.finish} (or orch ticket ${o.command} ${key}${o.flags})`,
+  );
 }
 
 export function showTicket(store: Store, id: unknown): TicketDetail {
@@ -364,6 +446,7 @@ export function showTicket(store: Store, id: unknown): TicketDetail {
   const done = ticketJobs(store.db, n).findLast((j) => j.stage === 'completed');
   return {
     ticket: viewOf(store, n),
+    finish: ticketFinish(store, n),
     dependents: dependentsOf(store.db, n),
     jobs: jobsOfTicket(store, n),
     assets: existsSync(assetDir) ? readdirSync(assetDir).sort() : [],
@@ -410,6 +493,7 @@ export const TICKET_ACTIONS = [
   'edit',
   'note',
   ...LIFECYCLE_ACTIONS,
+  'split',
   'move',
   'dep-add',
   'dep-remove',
@@ -423,9 +507,16 @@ export type TicketAction = (typeof TICKET_ACTIONS)[number];
  * change; the rest depends on the action: field values for `edit` (`repo` re-associates the
  * ticket with the checkout at that path; `rank` a number or `none`), `text` for `note`, exactly
  * one of `up`, `down`, `top`, `before: <id>` for `move`, `of` for `duplicate`, `target` for
- * the link actions, and an optional `note` on a lifecycle action.
+ * the link actions, and an optional `note` on a lifecycle action (`tickAll: true` on `done` ticks
+ * every unticked box as it closes). `split` moves `boxes` (numbers, every unticked box when
+ * absent) to a follow-up ticket and closes this one; `hold`, `area`, `priority`, and `repo` (a
+ * path) shape the follow-up, whose id comes back as `followUp`.
  */
-export function ticketAction(store: Store, id: unknown, raw: Raw): TicketView {
+export function ticketAction(
+  store: Store,
+  id: unknown,
+  raw: Raw,
+): TicketView & { followUp?: number } {
   const n = parseTicketId(id);
   const action = text(raw, 'action') as TicketAction | undefined;
   if (action === undefined || !TICKET_ACTIONS.includes(action)) {
@@ -458,11 +549,25 @@ export function ticketAction(store: Store, id: unknown, raw: Raw): TicketView {
     case 'related-remove':
       setTicketLink(store, n, target(), 'related', action === 'related-add', w);
       break;
+    case 'split': {
+      const repo = text(raw, 'repo');
+      const { followUp } = splitTicket(store, n, {
+        ...w,
+        boxes: boxList(raw),
+        hold: flag(raw, 'hold'),
+        area: text(raw, 'area'),
+        priority: text(raw, 'priority')?.toUpperCase(),
+        note: text(raw, 'note'),
+        ...(repo ? ticketRepository(repo) : {}),
+      });
+      return { ...viewOf(store, n), followUp: followUp.id };
+    }
     default:
       ticketLifecycle(store, n, action satisfies LifecycleAction, {
         ...w,
         of: raw['of'] === undefined ? undefined : parseTicketId(raw['of'], 'duplicate-of ticket'),
         note: text(raw, 'note'),
+        tickAll: flag(raw, 'tickAll'),
       });
   }
   return viewOf(store, n);

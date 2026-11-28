@@ -695,7 +695,21 @@ server validates.
   with `orch ticket add` from inside it.
 
 **Ticket detail** (`#/tickets/<id>`) shows the title, id, state, repository, status, priority,
-type, area, effort, and, when blocked, the reasons. **Edit** turns the title, priority, type,
+type, area, effort, and, when blocked, the reasons. A ticket whose PR merged while boxes stayed
+unticked (`finish` in `GET /api/tickets/<id>`, never a rule of the page) shows a **Needs a
+person** section: the unticked boxes, quoted, the merged job's Known gaps from its `build.md`,
+and four buttons, each opening a confirm that says what it will do. **Move to a follow-up and
+close** lets the person choose the boxes, the repository, area, and priority of the follow-up,
+and tick **Hold for a person**, which files it as a `question` the controller never picks up
+(**Hold a follow-up for a person and close** opens the same confirm with that ticked); it posts
+`split`. **They are done, close** posts `done` with `tickAll`. **Rework** posts `reopen`: the
+ticket waits in the open queue for `orch start` or `orch do`, and nothing starts from the click.
+Each post carries the revision on screen; a refusal (409) is shown, the ticket is read again,
+and nothing is retried. `#/tickets/<id>?finish=split|close|rework`, the link the controller’s
+stop line and the status mail print per option, shows the page with that confirm open and posts
+nothing; any other value, or a ticket with nothing to finish, opens no dialog (decision
+2026-11-27-finish-a-merged-ticket). The merged job’s own page shows the same boxes and known
+gaps with a link to the ticket. **Edit** turns the title, priority, type,
 area, effort, and the Markdown description into one form with Save and Cancel; Save sends a
 single `edit` with only the fields that changed and the revision the form was opened at. The
 description is rendered with the dashboard's Markdown subset; task items (`- [ ]`, `- [x]`) show
