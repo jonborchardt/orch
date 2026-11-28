@@ -329,6 +329,16 @@ export function listChecksFor(nameWithOwner: string, sha: string, cwd: string): 
   return [...fromRuns, ...fromStatuses];
 }
 
+/** The commit GitHub reports for `branch` now (never the local `origin/<branch>`); throws when it cannot. */
+export function branchTip(nameWithOwner: string, branch: string, cwd: string): string {
+  const path = `repos/${nameWithOwner}/commits/${encodeURIComponent(branch)}`;
+  const sha = ghJson<{ sha?: unknown } | null>(['api', path], cwd)?.sha;
+  if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) {
+    throw new ToolError(`gh api ${path} did not return a commit sha`);
+  }
+  return sha;
+}
+
 /** Workflow run an Actions job belongs to, or null when GitHub could not tell us. */
 export function actionsJobRunId(nameWithOwner: string, jobId: number, cwd: string): number | null {
   const r = optionalJson<{ run_id?: number } | null>(

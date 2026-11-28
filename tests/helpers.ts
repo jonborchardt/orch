@@ -367,7 +367,9 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * With `bare` set to the local origin repository, PR heads are read from it like GitHub would;
  * `gh api` answers come from `checkRuns`/`statuses` (keyed by sha, `*` as default; paginated in
  * pages of 100 under `--paginate --slurp`), `protection`, `rules`, `logs` (keyed by job id), or
- * `api` (keyed by path; a `compare/<base>...<head>` defaults to `{ behind_by: 0 }`), `rate_limit`
+ * `api` (keyed by path; a `compare/<base>...<head>` defaults to `{ behind_by: 0 }`, a branch's
+ * `commits/<branch>` to `{ sha: baseSha }`, default `SHIM_BASE_SHA`, whose checks never fall back
+ * to `*`), `rate_limit`
  * (the recovery worker's probe), else HTTP 404. A PR's
  * `pulls/<n>/files` come from its `files` entries (paginated the same way; a string is printed
  * as is), and its `changedFiles`, unless set, is their count (0 without any). `gh run rerun` succeeds and is only logged; `gh pr ready`
@@ -377,6 +379,9 @@ export function json<T = Record<string, unknown>>(r: CliResult): T {
  * `failTimes`, when set, limits them to that many failing calls: it counts down in the state, so
  * later calls succeed.
  */
+/** The base tip the shim reports for any branch unless `baseSha` is set; `*` checks skip it. */
+export const SHIM_BASE_SHA = 'ba5e'.repeat(10);
+
 const GH_SHIM_SOURCE = String.raw`
 const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
@@ -385,6 +390,7 @@ const state = JSON.parse(fs.readFileSync(file, 'utf8'));
 const args = process.argv.slice(2);
 state.calls.push(args);
 const [a, b] = args;
+const baseSha = state.baseSha || '${SHIM_BASE_SHA}';
 const flag = (f) => args[args.indexOf(f) + 1];
 let code = 0;
 const out = (o) => process.stdout.write(typeof o === 'string' ? o : JSON.stringify(o));
@@ -437,10 +443,10 @@ else if (a === 'pr' && b === 'view') {
     const files = (pr && pr.files) || [];
     if (typeof files === 'string') out(files); else paged(files, (page) => page);
   } else if ((m = /\/commits\/([0-9a-f]+)\/check-runs$/.exec(path))) {
-    const runs = (state.checkRuns || {})[m[1]] || (state.checkRuns || {})['*'] || [];
+    const runs = (state.checkRuns || {})[m[1]] || (m[1] === baseSha ? [] : (state.checkRuns || {})['*']) || [];
     paged(runs, (page) => ({ total_count: runs.length, check_runs: page }));
   } else if ((m = /\/commits\/([0-9a-f]+)\/status$/.exec(path))) {
-    const statuses = (state.statuses || {})[m[1]] || (state.statuses || {})['*'] || [];
+    const statuses = (state.statuses || {})[m[1]] || (m[1] === baseSha ? [] : (state.statuses || {})['*']) || [];
     paged(statuses, (page) => ({ state: statuses.some((s) => s.state !== 'success') ? 'pending' : 'success', statuses: page }));
   } else if (/\/protection\/required_status_checks$/.test(path)) {
     if (state.protection) out(state.protection); else notFound();
@@ -450,6 +456,7 @@ else if (a === 'pr' && b === 'view') {
     if (log === undefined) notFound(); else out(log);
   } else if (state.api && state.api[path] !== undefined) out(state.api[path]);
   else if (/\/compare\/[^/]+$/.test(path)) out({ behind_by: 0 });
+  else if (/^repos\/[^/]+\/[^/]+\/commits\/[^/]+$/.test(path)) out({ sha: baseSha });
   else if (path === 'rate_limit') out({ resources: {} });
   else notFound();
 } else if (a === 'pr' && b === 'create') {
@@ -496,7 +503,9 @@ export interface ShimState {
   checks: Record<string, unknown>[];
   /** Local bare origin; when set, PR heads are resolved from its branches. */
   bare?: string | undefined;
-  /** Check runs per commit sha (`*` = any sha). */
+  /** The base tip `gh api repos/o/n/commits/<branch>` reports (default `SHIM_BASE_SHA`). */
+  baseSha?: string | undefined;
+  /** Check runs per commit sha (`*` = any sha but the base tip). */
   checkRuns?: Record<string, ShimCheckRun[]> | undefined;
   /** Commit statuses per sha (`*` = any sha). */
   statuses?: Record<string, { context: string; state: string; target_url?: string }[]> | undefined;

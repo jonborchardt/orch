@@ -173,7 +173,7 @@ describe('ci stage: one bounded re-run before a repair', () => {
     expect(rerunCalls()).toHaveLength(1);
   });
 
-  it('cancelled and timed-out checks are re-run too; a repeat still escalates or reworks as before', () => {
+  it('cancelled and timed-out checks are re-run too; a repeat is re-run once more or reworks', () => {
     const c = start(store, clone);
     toCi(store, c);
     const sha = head(c.wt);
@@ -181,10 +181,13 @@ describe('ci stage: one bounded re-run before a repair', () => {
     workflowRun(cancelled, 7);
     checks(sha, [cancelled]);
     expect(reconcile(c)).toMatchObject({ outcome: 'pending', action: 'wait', reruns: 1 });
+    // A second cancelled verdict gets the head's second and last re-run (ticket 0228); a check
+    // GitHub cannot name a workflow run for cannot be re-run, so this one escalates.
     checks(sha, [run('test', 'cancelled')]);
     const r = reconcile(c);
     expect(r).toMatchObject({ outcome: 'infrastructure', action: 'escalate', reruns: 1 });
     expect(r.reason).toContain('(after 1 re-run)');
+    expect(r.reason).toContain('a human fixes CI, then resumes --to ci');
     expect(job(c)).toMatchObject({ stage: 'needs-human', ciRepairs: 0 });
 
     const d = start(store, clone);
