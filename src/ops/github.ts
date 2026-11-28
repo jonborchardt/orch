@@ -14,6 +14,7 @@ import {
   CI_RERUN_LIMIT,
   type CiCheck,
   type CiEvaluation,
+  type CiOutcome,
   ciStatusOf,
   evaluateChecks,
   RERUNNABLE,
@@ -318,13 +319,20 @@ export interface CiReconcileResult {
   receiptError: string | null;
 }
 
+/** A check as `ci.observed` records it. */
+const brief = (c: CiCheck) => ({ name: c.name, status: c.status, conclusion: c.conclusion });
+
+/** Outcomes about the PR or the base, not the head's checks: the rollup records the checks. */
+const NOT_A_VERDICT = new Set<string>(['closed', 'outdated', 'merged', 'base-failing']);
+const isVerdict = (o: string): o is CiOutcome => !NOT_A_VERDICT.has(o);
+
 export interface BaseRead {
   branch: string;
   /** The commit GitHub reported for the base branch; its checks were read for this sha. */
   sha: string;
   verdict: 'failing' | 'pending' | 'clear';
   /** The base's current attempts of the head's culprit checks. */
-  checks: { name: string; status: string; conclusion: string }[];
+  checks: ReturnType<typeof brief>[];
 }
 
 /** Reconciliations already recorded for `head` (`pr status` observations carry no outcome). */
@@ -553,11 +561,7 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
         branch: job.baseBranch,
         sha,
         verdict: read.verdict,
-        checks: read.checks.map((c) => ({
-          name: c.name,
-          status: c.status,
-          conclusion: c.conclusion,
-        })),
+        checks: read.checks.map(brief),
       };
       const at = `${job.baseBranch} at ${sha.slice(0, 7)}`;
       const parked = events.some(
@@ -630,14 +634,7 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
   }
   // The persisted rollup describes the checks; a closed, outdated, or merged PR still records what
   // they said.
-  const ciStatus = ciStatusOf(
-    outcome === 'closed' ||
-      outcome === 'outdated' ||
-      outcome === 'merged' ||
-      outcome === 'base-failing'
-      ? evaluation.outcome
-      : outcome,
-  );
+  const ciStatus = ciStatusOf(isVerdict(outcome) ? outcome : evaluation.outcome);
 
   recordCi(store, id, {
     ...tok,
@@ -651,7 +648,7 @@ export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileRe
       polls,
       required: evaluation.required,
       configured: evaluation.configured,
-      checks: checks.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion })),
+      checks: checks.map(brief),
       failures,
       ...(base ? { base } : {}),
       reason,

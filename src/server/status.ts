@@ -110,9 +110,12 @@ function ciBlocker(
 
 /**
  * The factory controller's newest `runner.stopped`, while it is still the job's last news: the job
- * is at the stage and status the stop recorded and no other loaded event is newer. Display only.
+ * is at the stage and status the stop recorded and no other loaded event is newer. A job parked on
+ * a red base (`baseBlocker`) shows that instead. Display only.
  */
 function stoppedBlocker(job: Lease, ev: Evidence): Blocker | null {
+  const base = baseBlocker(job, ev);
+  if (base !== null) return base;
   const stop = ev.events.get('runner.stopped');
   if (stop === undefined) return null;
   if (stop.payload['stage'] !== job.stage || stop.payload['status'] !== job.status) return null;
@@ -163,7 +166,6 @@ export function blockerOf(
     }
     case 'stale':
       return (
-        baseBlocker(job, ev) ??
         stoppedBlocker(job, ev) ?? {
           kind: 'interrupted',
           summary: `Session ${job.ownerSession ?? '?'} stopped renewing its lease; presumed gone`,
@@ -234,7 +236,6 @@ export function blockerOf(
     case 'idle': {
       if (job.ownerSession === null) {
         return (
-          baseBlocker(job, ev) ??
           stoppedBlocker(job, ev) ?? {
             kind: 'waiting',
             summary: 'No session owns this job',
@@ -244,7 +245,6 @@ export function blockerOf(
       }
       if (leaseExpired(job, now())) {
         return (
-          baseBlocker(job, ev) ??
           stoppedBlocker(job, ev) ?? {
             kind: 'waiting',
             summary: `Lease held by ${job.ownerSession} lapsed; presumed gone`,
