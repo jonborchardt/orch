@@ -15,8 +15,13 @@ import { type HourUsage, tokenUsage, type TokenUsageRow } from './schema.ts';
  */
 export function insertUsage(
   store: Store,
-  row: Pick<TokenUsageRow, 'ref' | 'jobId' | 'source'> &
-    Partial<Pick<TokenUsageRow, 'agents'>> & { hours: HourUsage[] },
+  row: {
+    ref: string;
+    jobId: string;
+    source: TokenUsageRow['source'];
+    hours: HourUsage[];
+    agents?: TokenUsageRow['agents'];
+  },
 ): void {
   store.db
     .insert(tokenUsage)
