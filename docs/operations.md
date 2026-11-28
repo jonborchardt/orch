@@ -123,11 +123,7 @@ waiting in a row, and a reset further away stops at once (`LIMIT_WAITS`, decisio
 `orch stop`, `orch stop next`, and Ctrl+C end the wait. A `usage-limit` or `api-unreachable` stop
 leaves the session unfinished with its ticket in flight: the summary names the limit and its reset
 time when Claude printed one, and `orch resume` continues the same ticket and job (decision
-2026-11-24-usage-limit-ends-run-resumably). A ticket whose checkout does not answer Git within
-30 seconds at dispatch (a disk kept busy by a worktree removal, say) is kept, not passed over: the
-controller waits 15, 30, 60, then every 120 seconds and dispatches it again, at most 30 minutes of
-waiting in a row (`CHECKOUT_WAITS`), then ends the run unfinished with that ticket in flight
-(`checkout-timeout`; decision 2026-11-27-controller-waits-for-slow-git). A limit on `fable`, which has an allowance of its
+2026-11-24-usage-limit-ends-run-resumably). A limit on `fable`, which has an allowance of its
 own, does not end the run while every role of the job drawn `fable` has another model in its
 pool: the controller records `models.fallback` on the job and launches again on that model
 (decision 2026-11-26-per-model-limit-falls-back). The same holds when `orch` was rebuilt since the

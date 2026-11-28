@@ -22,6 +22,7 @@ import {
   lastSession,
   MIN,
   quick,
+  sleeper,
   status,
   store,
   ticket,
@@ -49,20 +50,6 @@ beforeEach(() => {
 
 const WAIT = 'the repository checkout to answer Git';
 
-/** A fake sleep recording each sleep made while the session showed a wait; `during` runs on each. */
-function sleeper(during?: () => void) {
-  const sleeps: { ms: number; reason: string }[] = [];
-  const sleep = (ms: number) => {
-    const w = lastSession()?.wait ?? null;
-    if (w !== null) {
-      sleeps.push({ ms, reason: w.reason });
-      during?.();
-    }
-    return Promise.resolve();
-  };
-  return { sleeps, sleep };
-}
-
 // A poll longer than any wait: one sleep per wait.
 const opts = (l: Launcher, o: RunOptions = {}): RunOptions => ({
   launch: l.launch,
@@ -82,13 +69,13 @@ describe('a checkout that does not answer Git at dispatch', () => {
     const first = ticket('Behind a busy disk', { priority: 'P1' });
     const second = ticket('After it', { priority: 'P2' });
     git.timeouts = 5;
-    const { sleeps, sleep } = sleeper();
+    const { seen, sleep } = sleeper();
     const l = launcher(done);
 
     const s = await startSession(store, { mode: 'queue' }, opts(l, { sleep }));
 
-    expect(sleeps.map((x) => x.ms / 1000)).toEqual([15, 30, 60, 120, 120]);
-    expect(sleeps.every((x) => x.reason === WAIT)).toBe(true);
+    expect(seen.sleeps.map((ms) => ms / 1000)).toEqual([15, 30, 60, 120, 120]);
+    expect(seen.waits.every((w) => w.reason === WAIT)).toBe(true);
     expect(lastSession()?.wait ?? null).toBeNull();
     expect(s.tickets.map((t) => [t.ticketId, t.outcome])).toEqual([
       [first, 'done'],
@@ -104,14 +91,14 @@ describe('a checkout that does not answer Git at dispatch', () => {
     const first = ticket('Hung disk', { priority: 'P1' });
     const second = ticket('Not taken', { priority: 'P2' });
     git.timeouts = Infinity;
-    const { sleeps, sleep } = sleeper();
+    const { seen, sleep } = sleeper();
     const l = launcher(done);
 
     const s = await startSession(store, { mode: 'queue' }, opts(l, { sleep }));
 
     // 15 + 30 + 60 + 14 x 120 = 1785 s; one more wait would pass the bound.
-    expect(sleeps).toHaveLength(17);
-    expect(sleeps.reduce((n, x) => n + x.ms, 0)).toBe(1785_000);
+    expect(seen.sleeps).toHaveLength(17);
+    expect(seen.waitMs).toBe(1785_000);
     expect(l.calls).toHaveLength(0);
     expect(s.tickets).toMatchObject([
       { ticketId: first, outcome: 'blocked', code: 'checkout-timeout', next: 'orch resume' },
@@ -145,7 +132,7 @@ describe('a checkout that does not answer Git at dispatch', () => {
     async (how) => {
       const id = ticket(`Stopped by ${how}`);
       git.timeouts = Infinity;
-      const { sleeps, sleep } = sleeper(() => {
+      const { seen, sleep } = sleeper(() => {
         for (const x of runnerSlots(store.paths)) {
           if (x.pid !== null) requestStop(store.paths, how, x.key);
         }
@@ -153,7 +140,7 @@ describe('a checkout that does not answer Git at dispatch', () => {
 
       const s = await startSession(store, { mode: 'queue' }, opts(launcher(done), { sleep }));
 
-      expect(sleeps).toHaveLength(1);
+      expect(seen.sleeps).toHaveLength(1);
       expect(git.dispatchLookups).toBe(1);
       expect(s.stopped).toBe(true);
       expect(s.tickets).toMatchObject([{ ticketId: id, outcome: 'stopped', next: 'orch resume' }]);
@@ -220,12 +207,12 @@ describe('a checkout that does not answer Git at dispatch', () => {
   it('a missing checkout is still refused at once and passed over, with no wait (AC8)', async () => {
     const id = ticket('Checkout gone');
     git.missing = true;
-    const { sleeps, sleep } = sleeper();
+    const { seen, sleep } = sleeper();
     const l = launcher(done);
 
     const s = await startSession(store, { mode: 'queue' }, opts(l, { sleep }));
 
-    expect(sleeps).toEqual([]);
+    expect(seen.sleeps).toEqual([]);
     expect(git.dispatchLookups).toBe(1);
     expect(s.tickets).toMatchObject([{ ticketId: id, outcome: 'refused' }]);
     expect(s.tickets[0]?.reason).toMatch(/is not available here/);

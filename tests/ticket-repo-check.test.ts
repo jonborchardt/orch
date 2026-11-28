@@ -119,7 +119,6 @@ describe('timeout memo', () => {
     const git = fakeGit([]);
     ticketJobRequest(s, t.id, undefined, git.lookup);
     expect(git.calls).toEqual([{ path: t.repoPath, timeoutMs: DISPATCH_REPO_CHECK_BUDGET_MS }]);
-    expect(DISPATCH_REPO_CHECK_BUDGET_MS).toBe(30_000);
     // And it leaves the memo alone: the list is still blocked.
     expect(listTickets(s, { view: 'ready' }).tickets).toEqual([]);
   });

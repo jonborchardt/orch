@@ -132,14 +132,11 @@ export const LIMIT_WAITS: LimitWaits = {
  * last one repeats), at most `boundSeconds` in total, then the run stops resumably (decision
  * 2026-11-27-controller-waits-for-slow-git).
  */
-export interface CheckoutWaits {
-  boundSeconds: number;
-  backoffSeconds: readonly number[];
-}
-export const CHECKOUT_WAITS: CheckoutWaits = {
+export const CHECKOUT_WAITS = {
   boundSeconds: 30 * 60,
-  backoffSeconds: [15, 30, 60, 120],
+  backoffSeconds: [15, 30, 60, 120] as readonly number[],
 };
+export type CheckoutWaits = typeof CHECKOUT_WAITS;
 const POLL_MS = 2000;
 const BEAT_MS = 30_000;
 /** The stop code of a child that hit a Claude usage or rate limit; the run stays resumable. */
