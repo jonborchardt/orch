@@ -3,7 +3,7 @@ import type { Flake } from '../core/flake.ts';
 import type { ReadinessGrade } from '../core/readiness.ts';
 import type { DrawnModels } from '../core/roles.ts';
 import type { SessionLinks, SessionRef } from '../core/session.ts';
-import type { Choice, Completion, PrPhase, SpecChallengeState } from '../core/workflow.ts';
+import type { Choice, Completion, JobMode, PrPhase, SpecChallengeState } from '../core/workflow.ts';
 import type { DashboardAction } from '../ops/actions.ts';
 import type { Plan } from '../ops/factory.ts';
 import type { MergeView } from '../ops/merge-view.ts';
@@ -449,6 +449,51 @@ export interface RunsView {
   durationUnknown: number;
   /** Completed jobs per hour from the earliest creation to the latest completed finish. */
   completedPerHour: number | null;
+  /** Trust and cost per mode; the per-ticket figures cover the mode's merged tickets. */
+  trust: { full: TrustRow; fast: TrustRow };
+  /** One row per merged ticket, newest merge (the merged job's finish) first. */
+  tickets: MergedTicketRow[];
+}
+
+export interface MedianMax {
+  median: number | null;
+  max: number | null;
+}
+
+/** One mode's trust figures; medians and maxima skip nulls and are null when none is left. */
+export interface TrustRow {
+  /** Jobs of the mode that are completed or cancelled. */
+  finishedJobs: number;
+  /** Finished jobs with a `job.blocked` event / finished jobs. */
+  escalationRate: number | null;
+  /** Merged jobs with round <= 1 and no `job.reworked` or `job.blocked` / merged jobs. */
+  firstPassRate: number | null;
+  rounds: MedianMax;
+  ciRepairs: MedianMax;
+  /** Medians over the mode's merged tickets. */
+  elapsedMs: number | null;
+  agentSeconds: number | null;
+  /** Plain total tokens (input + output + cacheRead + cacheCreation), never weighted. */
+  tokens: number | null;
+}
+
+/** A ticket the factory merged; cost sums every job of the ticket that has a recorded value. */
+export interface MergedTicketRow {
+  ticketKey: string;
+  title: string;
+  /** The merged job with the newest finish. */
+  jobId: string;
+  mode: JobMode;
+  jobCount: number;
+  rounds: number;
+  ciRepairs: number;
+  /** Any job of the ticket has a `job.blocked` event. */
+  escalated: boolean;
+  elapsedMs: number | null;
+  agentSeconds: number | null;
+  tokens: TokenCounts | null;
+  /** Jobs of the ticket with recorded tokens. */
+  tokenJobs: number;
 }
 
 /** Durations of an Agents row: over runs with a duration above zero; `unmeasured` are the rest. */

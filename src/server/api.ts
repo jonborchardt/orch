@@ -27,6 +27,7 @@ import {
   type RoleKind,
 } from '../core/roles.ts';
 import { SESSION_EVENT, sessionLinks, UUID } from '../core/session.ts';
+import { ticketKey } from '../core/tickets.ts';
 import {
   cannotRefreshPr,
   type JobMode,
@@ -50,7 +51,7 @@ import { planJob } from '../ops/factory.ts';
 import { gradedReadiness } from '../ops/init.ts';
 import { mergeView } from '../ops/merge-view.ts';
 import { jobFinish } from '../ops/tickets.ts';
-import { agentTokens, jobTokens, storedUsage } from '../ops/token-usage.ts';
+import { agentTokens, jobSeconds, jobTokens, storedUsage } from '../ops/token-usage.ts';
 import { ENDS, visits } from '../ops/usage.ts';
 import { currentFlakes } from '../ops/verify.ts';
 import { baseConflicts } from '../ops/worktree.ts';
@@ -80,7 +81,7 @@ import {
   TIMELINE_TYPES,
   timelineOf,
 } from './status.ts';
-import { readTokenUsage, spanEnd, USAGE_RANGES, zero } from './token-usage.ts';
+import { add, readTokenUsage, spanEnd, USAGE_RANGES, zero } from './token-usage.ts';
 import { readSessionLog } from './transcript.ts';
 import type {
   ActionRequest,
@@ -97,6 +98,7 @@ import type {
   BoardRow,
   ClaudeSession,
   JobDetailView,
+  MergedTicketRow,
   ReadinessView,
   RoundView,
   RunsView,
@@ -105,6 +107,7 @@ import type {
   SessionView,
   StageRow,
   TokenCounts,
+  TrustRow,
   UsageView,
 } from './types.ts';
 
@@ -240,7 +243,7 @@ export function runs(store: Store): RunsView {
   const eventsOf = latestEventsByJob(
     store.db,
     jobs.map((j) => j.id),
-    ['job.completed', 'job.cancelled'],
+    ['job.completed', 'job.cancelled', 'job.blocked', 'job.reworked'],
   );
   const completed = jobs.filter((j) => j.status === 'completed');
   const cancelled = jobs.filter((j) => j.status === 'cancelled').length;
@@ -266,7 +269,87 @@ export function runs(store: Store): RunsView {
     durationUnknown: completed.length - durations.length,
     completedPerHour:
       completed.length > 0 && Number.isFinite(hours) && hours > 0 ? completed.length / hours : null,
+    ...trust(store, jobs, eventsOf),
   };
+}
+
+const total = (c: TokenCounts) => c.input + c.output + c.cacheRead + c.cacheCreation;
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const ratio = (n: number, of: number) => (of === 0 ? null : n / of);
+const sumOrNull = (xs: readonly (number | null)[]) => {
+  const known = xs.filter((x) => x !== null);
+  return known.length === 0 ? null : known.reduce((a, b) => a + b, 0);
+};
+
+/** Trust and cost per merged ticket, fast against full (ticket 0084); see docs/dashboard.md. */
+function trust(
+  store: Store,
+  jobs: readonly Job[],
+  eventsOf: Map<string, Map<string, Event>>,
+): Pick<RunsView, 'trust' | 'tickets'> {
+  const ev = (j: Job) => eventsOf.get(j.id) ?? new Map<string, Event>();
+  const finishKey = (j: Job) => `${terminalAt(j, ev(j)) ?? ''}\u0000${j.id}`;
+  const titles = new Map(allTickets(store.db).map((t) => [t.id, t.title]));
+  const byTicket = new Map<number, Job[]>();
+  for (const j of jobs) if (j.ticketId !== null) getOr(byTicket, j.ticketId, () => []).push(j);
+  const merged: [string, MergedTicketRow][] = [];
+  for (const [id, list] of byTicket) {
+    const job = list
+      .filter((j) => j.prState === 'merged')
+      .sort((a, b) => cmp(finishKey(a), finishKey(b)))
+      .at(-1);
+    if (!job) continue;
+    const tokens = list.flatMap((j) => jobTokens(store, j.id) ?? []);
+    const sum = zero();
+    for (const t of tokens) add(sum, t);
+    merged.push([
+      finishKey(job),
+      {
+        ticketKey: ticketKey(id),
+        title: titles.get(id) ?? '',
+        jobId: job.id,
+        mode: job.mode,
+        jobCount: list.length,
+        rounds: job.round,
+        ciRepairs: job.ciRepairs,
+        escalated: list.some((j) => ev(j).has('job.blocked')),
+        elapsedMs: sumOrNull(list.map((j) => span(j.createdAt, terminalAt(j, ev(j))))),
+        agentSeconds: sumOrNull(list.map((j) => jobSeconds(store, j.id))),
+        tokens: tokens.length === 0 ? null : sum,
+        tokenJobs: tokens.length,
+      },
+    ]);
+  }
+  const tickets = merged.sort((a, b) => cmp(b[0], a[0])).map(([, row]) => row);
+  const row = (mode: JobMode): TrustRow => {
+    const of = jobs.filter((j) => j.mode === mode);
+    const finished = of.filter((j) => j.status === 'completed' || j.status === 'cancelled');
+    const mergedJobs = of.filter((j) => j.prState === 'merged');
+    const firstPass = mergedJobs.filter(
+      (j) => j.round <= 1 && !ev(j).has('job.reworked') && !ev(j).has('job.blocked'),
+    );
+    const mine = tickets.filter((t) => t.mode === mode);
+    const pick = (f: (t: MergedTicketRow) => number | null) =>
+      mine.map(f).filter((x) => x !== null);
+    const medianMax = (xs: number[]) => ({
+      median: median(xs),
+      max: xs.length === 0 ? null : Math.max(...xs),
+    });
+    return {
+      finishedJobs: finished.length,
+      escalationRate: ratio(
+        finished.filter((j) => ev(j).has('job.blocked')).length,
+        finished.length,
+      ),
+      firstPassRate: ratio(firstPass.length, mergedJobs.length),
+      rounds: medianMax(pick((t) => t.rounds)),
+      ciRepairs: medianMax(pick((t) => t.ciRepairs)),
+      elapsedMs: median(pick((t) => t.elapsedMs)),
+      agentSeconds: median(pick((t) => t.agentSeconds)),
+      tokens: median(pick((t) => (t.tokens === null ? null : total(t.tokens)))),
+    };
+  };
+  return { trust: { full: row('full'), fast: row('fast') }, tickets };
 }
 
 /** Roles measured by their stage's visits; the builder pair is split by `jobs.mode`. */
@@ -412,7 +495,7 @@ function ordered<T extends ModelKey>(rows: Iterable<T>): T[] {
   );
 }
 
-function getOr<T>(map: Map<string, T>, key: string, make: () => T): T {
+function getOr<K, T>(map: Map<K, T>, key: K, make: () => T): T {
   let v = map.get(key);
   if (v === undefined) {
     v = make();
