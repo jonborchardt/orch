@@ -79,6 +79,16 @@ export class LostLockError extends OrchError {
   }
 }
 
+/**
+ * A ticket's recorded checkout did not answer Git within the dispatch budget: neither missing nor
+ * another repository, and worth asking again (decision 2026-11-27-controller-waits-for-slow-git).
+ */
+export class CheckoutTimeoutError extends OrchError {
+  constructor(message: string) {
+    super(message, 1);
+  }
+}
+
 /** Job owned by another session, bad token, or stale revision. */
 export class OwnershipError extends OrchError {
   constructor(message: string) {
