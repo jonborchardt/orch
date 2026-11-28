@@ -461,9 +461,14 @@ The controller reads CI with the same rules as `orch gh ci` ([workflow.md](workf
 - A failed check is re-run once per head (`ci.rerun`) before anything is repaired. A second
   failure for the same head sends the job back to `build` (`ciRepairs` + 1) until `maxCiRepairs`
   is spent, then `needs-human` with `max CI repair cycles reached`.
-- `cancelled`, `startup_failure`, `stale`, or `action_required` twice, no checks at all, a closed
-  PR, or a head moved outside the job escalate: they are not code defects. Fix GitHub Actions (or
-  the branch), then resume `--to ci` on the dashboard (Resume at ci) and `orch do <ticket>`.
+- When the base branch's tip fails the same checks, the job waits in `ci` instead (`base-failing`,
+  ticket code `base-failing`): released, nothing spent, no person needed. The controller passes the
+  ticket over and takes it again after another ticket lands; once the base is green the job
+  integrates it (no repair spent) or gets a second re-run.
+- `cancelled`, `startup_failure`, or `stale` three times (two re-runs), `action_required`, no
+  checks at all, a closed PR, or a head moved outside the job escalate: they are not code defects.
+  Fix GitHub Actions (or the branch), then resume `--to ci` on the dashboard (Resume at ci) and
+  `orch do <ticket>`.
 - `ci-pending` means the controller read GitHub 60 times without a verdict; `github-unreadable`
   means five reads in a row failed. Neither changed the job: `orch do <ticket>` reads again.
 

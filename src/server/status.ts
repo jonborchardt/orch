@@ -125,6 +125,24 @@ function stoppedBlocker(job: Lease, ev: Evidence): Blocker | null {
   };
 }
 
+/**
+ * A ci job nobody holds whose newest observation is `base-failing`: it waits for its base branch
+ * to pass the named checks, which needs no person. Display only.
+ */
+function baseBlocker(job: Lease, ev: Evidence): Blocker | null {
+  const observed = ev.events.get('ci.observed');
+  if (job.stage !== 'ci' || text(observed, 'outcome') !== 'base-failing') return null;
+  const base = observed?.payload['base'] as
+    { branch?: unknown; sha?: unknown; checks?: { name?: unknown }[] } | undefined;
+  const branch = typeof base?.branch === 'string' ? base.branch : 'the base branch';
+  const names = (base?.checks ?? []).flatMap((c) => (typeof c.name === 'string' ? [c.name] : []));
+  return {
+    kind: 'waiting',
+    summary: `Waiting for ${branch} to pass ${names.length ? names.join(', ') : 'its checks'}; no person needed`,
+    detail: text(observed, 'reason'),
+  };
+}
+
 export function blockerOf(
   job: Lease & Pick<Job, 'round' | 'ciRepairs' | 'maxCiRepairs'> & Partial<Pick<Job, 'prState'>>,
   state: Liveness,
@@ -145,6 +163,7 @@ export function blockerOf(
     }
     case 'stale':
       return (
+        baseBlocker(job, ev) ??
         stoppedBlocker(job, ev) ?? {
           kind: 'interrupted',
           summary: `Session ${job.ownerSession ?? '?'} stopped renewing its lease; presumed gone`,
@@ -215,6 +234,7 @@ export function blockerOf(
     case 'idle': {
       if (job.ownerSession === null) {
         return (
+          baseBlocker(job, ev) ??
           stoppedBlocker(job, ev) ?? {
             kind: 'waiting',
             summary: 'No session owns this job',
@@ -224,6 +244,7 @@ export function blockerOf(
       }
       if (leaseExpired(job, now())) {
         return (
+          baseBlocker(job, ev) ??
           stoppedBlocker(job, ev) ?? {
             kind: 'waiting',
             summary: `Lease held by ${job.ownerSession} lapsed; presumed gone`,
@@ -337,7 +358,14 @@ export function ciSummary(
   if (ci.outcome === 'infrastructure') {
     return {
       line: `Required checks did not reach a verdict ${at}.${stale}`,
-      guidance: 'Not a code defect: re-run the workflow or fix CI, then Resume at CI.',
+      guidance: 'Not a code defect, and its re-runs did not help: fix CI, then Resume at CI.',
+    };
+  }
+  if (ci.outcome === 'base-failing') {
+    return {
+      line: `CI failing ${at}, and the base branch fails the same checks; ${budget}.${stale}`,
+      guidance:
+        'Nothing to do: the job waits for the base branch to pass and continues from ci when it does.',
     };
   }
   if (ci.status === 'failing') {

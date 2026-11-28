@@ -54,7 +54,7 @@ import {
 import type { Job } from '../storage/schema.ts';
 import { ticketJobs } from '../storage/tickets.ts';
 import { type ChoiceLink, choiceLinks, needsHuman } from './actions.ts';
-import { needsHumanLines } from './run-report.ts';
+import { BASE_FAILING, needsHumanLines } from './run-report.ts';
 import { dispatchJob } from './dispatch.ts';
 import { loadConfig, resumeFactoryJob, specResumeSteps } from './factory.ts';
 import { transitionGuarded } from './gates.ts';
@@ -539,6 +539,11 @@ async function pollCi(run: Run, jobId: string): Promise<JobRun | null> {
         transient = 0;
         run.log(`  ci: ${r.action}: ${r.reason}`);
         if (r.action !== 'wait') return null;
+        // The base fails the same checks: no wait here; the job is released and taken again
+        // after another ticket lands (`runQueue`), or by orch start or orch do later.
+        if (r.outcome === 'base-failing') {
+          return { kind: 'blocked', code: BASE_FAILING, reason: r.reason };
+        }
         waitSeconds = r.waitSeconds ?? RETRY_SECONDS;
       } catch (err) {
         if (!(err instanceof ToolError)) throw err;
@@ -1033,7 +1038,11 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
         return out('stopped', 'stopped on request; the job is kept as it is', jobId, 'orch resume');
       }
       if (r.kind === 'blocked') {
-        const next = resumable(r.code) ? 'orch resume' : retry;
+        const next = resumable(r.code)
+          ? 'orch resume'
+          : r.code === BASE_FAILING
+            ? `nothing for a person: this session takes it again after another ticket lands, else orch do ${key} once the base is green`
+            : retry;
         return out('blocked', r.reason, jobId, next, r.code);
       }
       const after = getJob(store.db, jobId);
@@ -1155,6 +1164,16 @@ async function runQueue(
     ...session.skipped.map((s) => s.ticketId),
     ...session.results.filter(passesOver).map((r) => r.ticketId),
   ]);
+  // A ticket passed over because its base fails the same checks is taken again once another
+  // ticket ended done after it (that merge may be the base's fix); results are in the order
+  // they ended.
+  const retakeForBase = () => {
+    const done = session.results.findLastIndex((r) => r.outcome === 'done');
+    session.results.forEach((r, i) => {
+      if (i < done && r.code === BASE_FAILING) passed.delete(r.ticketId);
+    });
+  };
+  retakeForBase();
   for (;;) {
     if (run.stopNow()) return null;
     if (stopRequests(store.paths, run.slot).next)
@@ -1172,7 +1191,10 @@ async function runQueue(
       passed.delete(again.ticketId);
       const r = await attempt(again.ticketId, 'resume');
       if (r.outcome === 'stopped') return null;
-      if (r.outcome === 'done') continue;
+      if (r.outcome === 'done') {
+        retakeForBase();
+        continue;
+      }
       if (!passesOver(r)) return `ticket ${ticketKey(again.ticketId)} is ${r.outcome}: ${r.reason}`;
       passed.add(again.ticketId);
       continue;
@@ -1211,7 +1233,10 @@ async function runQueue(
     );
     const r = await attempt(next.id, resume === undefined ? 'ready' : 'resume');
     if (r.outcome === 'stopped') return null;
-    if (r.outcome === 'done') continue;
+    if (r.outcome === 'done') {
+      retakeForBase();
+      continue;
+    }
     if (!passesOver(r)) return `ticket ${next.key} is ${r.outcome}: ${r.reason}`;
     run.log(`ticket ${next.key} passed over: ${r.code ?? r.outcome}`);
     passed.add(next.id);

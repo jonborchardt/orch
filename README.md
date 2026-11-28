@@ -311,7 +311,8 @@ Optional email reports when a job needs a person or merged, and of each controll
   draft PR is created or reused, never duplicated; the job completes only inside `orch gh ci` after
   GitHub reports passing required checks for that exact head on the job's own PR, and `orch` then
   marks the PR ready; failed checks get one re-run, then a repair cycle through build, review, and
-  approval (bounded by `maxCiRepairs`).
+  approval (bounded by `maxCiRepairs`); a failure the base branch shares waits for a green base
+  instead.
 - Merging, where you opted in: `gh pr merge --merge --match-head-commit <ciHead>`, confirmed by a
   second read of GitHub, and only when GitHub's compare says `ciHead` contains the base's current
   tip; a base that moved after CI passed is merged into the branch and the job reopened into `pr`
@@ -331,7 +332,7 @@ Optional email reports when a job needs a person or merged, and of each controll
 - Merging a repository you have not opted in (on GitHub, or Merge in the dashboard). Marking a PR
   ready when `gh pr ready` failed (reported, not retried; Refresh PR records it afterwards). Fixing
   GitHub Actions itself (billing, runners, a workflow that never reports): `orch` escalates after
-  one re-run.
+  two re-runs.
 - Accepting a verification policy a job proposed, or onboarding a repository that has none.
 - Deciding on an approver's `ESCALATE`, a review round that still requests changes at the limit, a
   spent CI repair budget, a second merge conflict, a PR closed or moved outside the job.

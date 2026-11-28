@@ -8,8 +8,16 @@ import { choiceLine } from './actions.ts';
 import type { MergedTicket, RunSummary, WaitingJob } from './run.ts';
 import type { TokenCounts } from '../server/types.ts';
 
+/**
+ * The ticket code of a job whose failing checks fail on its base branch too: it waits in ci for a
+ * green base, which needs no person (decision 2026-11-28-base-failures-wait-not-escalate).
+ */
+export const BASE_FAILING = 'base-failing';
+
 const NEEDS_YOU = ['needs-human', 'blocked', 'refused'];
-const needsYou = (s: RunSummary) => s.tickets.filter((t) => NEEDS_YOU.includes(t.outcome));
+const waitsForBase = (t: RunSummary['tickets'][number]) => t.code === BASE_FAILING;
+const needsYou = (s: RunSummary) =>
+  s.tickets.filter((t) => NEEDS_YOU.includes(t.outcome) && !waitsForBase(t));
 
 const duration = (s: number) => `${String(Math.floor(s / 60))} min ${String(s % 60)} s`;
 
@@ -72,6 +80,9 @@ export function formatSummary(s: RunSummary): string {
     }
     if (t.next !== null) lines.push(`     next: ${t.next}`);
   }
+  const base = s.tickets.filter(waitsForBase);
+  if (base.length > 0) lines.push('', `Waiting for the base branch (${String(base.length)})`);
+  for (const t of base) lines.push(`${ticketKey(t.ticketId)} waits for its base: ${t.reason}`);
   const other = s.tickets.filter((t) => t.outcome !== 'done' && !NEEDS_YOU.includes(t.outcome));
   if (other.length + s.skipped.length > 0) lines.push('', 'Passed over');
   for (const t of other) lines.push(`${ticketKey(t.ticketId)} ${t.outcome}: ${t.reason}`);

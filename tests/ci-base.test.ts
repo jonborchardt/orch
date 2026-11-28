@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { waitSeconds } from '../src/core/ci.ts';
+import { planJob } from '../src/ops/factory.ts';
 import { listEvents } from '../src/storage/events.ts';
 import { head, start, toCi } from './drive.ts';
 import { SHIM_BASE_SHA } from './helpers.ts';
@@ -63,6 +64,12 @@ describe('ci stage: a failure shared with the base tip', () => {
       '--paginate',
       '--slurp',
     ]);
+
+    // The session's plan only releases the job: it waits for the base, not for a person.
+    const plan = planJob(store, c.id);
+    expect(plan.ci.baseFailing).toBe(true);
+    expect(plan.commands).toEqual([`orch job release ${c.id} --token <token>`]);
+    expect(plan.reason).toContain('the job waits for the base, and no person is needed');
 
     // The base turns green; GitHub's compare gives no answer: still waiting for the base.
     checks(BASE, [run('test', 'success')]);

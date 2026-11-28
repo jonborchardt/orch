@@ -174,6 +174,11 @@ export interface Plan {
      * (`controllerTakesCi`).
      */
     release: boolean;
+    /**
+     * True when the newest observation of the worktree HEAD is `base-failing`: the job waits for a
+     * green base and the session only releases it; no person is needed.
+     */
+    baseFailing: boolean;
     /** Reason from the newest observation. */
     lastReason: string | null;
   };
@@ -470,6 +475,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
   const polls = observations.filter(ofHead).length;
   const claimedAt = detail.events.filter((e) => e.type === 'job.claimed').at(-1)?.id ?? 0;
   const sessionPolls = observations.filter((e) => e.id > claimedAt && ofHead(e)).length;
+  const baseFailing =
+    ciCurrent && observations.filter(ofHead).at(-1)?.payload['outcome'] === 'base-failing';
   const controllerCi = job.stage === 'ci' && controllerTakesCi(store.paths, job);
   const has = (p: string) => detail.artifacts.some((a) => a.path === p);
   // Every mutating command carries the token explicitly: shells spawned by Claude Code do not
@@ -519,6 +526,7 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       waitSeconds: waitSeconds(polls),
       release:
         job.ciStatus === 'pending' && sessionPolls >= (controllerCi ? 1 : CI_MAX_SESSION_POLLS),
+      baseFailing,
       lastReason: (lastObserved?.payload['reason'] as string | undefined) ?? null,
     },
     notices,
@@ -835,7 +843,14 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
       const budget = `Repairs used: ${String(job.ciRepairs)} of ${String(job.maxCiRepairs)}.`;
       // A stored verdict, even a passing one for HEAD, never completes the stage: orch gh ci
       // re-reads GitHub and completes in the same call when the checks still pass for this head.
-      if (plan.ci.release) {
+      if (plan.ci.baseFailing) {
+        plan.reason =
+          `The required checks that failed for ${job.ciHead?.slice(0, 7) ?? '?'} fail on ${job.baseBranch} too: ` +
+          `the job waits for the base, and no person is needed. Release the job and stop; it continues ` +
+          `from ci once ${job.baseBranch} is green (orch start, orch do, or orch factory resume). ${budget}` +
+          (plan.ci.lastReason ? ` Last observation: ${plan.ci.lastReason}` : '');
+        plan.commands = [`orch job release ${id}${tok}`];
+      } else if (plan.ci.release) {
         const why = controllerCi
           ? `CI is pending, and the factory controller that launched this session polls CI itself. ` +
             `Release the job and stop; the controller waits for CI and carries the job on.`
@@ -849,8 +864,8 @@ export function planJob(store: Store, id: string, opts: PlanOptions = {}): Plan 
         plan.reason =
           `Reconcile CI for the PR head through orch gh ci; it records GitHub's verdict for the exact commit and ` +
           `acts on it (passing: ${preReview ? 'moves the job to review, the PR stays a draft (pre-review pass)' : 'completes the job'}; ` +
-          `failing: re-run once, then rework to build with saved logs; ` +
-          `cannot run or no checks: escalate). Pending checks are only an observation: sleep plan.ci.waitSeconds ` +
+          `failing: re-run once, then wait while the base fails the same checks, else rework to build with saved logs; ` +
+          `cannot run: re-run twice, then escalate; no checks: escalate). Pending checks are only an observation: sleep plan.ci.waitSeconds ` +
           `(${String(plan.ci.waitSeconds)} s now) and run it again; the CLI never polls by itself. ${budget}` +
           (job.ciHead && !ciCurrent
             ? ` The last observation was for ${job.ciHead.slice(0, 7)}, not HEAD ${worktree.head?.slice(0, 7) ?? '?'}.`

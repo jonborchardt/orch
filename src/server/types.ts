@@ -88,7 +88,7 @@ export interface CiView {
   checkedAt: string | null;
   repairs: number;
   maxRepairs: number;
-  /** Newest reconciliation outcome for `head` (pending, passing, failing, infrastructure, none, outdated, closed, merged). */
+  /** Newest reconciliation outcome for `head` (pending, passing, failing, infrastructure, none, outdated, closed, merged, base-failing). */
   outcome: string | null;
   /** GitHub's reason from that reconciliation, verbatim. */
   reason: string | null;
