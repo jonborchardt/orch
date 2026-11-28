@@ -362,6 +362,7 @@ export function TicketDetail({
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState(false);
   const linkRowId = useId();
+  const holdHelpId = useId();
 
   const back = (
     <Link href="#/tickets" underline="hover">
@@ -478,7 +479,11 @@ export function TicketDetail({
   const left = detail.finish;
   const boxCount = left?.remaining.length ?? 0;
   const moved = (left?.remaining ?? []).flatMap((_, i) => (kept.includes(i + 1) ? [] : [i + 1]));
+  // A `?finish=` request this ticket cannot honour is dropped, so no later poll opens its confirm.
+  if (finishing !== null && left === null) setFinishing(null);
   const openFinish = (option: FinishOption, held = false) => {
+    setKept([]);
+    setFollowUp({ repo: '', area: '', priority: '' });
     setHold(held);
     setFinishing(option);
   };
@@ -630,8 +635,11 @@ export function TicketDetail({
           data-testid="ticket-finish"
         >
           <Typography sx={{ fontWeight: weight.semibold }}>
-            Needs a person: <Link href={`#/jobs/${left.jobId}`}>{left.jobId}</Link> merged, but{' '}
-            {String(boxCount)} box(es) are not ticked, so the ticket stays in progress.
+            Needs a person:{' '}
+            <Link href={`#/jobs/${left.jobId}`} color="inherit">
+              {left.jobId}
+            </Link>{' '}
+            merged, but {String(boxCount)} box(es) are not ticked, so the ticket stays in progress.
           </Typography>
           <Remaining finish={left} />
           <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap' }}>
@@ -639,6 +647,7 @@ export function TicketDetail({
               <Button
                 key={label}
                 variant="outlined"
+                color="inherit"
                 disabled={busy}
                 onClick={() => {
                   openFinish(option, held);
@@ -904,6 +913,9 @@ export function TicketDetail({
                     label={item}
                   />
                 ))}
+                {moved.length === 0 && (
+                  <FormHelperText>Select at least one box to move.</FormHelperText>
+                )}
               </Box>
               <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', rowGap: 2 }}>
                 <Pick
@@ -941,6 +953,7 @@ export function TicketDetail({
                   control={
                     <Checkbox
                       checked={hold}
+                      slotProps={{ input: { 'aria-describedby': holdHelpId } }}
                       onChange={(e) => {
                         setHold(e.target.checked);
                       }}
@@ -948,7 +961,7 @@ export function TicketDetail({
                   }
                   label="Hold for a person"
                 />
-                <FormHelperText>
+                <FormHelperText id={holdHelpId}>
                   Files the follow-up as a question. The controller never picks up a question, so it
                   waits until a person changes its type.
                 </FormHelperText>

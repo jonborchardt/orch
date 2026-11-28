@@ -1325,17 +1325,48 @@ describe('finishing a merged ticket', () => {
     );
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('checkbox', { name: 'Hold for a person' })).toBeChecked();
+    expect(
+      within(dialog).getByRole('checkbox', { name: 'Hold for a person' }),
+    ).toHaveAccessibleDescription(/The controller never picks up a question/);
     const confirm = within(dialog).getByRole('button', { name: 'Move and close' });
+    expect(dialog).not.toHaveTextContent('Select at least one box to move.');
     for (const item of left.remaining) {
       fireEvent.click(within(dialog).getByRole('checkbox', { name: item }));
     }
     expect(confirm).toBeDisabled();
+    expect(dialog).toHaveTextContent('Select at least one box to move.');
     fireEvent.click(within(dialog).getByRole('checkbox', { name: 'run the benchmark' }));
     fireEvent.click(confirm);
     await waitFor(() => {
       expect(db.posts).toHaveLength(1);
     });
     expect(lastPost()?.body).toEqual({ action: 'split', boxes: [1], hold: true, revision: 1 });
+  });
+
+  it('a cancelled split leaves nothing behind for the next confirm', async () => {
+    await open();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Hold a follow-up for a person and close' }),
+    );
+    let dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'tell support' }));
+    fireEvent.change(within(dialog).getByLabelText('Priority'), { target: { value: 'P1' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Move to a follow-up and close' }));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move and close' }));
+    await waitFor(() => {
+      expect(db.posts).toHaveLength(1);
+    });
+    expect(lastPost()?.body).toEqual({
+      action: 'split',
+      boxes: [1, 2, 3],
+      hold: false,
+      revision: 1,
+    });
   });
 
   it('closes with every box ticked, or reopens for rework, each after its own confirm', async () => {
@@ -1398,6 +1429,15 @@ describe('finishing a merged ticket', () => {
       expect(db.posts, hash).toEqual([]);
       cleanup();
     }
+    // A link the ticket cannot honour yet is dropped: becoming finishable later opens nothing.
+    db.finish = {};
+    mount('#/tickets/6?finish=close');
+    await header();
+    await screen.findByRole('button', { name: 'Edit' });
+    db.finish = { 6: left };
+    await screen.findByRole('region', { name: 'Needs a person' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(db.posts).toEqual([]);
   });
 
   it('shows a 409 refusal, re-reads the ticket, and never retries', async () => {

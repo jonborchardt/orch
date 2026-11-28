@@ -313,7 +313,7 @@ export function JobDetail({
             with {String(detail.finish.remaining.length)} box(es) not ticked.
           </Typography>
           <Remaining finish={detail.finish} />
-          <Link href={ticketHref(job.ticketId)}>
+          <Link href={ticketHref(job.ticketId)} color="inherit">
             Finish ticket {ticketKey(job.ticketId)}: move the boxes to a follow-up, close, or rework
           </Link>
         </Alert>
