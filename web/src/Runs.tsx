@@ -14,9 +14,8 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { RunsView, TokenCounts, TrustRow } from '../../src/server/types.ts';
-import { w, weight } from './Usage.tsx';
 import { errorText, fetchRuns } from './api.ts';
-import { elapsedCell } from './format.ts';
+import { elapsedCell, w, weight } from './format.ts';
 
 export const UNAVAILABLE = 'Unavailable';
 
