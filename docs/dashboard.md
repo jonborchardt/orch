@@ -125,7 +125,7 @@ where the reviewer was the only objector, and its attributed blocking findings: 
 verdict), false alarms (declined, overruled by an APPROVE, vanished), and escapes (it passed, then a
 CI repair, a bug ticket naming the job or its PR, or a revert ticket did), with the median review
 time. Captions say open findings and unattributed rounds are left out, that a revert counts only
-through a ticket, and that tokens per review are not measured. **Spec challenger by model** and
+through a ticket, and that tokens per model are not measured for reviewers (per-role Tokens are). **Spec challenger by model** and
 **Same or different model as the author** give reviews and objections. **Builders by model**
 (builder, fast-builder, spec-writer by the job's draw) gives jobs, first-pass verification, mean
 review rounds, CI repairs, escalations, and whole-job tokens per job over jobs with recorded
