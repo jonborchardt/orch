@@ -149,7 +149,7 @@ function boxList(raw: Raw): number[] | undefined {
       ? v.split(/[\s,]+/).filter(Boolean)
       : [v];
   return parts.map((p) => {
-    const n = typeof p === 'string' && /^\d{1,9}$/.test(p) ? Number(p) : p;
+    const n = typeof p === 'string' ? Number(p) : p;
     if (typeof n !== 'number' || !Number.isInteger(n)) {
       throw new ValidationError(`boxes must be box numbers such as 1,3 (got ${JSON.stringify(p)})`);
     }

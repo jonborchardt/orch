@@ -264,9 +264,33 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-/** The `?finish=` values: each opens one confirm of the "needs a person" section. */
+/**
+ * The `?finish=` values: each opens one confirm of the "needs a person" section. Keep equal to
+ * the `finish` keys of `FINISH_OPTIONS` in src/ops/tickets.ts, which writes the links.
+ */
 export const FINISH_OPTIONS = ['split', 'close', 'rework'] as const;
 export type FinishOption = (typeof FINISH_OPTIONS)[number];
+
+/** The buttons of that section: label, the confirm it opens, and whether "Hold for a person" starts ticked. */
+const FINISH_BUTTONS: readonly (readonly [string, FinishOption, boolean])[] = [
+  ['Move to a follow-up and close', 'split', false],
+  ['Hold a follow-up for a person and close', 'split', true],
+  ['They are done, close', 'close', false],
+  ['Rework', 'rework', false],
+];
+
+/** Each confirm's title (given the ticket key) and the label of its confirming button. */
+const FINISH_TEXT: Record<FinishOption, { title: (key: string) => string; confirm: string }> = {
+  split: {
+    title: (key) => `Move unticked boxes of ticket ${key} to a follow-up?`,
+    confirm: 'Move and close',
+  },
+  close: {
+    title: (key) => `Close ticket ${key} with every box ticked?`,
+    confirm: 'Tick all and close',
+  },
+  rework: { title: (key) => `Rework ticket ${key}?`, confirm: 'Reopen for rework' },
+};
 
 /** What a merged ticket still needs: its unticked boxes, quoted, and the merged job's known gaps. */
 export function Remaining({ finish }: { finish: TicketFinish }) {
@@ -472,16 +496,6 @@ export function TicketDetail({
       });
     }
   };
-  const FINISH_TITLE: Record<FinishOption, string> = {
-    split: `Move unticked boxes of ticket ${key} to a follow-up?`,
-    close: `Close ticket ${key} with every box ticked?`,
-    rework: `Rework ticket ${key}?`,
-  };
-  const FINISH_CONFIRM: Record<FinishOption, string> = {
-    split: 'Move and close',
-    close: 'Tick all and close',
-    rework: 'Reopen for rework',
-  };
 
   const link = (kind: 'dep' | 'related', add: boolean, n: number | string) =>
     act({ action: `${kind}-${add ? 'add' : 'remove'}`, target: n });
@@ -621,42 +635,18 @@ export function TicketDetail({
           </Typography>
           <Remaining finish={left} />
           <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap' }}>
-            <Button
-              variant="outlined"
-              disabled={busy}
-              onClick={() => {
-                openFinish('split');
-              }}
-            >
-              Move to a follow-up and close
-            </Button>
-            <Button
-              variant="outlined"
-              disabled={busy}
-              onClick={() => {
-                openFinish('split', true);
-              }}
-            >
-              Hold a follow-up for a person and close
-            </Button>
-            <Button
-              variant="outlined"
-              disabled={busy}
-              onClick={() => {
-                openFinish('close');
-              }}
-            >
-              They are done, close
-            </Button>
-            <Button
-              variant="outlined"
-              disabled={busy}
-              onClick={() => {
-                openFinish('rework');
-              }}
-            >
-              Rework
-            </Button>
+            {FINISH_BUTTONS.map(([label, option, held]) => (
+              <Button
+                key={label}
+                variant="outlined"
+                disabled={busy}
+                onClick={() => {
+                  openFinish(option, held);
+                }}
+              >
+                {label}
+              </Button>
+            ))}
           </Stack>
         </Alert>
       )}
@@ -886,7 +876,9 @@ export function TicketDetail({
         }}
         aria-labelledby="ticket-finish-title"
       >
-        <DialogTitle id="ticket-finish-title">{finishing && FINISH_TITLE[finishing]}</DialogTitle>
+        <DialogTitle id="ticket-finish-title">
+          {finishing && FINISH_TEXT[finishing].title(key)}
+        </DialogTitle>
         <DialogContent>
           {finishing === 'split' && left && (
             <Stack spacing={1.5}>
@@ -989,7 +981,7 @@ export function TicketDetail({
             disabled={busy || (finishing === 'split' && moved.length === 0)}
             onClick={confirmFinish}
           >
-            {finishing && FINISH_CONFIRM[finishing]}
+            {finishing && FINISH_TEXT[finishing].confirm}
           </Button>
         </DialogActions>
       </Dialog>
