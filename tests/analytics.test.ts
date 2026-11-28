@@ -81,7 +81,13 @@ describe('pure helpers', () => {
     expect(median([])).toBeNull();
     expect(median([3, 1, 2])).toBe(2);
     expect(median([4, 1, 3, 2])).toBe(2.5);
-    expect(timing([10, 0, 30, null])).toEqual({ unmeasured: 2, averageMs: 20, medianMs: 20 });
+    expect(timing([10, 0, 30, null])).toEqual({
+      unmeasured: 2,
+      averageMs: 20,
+      medianMs: 20,
+      totalMs: 40,
+    });
+    expect(timing([0, null]).totalMs).toBeNull();
   });
 });
 
@@ -164,6 +170,9 @@ describe('GET /api/agents', () => {
       unmeasured: 1,
       averageMs: 20 * MIN,
       medianMs: 20 * MIN,
+      // Ticket 0083: the measured 10 + 30 minutes; the zero-length run is left out.
+      totalMs: 40 * MIN,
+      tokens: null,
     });
   });
 
@@ -199,6 +208,9 @@ describe('GET /api/agents', () => {
       unmeasured: 3,
       averageMs: null,
       medianMs: null,
+      // Ticket 0083: no spec review has a start time, so nothing is measured.
+      totalMs: null,
+      tokens: null,
     });
   });
 
@@ -241,6 +253,8 @@ describe('GET /api/agents', () => {
       unmeasured: 0,
       averageMs: usage.reduce((a, b) => a + b, 0) / usage.length,
       medianMs: MIN,
+      totalMs: 11 * MIN,
+      tokens: null,
     });
     expect(of('fast-builder')).toMatchObject({ runs: 1, completed: 1, medianMs: 7 * MIN });
     for (const r of view.stages) {
@@ -249,6 +263,51 @@ describe('GET /api/agents', () => {
       );
     }
     for (const r of view.reviewers) expect(r.runs).toBe(r.pass + r.changes);
+  });
+
+  const counts = (input: number, output = 0, cacheRead = 0, cacheCreation = 0) => ({
+    input,
+    output,
+    cacheRead,
+    cacheCreation,
+  });
+  const usageRow = (ref: string, agents?: Record<string, ReturnType<typeof counts>>) => {
+    insertUsage(store, {
+      ref,
+      jobId: seedJob({ createdAt: at(0) }),
+      source: 'runner',
+      hours: [{ hour: T0, ...counts(1000, 1000, 1000, 1000) }],
+      ...(agents ? { agents } : {}),
+    });
+  };
+
+  it('counts a row recorded before the split as unattributed, never as zero (ticket 0083 AC5)', async () => {
+    usageRow('old');
+    let view = await json<AgentsView>('/api/agents');
+    expect(view.attributed).toEqual({ sessions: 0, of: 1 });
+    expect(view.coordinator).toBeNull();
+    expect(view.other).toBeNull();
+    for (const r of [...view.reviewers, ...view.stages]) expect(r.tokens).toBeNull();
+
+    usageRow('new', { coordinator: counts(5), security: counts(2, 1) });
+    view = await json<AgentsView>('/api/agents');
+    expect(view.attributed).toEqual({ sessions: 1, of: 2 });
+    // The old row's 1000s appear nowhere; a role with nothing attributed reads zero.
+    expect(view.coordinator).toEqual(counts(5));
+    expect(view.other).toEqual(counts(0));
+    expect(view.reviewers.find((r) => r.role === 'security')?.tokens).toEqual(counts(2, 1));
+    expect(view.stages.find((r) => r.role === 'builder')?.tokens).toEqual(counts(0));
+  });
+
+  it("sums each role's tokens, coordinator, and other over recorded rows (ticket 0083 AC6)", async () => {
+    usageRow('s1', { coordinator: counts(10), builder: counts(1, 2, 3, 4), other: counts(7) });
+    usageRow('s2', { coordinator: counts(1), builder: counts(1, 1, 1, 1), correctness: counts(9) });
+    const view = await json<AgentsView>('/api/agents');
+    expect(view.stages.find((r) => r.role === 'builder')?.tokens).toEqual(counts(2, 3, 4, 5));
+    expect(view.reviewers.find((r) => r.role === 'correctness')?.tokens).toEqual(counts(9));
+    expect(view.coordinator).toEqual(counts(11));
+    expect(view.other).toEqual(counts(7));
+    expect(view.attributed).toEqual({ sessions: 2, of: 2 });
   });
 });
 

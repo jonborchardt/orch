@@ -34,13 +34,13 @@ const KINDS = [
 ] as const;
 
 /** Approximate API price ratios, in plain-input-token equivalents. Not real prices. */
-const WEIGHTS: TokenCounts = { input: 1, cacheCreation: 1.25, cacheRead: 0.1, output: 5 };
+export const WEIGHTS: TokenCounts = { input: 1, cacheCreation: 1.25, cacheRead: 0.1, output: 5 };
 
 const sum = (c: TokenCounts) => c.input + c.output + c.cacheRead + c.cacheCreation;
-const weight = (c: TokenCounts) => KINDS.reduce((a, k) => a + c[k.key] * WEIGHTS[k.key], 0);
+export const weight = (c: TokenCounts) => KINDS.reduce((a, k) => a + c[k.key] * WEIGHTS[k.key], 0);
 const n = (x: number) => x.toLocaleString();
 /** The one display rule for a weight: a whole number. */
-const w = (x: number) => x.toLocaleString(undefined, { maximumFractionDigits: 0 });
+export const w = (x: number) => x.toLocaleString(undefined, { maximumFractionDigits: 0 });
 const timeLabel = (d: Date) =>
   d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 const dayLabel = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });

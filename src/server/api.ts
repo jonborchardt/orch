@@ -50,7 +50,7 @@ import { planJob } from '../ops/factory.ts';
 import { gradedReadiness } from '../ops/init.ts';
 import { mergeView } from '../ops/merge-view.ts';
 import { jobFinish } from '../ops/tickets.ts';
-import { jobTokens, storedUsage } from '../ops/token-usage.ts';
+import { agentTokens, jobTokens, storedUsage } from '../ops/token-usage.ts';
 import { ENDS, visits } from '../ops/usage.ts';
 import { currentFlakes } from '../ops/verify.ts';
 import { baseConflicts } from '../ops/worktree.ts';
@@ -80,7 +80,7 @@ import {
   TIMELINE_TYPES,
   timelineOf,
 } from './status.ts';
-import { readTokenUsage, spanEnd, USAGE_RANGES } from './token-usage.ts';
+import { readTokenUsage, spanEnd, USAGE_RANGES, zero } from './token-usage.ts';
 import { readSessionLog } from './transcript.ts';
 import type {
   ActionRequest,
@@ -93,6 +93,7 @@ import type {
   ModelKey,
   ModelNoteView,
   ReviewerModelRow,
+  ReviewerRow,
   BoardRow,
   ClaudeSession,
   JobDetailView,
@@ -103,6 +104,7 @@ import type {
   SessionLogView,
   SessionView,
   StageRow,
+  TokenCounts,
   UsageView,
 } from './types.ts';
 
@@ -228,6 +230,7 @@ export function timing(xs: readonly (number | null)[]): AgentTiming {
     unmeasured: xs.length - measured.length,
     averageMs: average(measured),
     medianMs: median(measured),
+    totalMs: measured.length === 0 ? null : measured.reduce((a, b) => a + b, 0),
   };
 }
 
@@ -279,7 +282,10 @@ const STAGE_OF: Record<
 };
 
 /** The Stages column each end event (`ENDS` in ops/usage.ts) counts in. */
-const STAGE_COLUMN: Record<string, keyof Omit<StageRow, 'role' | 'runs' | keyof AgentTiming>> = {
+const STAGE_COLUMN: Record<
+  string,
+  keyof Omit<StageRow, 'role' | 'runs' | 'tokens' | keyof AgentTiming>
+> = {
   'stage.completed': 'completed',
   'stage.failed': 'failed',
   'job.blocked': 'escalated',
@@ -288,10 +294,15 @@ const STAGE_COLUMN: Record<string, keyof Omit<StageRow, 'role' | 'runs' | keyof 
   'job.interrupted': 'interrupted',
 };
 
-function reviewerRow(role: string, verdicts: { verdict: string; ms: number | null }[]) {
+function reviewerRow(
+  role: string,
+  verdicts: { verdict: string; ms: number | null }[],
+  tokens: TokenCounts | null,
+): ReviewerRow {
   const count = (v: string) => verdicts.filter((x) => x.verdict === v).length;
   return {
     role,
+    tokens,
     runs: verdicts.length,
     pass: count('pass'),
     changes: count('changes'),
@@ -316,10 +327,16 @@ export function agents(store: Store): AgentsView {
         : [],
     );
   const jobVisits = jobs.map((j) => ({ mode: j.mode, visits: visits(eventsOf.get(j.id) ?? []) }));
+  const used = agentTokens(store);
+  // Null until a recorded session is attributed; then a key with no tokens reads zero.
+  const tokensOf = (key: string) => (used.sessions === 0 ? null : (used.totals.get(key) ?? zero()));
   const view: AgentsView = {
     reviewers: [],
     stages: [],
     ...modelMetrics(store, jobs, reviewsOf, artifactsOf),
+    coordinator: tokensOf('coordinator'),
+    other: tokensOf('other'),
+    attributed: { sessions: used.sessions, of: used.of },
   };
   for (const role of ROLES) {
     if (role.kind === 'spec-challenge' || role.kind === 'review') {
@@ -331,7 +348,7 @@ export function agents(store: Store): AgentsView {
                 ? [{ verdict: r.verdict, ms: span(r.createdAt, r.completedAt) }]
                 : [],
             );
-      view.reviewers.push(reviewerRow(role.name, xs));
+      view.reviewers.push(reviewerRow(role.name, xs, tokensOf(role.name)));
       continue;
     }
     const on = STAGE_OF[role.kind];
@@ -347,6 +364,7 @@ export function agents(store: Store): AgentsView {
       sentBack: 0,
       cancelled: 0,
       interrupted: 0,
+      tokens: tokensOf(role.name),
       ...timing(ended.map((v) => v.durationMs)),
     };
     for (const v of ended) {

@@ -17,12 +17,18 @@ import type {
   ChallengerModelRow,
   ReviewerModelRow,
   ReviewerRow,
+  RoleTokens,
   StageRow,
+  TokenCounts,
 } from '../../src/server/types.ts';
 import { duration, Polled, UNAVAILABLE, usePolled } from './Runs.tsx';
+import { w, weight } from './Usage.tsx';
 import { fetchAgents } from './api.ts';
 
-type Row = AgentTiming & { role: string; runs: number };
+type Row = AgentTiming & RoleTokens & { role: string; runs: number };
+
+/** A token total as its cost weight (the Usage section's rule); Unavailable when null. */
+const cost = (c: TokenCounts | null) => (c === null ? UNAVAILABLE : w(weight(c)));
 
 /** A count with its share of Runs; no share when there are no runs. */
 const share = (n: number, runs: number) =>
@@ -72,6 +78,8 @@ function AgentTable<R extends Row>({
               ))}
               <TableCell align="right">Average</TableCell>
               <TableCell align="right">Median</TableCell>
+              <TableCell align="right">Total time</TableCell>
+              <TableCell align="right">Tokens</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -88,6 +96,8 @@ function AgentTable<R extends Row>({
                 ))}
                 <TableCell align="right">{duration(r.averageMs)}</TableCell>
                 <TableCell align="right">{duration(r.medianMs)}</TableCell>
+                <TableCell align="right">{duration(r.totalMs)}</TableCell>
+                <TableCell align="right">{cost(r.tokens)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -240,7 +250,7 @@ function ByModel({ data }: { data: AgentsView }) {
         notes={[
           'Findings count attributed blocking findings each reviewer raised; open ones and rounds consolidated before attribution are left out.',
           'Escapes count a revert only when a ticket titled "revert" names the job or its PR: orch records no Git revert.',
-          "Tokens per review are not measured: a session's tokens are recorded per job, not per agent.",
+          'Tokens per model are not measured for reviewers; the per-role Tokens above are.',
         ]}
       />
       <ModelTable
@@ -296,8 +306,16 @@ export function AgentsPage({ refreshMs = 4000 }: { refreshMs?: number }) {
         label="Stages"
         rows={data?.stages ?? []}
         columns={STAGE_COLUMNS}
-        note="Stage time includes coordinator work."
+        note="Stage time includes coordinator work; stage Tokens do not."
       />
+      {data && (
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 3 }}>
+          Tokens are a role&apos;s subagent transcripts, shown as a cost weight (see Usage), never
+          the coordinator&apos;s. Cost weight outside the roles: coordinator{' '}
+          {cost(data.coordinator)}, other {cost(data.other)}; tokens attributed for{' '}
+          {String(data.attributed.sessions)} of {String(data.attributed.of)} recorded sessions.
+        </Typography>
+      )}
       {data && <ByModel data={data} />}
     </Polled>
   );

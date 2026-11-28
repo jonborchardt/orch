@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { recordSession } from '../src/ops/token-usage.ts';
 import { tokenUsage } from '../src/server/api.ts';
 import { attachSession, createJob } from '../src/storage/jobs.ts';
-import { events, jobs } from '../src/storage/schema.ts';
+import { events, jobs, tokenUsage as usageRows } from '../src/storage/schema.ts';
 import { recordedRefs } from '../src/storage/usage.ts';
 
 import {
@@ -359,6 +359,71 @@ describe('recorded usage in the read model (ticket 0144)', () => {
     expect(v.total).toMatchObject({ input: 6, complete: false });
     expect(v.jobs[0]?.missing).toContain('agent-z9.jsonl');
     expect(bucket(v, H(0))?.missing).toEqual([id]);
+  });
+
+  const rowOf = (ref: string) =>
+    store.db.select().from(usageRows).where(eq(usageRows.ref, ref)).get();
+
+  it('stores the per-agent split: roles by agentType, main as coordinator, the rest as other (ticket 0083 AC3)', () => {
+    const p = writeSession(
+      claude,
+      'p',
+      [usage(0, 'm1', { i: 4, o: 1 }), usage(5, 'dup', { i: 100 })].join('\n'),
+    );
+    // `dup` is read again in a subagent file: counted once, there, as `hourCounts` does.
+    writeAgent(
+      p,
+      'a1',
+      [usage(10, 'dup', { i: 7 }), usage(3700, 's1', { r: 20, c: 3 })].join('\n'),
+      { agentType: 'factory-reviewer-security' },
+    );
+    writeAgent(p, 'a2', usage(20, 'g1', { o: 9 }), { agentType: 'general-purpose' });
+    const id = mkJob([U], true);
+    expect(recordSession(store, id, U, 'runner')).toBeNull();
+    const row = rowOf(U);
+    const k = (input: number, output: number, cacheRead: number, cacheCreation: number) => ({
+      input,
+      output,
+      cacheRead,
+      cacheCreation,
+    });
+    expect(row?.agents).toEqual({
+      coordinator: k(4, 1, 0, 0),
+      security: k(7, 0, 20, 3),
+      other: k(0, 9, 0, 0),
+    });
+    const sum = (
+      xs: readonly { input: number; output: number; cacheRead: number; cacheCreation: number }[],
+    ) =>
+      xs.reduce(
+        (t, c) =>
+          k(
+            t.input + c.input,
+            t.output + c.output,
+            t.cacheRead + c.cacheRead,
+            t.cacheCreation + c.cacheCreation,
+          ),
+        k(0, 0, 0, 0),
+      );
+    expect(sum(Object.values(row?.agents ?? {}))).toEqual(sum(row?.hours ?? []));
+  });
+
+  it('counts a subagent with a missing, oversized, non-object, or typeless meta under other (ticket 0083 AC4)', () => {
+    const p = writeSession(claude, 'p', usage(0, 'm1', { i: 1 }));
+    writeAgent(p, 'b1', usage(1, 'x1', { i: 1 }));
+    writeAgent(p, 'b2', usage(2, 'x2', { i: 2 }));
+    writeFileSync(
+      join(p, U, 'subagents', 'agent-b2.meta.json'),
+      JSON.stringify({ agentType: 'factory-builder', pad: 'x'.repeat(17 * 1024) }),
+    );
+    writeAgent(p, 'b3', usage(3, 'x3', { i: 4 }), ['factory-builder']);
+    writeAgent(p, 'b4', usage(4, 'x4', { i: 8 }), { agentType: 3 });
+    const id = mkJob([U], true);
+    expect(recordSession(store, id, U, 'read')).toBeNull();
+    expect(rowOf(U)?.agents).toEqual({
+      coordinator: { input: 1, output: 0, cacheRead: 0, cacheCreation: 0 },
+      other: { input: 15, output: 0, cacheRead: 0, cacheCreation: 0 },
+    });
   });
 
   it('stores a session whose files predate the range in full (AC11)', () => {

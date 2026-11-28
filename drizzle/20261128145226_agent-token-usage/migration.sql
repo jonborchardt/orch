@@ -1,0 +1,1 @@
+ALTER TABLE `token_usage` ADD `agents` text;

@@ -98,6 +98,20 @@ run per `stage.started` of their stage paired with its end by the same rule as `
 the end `stage.completed`, `stage.failed`, `job.blocked`, `job.reworked`, `job.cancelled`, or
 `job.interrupted` picks the column. Stage time includes coordinator work.
 
+Both tables end with **Total time** and **Tokens** (ticket 0083). Total time is the sum of the
+measured durations Average and Median use (Unavailable when none is measured). Tokens is the
+role's token total as the Usage tab's cost weight (`WEIGHTS` in `web/src/Usage.tsx`), over every
+recorded session that carries a per-agent split (`token_usage.agents`, decision
+[2026-11-28-agent-tokens-at-record-time](decisions/2026-11-28-agent-tokens-at-record-time.md)):
+`recordSession` puts each subagent file's tokens under the role whose `agent` in `ROLES` is its
+`agent-<id>.meta.json` `agentType`, the main transcript's under the coordinator, and anything else
+(no, oversized, or unreadable meta, or an agent type no role names) under other, counting a
+message once, in the file it was last read from. Rows recorded before the split stay unattributed:
+they count in no role's Tokens, and until one session is attributed every Tokens cell reads
+Unavailable. A caption gives the coordinator and other totals and "tokens attributed for N of M
+recorded sessions". Stage Total time includes coordinator work while role Tokens do not (the
+coordinator's share is shown only on its own), so the two columns are not a rate.
+
 Below them the Agents tab compares models within each role (`byModel` and `notes`, decision
 [2026-11-25-attributed-findings](decisions/2026-11-25-attributed-findings.md)); rows are keyed by
 role, model (`not recorded` for a job without a `models.drawn` event), whether the model matched
@@ -111,7 +125,7 @@ where the reviewer was the only objector, and its attributed blocking findings: 
 verdict), false alarms (declined, overruled by an APPROVE, vanished), and escapes (it passed, then a
 CI repair, a bug ticket naming the job or its PR, or a revert ticket did), with the median review
 time. Captions say open findings and unattributed rounds are left out, that a revert counts only
-through a ticket, and that tokens per review are not measured. **Spec challenger by model** and
+through a ticket, and that tokens per model are not measured for reviewers (per-role Tokens are). **Spec challenger by model** and
 **Same or different model as the author** give reviews and objections. **Builders by model**
 (builder, fast-builder, spec-writer by the job's draw) gives jobs, first-pass verification, mean
 review rounds, CI repairs, escalations, and whole-job tokens per job over jobs with recorded

@@ -10,6 +10,7 @@ import { readdirSync, realpathSync } from 'node:fs';
 import { join, sep } from 'node:path';
 
 import { canonicalPath, claudeHome } from '../core/paths.ts';
+import { ROLES } from '../core/roles.ts';
 import { UUID } from '../core/session.ts';
 import { type Status, TERMINAL_STATUSES } from '../core/workflow.ts';
 import {
@@ -17,18 +18,32 @@ import {
   hourCounts,
   rangeOf,
   readSessionUsage,
+  type SessionRead,
   spanOverlaps,
   type StoredUsage,
   type UsageJob,
   zero,
 } from '../server/token-usage.ts';
-import { confined, readConfined, USAGE_LIMITS, type UsageLimits } from '../server/transcript.ts';
+import {
+  confined,
+  LIMITS,
+  readConfined,
+  readMeta,
+  USAGE_LIMITS,
+  type UsageLimits,
+} from '../server/transcript.ts';
 import type { TokenCounts, UsageRange } from '../server/types.ts';
 import type { Store } from '../storage/client.ts';
 import { eventsOfTypes } from '../storage/events.ts';
 import { listJobs } from '../storage/jobs.ts';
 import type { TokenUsageRow } from '../storage/schema.ts';
-import { insertUsage, recordedRefs, usageInRange, usageOfJob } from '../storage/usage.ts';
+import {
+  agentSplits,
+  insertUsage,
+  recordedRefs,
+  usageInRange,
+  usageOfJob,
+} from '../storage/usage.ts';
 
 /** Bytes read from the start of a transcript to find its `cwd` during a backfill. */
 const CWD_HEAD_BYTES = 1024 * 1024;
@@ -49,8 +64,63 @@ export function recordSession(
   const L = { ...USAGE_LIMITS, ...limits };
   const got = readSessionUsage(claudeDir, ref, L, null, L.USAGE_TOTAL_BYTES);
   if (got.problem !== null) return got.problem;
-  insertUsage(store, { ref, jobId, source, hours: hourCounts(got.recs) });
+  insertUsage(store, { ref, jobId, source, hours: hourCounts(got.recs), agents: agentSplit(got) });
   return null;
+}
+
+/**
+ * A session's counts per agent key, over the records `hourCounts` sums (the last per message id,
+ * in the file it was last read from): the main file under `coordinator`, a subagent file under
+ * the `ROLES` name whose `agent` is its meta's `agentType`, anything else under `other`.
+ */
+function agentSplit(got: SessionRead): Record<string, TokenCounts> {
+  const last = new Map(got.recs.map((r) => [r.id, r]));
+  const keyOf = new Map<string, string>();
+  const key = (agent: string): string => {
+    let k = keyOf.get(agent);
+    if (k === undefined) {
+      const meta = readMeta(
+        join(got.sub, `agent-${agent}.meta.json`),
+        got.sub,
+        LIMITS.META_MAX_BYTES,
+      );
+      const type = meta['agentType'];
+      k = ROLES.find((r) => typeof type === 'string' && r.agent === type)?.name ?? 'other';
+      keyOf.set(agent, k);
+    }
+    return k;
+  };
+  const out: Record<string, TokenCounts> = {};
+  for (const r of last.values()) {
+    const k = r.agent === null ? 'coordinator' : key(r.agent);
+    add((out[k] ??= zero()), r);
+  }
+  return out;
+}
+
+/** Summed per-agent counts over recorded sessions, and how many of them carry a split. */
+export interface AgentTokens {
+  /** Per agent key; empty when no session is attributed. */
+  totals: Map<string, TokenCounts>;
+  sessions: number;
+  of: number;
+}
+
+/** Every recorded session's per-agent split, summed; rows recorded before the split are skipped. */
+export function agentTokens(store: Store): AgentTokens {
+  const splits = agentSplits(store.db);
+  const totals = new Map<string, TokenCounts>();
+  let sessions = 0;
+  for (const s of splits) {
+    if (s === null) continue;
+    sessions += 1;
+    for (const [k, c] of Object.entries(s)) {
+      let t = totals.get(k);
+      if (!t) totals.set(k, (t = zero()));
+      add(t, c);
+    }
+  }
+  return { totals, sessions, of: splits.length };
 }
 
 /**
