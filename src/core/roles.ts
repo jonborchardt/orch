@@ -129,27 +129,21 @@ function toolRules(value: unknown, key: string): string[] {
 
 const ALLOWED_TOOLS_FLAGS = ['--allowedTools', '--allowed-tools'];
 
-/** Index just past the last value of the last `--allowedTools` group, or -1 without one. */
-function allowedToolsEnd(args: readonly string[]): number {
-  let end = -1;
+/** The value ranges `[start, end)` of every `--allowedTools` (or `--allowed-tools`) group. */
+function allowedToolsGroups(args: readonly string[]): { start: number; end: number }[] {
+  const groups: { start: number; end: number }[] = [];
   for (let i = 0; i < args.length; i++) {
     if (!ALLOWED_TOOLS_FLAGS.includes(args[i] ?? '')) continue;
-    end = i + 1;
+    let end = i + 1;
     while (end < args.length && !(args[end] ?? '').startsWith('-')) end++;
+    groups.push({ start: i + 1, end });
   }
-  return end;
+  return groups;
 }
 
 /** The values of every `--allowedTools` (or `--allowed-tools`) group in `args`, in order. */
 export function allowedToolsOf(args: readonly string[]): string[] {
-  const tools: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (!ALLOWED_TOOLS_FLAGS.includes(args[i] ?? '')) continue;
-    for (let j = i + 1; j < args.length && !(args[j] ?? '').startsWith('-'); j++) {
-      tools.push(args[j] ?? '');
-    }
-  }
-  return tools;
+  return allowedToolsGroups(args).flatMap((g) => args.slice(g.start, g.end));
 }
 
 /**
@@ -168,7 +162,7 @@ export function runnerArgsFor(config: FactoryConfig, repo: string): string[] {
     additions.push(rule);
   }
   if (additions.length === 0) return [...base];
-  const end = allowedToolsEnd(base);
+  const end = allowedToolsGroups(base).at(-1)?.end ?? -1;
   if (end === -1) return [...base, '--allowedTools', ...additions];
   return [...base.slice(0, end), ...additions, ...base.slice(end)];
 }
