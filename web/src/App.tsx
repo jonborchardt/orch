@@ -19,7 +19,7 @@ import { Help } from './Help.tsx';
 import { JobBoard, parseSort, type Sort } from './JobBoard.tsx';
 import { type DetailActivity, JobDetail } from './JobDetail.tsx';
 import { RunsPage, usePolled } from './Runs.tsx';
-import { Pick } from './TicketDetail.tsx';
+import { FINISH_OPTIONS, Pick } from './TicketDetail.tsx';
 import { NO_FILTERS, type TicketFilters, TicketsPage } from './Tickets.tsx';
 import { UsagePage } from './Usage.tsx';
 import { failureText, fetchBoard, fetchRepos, fetchRunner } from './api.ts';
@@ -40,7 +40,8 @@ function useHashRoute(): string {
   return hash;
 }
 
-const TICKETS_ROUTE = /^#\/tickets(?:\/(\d{1,9}))?\/?$/;
+// `?finish=<option>` (the mail's and terminal's per-option link) only opens that option's confirm.
+const TICKETS_ROUTE = /^#\/tickets(?:\/(\d{1,9}))?\/?(?:\?finish=([a-z]*))?$/;
 const RUNS_ROUTE = /^#\/runs\/?$/;
 const AGENTS_ROUTE = /^#\/agents\/?$/;
 const USAGE_ROUTE = /^#\/usage\/?$/;
@@ -465,6 +466,7 @@ export function App({ refreshMs = 4000 }: { refreshMs?: number }) {
         {ticketMatch ? (
           <TicketsPage
             id={ticketMatch[1] === undefined ? null : Number(ticketMatch[1])}
+            finish={FINISH_OPTIONS.find((o) => o === ticketMatch[2]) ?? null}
             refreshMs={refreshMs}
             filters={ticketFilters}
             onFilters={setTicketFilters}

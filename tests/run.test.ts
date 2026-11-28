@@ -700,16 +700,19 @@ describe('ticket lifecycle', () => {
     expect(merges()).toHaveLength(1);
     expect(s.tickets[0]?.outcome).toBe('blocked');
     expect(s.tickets[0]?.reason).toContain('the ticket stays in-progress');
-    // Merged and verified: the step is the boxes and ticket done, never a retry.
+    // Merged and verified: the step is one dashboard link per way to finish, never a retry.
     const k = ticketKey(id);
     expect(s.tickets[0]?.code).toBe('ticket-open');
-    expect(s.tickets[0]?.next).toContain('tick the remaining boxes');
-    expect(s.tickets[0]?.next).toContain('move them to a follow-up ticket');
-    expect(s.tickets[0]?.next).toContain(`orch ticket done ${k}`);
+    for (const option of ['split', 'close', 'rework']) {
+      expect(s.tickets[0]?.next).toContain(`http://127.0.0.1:4777/#/tickets/${k}?finish=${option}`);
+    }
+    expect(s.tickets[0]?.next).toContain(`orch ticket done ${k} --tick-all`);
     expect(s.tickets[0]?.next).not.toContain('tries again');
     expect(status(id)).toBe('in-progress');
 
+    // Rework is a reopen: the open ticket gets a new job, as any open ticket does.
     ticketAction(store, id, { action: 'reopen' });
+    expect(status(id)).toBe('open');
     await one(l, id);
     expect(jobsOf(id)).toHaveLength(2);
     expect(l.calls).toHaveLength(2);

@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { ticketKey } from '../src/core/tickets.ts';
 import { resumeSession } from '../src/ops/run.ts';
 import { type RunnerSession, writeSession } from '../src/ops/runner-state.ts';
+import { finishLines } from '../src/ops/tickets.ts';
 import {
   DEAD_PID,
   done,
@@ -35,7 +36,7 @@ describe('the queue passes over a ticket-specific outcome', () => {
     const [open, merged] = s.tickets;
     expect(open).toMatchObject({ ticketId: first, outcome: 'blocked', code: 'ticket-open' });
     expect(open?.next).toBe(
-      `tick the remaining boxes (orch ticket edit ${ticketKey(first)} --body-file -) or move them to a follow-up ticket, then orch ticket done ${ticketKey(first)}`,
+      `finish the ticket on the dashboard (orch ui), one of: ${finishLines(first).join('; ')}`,
     );
     expect(open?.next).not.toContain('tries again');
     expect(merged).toMatchObject({ ticketId: second, outcome: 'done' });

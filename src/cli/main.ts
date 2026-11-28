@@ -210,6 +210,9 @@ export async function main(argv: string[]): Promise<number> {
         top: bool,
         before: str,
         position: str,
+        boxes: str,
+        hold: bool,
+        'tick-all': bool,
         // backup
         'data-dir': str,
         // ui

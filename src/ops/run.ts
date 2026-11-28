@@ -87,7 +87,7 @@ import {
   type TicketResult,
   writeSession,
 } from './runner-state.ts';
-import { listTickets, showTicket } from './tickets.ts';
+import { finishLines, listTickets, showTicket } from './tickets.ts';
 import { jobSeconds, jobTokens, recordSession } from './token-usage.ts';
 import { sleep } from './verify-lock.ts';
 
@@ -1068,7 +1068,7 @@ export async function runTicket(run: Run, ticketId: number): Promise<TicketResul
         // Merged and verified: nothing is left to retry, only the boxes the merge left open.
         const step =
           m.code === 'ticket-open'
-            ? `tick the remaining boxes (orch ticket edit ${key} --body-file -) or move them to a follow-up ticket, then orch ticket done ${key}`
+            ? `finish the ticket on the dashboard (orch ui), one of: ${finishLines(ticketId).join('; ')}`
             : `orch do ${key} tries again`;
         return out('blocked', m.reason, jobId, step, m.code);
       }

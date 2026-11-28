@@ -247,6 +247,7 @@ function detail(over: Partial<JobDetailView> = {}): JobDetailView {
     choices: null,
     needed: null,
     afterAction: null,
+    finish: null,
     conflicts: null,
     links: {
       vscode: 'vscode://file//wt/g',
@@ -1275,6 +1276,36 @@ describe('Job detail', () => {
     mount();
     await screen.findByRole('button', { name: 'Resume at approve' });
     expect(screen.queryByTestId('choices')).not.toBeInTheDocument();
+  });
+
+  it('a merged job whose ticket has boxes left shows them, the known gaps, and a link to the ticket', async () => {
+    mockFetch();
+    data.detail = detail({
+      job: { ...detail().job, ticketId: 85 },
+      finish: {
+        jobId: detail().job.id,
+        prUrl: 'https://github.com/acme/alpha/pull/3',
+        remaining: ['run the benchmark', 'tell support'],
+        knownGaps: 'Not measured on Windows.',
+      },
+    });
+    window.location.hash = `#/jobs/${detail().job.id}`;
+    mount();
+    const section = await screen.findByRole('region', { name: 'Needs a person' });
+    expect(section).toHaveTextContent('ticket 0085 stays in progress with 2 box(es) not ticked');
+    expect(section).toHaveTextContent('“run the benchmark”');
+    expect(section).toHaveTextContent('“tell support”');
+    expect(within(section).getByTestId('known-gaps')).toHaveTextContent('Not measured on Windows.');
+    expect(within(section).getByRole('link', { name: /^Finish ticket 0085/ })).toHaveAttribute(
+      'href',
+      '#/tickets/85',
+    );
+
+    cleanup();
+    data.detail = detail({ job: { ...detail().job, ticketId: 85 } });
+    mount();
+    await screen.findByRole('link', { name: 'ticket 0085' });
+    expect(screen.queryByRole('region', { name: 'Needs a person' })).not.toBeInTheDocument();
   });
 
   it('opens the choice a ?choose= link names, posting nothing until Confirm', async () => {

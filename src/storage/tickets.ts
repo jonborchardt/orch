@@ -15,11 +15,14 @@ import {
   type Classified,
   DEFAULT_AREAS,
   dependencyPath,
+  followUpBody,
   type LifecycleAction,
   type LinkKind,
   type MoveTo,
+  pickBoxes,
   planMove,
   type Priority,
+  tickBoxes,
   type TicketFields,
   ticketKey,
   type TicketStatus,
@@ -218,57 +221,56 @@ export interface CreateTicketInput extends TicketFields {
 }
 
 export function createTicket(store: Store, input: CreateTicketInput): LinkedTicket {
+  return store.db.transaction((tx) => insertTicket(tx, input, now()), { behavior: 'immediate' });
+}
+
+/** Validate and insert one ticket with its links and `ticket.created`, inside the caller's transaction. */
+function insertTicket(tx: Db, input: CreateTicketInput, ts: string): LinkedTicket {
   const dependsOn = [...new Set(input.dependsOn ?? [])];
   const related = [...new Set(input.related ?? [])];
-  return store.db.transaction(
-    (tx) => {
-      validateFields(
-        input,
-        listAreas(tx).map((a) => a.name),
-      );
-      requireTickets(tx, dependsOn, 'depends-on');
-      requireTickets(tx, related, 'related');
-      const ts = now();
-      const row = tx
-        .insert(tickets)
-        .values({
-          repo: input.repo,
-          repoPath: input.repoPath,
-          title: input.title.trim(),
-          status: 'open',
-          type: (input.type ?? 'feature') as TicketType,
-          area: input.area ?? 'other',
-          priority: (input.priority ?? 'P3') as Priority,
-          effort: input.effort ?? 1,
-          classified: (input.classified ?? 'auto') as Classified,
-          body: input.body ?? '',
-          createdAt: ts,
-          updatedAt: ts,
-        })
-        .returning()
-        .get();
-      // A new ticket has no dependents, so its dependencies cannot close a cycle.
-      for (const [kind, ids] of [
-        ['depends_on', dependsOn],
-        ['related', related],
-      ] as const) {
-        for (const targetId of ids)
-          tx.insert(ticketLinks).values({ ticketId: row.id, targetId, kind }).run();
-      }
-      appendTicketEvent(
-        tx,
-        row.id,
-        {
-          type: 'ticket.created',
-          payload: { title: row.title, repo: row.repo, dependsOn, related },
-        },
-        input.actor ?? null,
-        ts,
-      );
-      return { ...row, dependsOn, related };
-    },
-    { behavior: 'immediate' },
+  validateFields(
+    input,
+    listAreas(tx).map((a) => a.name),
   );
+  requireTickets(tx, dependsOn, 'depends-on');
+  requireTickets(tx, related, 'related');
+  const row = tx
+    .insert(tickets)
+    .values({
+      repo: input.repo,
+      repoPath: input.repoPath,
+      title: input.title.trim(),
+      status: 'open',
+      type: (input.type ?? 'feature') as TicketType,
+      area: input.area ?? 'other',
+      priority: (input.priority ?? 'P3') as Priority,
+      effort: input.effort ?? 1,
+      classified: (input.classified ?? 'auto') as Classified,
+      body: input.body ?? '',
+      createdAt: ts,
+      updatedAt: ts,
+    })
+    .returning()
+    .get();
+  // A new ticket has no dependents, so its dependencies cannot close a cycle.
+  for (const [kind, ids] of [
+    ['depends_on', dependsOn],
+    ['related', related],
+  ] as const) {
+    for (const targetId of ids)
+      tx.insert(ticketLinks).values({ ticketId: row.id, targetId, kind }).run();
+  }
+  appendTicketEvent(
+    tx,
+    row.id,
+    {
+      type: 'ticket.created',
+      payload: { title: row.title, repo: row.repo, dependsOn, related },
+    },
+    input.actor ?? null,
+    ts,
+  );
+  return { ...row, dependsOn, related };
 }
 
 interface TicketDecision {
@@ -416,6 +418,8 @@ export interface LifecycleInput extends TicketWrite {
   /** The ticket this one duplicates; required for `duplicate`. */
   of?: number | undefined;
   note?: string | undefined;
+  /** `done` only: tick every unchecked box in the same transaction. */
+  tickAll?: boolean | undefined;
 }
 
 /**
@@ -432,6 +436,10 @@ export function ticketLifecycle(
   return mutateTicket(store, id, input, (ticket, tx) => {
     const to = ticketTransition(ticket.status, action);
     const patch: Partial<Ticket> = { status: to, duplicateOf: null };
+    if (input.tickAll) {
+      if (action !== 'done') throw new ValidationError('tickAll goes with done only.');
+      patch.body = tickBoxes(ticket.body, 'all');
+    }
     if (action !== 'start' && action !== 'reopen') {
       const job = activeJobOf(tx, id);
       if (job !== null) {
@@ -467,6 +475,86 @@ export function ticketLifecycle(
       ],
     };
   });
+}
+
+export interface SplitInput extends TicketWrite {
+  /** Unticked boxes to move, numbered 1..n in body order; every one when absent. */
+  boxes?: readonly number[] | undefined;
+  /** File the follow-up as a `question`, which no controller picks up. */
+  hold?: boolean | undefined;
+  area?: string | undefined;
+  priority?: string | undefined;
+  /** Another repository for the follow-up (resolved by ops/tickets.ts). */
+  repo?: string | undefined;
+  repoPath?: string | undefined;
+  note?: string | undefined;
+}
+
+/**
+ * Finish a ticket whose work is in but whose boxes are not: file a follow-up ticket holding the
+ * chosen unticked boxes, tick them on the original as "(moved to NNNN)", and close the original
+ * as done, all in one transaction. Refused, writing nothing, for a closed ticket, one a job is
+ * still working on, or a box number that is not an unticked box.
+ */
+export function splitTicket(
+  store: Store,
+  id: number,
+  input: SplitInput = {},
+): { ticket: LinkedTicket; followUp: LinkedTicket } {
+  return store.db.transaction(
+    (tx) => {
+      const ticket = getTicket(tx, id);
+      checkRevision(ticket, input);
+      const to = ticketTransition(ticket.status, 'done');
+      const job = activeJobOf(tx, id);
+      if (job !== null) {
+        throw new WorkflowError(
+          `Job ${job} is still working on ticket ${ticketKey(id)}; let it finish or cancel it first.`,
+        );
+      }
+      const { numbers, items } = pickBoxes(ticket.body, input.boxes);
+      const prUrl = ticketJobs(tx, id).findLast((j) => j.prUrl !== null)?.prUrl ?? null;
+      const ts = now();
+      const followUp = insertTicket(
+        tx,
+        {
+          title: `Follow-up of ${ticketKey(id)}: ${ticket.title}`,
+          repo: input.repo ?? ticket.repo,
+          repoPath: input.repoPath ?? ticket.repoPath,
+          type: input.hold ? 'question' : ticket.type,
+          area: input.area ?? ticket.area,
+          priority: input.priority ?? ticket.priority,
+          body: followUpBody(ticket, prUrl, items),
+          related: [id],
+          actor: input.actor,
+        },
+        ts,
+      );
+      const key = ticketKey(followUp.id);
+      const note = [
+        input.note?.trim(),
+        prUrl === null ? null : `merged ${prUrl}`,
+        `${String(items.length)} unticked box(es) moved to follow-up ${key}`,
+      ]
+        .filter(Boolean)
+        .join('; ');
+      const event = {
+        type: 'ticket.completed',
+        payload: { from: ticket.status, to, followUp: followUp.id, prUrl, moved: items, note },
+      };
+      const body = tickBoxes(ticket.body, numbers, ` (moved to ${key})`);
+      applyTicket(
+        tx,
+        ticket,
+        { status: to, duplicateOf: null, body },
+        [event],
+        input.actor ?? null,
+        ts,
+      );
+      return { ticket: getLinkedTicket(tx, id), followUp };
+    },
+    { behavior: 'immediate' },
+  );
 }
 
 /**

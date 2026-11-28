@@ -138,6 +138,67 @@ export function uncheckedItems(body: string): string[] {
   );
 }
 
+const UNCHECKED_LINE = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+\[) (\][ \t]*.*)$/gm;
+
+/**
+ * The unchecked boxes `boxes` names, numbered 1..n in `uncheckedItems` order (each once, sorted);
+ * every one when `boxes` is undefined. A ValidationError when the body has none or a number is
+ * not one of them.
+ */
+export function pickBoxes(
+  body: string,
+  boxes?: readonly number[],
+): { numbers: number[]; items: string[] } {
+  const all = uncheckedItems(body);
+  if (all.length === 0) throw new ValidationError('The ticket has no unticked box.');
+  const numbers = boxes ? [...new Set(boxes)].sort((a, b) => a - b) : all.map((_, i) => i + 1);
+  const bad = numbers.filter((n) => !Number.isInteger(n) || n < 1 || n > all.length);
+  if (numbers.length === 0 || bad.length > 0) {
+    throw new ValidationError(
+      `boxes must name unticked boxes 1 to ${String(all.length)} (got ${numbers.length === 0 ? 'none' : bad.join(', ')})`,
+    );
+  }
+  return { numbers, items: numbers.map((n) => all[n - 1] ?? '') };
+}
+
+/** `body` with the unchecked boxes `numbers` (1-based; `all` for every one) ticked, `suffix` appended to each. */
+export function tickBoxes(body: string, numbers: readonly number[] | 'all', suffix = ''): string {
+  let n = 0;
+  return body.replace(UNCHECKED_LINE, (line: string, head: string, rest: string) => {
+    n += 1;
+    return numbers === 'all' || numbers.includes(n) ? `${head}x${rest.trimEnd()}${suffix}` : line;
+  });
+}
+
+/** Body of the follow-up ticket that takes `items` over from `original`. */
+export function followUpBody(
+  original: { id: number; title: string },
+  prUrl: string | null,
+  items: readonly string[],
+): string {
+  const merged = prUrl === null ? '' : `, merged as ${prUrl}`;
+  return [
+    `Follow-up of ticket ${ticketKey(original.id)} (${original.title})${merged}. These boxes were left unticked there:`,
+    '',
+    ...items.map((i) => `- [ ] ${i}`),
+    '',
+  ].join('\n');
+}
+
+/** The text under `## <heading>` (to the next `## ` heading), trimmed; null when absent or empty. */
+export function markdownSection(markdown: string, heading: string): string | null {
+  const lines = markdown.split(/\r?\n/);
+  const at = lines.findIndex((l) => l.trimEnd() === `## ${heading}`);
+  if (at < 0) return null;
+  const end = lines.findIndex((l, i) => i > at && l.startsWith('## '));
+  return (
+    lines
+      .slice(at + 1, end < 0 ? undefined : end)
+      .join('\n')
+      .trim() || null
+  );
+}
+
 /** The unchecked items (each once) approval must account for: none once the ticket is finished. */
 export function openChecklist(ticket: { status: string; body: string }): string[] {
   return ticket.status === 'open' || ticket.status === 'in-progress'
