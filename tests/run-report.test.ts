@@ -13,8 +13,8 @@ import { summaryExitCode } from '../src/cli/run.ts';
 import { ticketKey } from '../src/core/tickets.ts';
 import { dispatchJob } from '../src/ops/dispatch.ts';
 import { buildReceipt } from '../src/ops/receipt.ts';
-import { RUNNER_SESSION, startSession } from '../src/ops/run.ts';
-import { formatSummary } from '../src/ops/run-report.ts';
+import { RUNNER_SESSION, type RunSummary, startSession } from '../src/ops/run.ts';
+import { formatSummary, runSubject } from '../src/ops/run-report.ts';
 import { claimJob, getJob, transitionJob } from '../src/storage/jobs.ts';
 import type { Job } from '../src/storage/schema.ts';
 import { insertUsage } from '../src/storage/usage.ts';
@@ -128,6 +128,40 @@ describe('the end-of-session report', () => {
 
     expect(s.merged[0]).toMatchObject({ jobId: job.id, seconds: null, tokens: null });
     expect(formatSummary(s)).toContain('time not recorded, tokens not recorded');
+  });
+
+  it('shows a ticket waiting for its base apart from what needs you (ticket 0228)', () => {
+    const waiting = {
+      ticketId: 7,
+      title: 'Red base',
+      repo: 'github.com/acme/alpha',
+      jobId: 'job-0000000a',
+      outcome: 'blocked' as const,
+      code: 'base-failing',
+      reason: 'test also failed on main at ba5eba5',
+      relands: 0,
+      next: null,
+    };
+    const s: RunSummary = {
+      reason: 'no ready ticket is left (1 passed over)',
+      stopped: false,
+      interrupted: false,
+      attempted: 1,
+      completed: 0,
+      blocked: 1,
+      relands: 0,
+      elapsedSeconds: 1,
+      tickets: [waiting],
+      skipped: [],
+      merged: [],
+      waiting: [],
+    };
+    const text = formatSummary(s);
+    expect(text).toContain('Needs you (0)');
+    expect(text).toContain(
+      `Waiting for the base branch (1)\n${ticketKey(7)} waits for its base: ${waiting.reason}`,
+    );
+    expect(runSubject(s)).toBe('session ended: 0 merged, 0 need you');
   });
 });
 

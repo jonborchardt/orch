@@ -110,9 +110,12 @@ function ciBlocker(
 
 /**
  * The factory controller's newest `runner.stopped`, while it is still the job's last news: the job
- * is at the stage and status the stop recorded and no other loaded event is newer. Display only.
+ * is at the stage and status the stop recorded and no other loaded event is newer. A job parked on
+ * a red base (`baseBlocker`) shows that instead. Display only.
  */
 function stoppedBlocker(job: Lease, ev: Evidence): Blocker | null {
+  const base = baseBlocker(job, ev);
+  if (base !== null) return base;
   const stop = ev.events.get('runner.stopped');
   if (stop === undefined) return null;
   if (stop.payload['stage'] !== job.stage || stop.payload['status'] !== job.status) return null;
@@ -122,6 +125,24 @@ function stoppedBlocker(job: Lease, ev: Evidence): Blocker | null {
     summary: `Factory controller stopped it: ${text(stop, 'code') ?? '?'}`,
     detail: text(stop, 'reason'),
     next: text(stop, 'next'),
+  };
+}
+
+/**
+ * A ci job nobody holds whose newest observation is `base-failing`: it waits for its base branch
+ * to pass the named checks, which needs no person. Display only.
+ */
+function baseBlocker(job: Lease, ev: Evidence): Blocker | null {
+  const observed = ev.events.get('ci.observed');
+  if (job.stage !== 'ci' || text(observed, 'outcome') !== 'base-failing') return null;
+  const base = observed?.payload['base'] as
+    { branch?: unknown; sha?: unknown; checks?: { name?: unknown }[] } | undefined;
+  const branch = typeof base?.branch === 'string' ? base.branch : 'the base branch';
+  const names = (base?.checks ?? []).flatMap((c) => (typeof c.name === 'string' ? [c.name] : []));
+  return {
+    kind: 'waiting',
+    summary: `Waiting for ${branch} to pass ${names.length ? names.join(', ') : 'its checks'}; no person needed`,
+    detail: text(observed, 'reason'),
   };
 }
 
@@ -337,7 +358,14 @@ export function ciSummary(
   if (ci.outcome === 'infrastructure') {
     return {
       line: `Required checks did not reach a verdict ${at}.${stale}`,
-      guidance: 'Not a code defect: re-run the workflow or fix CI, then Resume at CI.',
+      guidance: 'Not a code defect, and its re-runs did not help: fix CI, then Resume at CI.',
+    };
+  }
+  if (ci.outcome === 'base-failing') {
+    return {
+      line: `CI failing ${at}, and the base branch fails the same checks; ${budget}.${stale}`,
+      guidance:
+        'Nothing to do: the job waits for the base branch to pass and continues from ci when it does.',
     };
   }
   if (ci.status === 'failing') {

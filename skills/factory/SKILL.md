@@ -36,8 +36,9 @@ Rules that are never relaxed:
 - Put every path in `plan.sensitive.needsReview` into the reviewer prompts.
 - Escalate rather than approve around a blocking finding.
 - Never run `git push --force`, `gh pr merge`, `gh pr ready`, or `gh run rerun`; never push outside
-  `orch gh push`; never delete branches or worktrees. `orch gh ci` requests the one bounded re-run
-  and marks a passing PR ready. Merging is orch's `mergeJob` alone: a dashboard Merge click, or
+  `orch gh push`; never delete branches or worktrees. `orch gh ci` requests the bounded re-runs
+  (at most two per head) and marks a passing PR ready. Never escalate to ask for a CI re-run or to
+  wait for the base branch: `orch gh ci` decides both. Merging is orch's `mergeJob` alone: a dashboard Merge click, or
   `orch job merge` / the controller where the repository is opted in to `mergeRepos`.
 
 ## 0. Preflight
@@ -305,7 +306,9 @@ interrupted attempt.
   When `plan.ci.release` is true, the plan's only command is `orch job release <id> --token <t>`:
   run it, tell the user CI is still running, give the resume command, and stop. In a session the
   factory controller launched this comes at the first pending observation, since the controller
-  polls CI itself.
+  polls CI itself. With `outcome: base-failing` (the base branch fails the same checks) the plan's
+  only command is the release too (`plan.ci.baseFailing`): run it, tell the user the job waits for
+  the base and needs no person, and stop.
 - `complete`: usually the job is `completed`; `orch factory next` confirms `done`. In a repository
   with `verification.authority: "ci"` the first pr/ci pass runs before review (simplify leads to
   `pr`): there `complete` with `ready: null` moves the job to `review` and the PR stays a draft.
