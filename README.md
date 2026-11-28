@@ -22,6 +22,9 @@ flowchart LR
     D -->|"Next ready ticket"| A
 ```
 
+New here? [docs/getting-started.md](docs/getting-started.md) goes from clone to a first merged
+ticket.
+
 ## Who it's for, and who it isn't
 
 For a developer with several repositories, a backlog, and a Claude plan, but no time to review
@@ -410,6 +413,8 @@ Details: [docs/operations.md](docs/operations.md#backup-and-restore).
 ## Documentation
 
 - `orch <command> --help` for every command and option.
+- [docs/getting-started.md](docs/getting-started.md): from clone to a first merged ticket, for a
+  newcomer.
 - [docs/overview.md](docs/overview.md): the architecture: control and execution planes, sources of
   truth, tickets and jobs, ownership, verification boundaries, recovery, and how `orch` compares
   with Beads, agent-orchestrator, and Gas Town.
