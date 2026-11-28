@@ -232,10 +232,11 @@ orch init --check
 **The runner's allow-list is missing a tool.** Symptom: under `orch start` or `orch do` a job
 stops making progress in `build`, in a repository whose builder needs something other than
 `orch`, `git`, `npm`, `npx`, `node`, and `cd` (for example `pnpm`, `cargo`, or `pytest`). The
-headless session may not run a command outside the list, and nobody is there to approve it. Fix:
-set `runnerClaudeArgs` in your own `<config>/factory.json` (`orch factory config` prints where
-that file is) to add the tools your builder needs (for example `"Bash(cargo *)"`). It replaces
-the default list, so repeat the defaults you still want. The full example:
+headless session may not run a command outside the list, and nobody is there to approve it. `orch init --check` lists a check executable the list does not cover under `uncovered`. Fix:
+add the rule to your own `<config>/factory.json` (`orch factory config` prints where that file
+is), under `repoAllowedTools` for that repository, for example
+`{"repoAllowedTools": {"github.com/acme/web": ["Bash(cargo *)"]}}`, or under `extraAllowedTools`
+for every repository. The defaults are kept; there is no need to repeat them. The full example:
 [workflow.md](workflow.md#claude-code-configuration).
 
 **An interrupted session.** Symptom: the terminal running `orch start` or `orch do` was closed,

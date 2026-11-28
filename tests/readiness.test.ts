@@ -47,6 +47,33 @@ describe('gradeReadiness', () => {
     ]);
   });
 
+  it('caps A at B on a permission gap and adds its advice; B, C, D only gain the line', () => {
+    const gap = { uncovered: ['pnpm'], repo: 'github.com/o/a', file: '/cfg/factory.json' };
+    const capped = gradeReadiness(facts(true, true, true, true), gap);
+    expect(capped).toMatchObject({ letter: 'B', met: 4, uncovered: ['pnpm'] });
+    expect(capped.advice).toHaveLength(1);
+    expect(capped.advice[0]).toContain('"Bash(pnpm *)"');
+    expect(capped.advice[0]).toContain('repoAllowedTools');
+    expect(capped.advice[0]).toContain('github.com/o/a');
+    expect(capped.advice[0]).toContain('/cfg/factory.json');
+    expect(gradeReadiness(facts(true, true, true, true), { ...gap, uncovered: [] })).toMatchObject({
+      letter: 'A',
+      advice: [],
+      uncovered: [],
+    });
+    for (const [f, letter] of [
+      [facts(true, true, false, true), 'B'],
+      [facts(true, false, false, true), 'C'],
+      [facts(false, false, false, false), 'D'],
+    ] as const) {
+      const plain = gradeReadiness(f);
+      const g = gradeReadiness(f, gap);
+      expect(g.letter).toBe(letter);
+      expect(g.met).toBe(plain.met);
+      expect(g.advice).toEqual([...plain.advice, capped.advice[0]]);
+    }
+  });
+
   it('treats a check whose id or arguments contain test or check as running tests', () => {
     expect(runsTests({ id: 'check', args: [] })).toBe(true);
     expect(runsTests({ id: 'ci', args: ['run', 'test:unit'] })).toBe(true);
