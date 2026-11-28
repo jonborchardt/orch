@@ -380,7 +380,7 @@ export interface TransitionOptions extends Auth {
   reason?: string | undefined;
   /** See `TransitionContext.mergedByHuman`; only `completeCi` sets it. */
   mergedByHuman?: boolean | undefined;
-  /** See `TransitionContext.integration`; only `integrateBase` sets it. */
+  /** See `TransitionContext.integration`; set by base integration (`integrateBase`, `reconcileCi`). */
   integration?: boolean | undefined;
   /** See `TransitionContext.authority`; computed by `ops/gates.ts` from the effective policy. */
   authority?: Authority | undefined;

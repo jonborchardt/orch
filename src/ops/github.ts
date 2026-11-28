@@ -423,8 +423,8 @@ function collectDiagnostics(
  * green it reworks to integrate it, or re-runs a second time (`CI_RERUN_LIMIT`). Otherwise failing
  * required checks collect diagnostics and send the job back to build through `rework`, which is
  * bounded by `maxCiRepairs` and escalates when exhausted; checks that did not run get a second
- * re-run, then escalate, as do a PR with no checks at all; neither counts as a repair. Pending checks record only the
- * observation with the seconds to wait: the caller sleeps and calls again, or resumes later.
+ * re-run, then escalate, as do a PR with no checks at all; neither counts as a repair. Pending
+ * checks record only the observation with the seconds to wait: the caller sleeps and calls again, or resumes later.
  */
 export function reconcileCi(store: Store, id: string, auth: Auth): CiReconcileResult {
   const job = authorize(store, id, auth);
