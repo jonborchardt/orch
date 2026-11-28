@@ -224,7 +224,7 @@ without CI. Details: [docs/workflow.md](docs/workflow.md#verification-authority)
 `.github/workflows/` is merged only by a human's click on the dashboard.
 
 The merge opt-in is off by default, per repository, and kept in your own `<config>/factory.json`,
-never in a repository. Model overrides, `maxRounds`, `maxCiRepairs`, and `runnerClaudeArgs` go in
+never in a repository. Model overrides, `maxRounds`, `maxCiRepairs`, and the session permissions go in
 the same file (`orch factory config` prints it). `models.<role>` is a model (`opus`, `sonnet`,
 `haiku`, `fable`, `inherit`) or a pool, a non-empty array of distinct ones such as
 `{"builder": ["opus", "fable"]}`: orch draws one model per role when it creates a job, keeps it for
@@ -232,7 +232,9 @@ the whole job, and records it on the job and on every review. You maintain the p
 prunes them. The controller's Claude session gets
 `--permission-mode auto` plus an allow-list for `orch`, `git`, `npm`, `npx`, `node`, and `cd`,
 never a permission bypass. A repository whose builder needs other tools (`pnpm`, `cargo`,
-`pytest`) needs them in `"runnerClaudeArgs"`, which replaces the default list. A Windows
+`pytest`) gets them from `"extraAllowedTools"` (every repository) or `"repoAllowedTools"` (keyed by
+repository identity), added to the defaults; `orch init --check` names any check executable the
+list does not cover. A Windows
 `claude.cmd` shim is refused, because the prompt cannot be passed through `cmd.exe` safely.
 Details and an example: [docs/workflow.md](docs/workflow.md#claude-code-configuration).
 

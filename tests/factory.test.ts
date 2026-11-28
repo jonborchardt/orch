@@ -396,7 +396,7 @@ describe('orch factory CLI', () => {
       orch(home, tmpdir(), ['--json', 'factory', 'config']),
     );
     expect(cfg.file).toBe(join(home, 'factory.json'));
-    expect(cfg.maxRounds).toBe(3);
+    expect(cfg).toMatchObject({ maxRounds: 3, extraAllowedTools: [], repoAllowedTools: {} });
 
     // No --session: a generated one meets cli-session's live lease.
     expect(orch(home, tmpdir(), ['factory', 'resume', id]).code).toBe(4);

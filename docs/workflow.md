@@ -693,8 +693,9 @@ a shim is refused before anything starts. Install the native build (`claude.exe`
 first on PATH (`orch doctor` checks that a `claude` is found). It must be signed in (run `claude`
 once), and the `factory` skill and agents must be installed (`orch install`).
 
-The session's permissions are `runnerClaudeArgs` in the user's `<config>/factory.json`. The
-default is what a Node repository's factory run needs:
+The session's permissions come from the user's `<config>/factory.json` only, never from a
+repository. The base list is `runnerClaudeArgs`; its default is what a Node repository's factory
+run needs:
 
 ```json
 {
@@ -714,11 +715,33 @@ default is what a Node repository's factory run needs:
 
 A repository whose builder runs other tools should have them added. A command outside the list
 is left to auto mode's judgement, and in a headless session nobody is there to approve one it
-declines, so the job can stop moving. For example `"Bash(pnpm *)"`, `"Bash(cargo *)"`,
-or `"Bash(pytest *)"`. The setting replaces the default list, so repeat the entries you still
-want; it applies to every repository the controller works on, and it is never read from a
-repository. `orch verify` runs a repository's own checks whatever is listed here: the allow-list
-is only about what the agents may run while they work.
+declines, so the job can stop moving. Add rules without restating the defaults:
+
+```json
+{
+  "extraAllowedTools": ["Bash(make *)"],
+  "repoAllowedTools": {
+    "github.com/acme/web": ["Bash(pnpm *)"],
+    "github.com/acme/engine": ["Bash(cargo *)"]
+  }
+}
+```
+
+`extraAllowedTools` applies to every repository; `repoAllowedTools` applies only to the
+repository with that identity (the `github.com/owner/name` form `mergeRepos` uses). A session's
+arguments are derived in this order (`runnerArgsFor` in `src/core/roles.ts`): the base
+(`runnerClaudeArgs` if set, else the defaults), then `extraAllowedTools`, then the repository's
+`repoAllowedTools`, each rule skipped when already allowed, inserted after the last value of the
+base's `--allowedTools` group (a base without one gets `--allowedTools` and the additions
+appended). `runnerClaudeArgs` replaces only the default list: the additions still apply on top of
+it. A rule is a non-empty string that never starts with `-`, so it cannot become a flag.
+
+`orch init --check` prints the effective list for the repository (`allowed`) and, when the policy
+is ready, every check executable that list does not cover (`uncovered`): covered means a `Bash`,
+`Bash(*)`, `Bash(<exe> *)` or `Bash(<exe>:*)` rule, or a permission bypass in the arguments. An
+uncovered executable caps the readiness grade at B and adds an advice line naming the exact
+`repoAllowedTools` setting and file that close it. `orch verify` runs a repository's own checks
+whatever is listed here: the allow-list is only about what the agents may run while they work.
 
 ## Session notices
 

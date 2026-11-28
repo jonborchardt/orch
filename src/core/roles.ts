@@ -78,9 +78,13 @@ export interface FactoryConfig {
   mergeRepos: string[];
   /**
    * Permission arguments `orch start` passes to its `claude -p` child, replacing
-   * DEFAULT_RUNNER_CLAUDE_ARGS (a repository whose checks need other tools lists them here).
+   * DEFAULT_RUNNER_CLAUDE_ARGS. The additions below still apply on top (`runnerArgsFor`).
    */
   runnerClaudeArgs: string[];
+  /** Tool rules added to the session's `--allowedTools` for every repository. */
+  extraAllowedTools: string[];
+  /** Tool rules added only for the repository with that identity (`github.com/owner/name`). */
+  repoAllowedTools: Record<string, string[]>;
 }
 
 /**
@@ -106,7 +110,81 @@ export const DEFAULT_CONFIG: FactoryConfig = {
   maxCiRepairs: 2,
   mergeRepos: [],
   runnerClaudeArgs: [...DEFAULT_RUNNER_CLAUDE_ARGS],
+  extraAllowedTools: [],
+  repoAllowedTools: {},
 };
+
+/** Tool rules: non-empty strings that never start with "-", so a rule cannot become a flag. */
+function toolRules(value: unknown, key: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((v) => typeof v === 'string' && v !== '' && !v.startsWith('-'))
+  ) {
+    throw new ValidationError(
+      `factory.json: "${key}" must be an array of tool rules (non-empty strings not starting with "-")`,
+    );
+  }
+  return value as string[];
+}
+
+const ALLOWED_TOOLS_FLAGS = ['--allowedTools', '--allowed-tools'];
+
+/** The value ranges `[start, end)` of every `--allowedTools` (or `--allowed-tools`) group. */
+function allowedToolsGroups(args: readonly string[]): { start: number; end: number }[] {
+  const groups: { start: number; end: number }[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (!ALLOWED_TOOLS_FLAGS.includes(args[i] ?? '')) continue;
+    let end = i + 1;
+    while (end < args.length && !(args[end] ?? '').startsWith('-')) end++;
+    groups.push({ start: i + 1, end });
+  }
+  return groups;
+}
+
+/** The values of every `--allowedTools` (or `--allowed-tools`) group in `args`, in order. */
+export function allowedToolsOf(args: readonly string[]): string[] {
+  return allowedToolsGroups(args).flatMap((g) => args.slice(g.start, g.end));
+}
+
+/**
+ * The `claude -p` arguments for a session in repository `repo`: `runnerClaudeArgs` (the defaults
+ * unless overridden), then `extraAllowedTools`, then `repoAllowedTools[repo]`, skipping rules
+ * already allowed, inserted after the last `--allowedTools` value (or appended under a new
+ * `--allowedTools` when the base has none). Pure: same config and identity, same array.
+ */
+export function runnerArgsFor(config: FactoryConfig, repo: string): string[] {
+  const base = config.runnerClaudeArgs;
+  const allowed = new Set(allowedToolsOf(base));
+  const additions: string[] = [];
+  for (const rule of [...config.extraAllowedTools, ...(config.repoAllowedTools[repo] ?? [])]) {
+    if (allowed.has(rule)) continue;
+    allowed.add(rule);
+    additions.push(rule);
+  }
+  if (additions.length === 0) return [...base];
+  const end = allowedToolsGroups(base).at(-1)?.end ?? -1;
+  if (end === -1) return [...base, '--allowedTools', ...additions];
+  return [...base.slice(0, end), ...additions, ...base.slice(end)];
+}
+
+/**
+ * The executables in `executables` a session with `args` may not run: neither a blanket `Bash`,
+ * `Bash(*)`, `Bash(E *)` nor `Bash(E:*)` is allowed, and permissions are not bypassed.
+ */
+export function uncoveredExecutables(
+  args: readonly string[],
+  executables: readonly string[],
+): string[] {
+  const bypass =
+    args.includes('--dangerously-skip-permissions') ||
+    args.some((a, i) => a === '--permission-mode' && args[i + 1] === 'bypassPermissions');
+  if (bypass) return [];
+  const allowed = new Set(allowedToolsOf(args));
+  if (allowed.has('Bash') || allowed.has('Bash(*)')) return [];
+  return [...new Set(executables)].filter(
+    (e) => !allowed.has(`Bash(${e} *)`) && !allowed.has(`Bash(${e}:*)`),
+  );
+}
 
 /** Validate a parsed factory.json. Unknown keys are rejected so typos do not pass silently. */
 export function parseConfig(raw: unknown): FactoryConfig {
@@ -115,7 +193,7 @@ export function parseConfig(raw: unknown): FactoryConfig {
     throw new ValidationError('factory.json must be a JSON object');
   }
   const obj = raw as Record<string, unknown>;
-  const config: FactoryConfig = { ...DEFAULT_CONFIG, models: {} };
+  const config: FactoryConfig = { ...DEFAULT_CONFIG, models: {}, repoAllowedTools: {} };
   for (const [key, value] of Object.entries(obj)) {
     switch (key) {
       case 'models': {
@@ -183,6 +261,20 @@ export function parseConfig(raw: unknown): FactoryConfig {
           );
         }
         config.runnerClaudeArgs = value as string[];
+        break;
+      }
+      case 'extraAllowedTools':
+        config.extraAllowedTools = toolRules(value, key);
+        break;
+      case 'repoAllowedTools': {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+          throw new ValidationError(
+            'factory.json: "repoAllowedTools" must be an object of repository identity -> tool rules',
+          );
+        }
+        for (const [repo, rules] of Object.entries(value as Record<string, unknown>)) {
+          config.repoAllowedTools[repo] = toolRules(rules, `repoAllowedTools.${repo}`);
+        }
         break;
       }
       default:

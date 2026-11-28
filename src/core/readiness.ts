@@ -23,8 +23,20 @@ export interface ReadinessGrade {
   /** Facts that are true, out of four. */
   met: number;
   facts: ReadinessFacts;
-  /** One line per fact that is not met. */
+  /** One line per fact that is not met, then one for uncovered executables. */
   advice: string[];
+  /** Check executables the repository's agent sessions may not run; non-empty caps the grade at B. */
+  uncovered: string[];
+}
+
+/**
+ * Check executables agents may not run (`uncoveredExecutables`), with what to add where: the
+ * repository identity the rule is keyed by and the user's config file.
+ */
+export interface PermissionGap {
+  uncovered: string[];
+  repo: string;
+  file: string;
 }
 
 const ADVICE: Record<ReadinessFact, string> = {
@@ -39,16 +51,30 @@ const ADVICE: Record<ReadinessFact, string> = {
 
 const FACTS = Object.keys(ADVICE) as ReadinessFact[];
 
-/** A = all four facts true, B = three, C = two, D = one or none. */
-export function gradeReadiness(facts: ReadinessFacts): ReadinessGrade {
+function gapAdvice(gap: PermissionGap): string {
+  const setting = JSON.stringify({
+    repoAllowedTools: { [gap.repo]: gap.uncovered.map((e) => `Bash(${e} *)`) },
+  });
+  return `Agent sessions may not run ${gap.uncovered.join(', ')}, which the checks run: add ${setting} to ${gap.file} (or the rules to "extraAllowedTools" for every repository).`;
+}
+
+/**
+ * A = all four facts true, B = three, C = two, D = one or none. A permission gap (check
+ * executables agents may not run) caps A at B and adds one advice line; `met` is unchanged.
+ */
+export function gradeReadiness(facts: ReadinessFacts, gap?: PermissionGap): ReadinessGrade {
   const met = FACTS.filter((f) => facts[f] === true).length;
+  const uncovered = gap?.uncovered ?? [];
+  const advice = FACTS.filter((f) => facts[f] !== true).map((f) =>
+    facts[f] === null ? `${ADVICE[f]} (unknown: GitHub did not say)` : ADVICE[f],
+  );
+  if (gap && uncovered.length > 0) advice.push(gapAdvice(gap));
   return {
-    letter: met === 4 ? 'A' : met === 3 ? 'B' : met === 2 ? 'C' : 'D',
+    letter: met === 4 && uncovered.length === 0 ? 'A' : met >= 3 ? 'B' : met === 2 ? 'C' : 'D',
     met,
     facts,
-    advice: FACTS.filter((f) => facts[f] !== true).map((f) =>
-      facts[f] === null ? `${ADVICE[f]} (unknown: GitHub did not say)` : ADVICE[f],
-    ),
+    advice,
+    uncovered,
   };
 }
 

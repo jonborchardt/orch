@@ -28,6 +28,14 @@ export const INIT_HELP = `Usage: orch init [--repo <path>] --command "<id>=<exec
                        when origin is on github.com (read with gh), required status checks,
                        up-to-date branches (or a merge queue), and protection on the base
                        branch. The grade is advice: it never changes the exit code.
+                       Inside a Git repository it also prints "allowed", the --allowedTools a
+                       factory session here gets (runnerClaudeArgs or the defaults, plus
+                       extraAllowedTools and this repository's repoAllowedTools from your
+                       <config>/factory.json). When the policy is ready and a check's
+                       executable is not covered (no Bash, Bash(*), Bash(<exe> *), or
+                       Bash(<exe>:*) rule and no permission bypass), the gap is listed with
+                       the exact repoAllowedTools setting that closes it, and the grade is
+                       capped at B.
 
 The factory trusts the factory.json committed at the merge base of a job and its base branch,
 never the copy a job edits, so the policy must be committed (and pushed) before the first job.
@@ -58,8 +66,10 @@ export function formatInit(r: InitResult | GradedReadiness): string {
     if (r.baseRef) lines.push(`baseline  ${r.baseRef}`);
     if (r.checks.length) lines.push(`checks    ${r.checks.join(', ')}`);
     if (r.next) lines.push(`next      ${r.next}`);
+    if (r.allowedTools) lines.push(`allowed   ${r.allowedTools.join(', ')}`);
     if (r.grade) {
       lines.push(`grade     ${r.grade.letter} (${String(r.grade.met)}/4)`);
+      if (r.grade.uncovered.length) lines.push(`uncovered ${r.grade.uncovered.join(', ')}`);
       lines.push(...r.grade.advice.map((a) => `          - ${a}`));
     }
     return lines.join('\n');

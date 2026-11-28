@@ -8,8 +8,9 @@ import { join } from 'node:path';
 
 import { UsageError, ValidationError } from '../core/errors.ts';
 import { whichSync } from '../core/exec.ts';
-import { findProjectRoot } from '../core/paths.ts';
+import { findProjectRoot, runtimePaths } from '../core/paths.ts';
 import { gradeReadiness, type ReadinessGrade, runsTests } from '../core/readiness.ts';
+import { allowedToolsOf, runnerArgsFor, uncoveredExecutables } from '../core/roles.ts';
 import {
   formatPolicy,
   parsePolicy,
@@ -21,6 +22,8 @@ import {
 import { baseRef, describeRepo } from '../git/repo.ts';
 import { git, tryGit } from '../git/run.ts';
 import { branchRuleFacts } from '../integrations/github.ts';
+import { loadConfigFile } from './factory.ts';
+import { jobRepository } from './repo.ts';
 import { policyAt } from './verify.ts';
 
 /** package.json scripts worth proposing, in order. `check` stands in for the three it usually runs. */
@@ -274,6 +277,8 @@ export function checkReadiness(cwd: string, repo?: string, branch?: string): Rea
 export interface GradedReadiness extends Readiness {
   /** Readiness grade: advice, never a gate. Null outside a Git repository. */
   grade: ReadinessGrade | null;
+  /** The `--allowedTools` a factory session here gets (`runnerArgsFor`). Null outside Git. */
+  allowedTools: string[] | null;
 }
 
 /**
@@ -283,18 +288,29 @@ export interface GradedReadiness extends Readiness {
  */
 export function gradedReadiness(cwd: string, repo?: string, branch?: string): GradedReadiness {
   const r = checkReadiness(cwd, repo, branch);
-  if (!r.root) return { ...r, grade: null };
+  if (!r.root) return { ...r, grade: null, allowedTools: null };
   const info = describeRepo(r.root);
   const base = branch ?? info.currentBranch;
+  // Permissions come only from the user's config, keyed by the identity a job here records.
+  const identity = jobRepository(r.root).repo.identity;
+  const file = join(runtimePaths().config, 'factory.json');
+  const args = runnerArgsFor(loadConfigFile(file), identity);
   // Ready means the working copy is the trusted policy, so reading it here reads the trusted one.
-  const policyTest =
-    r.ready &&
-    r.path !== null &&
-    parsePolicyText(readFileSync(r.path, 'utf8')).commands.some((c) => c.required && runsTests(c));
+  const commands =
+    r.ready && r.path !== null ? parsePolicyText(readFileSync(r.path, 'utf8')).commands : [];
+  const policyTest = commands.some((c) => c.required && runsTests(c));
+  const uncovered = uncoveredExecutables(
+    args,
+    commands.map((c) => c.command),
+  );
   const nameWithOwner = /^github\.com\/([^/]+\/[^/]+)$/.exec(info.remote ?? '')?.[1];
   const github =
     nameWithOwner && base !== 'HEAD'
       ? branchRuleFacts(nameWithOwner, base, r.root)
       : { requiredChecks: null, upToDate: null, protection: null };
-  return { ...r, grade: gradeReadiness({ policyTest, ...github }) };
+  return {
+    ...r,
+    grade: gradeReadiness({ policyTest, ...github }, { uncovered, repo: identity, file }),
+    allowedTools: allowedToolsOf(args),
+  };
 }
