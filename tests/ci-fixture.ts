@@ -53,6 +53,16 @@ export function checks(sha: string, runs: ShimCheckRun[]): void {
   shim.write({ checkRuns: { ...(shim.read().checkRuns ?? {}), [sha]: runs } });
 }
 
+/** GitHub knows which workflow run an Actions job belongs to. */
+export function workflowRun(check: ShimCheckRun, runId: number): void {
+  shim.write({
+    api: {
+      ...shim.read().api,
+      [`repos/acme/alpha/actions/jobs/${String(check.id)}`]: { run_id: runId },
+    },
+  });
+}
+
 export const reconcile = (c: Ctx) => reconcileCi(store, c.id, { token: c.token });
 export const job = (c: Ctx) => getJob(store.db, c.id);
 export const observed = (c: Ctx) =>

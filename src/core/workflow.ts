@@ -479,8 +479,9 @@ export interface TransitionContext {
    */
   mergedByHuman?: boolean | undefined;
   /**
-   * `rework` only: base integration needed the builder. Only `integrateBase` passes it; from `ci`
-   * it reworks like approve and pr, spending no CI repair.
+   * `rework` only: base integration needed the builder (`integrateBase`), or `reconcileCi` found
+   * a base that stopped failing a shared check missing from the head; from `ci` it reworks like
+   * approve and pr, spending no CI repair.
    */
   integration?: boolean | undefined;
   /**

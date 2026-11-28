@@ -55,6 +55,13 @@ export const CI_GRACE_POLLS = 5;
  */
 export const CI_MAX_RERUNS = 1;
 
+/**
+ * Re-runs a head may ever get. The second is only for a check that did not reach a verdict again,
+ * or for a failure the base branch shared and has since stopped failing; a mechanical re-run is
+ * never handed to a person (decision 2026-11-28-base-failures-wait-not-escalate).
+ */
+export const CI_RERUN_LIMIT = 2;
+
 /** Conclusions a re-run of the failed jobs can change. `action_required` and `neutral` cannot. */
 export const RERUNNABLE = new Set([
   'failure',
@@ -215,6 +222,30 @@ export function evaluateChecks(
     outcome: 'passing',
     reason: `required check(s) passed: ${required.join(', ')}`,
   };
+}
+
+/**
+ * How the base tip's checks stand for the head's culprit checks (required checks that did not
+ * pass): `failing` when every culprit has a current attempt on the base that completed without
+ * passing, `pending` when not failing and a culprit is queued or running there, `clear` otherwise
+ * (including a check the base never reports). `checks` are the base's current attempts of the
+ * culprits, for the record.
+ */
+export function baseVerdict(
+  culprits: readonly string[],
+  baseChecks: CiCheck[],
+): { verdict: 'failing' | 'pending' | 'clear'; checks: CiCheck[] } {
+  const names = new Set(culprits);
+  const checks = currentAttempts(baseChecks).filter((c) => names.has(c.name));
+  const some = (name: string, kinds: Conclusion[]) =>
+    checks.some((c) => c.name === name && kinds.includes(conclusionOf(c)));
+  const verdict =
+    names.size > 0 && [...names].every((n) => some(n, ['defect', 'infrastructure']))
+      ? 'failing'
+      : [...names].some((n) => some(n, ['pending']))
+        ? 'pending'
+        : 'clear';
+  return { verdict, checks };
 }
 
 /** The persisted rollup for an outcome. */

@@ -300,6 +300,29 @@ describe('blockerOf and runner.stopped', () => {
     expect(blockerOf({ ...done, prState: 'merged' }, 'completed', ended)).toBeNull();
   });
 
+  it('a ci job parked on a red base waits for that branch and check, not for a person (ticket 0228)', () => {
+    const parked = ev('ci.observed', {
+      outcome: 'base-failing',
+      reason: 'test also failed on main',
+      base: { branch: 'main', sha: 'b'.repeat(40), verdict: 'failing', checks: [{ name: 'test' }] },
+    });
+    const stopped = stop({ code: 'base-failing', stage: 'ci', status: 'running' });
+    const expected = {
+      kind: 'waiting',
+      summary: 'Waiting for main to pass test; no person needed',
+      detail: 'test also failed on main',
+    };
+    for (const state of ['idle', 'stale'] as const) {
+      expect(
+        blockerOf(idle({ stage: 'ci', status: 'running' }), state, evidence(parked, stopped)),
+      ).toEqual(expected);
+    }
+    // Any other newest observation leaves the usual blocker.
+    expect(
+      blockerOf(idle({ stage: 'ci' }), 'idle', evidence(ev('ci.observed', { outcome: 'pending' }))),
+    ).toEqual(waiting);
+  });
+
   it('AC4: blocked, failed, interrupted, cancelled and running blockers ignore the stop', () => {
     const cases = [
       ['needs-human', 'blocked', 'blocked'],
@@ -373,6 +396,18 @@ describe('ciSummary', () => {
         outcome: 'infrastructure',
       }),
     ).toContain('did not reach a verdict');
+    const parked = ciSummary(
+      ci({ head: 'a1b2c3d4', status: 'failing', current: true, outcome: 'base-failing' }),
+      withPr({ ownerSession: null }),
+    );
+    expect(parked.line).toBe(
+      'CI failing for a1b2c3d, and the base branch fails the same checks; 0 of 2 repairs used.',
+    );
+    expect(parked.guidance).toContain('Nothing to do');
+    for (const outcome of ['base-failing', 'infrastructure']) {
+      const g = ciSummary(ci({ head: 'a1b2c3d4', status: 'failing', outcome }), withPr()).guidance;
+      expect(g).not.toMatch(/re-run the workflow/);
+    }
     expect(
       line(withPr({ stage: 'needs-human' }), {
         head: 'a1b2c3d4',

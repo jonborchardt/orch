@@ -142,6 +142,7 @@ function plan(over: Partial<Plan>): Plan {
       reruns: 0,
       waitSeconds: 90,
       release: false,
+      baseFailing: false,
       lastReason: null,
     },
     notices: [],
