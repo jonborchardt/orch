@@ -133,7 +133,7 @@ const TICKET_COLUMNS: [string, (t: RunsView['tickets'][number]) => React.ReactNo
   ['Escalated', (t) => (t.escalated ? 'Yes' : 'No')],
   ['Elapsed', (t) => duration(t.elapsedMs)],
   ['Agent time', (t) => seconds(t.agentSeconds)],
-  ['Tokens', (t) => cost(t.tokens)],
+  ['Weight', (t) => cost(t.tokens)],
 ];
 
 function TrustTables({ data }: { data: RunsView }) {
@@ -165,7 +165,7 @@ function TrustTables({ data }: { data: RunsView }) {
           </TableBody>
         </Table>
       </TableContainer>
-      <Typography variant="caption" color="text.secondary" component="p">
+      <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 1 }}>
         {`Per-ticket medians and maxima cover the merged tickets with a recorded value; tokens recorded for ${String(recorded)} of ${String(data.tickets.length)} merged tickets.`}
       </Typography>
       <Typography variant="subtitle1" component="h2" sx={{ mt: 3 }}>
@@ -181,6 +181,11 @@ function TrustTables({ data }: { data: RunsView }) {
             </TableRow>
           </TableHead>
           <TableBody>
+            {data.tickets.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={TICKET_COLUMNS.length}>No merged tickets yet.</TableCell>
+              </TableRow>
+            )}
             {data.tickets.map((t) => (
               <TableRow key={t.jobId}>
                 {TICKET_COLUMNS.map(([name, f]) => (

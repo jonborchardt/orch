@@ -107,6 +107,7 @@ const NO_MODELS = {
   attributed: { sessions: 0, of: 0 },
 };
 let AGENTS: AgentsView;
+let runs: RunsView;
 const SOME_UNMEASURED: AgentsView = {
   ...NO_MODELS,
   reviewers: [
@@ -130,6 +131,7 @@ let gets: string[];
 beforeEach(() => {
   gets = [];
   AGENTS = SOME_UNMEASURED;
+  runs = RUNS;
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
@@ -137,7 +139,7 @@ beforeEach(() => {
       gets.push(url);
       const body =
         url === '/api/runs'
-          ? RUNS
+          ? runs
           : url === '/api/agents'
             ? AGENTS
             : url === '/api/runner'
@@ -254,7 +256,7 @@ describe('Runs and Agents sections', () => {
       'Escalated',
       'Elapsed',
       'Agent time',
-      'Tokens',
+      'Weight',
     ]);
     const rows = within(table).getAllByRole('row').slice(1);
     const cells = (r: HTMLElement) => [...r.querySelectorAll('td')].map((c) => c.textContent);
@@ -278,6 +280,13 @@ describe('Runs and Agents sections', () => {
       'href',
       '#/jobs/job-0000abcd',
     );
+  });
+
+  it('says so when no ticket has merged yet', async () => {
+    runs = { ...RUNS, tickets: [] };
+    mount('#/runs');
+    const table = await screen.findByRole('table', { name: 'Merged tickets' });
+    expect(within(table).getByText('No merged tickets yet.')).toBeInTheDocument();
   });
 
   it('renders Reviewers and Stages tables with plain outcome columns', async () => {

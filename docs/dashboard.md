@@ -97,7 +97,8 @@ conservative. A ticket's `escalated` is true when any of its jobs has `job.block
 cancelled ones included: Elapsed is the sum of each job's `createdAt` to finish (as above), Agent
 time the sum of its `runner.session` `seconds`, and tokens the sum of its recorded sessions, with
 `tokenJobs` the jobs that had any; a ticket with no recorded value reads Unavailable, never zero.
-The Merged tickets table shows tokens as the Usage section's weight. The mode's medians and
+The Merged tickets table shows tokens as the Usage section's weight, in its Weight column, and
+reads "No merged tickets yet." when there are none. The mode's medians and
 maxima of rounds, CI repairs, Elapsed, Agent time, and tokens are over its merged tickets with a
 value, and null (Unavailable) when none has one; the token median is plain total tokens (input +
 output + cache read + cache creation), not weighted. The caption counts the merged tickets with
