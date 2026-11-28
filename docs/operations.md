@@ -61,6 +61,13 @@ can pass its gates ([workflow.md](workflow.md#verification-evidence)). The merge
 repository's verified PRs without a click. In the global queue a ticket of a repository without
 the opt-in is passed over; `orch do` refuses to start a job for it.
 
+`orch init --check` also prints `allowed`, the tools a factory session in that repository may
+run, and `uncovered`, any check executable outside that list (a pnpm repository under the
+defaults lists `pnpm`). Its advice names the setting that closes the gap, for example
+`{"repoAllowedTools": {"github.com/acme/web": ["Bash(pnpm *)"]}}` in your own
+`<config>/factory.json`; until then the grade is at most B
+([workflow.md](workflow.md#claude-code-configuration)).
+
 ### 4. `orch start`: work the whole queue
 
 ```sh

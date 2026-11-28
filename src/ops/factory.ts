@@ -80,7 +80,11 @@ export function configPath(store: Store): string {
 }
 
 export function loadConfig(store: Store): FactoryConfig {
-  const file = configPath(store);
+  return loadConfigFile(configPath(store));
+}
+
+/** The user's factory.json at `file`, validated; the defaults when it does not exist. */
+export function loadConfigFile(file: string): FactoryConfig {
   if (!existsSync(file)) return parseConfig(undefined);
   let raw: unknown;
   try {

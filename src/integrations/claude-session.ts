@@ -26,7 +26,7 @@ export interface LaunchInput {
   /** Working directory: the job's worktree. */
   cwd: string;
   prompt: string;
-  /** Permission arguments (`runnerClaudeArgs`). */
+  /** Permission arguments (`runnerArgsFor`: `runnerClaudeArgs` plus the allowed-tool additions). */
   args: readonly string[];
   /** Display name of the session. */
   name: string;

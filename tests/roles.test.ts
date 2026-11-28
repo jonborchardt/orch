@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { ValidationError } from '../src/core/errors.ts';
 import {
+  allowedToolsOf,
+  DEFAULT_RUNNER_CLAUDE_ARGS,
   DEFAULT_UI_PATTERNS,
   detectUi,
   drawModel,
@@ -18,6 +20,8 @@ import {
   planFallbacks,
   resolveRoles,
   ROLES,
+  runnerArgsFor,
+  uncoveredExecutables,
 } from '../src/core/roles.ts';
 
 describe('detectUi', () => {
@@ -216,5 +220,87 @@ describe('per-model limit fallback (ticket 0179)', () => {
     ]);
     expect(planFallbacks(roles, { ...pools, approver: ['fable'] }, ex('fable'))).toBeNull();
     expect(planFallbacks(roles, pools, ex())).toEqual([]);
+  });
+});
+
+describe('runner permissions (ticket 0200)', () => {
+  const D = [...DEFAULT_RUNNER_CLAUDE_ARGS];
+  const cfg = (raw: unknown) => parseConfig(raw);
+
+  it('adds extraAllowedTools after the last default rule, keeping every default in order', () => {
+    const args = runnerArgsFor(cfg({ extraAllowedTools: ['Bash(pnpm *)'] }), 'github.com/o/x');
+    expect(args).toEqual([...D, 'Bash(pnpm *)']);
+    expect(args[args.indexOf('Bash(cd *)') + 1]).toBe('Bash(pnpm *)');
+  });
+
+  it('is exactly the defaults with no config or neither new key', () => {
+    expect(runnerArgsFor(cfg(undefined), 'github.com/o/a')).toEqual(D);
+    expect(runnerArgsFor(cfg({ maxRounds: 2 }), 'github.com/o/b')).toEqual(D);
+    expect(runnerArgsFor(cfg({ extraAllowedTools: [], repoAllowedTools: {} }), 'x')).toEqual(D);
+  });
+
+  it('uses runnerClaudeArgs exactly when it is the only setting', () => {
+    const override = ['--permission-mode', 'auto', '--allowedTools', 'Bash(git *)'];
+    expect(runnerArgsFor(cfg({ runnerClaudeArgs: override }), 'github.com/o/a')).toEqual(override);
+  });
+
+  it('puts additions in the override group, user before repository, duplicates dropped', () => {
+    const override = ['--allowedTools', 'Bash(git *)', 'Read', '--permission-mode', 'auto'];
+    const c = cfg({
+      runnerClaudeArgs: override,
+      extraAllowedTools: ['Bash(pnpm *)', 'Bash(git *)'],
+      repoAllowedTools: { 'github.com/o/a': ['Bash(cargo *)', 'Bash(pnpm *)'] },
+    });
+    expect(runnerArgsFor(c, 'github.com/o/a')).toEqual([
+      '--allowedTools',
+      'Bash(git *)',
+      'Read',
+      'Bash(pnpm *)',
+      'Bash(cargo *)',
+      '--permission-mode',
+      'auto',
+    ]);
+    // An override without the flag gets one appended.
+    const bare = cfg({ runnerClaudeArgs: ['--permission-mode', 'auto'], extraAllowedTools: ['X'] });
+    expect(runnerArgsFor(bare, 'r')).toEqual(['--permission-mode', 'auto', '--allowedTools', 'X']);
+    // --allowed-tools is understood as the same flag.
+    const dashed = cfg({ runnerClaudeArgs: ['--allowed-tools', 'A'], extraAllowedTools: ['B'] });
+    expect(runnerArgsFor(dashed, 'r')).toEqual(['--allowed-tools', 'A', 'B']);
+  });
+
+  it('scopes repoAllowedTools to its identity, deterministically', () => {
+    const c = cfg({ repoAllowedTools: { 'github.com/o/a': ['Bash(cargo *)'] } });
+    expect(runnerArgsFor(c, 'github.com/o/a')).toContain('Bash(cargo *)');
+    expect(runnerArgsFor(c, 'github.com/o/b')).toEqual(D);
+    expect(runnerArgsFor(c, 'github.com/o/a')).toEqual(runnerArgsFor(c, 'github.com/o/a'));
+  });
+
+  it('rejects malformed rules, naming the key; a rule may never start with "-"', () => {
+    for (const [raw, key] of [
+      [{ extraAllowedTools: 'Bash' }, 'extraAllowedTools'],
+      [{ extraAllowedTools: [''] }, 'extraAllowedTools'],
+      [{ extraAllowedTools: [1] }, 'extraAllowedTools'],
+      [{ extraAllowedTools: ['--dangerously-skip-permissions'] }, 'extraAllowedTools'],
+      [{ repoAllowedTools: ['Bash'] }, 'repoAllowedTools'],
+      [{ repoAllowedTools: { 'github.com/o/a': 'Bash' } }, 'repoAllowedTools'],
+      [{ repoAllowedTools: { 'github.com/o/a': ['-x'] } }, 'repoAllowedTools'],
+    ] as const) {
+      expect(() => parseConfig(raw)).toThrow(ValidationError);
+      expect(() => parseConfig(raw)).toThrow(key);
+    }
+  });
+
+  it('reads the allow-list and finds check executables it does not cover', () => {
+    expect(allowedToolsOf(D)).toEqual(D.slice(3));
+    expect(uncoveredExecutables(D, ['npm', 'node', 'pnpm', 'pnpm'])).toEqual(['pnpm']);
+    const allow = (...rules: string[]) => ['--allowedTools', ...rules];
+    expect(uncoveredExecutables(allow('Bash'), ['pnpm'])).toEqual([]);
+    expect(uncoveredExecutables(allow('Bash(*)'), ['pnpm'])).toEqual([]);
+    expect(uncoveredExecutables(allow('Bash(pnpm *)'), ['pnpm'])).toEqual([]);
+    expect(uncoveredExecutables(allow('Bash(pnpm:*)'), ['pnpm'])).toEqual([]);
+    expect(uncoveredExecutables(allow('Bash(pnpmx *)'), ['pnpm'])).toEqual(['pnpm']);
+    expect(uncoveredExecutables(['--dangerously-skip-permissions'], ['pnpm'])).toEqual([]);
+    expect(uncoveredExecutables(['--permission-mode', 'bypassPermissions'], ['pnpm'])).toEqual([]);
+    expect(uncoveredExecutables(['--permission-mode', 'auto'], ['pnpm'])).toEqual(['pnpm']);
   });
 });

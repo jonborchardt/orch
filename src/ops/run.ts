@@ -23,7 +23,7 @@ import { apiUnreachable, claudeLimit, limitUntil } from '../core/claude-limit.ts
 import { runForeground } from '../core/exec.ts';
 import { installRoot, jobArtifactDir } from '../core/paths.ts';
 import { leaseExpired } from '../core/ownership.ts';
-import { OWN_ALLOWANCE_MODELS } from '../core/roles.ts';
+import { OWN_ALLOWANCE_MODELS, runnerArgsFor } from '../core/roles.ts';
 import { orderTickets, ticketKey } from '../core/tickets.ts';
 import {
   endsRun,
@@ -454,7 +454,7 @@ async function runChild(run: Run, job: Job): Promise<ChildRun> {
   const cwd = resumed.job.worktreePath ?? job.repoPath;
   const env: NodeJS.ProcessEnv = { ...process.env, ORCH_SESSION: RUNNER_SESSION };
   delete env['ORCH_TOKEN'];
-  const args = loadConfig(store).runnerClaudeArgs;
+  const args = runnerArgsFor(loadConfig(store), job.repo);
   // The conversation's id is fixed up front and tied to the job before the child starts, so the
   // Session tab reads its transcript from the first minute.
   const sessionId = randomUUID();

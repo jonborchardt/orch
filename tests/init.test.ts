@@ -5,13 +5,15 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { delimiter, join, sep } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { UsageError, ValidationError } from '../src/core/errors.ts';
 import { canonicalPath } from '../src/core/paths.ts';
+import { DEFAULT_RUNNER_CLAUDE_ARGS } from '../src/core/roles.ts';
 import { parsePolicyText, policyFingerprint } from '../src/core/verification.ts';
+import { describeRepo } from '../src/git/repo.ts';
 import { startJob } from '../src/ops/factory.ts';
 import { checkReadiness, gradedReadiness, initRepo, parseCommandFlag } from '../src/ops/init.ts';
 import { worktreeOf } from '../src/ops/tree.ts';
@@ -368,6 +370,84 @@ describe('orch init --check: readiness grade (advice, never the exit code)', () 
     expect(lines.slice(at + 1).filter((l) => l.trim().startsWith('- '))).toEqual([
       expect.stringMatching(/up to date.*merge queue/),
     ]);
+  });
+});
+
+describe('orch init --check: agent permissions (ticket 0200)', () => {
+  const DEFAULT_TOOLS = DEFAULT_RUNNER_CLAUDE_ARGS.slice(3);
+  const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  interface Checked {
+    ready: boolean;
+    allowedTools: string[] | null;
+    grade: { letter: string; uncovered: string[]; advice: string[] } | null;
+  }
+  /** A ready repository whose required check runs `pnpm`, a stub `pnpm` on PATH, and a home. */
+  function pnpmRepo() {
+    const { clone, bare } = makeRepoWithOrigin('https://git.example.com/acme/alpha.git');
+    const bin = tempDir('orch-bin-');
+    const home = tempDir('orch-init-home-');
+    dirs.push(clone, bare, bin, home);
+    writeFileSync(join(bin, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'), '');
+    const policy = {
+      verification: { commands: [{ id: 'test', command: 'pnpm', args: ['test'] }] },
+    };
+    commitFile(clone, 'factory.json', JSON.stringify(policy) + '\n', 'pnpm policy');
+    gitIn(clone, 'push', '-q', 'origin', 'main');
+    const env = { [pathKey]: `${bin}${delimiter}${process.env[pathKey] ?? ''}` };
+    const check = (config?: object) => {
+      if (config) writeFileSync(join(home, 'factory.json'), JSON.stringify(config));
+      const r = orch(home, clone, ['--json', 'init', '--check'], env);
+      expect(r.code, r.err).toBe(0);
+      return json<Checked>(r);
+    };
+    return { clone, home, env, check, identity: describeRepo(clone).identity };
+  }
+
+  it('reports a pnpm check as not covered by the defaults, with the exact setting, never in the exit code', () => {
+    const { clone, home, env, check, identity } = pnpmRepo();
+    const r = check();
+    expect(r.ready).toBe(true);
+    expect(r.allowedTools).toEqual(DEFAULT_TOOLS);
+    expect(r.grade?.uncovered).toEqual(['pnpm']);
+    const advice = r.grade?.advice.at(-1) ?? '';
+    for (const part of [
+      '"Bash(pnpm *)"',
+      'repoAllowedTools',
+      identity,
+      join(home, 'factory.json'),
+    ]) {
+      expect(advice).toContain(part);
+    }
+    const text = orch(home, clone, ['init', '--check'], env);
+    expect(text.code).toBe(0);
+    expect(text.out).toContain(`allowed   ${DEFAULT_TOOLS.join(', ')}`);
+    expect(text.out).toContain('uncovered pnpm');
+  });
+
+  it('closes the gap from extraAllowedTools, repoAllowedTools for this identity, or an override', () => {
+    const { check, identity } = pnpmRepo();
+    expect(check({ extraAllowedTools: ['Bash(pnpm *)'] }).grade?.uncovered).toEqual([]);
+    const scoped = check({ repoAllowedTools: { [identity]: ['Bash(pnpm *)'] } });
+    expect(scoped.grade?.uncovered).toEqual([]);
+    expect(scoped.allowedTools).toEqual([...DEFAULT_TOOLS, 'Bash(pnpm *)']);
+    const other = check({ repoAllowedTools: { 'github.com/someone/else': ['Bash(pnpm *)'] } });
+    expect(other.grade?.uncovered).toEqual(['pnpm']);
+    expect(other.allowedTools).toEqual(DEFAULT_TOOLS);
+    const override = check({ runnerClaudeArgs: ['--allowedTools', 'Bash(pnpm *)'] });
+    expect(override.grade?.uncovered).toEqual([]);
+  });
+
+  it('never takes permissions from a factory.json committed in the repository', () => {
+    const { clone, home } = pnpmRepo();
+    const granting = {
+      extraAllowedTools: ['Bash(pnpm *)'],
+      repoAllowedTools: { [describeRepo(clone).identity]: ['Bash(pnpm *)'] },
+      verification: { commands: [{ id: 'test', command: 'pnpm', args: ['test'] }] },
+    };
+    commitFile(clone, 'factory.json', JSON.stringify(granting) + '\n', 'try to grant');
+    gitIn(clone, 'push', '-q', 'origin', 'main');
+    const r = orch(home, clone, ['--json', 'init', '--check']);
+    expect(json<Checked>(r).allowedTools).toEqual(DEFAULT_TOOLS);
   });
 });
 
